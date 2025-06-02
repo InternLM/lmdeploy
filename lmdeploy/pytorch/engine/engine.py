@@ -124,6 +124,30 @@ def _build_misc_config(engine_config: PytorchEngineConfig):
     return misc_config
 
 
+class CounterEvent:
+
+    def __init__(self):
+        self._counter = 0
+        self._event = asyncio.Event()
+
+    async def wait(self):
+        await self._event.wait()
+
+    def is_set(self):
+        return self._event.is_set()
+
+    def set(self):
+        if self._counter > 0:
+            self._counter -= 1
+        if self._counter == 0:
+            self._event.set()
+
+    def clear(self):
+        if self._counter == 0 and self._event.is_set():
+            self._event.clear()
+        self._counter += 1
+
+
 class RunableEventBase:
     """Runable event base."""
 
@@ -978,7 +1002,7 @@ class Engine:
         """Async loop migration."""
         while True:
             migration_running = self.scheduler._schedule_migration()
-            if not migration_running and not self.scheduler.has_migration_waiting:
+            if not migration_running and not self.scheduler.has_migration_waiting():
                 await self.migration_event.wait()
             elif migration_running:
                 self.migration_event.clear()
@@ -1025,6 +1049,7 @@ class Engine:
     async def _async_loop_main(
         self,
         resp_que: asyncio.Queue,
+        forward_event: asyncio.Event,
         has_runable_event: RunableEventBase,
         inputs_maker: InputsMakerBase,
     ):
@@ -1046,13 +1071,28 @@ class Engine:
             next_running = None
             scheduler.lock_running(running)
             for idx in range(num_loops):
-                if idx >= num_loops - 1:
+
+                # lock forward event
+                # make sure that prefetch forward would not wait for detokenize
+                # WARNING: this might have side effect on the performance
+                if idx == num_loops // 2:
+                    forward_event.clear()
+
+                # pre-forward before get last token
+                if idx == num_loops - 1:
                     scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
+
+                # send output
                 out = await self.executor.get_output_async()
                 if len(out) > 0:
                     step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
+
+                # unlock forward event.
+                if idx == num_loops - 1:
+                    forward_event.set()
+
             scheduler.unlock_running(running)
             has_runable_event.set()
 
@@ -1093,7 +1133,7 @@ class Engine:
             event_loop = asyncio.get_event_loop()
 
             # forward task
-            forward_event = asyncio.Event()
+            forward_event = CounterEvent()
             forward_event.set()
 
             # migration task
@@ -1115,15 +1155,18 @@ class Engine:
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
 
-            logger.info('Starting async task MigrationLoop.')
-            loop_migration = event_loop.create_task(
-                self._async_loop_migration(resp_que, has_runable_event=has_runable_event),
-                name='MainLoopMigration',
-            )
+            loop_main = asyncio.current_task()
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
+
+            if self.engine_config.role != EngineRole.Hybrid:
+                logger.info('Starting async task MigrationLoop.')
+                loop_migration = event_loop.create_task(
+                    self._async_loop_migration(resp_que, has_runable_event=has_runable_event),
+                    name='MainLoopMigration',
+                )
+                loop_tasks.append(loop_migration)
 
             # binding done callback
-            loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_migration, loop_send_resp]
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 
@@ -1131,6 +1174,7 @@ class Engine:
             logger.info('Starting async task MainLoop.')
             inputs_maker = build_inputs_maker(self)
             await self._async_loop_main(resp_que=resp_que,
+                                        forward_event=forward_event,
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
 

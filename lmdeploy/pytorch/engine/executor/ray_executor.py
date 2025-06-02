@@ -86,7 +86,7 @@ def _get_obj_store_memory(dp: int = 1):
     DEFAULT_OBJECT_STORE_MEMORY_PROPORTION = float(DEFAULT_OBJECT_STORE_MEMORY_PROPORTION)
     DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = os.getenv('RAY_DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES', None)
     if DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES is None:
-        DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = 200 * (10**9)
+        DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = 80 * (10**9)
     else:
         DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = int(DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES)
     total_mem = psutil.virtual_memory().total
@@ -146,14 +146,20 @@ def init_ray_cluster(world_size: int, ray_address: str = None, dp: int = 1):
 
 
 def _get_master_addr():
-    """Get master addr."""
+    """get master addr."""
+    addr = _envs.dist_master_addr
+    if addr is not None:
+        return addr
     gcs_addr = ray.get_runtime_context().gcs_address
     master_addr = gcs_addr.split(':')[0]
     return master_addr
 
 
 def _get_master_port():
-    """Get master port."""
+    """get master port."""
+    port = _envs.dist_master_port
+    if port is not None:
+        return port
     return find_available_port()
 
 
@@ -436,6 +442,9 @@ class RayExecutor(ExecutorBase):
 
     def release(self):
         """release."""
+        if _envs.ray_timeline_enable:
+            ray.timeline(_envs.ray_timeline_output_path)
+
         if self.dp == 1:
             try:
                 self.collective_rpc('release', timeout=5.0)

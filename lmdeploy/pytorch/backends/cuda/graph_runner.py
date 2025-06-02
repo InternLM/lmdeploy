@@ -2,6 +2,7 @@
 from typing import Any, Dict, List, Tuple
 
 import torch
+from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
@@ -68,6 +69,7 @@ class CUDASingleGraphRunner:
         self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
 
+    @record_function('capture_cudagraph')
     def capture(self, **kwargs):
         """Capture graph."""
         logger.debug(f'Capturing graph with meta: {self.meta}')
@@ -90,6 +92,7 @@ class CUDASingleGraphRunner:
         self.meta.output_buffers = output_buffers
         return output
 
+    @record_function('forward_cudagraph')
     def forward(self, **kwargs):
         """forward."""
         num_tokens = kwargs['input_ids'].size(-1)
@@ -161,7 +164,8 @@ class CUDAGraphRunner(GraphRunner):
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:
-            return self.model(**kwargs)
+            with record_function('forward_eager'):
+                return self.model(**kwargs)
 
         graph_key = self.get_graph_key(**kwargs)
         max_tokens = graph_key[0]
@@ -183,6 +187,7 @@ class CUDAGraphRunner(GraphRunner):
         output = runner.forward(**kwargs)
         return output
 
+    @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Literal
 
 import torch
+from torch.profiler import record_function
 
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
@@ -441,6 +442,7 @@ class StepContextManager:
         self._current_ctx = None
 
     @staticmethod
+    @record_function('build_step_context')
     def build_context(
         inputs: ModelInputs,
         model_config: ModelConfig,

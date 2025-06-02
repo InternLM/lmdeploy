@@ -577,7 +577,7 @@ class DeepseekV2Attention(nn.Module):
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None, info: Any = None):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -602,6 +602,7 @@ class MoEGate(nn.Module):
         self.softmax_topk = SoftmaxTopK(self.top_k)
 
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
+        self.eplb_dispatch_info = info
 
     def _compute_scores(self, logits: torch.Tensor):
         """Compute scores."""
@@ -665,6 +666,9 @@ class MoEGate(nn.Module):
         if not self.renormalize or self.topk_method == 'noaux_tc':
             topk_weight = topk_weight * self.routed_scaling_factor
 
+        if self.eplb_dispatch_info is not None:
+            topk_idx = eplb.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
+
         return topk_weight, topk_idx
 
 
@@ -685,18 +689,19 @@ class DeepseekV2MoE(nn.Module):
         self.n_group = config.n_group
         self.topk_group = config.topk_group
 
-        self.gate = MoEGate(config, dtype=dtype, device=device)
-
         dist_ctx = get_dist_manager().current_context()
         dp = dist_ctx.dp
         world_size = dist_ctx.world_size
         moe_all_reduce = dp > 1 and dist_ctx.tp > 1
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            self.eplb_dispatch_info = eplb.EPLBDispatchInfo.init_new(
+            eplb_dispatch_info = eplb.EPLBDispatchInfo.init_new(
                 ep_rank=dist_ctx.ep_rank,
                 layer_idx=layer_idx,
             )
             self.num_experts = eplb.get_global_eplb_metadata().num_physical_experts()
+            self.gate = MoEGate(config, dtype=dtype, device=device, info=eplb_dispatch_info)
+        else:
+            self.gate = MoEGate(config, dtype=dtype, device=device, info=None)
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -730,9 +735,6 @@ class DeepseekV2MoE(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
-        if get_dist_manager().current_context().dist_config.enable_eplb:
-            topk_ids = eplb.topk_ids_logical_to_physical(topk_ids, self.eplb_dispatch_info)
-
         out_states = self.experts(
             hidden_states,
             topk_weights,

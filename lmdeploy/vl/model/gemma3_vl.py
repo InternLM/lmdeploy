@@ -74,11 +74,20 @@ class Gemma3VisionModel(VisonModel):
         )
         images = self.collect_images(messages)
         images = [image.convert('RGB') for image, _ in images]
+        num_image = len(images)
         images = make_nested_list_of_images(images)
         image_inputs = self.processor.image_processor(images, **output_kwargs['images_kwargs'])
-        image_inputs['image_tokens'] = self.image_tokens
-        image_inputs['image_token_id'] = self.image_token_id
-        messages.append(dict(role='preprocess', content=[image_inputs]))
+        outputs = []
+        for idx in range(num_image):
+            pixel_values = image_inputs['pixel_values'][idx:idx + 1, ...]
+            num_crops = image_inputs['num_crops'][:idx:idx + 1]
+            data = dict(pixel_values=pixel_values,
+                        num_crops=num_crops,
+                        image_tokens=self.image_tokens,
+                        image_token_id=self.image_token_id)
+            outputs.append(data)
+
+        messages.append(dict(role='preprocess', content=outputs))
         return messages
 
     @torch.no_grad()
