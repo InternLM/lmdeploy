@@ -69,7 +69,7 @@ class AgentProfiler:
             return None
 
     def dump(self):
-        """dump profile result."""
+        """Dump profile result."""
         if self.profiler is None:
             return
 
@@ -89,7 +89,7 @@ class AgentProfiler:
             self.profiler = None
 
     async def profile_task(self):
-        """profile task."""
+        """Profile task."""
         if self.profiler is None:
             return
 
@@ -106,7 +106,7 @@ class AgentProfiler:
         self.dump()
 
     def create_task(self):
-        """create task."""
+        """Create task."""
         event_loop = asyncio.get_event_loop()
         self._task = event_loop.create_task(self.profile_task())
 
@@ -618,7 +618,7 @@ class BaseModelAgent:
                 __update_inputs(next_token_ids, model_metas)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
-        """async loop background."""
+        """Async loop background."""
         with self.all_context(), torch.cuda.stream(self.stream), torch.inference_mode():
             while True:
                 forward_inputs = await self._in_que.get()
@@ -630,7 +630,7 @@ class BaseModelAgent:
                     forward_event.set()
 
     async def _async_loop_inputs_preprocess(self):
-        """async loop inputs preprocess."""
+        """Async loop inputs preprocess."""
         non_blocking = True
         keys = ['inputs', 'all_ids', 'guided_input_ids', 'sampling_inputs', 'num_appendable_ids', 'num_ignore_eos']
         while True:
@@ -695,7 +695,7 @@ class BaseModelAgent:
         self._preprocess_task.add_done_callback(preprocess_done_callback)
 
     def stop(self):
-        """stop task."""
+        """Stop task."""
         if self.dist_ctx.dp > 1:
             return
 
@@ -711,7 +711,7 @@ class BaseModelAgent:
                 self._preprocess_task.cancel()
 
     async def stop_async(self):
-        """stop task."""
+        """Stop task."""
         if self.dist_ctx.dp > 1:
             return
 
@@ -739,7 +739,7 @@ class BaseModelAgent:
                     logger.debug('ModelAgent preprocess task cancelled.')
 
     def set_forward_inputs(self, inputs):
-        """set forward inputs."""
+        """Set forward inputs."""
         assert self._pre_in_que is not None, ('Please start backendground task before forward.')
         self._pre_in_que.put_nowait(inputs)
 

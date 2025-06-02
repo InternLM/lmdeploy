@@ -28,7 +28,7 @@ def env_to_int(
     env_var: str,
     default: int = 0,
 ):
-    """env to int."""
+    """Env to int."""
     value = os.getenv(env_var)
     if value is None:
         return default
