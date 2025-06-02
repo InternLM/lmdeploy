@@ -50,7 +50,7 @@ endif()
 FetchContent_Declare(
   repo-cutlass
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-  GIT_TAG        81a43e6d92cdd8c20d22392f9579604ed5f710a1
+  GIT_TAG        v3.9.2
   GIT_SHALLOW ON
 )
 
