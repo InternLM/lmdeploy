@@ -1,3 +1,10 @@
+
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <cuda_fp8.h>
+
+#include <cub/block/block_reduce.cuh>
+
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -5,8 +12,6 @@
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/quantization.cuh"
 #include "src/turbomind/kernels/quantization.h"
-
-#include <cub/block/block_reduce.cuh>
 
 namespace turbomind {
 
