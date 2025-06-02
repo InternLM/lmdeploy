@@ -279,7 +279,7 @@ public:
 
         int max_active_cluster{};
         cudaOccupancyMaxActiveClusters(&max_active_cluster, func, &config);
-        config.gridDim = max_active_cluster * cluster_size;
+        config.gridDim = std::min<int>(config.gridDim.x, max_active_cluster * cluster_size);
 
         // std::cout << "max active cluster: " << max_active_cluster << "\n";
 
