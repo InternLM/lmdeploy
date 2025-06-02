@@ -7,7 +7,7 @@ from ..norm import RMSNormBuilder, RMSNormImpl
 
 
 class TritonRMSNormImpl(RMSNormImpl):
-    """triton RMS norm implementation."""
+    """Triton RMS norm implementation."""
 
     def __init__(self, hidden_size: int, eps: float = 1e-6):
         self.hidden_size = hidden_size
@@ -24,7 +24,7 @@ class TritonRMSNormImpl(RMSNormImpl):
 
 
 class TritonRMSNormBuilder(RMSNormBuilder):
-    """triton RMS norm implementation builder."""
+    """Triton RMS norm implementation builder."""
 
     @staticmethod
     def build(weight: torch.Tensor, eps: float = 1e-6):

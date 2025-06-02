@@ -10,7 +10,7 @@ def env_to_bool(
     true_values: Union[set, list] = {'true', '1', 'yes', 'on'},
     false_values: Union[set, list] = {'false', '0', 'no', 'off'},
 ):
-    """env to bool."""
+    """Env to bool."""
     value = os.getenv(env_var)
     if value is None:
         return default
@@ -28,7 +28,7 @@ def env_to_int(
     env_var: str,
     default: int = 0,
 ):
-    """env to int."""
+    """Env to int."""
     value = os.getenv(env_var)
     if value is None:
         return default

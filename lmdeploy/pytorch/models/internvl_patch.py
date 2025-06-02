@@ -8,7 +8,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 
 class InternVisionEmbeddings(nn.Module):
-    """mono vision."""
+    """Mono vision."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -56,7 +56,7 @@ class InternVisionEmbeddings(nn.Module):
 
 
 class InternVisionPatchModel(nn.Module):
-    """mono vision."""
+    """Mono vision."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()

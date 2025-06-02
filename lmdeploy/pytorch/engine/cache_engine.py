@@ -72,22 +72,22 @@ class CacheEngine:
 
     @property
     def cpu_cache(self):
-        """gpu cache."""
+        """Gpu cache."""
         return self.local_cpu_cache
 
     @property
     def gpu_cache(self):
-        """gpu cache."""
+        """Gpu cache."""
         return self.local_gpu_cache
 
     @property
     def num_gpu_blocks(self):
-        """num gpu blocks."""
+        """Num gpu blocks."""
         return self.cache_config.num_gpu_blocks
 
     @property
     def num_cpu_blocks(self):
-        """num gpu blocks."""
+        """Num gpu blocks."""
         return self.cache_config.num_cpu_blocks
 
     @classmethod
@@ -98,7 +98,7 @@ class CacheEngine:
                                   world_size: int = 1,
                                   quant_policy: Literal[0, 4, 8] = 0,
                                   local: bool = True):
-        """get single block shape."""
+        """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
@@ -120,7 +120,7 @@ class CacheEngine:
                                     world_size: int = 1,
                                     quant_policy: Literal[0, 4, 8] = 0,
                                     local: bool = True):
-        """get single block shape."""
+        """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
@@ -136,7 +136,7 @@ class CacheEngine:
         return attn_backend.get_v_block_shape(block_size, num_heads, head_size, dtype)
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
-        """get shape of key block."""
+        """Get shape of key block."""
         head_size = self.model_config.k_head_dim
         if head_size is None:
             head_size = self.model_config.head_dim
@@ -150,7 +150,7 @@ class CacheEngine:
         )
 
     def get_value_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
-        """get shape of value block."""
+        """Get shape of value block."""
         head_size = self.model_config.v_head_dim
         if head_size is None:
             head_size = self.model_config.head_dim
@@ -164,7 +164,7 @@ class CacheEngine:
         )
 
     def _allocate_cache(self, num_blocks: int, device: torch.device):
-        """allocate cache implement."""
+        """Allocate cache implement."""
         key_block_shape = self.get_key_block_shape(local=True)
         value_block_shape = self.get_value_block_shape(local=True)
 
@@ -201,14 +201,14 @@ class CacheEngine:
         return output
 
     def allocate_gpu_cache(self):
-        """allocate caches on GPU."""
+        """Allocate caches on GPU."""
         caches = self._allocate_cache(self.num_gpu_blocks, 'cuda')
         self.full_gpu_cache = caches
         self.local_gpu_cache = list(zip(*caches))
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
-        """allocate caches on Host."""
+        """Allocate caches on Host."""
         caches = self._allocate_cache(self.num_cpu_blocks, 'cpu')
 
         self.full_cpu_cache = caches

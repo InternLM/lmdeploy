@@ -10,7 +10,7 @@ from ..linear import LinearBuilder, LinearImpl
 
 
 def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
-    """reduce scatter."""
+    """Reduce scatter."""
     out = out.transpose(0, -2)
     if not out.is_contiguous():
         out = out.contiguous()
@@ -43,7 +43,7 @@ class DefaultLinearImpl(LinearImpl):
 
 
 class DefaultLinearBuilder(LinearBuilder):
-    """linear implementation builder."""
+    """Linear implementation builder."""
 
     @staticmethod
     def build(in_features: int, out_features: int, bias: bool = True, dtype: torch.dtype = None):

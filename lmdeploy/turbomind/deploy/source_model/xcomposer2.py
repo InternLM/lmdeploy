@@ -26,11 +26,11 @@ class Xcomposer2Model(InternLM2Model):
     Reader = Xcomposer2Reader
 
     def _lora_cfg_7b(self):
-        """lora config for internlm-xcomposer2-7b."""
+        """Lora config for internlm-xcomposer2-7b."""
         return dict(lora_r=256, lora_scale=1.0, lora_policy='plora', lora_max_wo_r=256)
 
     def _lora_cfg_4khd_7b(self, model_info: dict):
-        """lora config for internlm-xcomposer2-4khd-7b."""
+        """Lora config for internlm-xcomposer2-4khd-7b."""
         rank_pattern = ['attention.w_qkv:8', 'attention.wo:256']
         scale_pattern = ['attention.w_qkv:2.0', 'attention.wo:1.0']
         rank_pattern = ','.join(rank_pattern)

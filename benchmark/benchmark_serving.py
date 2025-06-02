@@ -1,3 +1,4 @@
+import os
 import subprocess
 import time
 from typing import Dict, List
@@ -83,7 +84,11 @@ def benchmark_server(model_path, backend, server_config, data_config):
     # The model_path provided by the user will override the model_path in the config file.
     model_path = model_path or server_config['model_path']
     server_config.pop('model_path', None)
-    model_name = model_path.split('/')[-1]
+    model_name = os.path.basename(model_path)
+    max_batch_size = server_config['max-batch-size']
+    cache_max_entry_count = server_config.get('cache-max-entry-count', 0.8)
+    tp = server_config.get('tp', 1)
+    output_file = f'benchmark_{model_name}_{backend}_bs{max_batch_size}_tp{tp}_cache{cache_max_entry_count}.csv'
     server_cmd = get_launching_server_cmd(model_path, backend, **server_config)
     server_ip, server_port = get_server_ip_port(backend, **server_config)
     try:
@@ -95,7 +100,7 @@ def benchmark_server(model_path, backend, server_config, data_config):
             data_config = [data_config]
         assert isinstance(data_config, List) and all(isinstance(d, Dict) for d in data_config)
         for data in data_config:
-            data['output-file'] = f'benchmark_{model_name}_{backend}.csv'
+            data['output-file'] = output_file
             client_cmd = get_client_cmd(backend, server_ip, server_port, **data)
             print(f"Running client command: {' '.join(client_cmd)}")
             subprocess.run(client_cmd, check=True)
