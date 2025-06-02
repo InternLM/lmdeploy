@@ -76,7 +76,7 @@ struct GemmUniversalSm90_v5 {
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
-    static constexpr int Stages = 4;
+    static constexpr int Stages = 5;
 
     static constexpr bool kSplitK     = false;
     static constexpr int  kChunkSizeK = TILE_K;
@@ -390,12 +390,12 @@ struct GemmUniversalSm90_v5 {
                 float scales[2][2];
                 auto  scale_accum = [&](int n) {  // cta_n = mma_iter_n * wg_n * mma_atom_n
                     int m = 0;
-                    // if (n == 0) {
-                    scales[0][0] = scale_U[m][0] * scale_V[0];
-                    scales[1][0] = scale_U[m][1] * scale_V[0];
-                    scales[0][1] = scale_U[m][0] * scale_V[1];
-                    scales[1][1] = scale_U[m][1] * scale_V[1];
-                    // }
+                    if (n == 0) {
+                        scales[0][0] = scale_U[m][0] * scale_V[0];
+                        scales[1][0] = scale_U[m][1] * scale_V[0];
+                        scales[0][1] = scale_U[m][0] * scale_V[1];
+                        scales[1][1] = scale_U[m][1] * scale_V[1];
+                    }
                     PRAGMA_UNROLL
                     for (int c0 = 0; c0 < MMA_ATOM_N; c0 += OUTER_N) {
                         bool pred = (pred_V & (1U << (c0 / OUTER_N)));
@@ -430,7 +430,7 @@ struct GemmUniversalSm90_v5 {
 
                 static_assert(MMA_ITER_M == 1);
 
-                __pipeline_wait_prior(0);
+                // __pipeline_wait_prior(0);
 
                 math_barrier_sync(0);
 
@@ -441,17 +441,14 @@ struct GemmUniversalSm90_v5 {
                 Load_V();
                 ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                 Load_U();
-
                 cute::warpgroup_arrive();
                 gmma(0);
                 cute::warpgroup_wait<0>();
                 scale_accum(0);
-
                 cute::warpgroup_arrive();
                 gmma(1);
                 cute::warpgroup_wait<0>();
                 scale_accum(1);
-
                 consumer_arrive();
                 ++pipe_state;
                 --k_iter;
@@ -459,43 +456,39 @@ struct GemmUniversalSm90_v5 {
                 Load_V();
                 ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                 Load_U();
-                // smem_iter_A.Reset(pipe_state.index());
-                // smem_iter_B.Reset(pipe_state.index());
+                smem_iter_A.Reset(pipe_state.index());
+                smem_iter_B.Reset(pipe_state.index());
 
                 for (; k_iter > 1; --k_iter) {
-
-                    smem_iter_A.Reset(pipe_state.index());
-                    smem_iter_B.Reset(pipe_state.index());
+                    // smem_iter_A.Reset(pipe_state.index());
+                    // smem_iter_B.Reset(pipe_state.index());
                     cute::warpgroup_arrive();
                     gmma(0);
                     cute::warpgroup_wait<0>();
                     scale_accum(0);
-
                     cute::warpgroup_arrive();
                     gmma(1);
                     cute::warpgroup_wait<0>();
                     scale_accum(1);
-
                     consumer_arrive();
                     ++pipe_state;
+
                     Load_V();
                     ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                     Load_U();
-                    // smem_iter_A.Reset(pipe_state.index());
-                    // smem_iter_B.Reset(pipe_state.index());
+                    smem_iter_A.Reset(pipe_state.index());
+                    smem_iter_B.Reset(pipe_state.index());
                 }
 
-                smem_iter_A.Reset(pipe_state.index());
-                smem_iter_B.Reset(pipe_state.index());
+                // smem_iter_A.Reset(pipe_state.index());
+                // smem_iter_B.Reset(pipe_state.index());
                 cute::warpgroup_arrive();
                 gmma(0);
                 cute::warpgroup_wait<0>();
                 scale_accum(0);
-
                 cute::warpgroup_arrive();
                 gmma(1);
                 cute::warpgroup_wait<0>();
-
                 consumer_arrive();
                 ++pipe_state;
 
@@ -599,17 +592,17 @@ struct GemmUniversalSm90_v5 {
 
         auto Copy = [k = cdiv(K, 128)](Tv* dst, const Tv* src, bool pred) {
             const int tid = threadIdx.x % kMathGroupSize;
-            // PRAGMA_UNROLL
-            // for (int i = 0; i < MAX_K_BLOCKS; i += kMathGroupSize) {
-            //     if (int p = tid + i; p < k && pred) {
-            //         dst[p] = __ldg(&src[p]);
-            //     }
-            // }
             PRAGMA_UNROLL
-            for (int i = 0; i < MAX_K_BLOCKS; i += WARPGROUP_SIZE) {
-                int p = tid + i;
-                CP_ASYNC<CacheOp::kAlways, 4, 0>::apply(cast_smem_ptr_to_uint(&dst[p]), &src[p], p < k && pred);
+            for (int i = 0; i < MAX_K_BLOCKS; i += kMathGroupSize) {
+                if (int p = tid + i; p < k && pred) {
+                    dst[p] = __ldg(&src[p]);
+                }
             }
+            // PRAGMA_UNROLL
+            // for (int i = 0; i < MAX_K_BLOCKS; i += WARPGROUP_SIZE) {
+            //     int p = tid + i;
+            //     CP_ASYNC<CacheOp::kAlways, 4, 0>::apply(cast_smem_ptr_to_uint(&dst[p]), &src[p], p < k && pred);
+            // }
         };
 
         const Tv* gmem_V{};
@@ -641,7 +634,7 @@ struct GemmUniversalSm90_v5 {
             // }
         }
 
-        __pipeline_commit();
+        // __pipeline_commit();
     }
 };
 
