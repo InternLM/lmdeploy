@@ -63,3 +63,7 @@ torch_profile_output_prefix = os.getenv('LMDEPLOY_PROFILE_OUT_PREFIX', 'lmdeploy
 # ray timeline
 ray_timeline_enable = env_to_bool('LMDEPLOY_RAY_TIMELINE_ENABLE', False)
 ray_timeline_output_path = os.getenv('LMDEPLOY_RAY_TIMELINE_OUT_PATH', 'ray_timeline.json')
+
+# dist
+dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)
+dist_master_port = os.getenv('LMDEPLOY_DIST_MASTER_PORT', None)
