@@ -311,7 +311,6 @@ class RayExecutor(ExecutorBase):
             if self.dp == 1:
                 self.master_addr = _get_master_addr()
                 self.master_port = _get_master_port()
-                print(f'##### Using master addr: {self.master_addr}, port: {self.master_port}')
             else:
                 self.master_addr = _envs.dp_master_addr
                 self.master_port = _envs.dp_master_port
