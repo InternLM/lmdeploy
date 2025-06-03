@@ -9,12 +9,12 @@ RESET_COLOR = '\033[0m'
 
 
 def _red_text(text: str):
-    """red text."""
+    """Red text."""
     return f'{RED_COLOR}{text}{RESET_COLOR}'
 
 
 class BaseChecker:
-    """base checker."""
+    """Base checker."""
 
     def __init__(self, logger: Logger = None):
         if logger is None:
@@ -24,7 +24,7 @@ class BaseChecker:
         self._required_checker: List[BaseChecker] = list()
 
     def get_logger(self):
-        """get logger."""
+        """Get logger."""
         return self.logger
 
     def register_required_checker(self, checker: 'BaseChecker'):
@@ -32,7 +32,7 @@ class BaseChecker:
         self._required_checker.append(checker)
 
     def handle(self):
-        """handle check."""
+        """Handle check."""
         is_passed = getattr(self, '_is_passed', False)
         if not is_passed:
             checker_name = type(self).__name__

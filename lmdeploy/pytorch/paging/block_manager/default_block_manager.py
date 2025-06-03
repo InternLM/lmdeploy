@@ -7,7 +7,7 @@ from .base_block_manager import BaseBlockManager
 
 
 def _div_up(x, n):
-    """perform div up."""
+    """Perform div up."""
     return (x + n - 1) // n
 
 
@@ -24,7 +24,7 @@ class DefaultBlockManager(BaseBlockManager):
 
     @classmethod
     def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
-        """get num required blocks."""
+        """Get num required blocks."""
         num_tokens = obj.num_all_tokens() + prealloc_size
 
         # cross tokens
@@ -64,7 +64,7 @@ class DefaultBlockManager(BaseBlockManager):
         gpu_allocator = self.allocator.get_phy_allocator('gpu')
 
         def _can_swap():
-            """check swap."""
+            """Check swap."""
             if len(logical_blocks) == 0:
                 return False
 
@@ -85,7 +85,7 @@ class DefaultBlockManager(BaseBlockManager):
             return True
 
         def _do_swap():
-            """perform swap."""
+            """Perform swap."""
             new_blocks = cpu_allocator.allocate(len(logical_blocks))
 
             old_blocks = phy_blocks
@@ -110,7 +110,7 @@ class DefaultBlockManager(BaseBlockManager):
         gpu_allocator = self.allocator.get_phy_allocator('gpu')
 
         def _can_swap():
-            """check swap."""
+            """Check swap."""
             if len(logical_blocks) == 0:
                 return False
 
@@ -131,7 +131,7 @@ class DefaultBlockManager(BaseBlockManager):
             return True
 
         def _do_swap():
-            """perform swap."""
+            """Perform swap."""
             new_blocks = gpu_allocator.allocate(len(logical_blocks))
 
             old_blocks = phy_blocks

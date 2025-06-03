@@ -32,7 +32,7 @@ class DistContext:
 
     @classmethod
     def build(cls, rank: int = 0, dist_config: DistConfig = None, ccl_backend: str = 'nccl'):
-        """build dist context."""
+        """Build dist context."""
         from datetime import timedelta
         timeout = timedelta(days=35600)
         cpu_backend = 'gloo'
@@ -112,7 +112,7 @@ class DistContext:
         return context
 
     def close(self):
-        """close groups."""
+        """Close groups."""
         if not dist.is_initialized():
             return
         if self.tp_gpu_groups is not None:
@@ -127,23 +127,23 @@ DefaultContext = DistContext.build()
 
 
 class DistManager:
-    """distributed context manager."""
+    """Distributed context manager."""
 
     def __init__(self):
         self.t_local = threading.local()
         self.t_local.device_context = DefaultContext
 
     def current_context(self) -> DistContext:
-        """get current context."""
+        """Get current context."""
         return getattr(self.t_local, 'device_context', DefaultContext)
 
     def set_context(self, context: DistContext):
-        """set current context."""
+        """Set current context."""
         self.t_local.device_context = context
 
     @contextmanager
     def context(self, context: DistContext):
-        """context manager."""
+        """Context manager."""
         origin_context = self.current_context()
         self.set_context(context)
         yield self
@@ -154,7 +154,7 @@ _DIST_MANAGER: DistManager = None
 
 
 def get_dist_manager():
-    """get device manager."""
+    """Get device manager."""
     global _DIST_MANAGER
     if _DIST_MANAGER is None:
         _DIST_MANAGER = DistManager()
@@ -162,7 +162,7 @@ def get_dist_manager():
 
 
 def get_world_rank():
-    """get distributed world size and rank."""
+    """Get distributed world size and rank."""
     ctx = get_dist_manager().current_context()
     world_size = ctx.world_size
     rank = ctx.rank
@@ -186,13 +186,13 @@ def get_ep_world_rank():
 
 
 def _check_group_device(device: str):
-    """check group device."""
+    """Check group device."""
     assert (device in ['cpu', 'gpu']), ('Expect process group device in ("cpu", "gpu"), '
                                         f'but get {device}.')
 
 
 def get_process_group(device: str = None):
-    """get process group."""
+    """Get process group."""
     ctx = get_dist_manager().current_context()
     if device is None:
         return dist.GroupMember.WORLD
@@ -206,7 +206,7 @@ def get_process_group(device: str = None):
 
 
 def get_tp_group(device: str = 'gpu'):
-    """get tp group."""
+    """Get tp group."""
     ctx = get_dist_manager().current_context()
 
     _check_group_device(device)
@@ -218,7 +218,7 @@ def get_tp_group(device: str = 'gpu'):
 
 
 def get_dp_group(device: str = 'gpu'):
-    """get dp group."""
+    """Get dp group."""
     ctx = get_dist_manager().current_context()
 
     _check_group_device(device)
@@ -230,7 +230,7 @@ def get_dp_group(device: str = 'gpu'):
 
 
 def get_group(group_type: str, device: str):
-    """get group."""
+    """Get group."""
     if group_type == 'tp':
         return get_tp_group(device)
     elif group_type == 'dp':
@@ -242,7 +242,7 @@ def get_group(group_type: str, device: str):
 
 
 def all_reduce(tensor, op=ReduceOp.SUM, group='tp', async_op=False):
-    """all reduce."""
+    """All reduce."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
     return dist.all_reduce(tensor, op, group, async_op)
@@ -274,7 +274,7 @@ def all_gather_into_tensor(output_tensor, input_tensor, group='tp', async_op=Fal
 
 
 def reduce_scatter(output, input_list, op=ReduceOp.SUM, group='tp', async_op=False):
-    """reduce scatter."""
+    """Reduce scatter."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
     return dist.reduce_scatter(output, input_list, op=op, group=group, async_op=async_op)

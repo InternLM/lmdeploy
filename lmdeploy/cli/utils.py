@@ -61,11 +61,9 @@ def get_lora_adapters(adapters: List[str]):
 
 
 def get_chat_template(chat_template: str):
-    """get chat template config.
+    """Get chat template config.
 
-    Args
-        chat_template(str): it could be a builtin chat template name,
-        or a chat template json file
+    Args     chat_template(str): it could be a builtin chat template name,     or a chat template json file
     """
     import os
 
@@ -175,7 +173,7 @@ class ArgumentHelper:
 
     @staticmethod
     def dp_rank(parser):
-        """add argument dp_rank to parser."""
+        """Add argument dp_rank to parser."""
 
         return parser.add_argument('--dp-rank',
                                    type=int,
@@ -184,13 +182,13 @@ class ArgumentHelper:
 
     @staticmethod
     def node_rank(parser):
-        """add argument node_rank to parser."""
+        """Add argument node_rank to parser."""
 
         return parser.add_argument('--node-rank', type=int, default=0, help='The current node rank.')
 
     @staticmethod
     def num_nodes(parser):
-        """add argument num_nodes to parser."""
+        """Add argument num_nodes to parser."""
 
         return parser.add_argument('--nnodes', type=int, default=1, help='The total node nums')
 
