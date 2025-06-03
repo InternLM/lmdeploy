@@ -582,14 +582,14 @@ class RayExecutor(ExecutorBase):
         driver_ip = _get_master_addr()
         if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
-            
+
         elif device_str == 'ascend':
             self._init_ascend_distributed_environment(driver_ip)
         else:
             raise ValueError(f'Unsupported device type: {device_str}')
 
     def _init_ascend_distributed_environment(self, driver_ip):
-        """init ascend distributed environment."""
+        """Init ascend distributed environment."""
         rank_table_file = _envs.ascend_rank_table_file
         if not rank_table_file:
             # if rank table file is not set, treat as single node
