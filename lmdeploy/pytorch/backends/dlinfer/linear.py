@@ -14,7 +14,7 @@ class DlinferLinearImpl(LinearImpl):
     """Dlinfer linear implementation api."""
 
     def update_weights(self, weight: torch.Tensor, bias: Optional[torch.Tensor] = None):
-        """update weights."""
+        """Update weights."""
         if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
         if weight.device.type == 'npu':

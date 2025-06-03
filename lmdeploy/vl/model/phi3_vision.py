@@ -30,7 +30,7 @@ class Phi3VisionModel(LlavaHfVisionModel):
             raise NotImplementedError('turbomind has not supported phi3v yet')
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refers to `super.preprocess() for spec."""
+        """Refers to `super.preprocess() for spec."""
         images = self.collect_images(messages)
         outputs = []
         for image, params in images:
