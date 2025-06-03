@@ -95,7 +95,6 @@ turbomind_chat_model:
     - THUDM/glm-4-9b-chat
     - THUDM/codegeex4-all-9b
     - openbmb/MiniCPM-Llama3-V-2_5
-    - openbmb/MiniCPM-V-2_6
     - allenai/Molmo-7B-D-0924
 
 pytorch_chat_model:
@@ -158,7 +157,6 @@ pytorch_chat_model:
     - THUDM/glm-4v-9b
     - THUDM/glm-4-9b-chat
     - THUDM/codegeex4-all-9b
-    - openbmb/MiniCPM-V-2_6
     - microsoft/Phi-4-mini-instruct
     - microsoft/Phi-3.5-mini-instruct
     - microsoft/Phi-3.5-vision-instruct
@@ -188,7 +186,6 @@ turbomind_vl_model:
     - internlm/internlm-xcomposer2d5-7b
     - internlm/internlm-xcomposer2-4khd-7b
     - openbmb/MiniCPM-Llama3-V-2_5
-    - openbmb/MiniCPM-V-2_6
 
 pytorch_vl_model:
     - meta-llama/Llama-3.2-11B-Vision-Instruct
@@ -212,7 +209,6 @@ pytorch_vl_model:
     - THUDM/cogvlm-chat-hf
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
-    - openbmb/MiniCPM-V-2_6
     - microsoft/Phi-3-vision-128k-instruct
     - microsoft/Phi-3.5-vision-instruct
 
@@ -255,7 +251,6 @@ turbomind_quatization:
         - OpenGVLab/InternVL3-2B
         - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL2_5-1B
-        - openbmb/MiniCPM-V-2_6
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-32B
@@ -336,8 +331,6 @@ pytorch_quatization:
         - microsoft/Phi-3-mini-4k-instruct
         - microsoft/Phi-3-vision-128k-instruct
         - microsoft/Phi-3.5-vision-instruct
-        - microsoft/Phi-3.5-mini-instruct
-        - openbmb/MiniCPM-V-2_6
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 
