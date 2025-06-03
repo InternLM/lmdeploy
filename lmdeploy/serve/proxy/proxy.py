@@ -181,7 +181,7 @@ class NodeManager:
                 self.pd_connection_pool.drop(*conn)
 
     def terminate_node(self, node_url: str):
-        """terminate a node."""
+        """Terminate a node."""
         success = True
         if node_url in self.nodes:
             self.nodes.pop(node_url)
@@ -201,7 +201,7 @@ class NodeManager:
         return success
 
     def terminate_all_nodes(self):
-        """terminate all nodes."""
+        """Terminate all nodes."""
         node_url_li = list(self.nodes.keys())
         all_success = True
         for node_url in node_url_li:
@@ -210,7 +210,7 @@ class NodeManager:
         return all_success
 
     def remove_stale_nodes_by_expiration(self):
-        """remove stale nodes."""
+        """Remove stale nodes."""
         to_be_deleted = []
         node_urls = list(self.nodes.keys())
         for node_url in node_urls:
@@ -479,7 +479,7 @@ def remove_node(node: Node):
 
 @app.post('/nodes/terminate', dependencies=[Depends(check_api_key)])
 def terminate_node(node: Node):
-    """terminate nodes."""
+    """Terminate nodes."""
     try:
         node_url = node.url
         success = node_manager.terminate_node(node_url)
@@ -493,7 +493,7 @@ def terminate_node(node: Node):
 
 @app.get('/nodes/terminate_all', dependencies=[Depends(check_api_key)])
 def terminate_node_all():
-    """terminate nodes."""
+    """Terminate nodes."""
     try:
         success = node_manager.terminate_all_nodes()
         if not success:

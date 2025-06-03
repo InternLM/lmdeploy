@@ -12,7 +12,7 @@ class MLlamaModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
-        """build llava hf."""
+        """Build llava hf."""
         cfg = DefaultModelConfigBuilder.build(hf_config.text_config, model_path, **kwargs)
         cfg.hf_config = hf_config
         return cfg

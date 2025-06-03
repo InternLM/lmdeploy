@@ -3,7 +3,7 @@ from .base import BaseChecker
 
 
 class AdapterChecker(BaseChecker):
-    """check adapter is available."""
+    """Check adapter is available."""
 
     def __init__(self, adapter_path: str, logger=None):
         super().__init__(logger)

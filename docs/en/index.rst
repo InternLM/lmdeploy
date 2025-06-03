@@ -103,6 +103,7 @@ Documentation
    advance/debug_turbomind.md
    advance/structed_output.md
    advance/pytorch_multinodes.md
+   advance/pytorch_profiling.md
 
 .. toctree::
    :maxdepth: 1
