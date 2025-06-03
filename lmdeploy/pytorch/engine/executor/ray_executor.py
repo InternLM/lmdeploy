@@ -305,6 +305,7 @@ class RayExecutor(ExecutorBase):
             if self.dp == 1:
                 self.master_addr = _get_master_addr()
                 self.master_port = _get_master_port()
+                print(f'##### Using master addr: {self.master_addr}, port: {self.master_port}')
             else:
                 self.master_addr = _envs.dp_master_addr
                 self.master_port = _envs.dp_master_port
@@ -572,11 +573,12 @@ class RayExecutor(ExecutorBase):
         driver_ip = _get_master_addr()
         if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
+            
         elif device_str == 'ascend':
-            rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
-            self.workers = self._sort_workers_by_ip(worker_ips, self.workers)
-            ray.get([worker.set_device.remote(rank_mapping[idx]) for idx, worker in enumerate(self.workers)])
-            ray.get([worker.set_env.remote(envs) for worker in self.workers])
+            # rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)            
+            self.workers = self._sort_workers(driver_ip, self.workers)
+            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
+            # ray.get([worker.set_env.remote(envs) for worker in self.workers])
         else:
             raise ValueError(f'Unsupported device type: {device_str}')
 
