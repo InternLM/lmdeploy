@@ -50,7 +50,7 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
 
 @dataclass
 class BackendConfig:
-    """backend config."""
+    """Backend config."""
     eager_mode: bool = True
     device_type: str = 'cuda'
 
@@ -90,7 +90,7 @@ class CacheConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
 
     def __post_init__(self):
-        """post init."""
+        """Post init."""
         from lmdeploy.utils import get_logger
         logger = get_logger('lmdeploy')
         if self.window_size > 1 and self.enable_prefix_caching:
@@ -110,7 +110,7 @@ class DistConfig:
     attn_config: 'DistConfig' = None
 
     def __post_init__(self):
-        """post init."""
+        """Post init."""
         assert self.dp_rank < self.dp
         assert self.dp >= 1
         if self.dp == 1:
@@ -123,7 +123,7 @@ class DistConfig:
         self.attn_config = attn_config
 
     def need_dummy_batch(self):
-        """need dummy batch."""
+        """Need dummy batch."""
         if self.dp == 1:
             return False
         return self.tp > 1 or self.ep > 1
@@ -151,7 +151,7 @@ class ModelConfig:
     use_flash_mla: bool = False
 
     def get_head_size(self):
-        """get head size."""
+        """Get head size."""
         return self.head_dim
 
     @classmethod
@@ -183,7 +183,7 @@ class ModelConfig:
                        model_path: str = None,
                        dtype: str = 'auto',
                        dist_config: DistConfig = None):
-        """from huggingface config."""
+        """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
         if dist_config is None:
             dist_config = DistConfig()

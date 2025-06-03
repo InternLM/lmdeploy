@@ -12,7 +12,7 @@ from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
 
 @dataclass
 class TritonAttentionMetadata(AttentionMetadata):
-    """triton attention metadata."""
+    """Triton attention metadata."""
     is_decoding: bool
     block_offsets: torch.Tensor
     q_start_loc: torch.Tensor = None
@@ -28,12 +28,12 @@ class TritonAttentionMetadata(AttentionMetadata):
 
 
 def _cdiv(a, b):
-    """perform div up."""
+    """Perform div up."""
     return (a + b - 1) // b
 
 
 class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
-    """triton attention implementation."""
+    """Triton attention implementation."""
 
     def __init__(
         self,
@@ -338,7 +338,7 @@ class FlashMLAImpl(TritonAttentionImpl):
 
 
 class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
-    """triton attention builder."""
+    """Triton attention builder."""
 
     @staticmethod
     def build(

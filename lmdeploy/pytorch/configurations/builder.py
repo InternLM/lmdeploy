@@ -16,7 +16,7 @@ class AutoModelConfigBuilder(ABC):
 
     @classmethod
     def register_builder(cls, sub_cls):
-        """register builder."""
+        """Register builder."""
         if sub_cls not in AutoModelConfigBuilder._sub_classes:
             AutoModelConfigBuilder._sub_classes.append(sub_cls)
 
@@ -52,7 +52,7 @@ class AutoModelConfigBuilder(ABC):
 
     @classmethod
     def update_num_kv_heads(cls, hf_config, tp, num_key_value_heads):
-        """update num kv heads."""
+        """Update num kv heads."""
         # update num_kv_heads for tp mode
         if tp > 1 and tp > num_key_value_heads:
             assert tp % num_key_value_heads == 0

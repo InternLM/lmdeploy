@@ -9,7 +9,7 @@ class LinearImpl(ABC):
     """Linear implementation api."""
 
     def update_weights(self, weight: torch.Tensor, bias: Optional[torch.Tensor] = None):
-        """update weights."""
+        """Update weights."""
         return weight, bias
 
     @abstractmethod
@@ -25,7 +25,7 @@ class LinearImpl(ABC):
 
 
 class LinearBuilder(ABC):
-    """linear implementation builder."""
+    """Linear implementation builder."""
 
     @staticmethod
     @abstractmethod

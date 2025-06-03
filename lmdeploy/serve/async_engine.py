@@ -78,7 +78,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
 
 
 def _append_response(dst: Response, src: Response):
-    """dst += src."""
+    """Dst += src."""
     if not dst:
         return src
     dst.text += src.text
@@ -116,7 +116,7 @@ class Session:
         self.history: List[Tuple[Any, str]] = []
 
     def _merge_response(self, resp: Response, step: Union[Response, GenOut]):
-        """merge response."""
+        """Merge response."""
         resp.text += step.text if isinstance(step, Response) else step.response
         resp.input_token_len = step.input_token_len
         resp.generate_token_len = step.generate_token_len
@@ -125,11 +125,11 @@ class Session:
 
     @property
     def response(self) -> Response:
-        """return response."""
+        """Return response."""
         return self._response
 
     def close(self):
-        """release engine storage for this session."""
+        """Release engine storage for this session."""
         if self._engine:
             self._engine._run(coro=self._engine.end_session(self._id)).result()
             self._engine = None
@@ -923,15 +923,14 @@ class AsyncEngine(LogitsMixin):
         return session
 
     def start_loop(self, use_async_api=False):
-        """start engine loop.
+        """Start engine loop.
 
-        When using pytorch backend with dp > 1, all dp_rank should receive at least one request
-        before it can start processing (warmup). Since pytorch engine will bound to event loop,
-        the pipeline can only choose either the synchronous apis(__call__, stream_infer, etc.) or
-        the asynchronous api (generate) during its lifetime.
+        When using pytorch backend with dp > 1, all dp_rank should receive at least one request before it can start
+        processing (warmup). Since pytorch engine will bound to event loop, the pipeline can only choose either the
+        synchronous apis(__call__, stream_infer, etc.) or the asynchronous api (generate) during its lifetime.
 
-        The purpose of this function is to allow users to choose whether to use the
-        synchronous interface or the asynchronous interface for the pipeline.
+        The purpose of this function is to allow users to choose whether to use the synchronous interface or the
+        asynchronous interface for the pipeline.
         """
         if hasattr(self.engine, 'start_loop'):
             if use_async_api:

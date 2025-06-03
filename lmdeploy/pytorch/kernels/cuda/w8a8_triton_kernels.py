@@ -307,7 +307,7 @@ def per_token_quant_int8(x, eps, quant_dtype=torch.int8):
 
 @triton.jit
 def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
-    """compute rms norm."""
+    """Compute rms norm."""
     xf = x.to(tl.float32)
 
     var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
@@ -330,7 +330,7 @@ def rms_norm_quant_kernel(
     Q_MAX: tl.constexpr,
     IS_FLOATING_POINT: tl.constexpr,
 ):
-    """rms norm kernel."""
+    """Rms norm kernel."""
     prog_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
 
@@ -368,7 +368,7 @@ def add_rms_norm_quant_kernel(
     Q_MAX: tl.constexpr,
     IS_FLOATING_POINT: tl.constexpr,
 ):
-    """rms norm kernel."""
+    """Rms norm kernel."""
     prog_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
 
@@ -503,7 +503,7 @@ def test_per_token_quant(x, eps, quant_dtype=torch.int8):
 
 
 def bench_rms_and_linear(M: int, provider: str, dtype: torch.dtype = torch.float16, eps: float = 1e-5):
-    """benchmark rms and linear."""
+    """Benchmark rms and linear."""
 
     def rms_norm_torch(x, w, eps):
         variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
