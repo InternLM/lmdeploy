@@ -575,12 +575,24 @@ class RayExecutor(ExecutorBase):
             self.workers = self._sort_workers(driver_ip, self.workers)
             
         elif device_str == 'ascend':
-            # rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)            
-            self.workers = self._sort_workers(driver_ip, self.workers)
-            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
-            # ray.get([worker.set_env.remote(envs) for worker in self.workers])
+            self._init_ascend_distributed_environment(driver_ip)
         else:
             raise ValueError(f'Unsupported device type: {device_str}')
+
+    def _init_ascend_distributed_environment(self, driver_ip):
+        """init ascend distributed environment."""
+        rank_table_file = _envs.ascend_rank_table_file
+        if not rank_table_file:
+            # if rank table file is not set, treat as single node
+            self.workers = self._sort_workers(driver_ip, self.workers)
+            # simply set device by index, this is for single node, multiple devices
+            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
+        else:
+            # if rank table file is set, use it to get rank mapping, multiple nodes
+            rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
+            self.workers = self._sort_workers_by_ip(worker_ips, self.workers)
+            ray.get([worker.set_device.remote(rank_mapping[idx]) for idx, worker in enumerate(self.workers)])
+            ray.get([worker.set_env.remote(envs) for worker in self.workers])
 
     """ PD Disaggregation API Begin """
 
