@@ -302,7 +302,7 @@ def build_1_2_5_buckets(max_value: int) -> List[int]:
 
 
 def setup_loggers(model_name: str, max_model_len: int, engine_num: int):
-    """setup loggers."""
+    """Setup loggers."""
     stat_loggers: List[List[StatLoggerBase]] = []
     for dp_rank in range(engine_num):
         stat_loggers.append([
