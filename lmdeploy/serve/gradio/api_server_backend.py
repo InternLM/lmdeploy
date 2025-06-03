@@ -51,7 +51,7 @@ def chat_stream_restful(instruction: str, state_chatbot: Sequence, cancel_btn: g
 
 
 def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State, session_id: int):
-    """reset the session.
+    """Reset the session.
 
     Args:
         instruction_txtbox (str): user's prompt
@@ -75,7 +75,7 @@ def reset_restful_func(instruction_txtbox: gr.Textbox, state_chatbot: gr.State, 
 
 
 def cancel_restful_func(state_chatbot: gr.State, cancel_btn: gr.Button, reset_btn: gr.Button, session_id: int):
-    """stop the session.
+    """Stop the session.
 
     Args:
         instruction_txtbox (str): user's prompt
@@ -119,7 +119,7 @@ def run_api_server(api_server_url: str,
                    server_port: int = 6006,
                    batch_size: int = 32,
                    share: bool = False):
-    """chat with AI assistant through web ui.
+    """Chat with AI assistant through web ui.
 
     Args:
         api_server_url (str): restufl api url

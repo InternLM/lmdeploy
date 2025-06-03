@@ -69,7 +69,7 @@ class AgentProfiler:
             return None
 
     def dump(self):
-        """dump profile result."""
+        """Dump profile result."""
         if self.profiler is None:
             return
 
@@ -89,7 +89,7 @@ class AgentProfiler:
             self.profiler = None
 
     async def profile_task(self):
-        """profile task."""
+        """Profile task."""
         if self.profiler is None:
             return
 
@@ -106,18 +106,18 @@ class AgentProfiler:
         self.dump()
 
     def create_task(self):
-        """create task."""
+        """Create task."""
         event_loop = asyncio.get_event_loop()
         self._task = event_loop.create_task(self.profile_task())
 
 
 def msg_with_rank(rank: int, msg: str):
-    """return message with rank."""
+    """Return message with rank."""
     return f'rank[{rank}] - {msg}'
 
 
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
-    """perform cache swapping."""
+    """Perform cache swapping."""
     issued_cache_op = False
     if len(swap_in_map) > 0:
         cache_engine.swap_in(swap_in_map)
@@ -137,7 +137,7 @@ def model_forward(
     cache_engine: CacheEngine,
     stream: torch.cuda.Stream = None,
 ):
-    """perform model forward."""
+    """Perform model forward."""
     stream = stream or torch.cuda.current_stream()
     with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
@@ -164,7 +164,7 @@ def model_forward(
 
 @record_function('stopping_criteria')
 def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
-    """batched stopping criteria."""
+    """Batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
     stopped = num_appendable_ids <= 0
     if stop_words is not None:
@@ -187,7 +187,7 @@ def _try_to_cuda(val, non_blocking: bool = False):
 
 
 class DistGatherScalar:
-    """distribute value gather."""
+    """Distribute value gather."""
 
     def __init__(self, val, size: int, device: str = 'cpu', group: dist.ProcessGroup = None):
         self.val = val
@@ -278,15 +278,15 @@ class BaseModelAgent:
             yield
 
     def set_cache_config(self, cache_config: CacheConfig):
-        """set all cache config."""
+        """Set all cache config."""
         self.cache_config = cache_config
 
     def set_model_config(self, model_config: ModelConfig):
-        """set model config."""
+        """Set model config."""
         self.model_config = model_config
 
     def get_free_mem(self):
-        """gather available memory."""
+        """Gather available memory."""
         with self.all_context():
             torch.cuda.empty_cache()
             gpu_mem_physical_free, _ = get_gpu_memory()
@@ -311,12 +311,12 @@ class BaseModelAgent:
         return_logits: bool,
         sync_long_context: bool,
     ):
-        """model forward."""
+        """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
 
         class _OutputGather:
-            """output gather."""
+            """Output gather."""
 
             def __init__(self, max_seq_len):
                 self._max_seq_len = max_seq_len
@@ -341,7 +341,7 @@ class BaseModelAgent:
                 self._output = out_logits
 
             def get_output(self):
-                """get tmp_output."""
+                """Get tmp_output."""
                 if not return_logits:
                     return self._output[:, -1:]
                 torch.cuda.synchronize()
@@ -357,7 +357,7 @@ class BaseModelAgent:
                 return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         async def __long_context_single_forward(new_inputs, max_seqlen: int):
-            """one large sequence."""
+            """One large sequence."""
             dist_ctx = get_dist_manager().current_context()
             dp = dist_ctx.dp
             model_metas = new_inputs[0].model_metas
@@ -419,10 +419,10 @@ class BaseModelAgent:
 
     async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
                                     sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
-        """sampling logits."""
+        """Sampling logits."""
 
         def __get_last_logits():
-            """get last logits."""
+            """Get last logits."""
             seq_length = inputs.seq_length
             if len(seq_length) == logits.size(0):
                 return logits
@@ -441,7 +441,7 @@ class BaseModelAgent:
         return next_token_ids
 
     def _push_output(self, output: dict):
-        """push output."""
+        """Push output."""
         event = torch.cuda.Event()
         event.record()
         output['event'] = event
@@ -474,7 +474,7 @@ class BaseModelAgent:
         is_dummy: bool = False,
         sync_long_context: bool = False,
     ):
-        """asyc forward task."""
+        """Asyc forward task."""
         if swap_in_map is None:
             swap_in_map = dict()
 
@@ -485,7 +485,7 @@ class BaseModelAgent:
 
         @record_function('update_inputs_for_next_step')
         def __update_inputs(next_token_ids, model_metas):
-            """update inputs."""
+            """Update inputs."""
             nonlocal all_ids, guided_input_ids, swap_in_map, swap_out_map
             swap_in_map = dict()
             swap_out_map = dict()
@@ -500,7 +500,7 @@ class BaseModelAgent:
 
         @asynccontextmanager
         async def __prepare_dp():
-            """prepare dp."""
+            """Prepare dp."""
             if dp == 1:
                 yield
                 return
@@ -620,7 +620,7 @@ class BaseModelAgent:
                 __update_inputs(next_token_ids, model_metas)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
-        """async loop background."""
+        """Async loop background."""
         with self.all_context(), torch.cuda.stream(self.stream), torch.inference_mode():
             dist_ctx = get_dist_manager().current_context()
             dp = dist_ctx.dp
@@ -643,7 +643,7 @@ class BaseModelAgent:
                 input_maker.step()
 
     async def _async_loop_inputs_preprocess(self):
-        """async loop inputs preprocess."""
+        """Async loop inputs preprocess."""
         non_blocking = True
         keys = ['inputs', 'all_ids', 'guided_input_ids', 'sampling_inputs', 'num_appendable_ids', 'num_ignore_eos']
         while True:
@@ -661,7 +661,7 @@ class BaseModelAgent:
 
     @staticmethod
     def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
-        """raise exception on finish."""
+        """Raise exception on finish."""
         task_name = task.get_name()
         try:
             task.result()
@@ -676,7 +676,7 @@ class BaseModelAgent:
                     ptask.cancel()
 
     def start(self, forward_event: asyncio.Event = None):
-        """start event loop."""
+        """Start event loop."""
         event_loop = asyncio.get_event_loop()
         self._pre_in_que = asyncio.Queue()
         self._in_que = asyncio.Queue()
@@ -708,7 +708,7 @@ class BaseModelAgent:
         self._preprocess_task.add_done_callback(preprocess_done_callback)
 
     def stop(self):
-        """stop task."""
+        """Stop task."""
         if self.dist_ctx.dp > 1:
             return
 
@@ -724,7 +724,7 @@ class BaseModelAgent:
                 self._preprocess_task.cancel()
 
     async def stop_async(self):
-        """stop task."""
+        """Stop task."""
         if self.dist_ctx.dp > 1:
             return
 
@@ -752,12 +752,12 @@ class BaseModelAgent:
                     logger.debug('ModelAgent preprocess task cancelled.')
 
     def set_forward_inputs(self, inputs):
-        """set forward inputs."""
+        """Set forward inputs."""
         assert self._pre_in_que is not None, ('Please start backendground task before forward.')
         self._pre_in_que.put_nowait(inputs)
 
     async def get_output_async(self):
-        """async get output."""
+        """Async get output."""
         assert self._out_que is not None, ('Please start backendground task before forward.')
         out = await self._out_que.get()
         if out is None:
@@ -774,7 +774,7 @@ class BaseModelAgent:
         return out
 
     def _build_model(self):
-        """build patched model."""
+        """Build patched model."""
         model_path = self.model_path
         adapters = self.adapters
         device = self.device
@@ -793,12 +793,12 @@ class BaseModelAgent:
         self.patched_model = patched_model
 
     def build_model(self):
-        """build model api."""
+        """Build model api."""
         with self.all_context():
             self._build_model()
 
     def build_graph_runner(self):
-        """build graph runner."""
+        """Build graph runner."""
         with self.all_context():
             backend = get_backend()
             self.patched_model = backend.build_graph_runner(self.patched_model,
@@ -808,7 +808,7 @@ class BaseModelAgent:
                                                             device=self.device)
 
     def build_cache_engine(self):
-        """build cache engine."""
+        """Build cache engine."""
         with self.all_context():
             dist_ctx = self.dist_ctx
             attn_dist_cfg = dist_ctx.dist_config.attn_config
@@ -831,7 +831,7 @@ class BaseModelAgent:
         return output
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        """model forward.
+        """Model forward.
 
         Args:
             inputs (Dict): The input data comes from _make_inputs.
@@ -844,21 +844,21 @@ class BaseModelAgent:
 
     @record_function('get_logits')
     def get_logits(self, hidden_states: torch.Tensor):
-        """get logits of model output."""
+        """Get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
 
     def get_input_processor(self):
-        """get input processor.."""
+        """Get input processor.."""
         return self.patched_model.get_input_processor()
 
     def reset_graph_runner(self):
-        """reset graph runner to prevent tp hanging."""
+        """Reset graph runner to prevent tp hanging."""
         if hasattr(self.patched_model, 'reset'):
             self.patched_model.reset()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
-        """update params."""
+        """Update params."""
 
         # modified from https://github.com/vllm-project/vllm/blob/v0.8.5/examples/offline_inference/rlhf_utils.py#L82
         def _construct(item):
@@ -926,7 +926,7 @@ class DPForwardInputsMaker:
         self._ready_event = torch.cuda.Event()
 
     def _make_dummy_forward_inputs(self):
-        """make dummy forward inputs."""
+        """Make dummy forward inputs."""
         is_decoding = self._is_decoding
         loop_count = self.misc_config.prefill_interval if is_decoding else 1
         dist_config = self.dist_ctx.dist_config
@@ -945,7 +945,7 @@ class DPForwardInputsMaker:
         return forward_inputs
 
     def _update_is_decoding(self, forward_inputs):
-        """update is decoding."""
+        """Update is decoding."""
         model_inputs = forward_inputs['inputs']
         assert model_inputs.is_decoding == self._is_decoding
         if self.cache_config.role != EngineRole.Prefill:
@@ -998,7 +998,7 @@ def build_model_agent(model_path: str,
                       dist_ctx: DistContext = None,
                       device_ctx: DeviceContext = None,
                       adapters: Dict[str, str] = None):
-    """create model agent.
+    """Create model agent.
 
     Args:
         model_path (str): the path of the input model

@@ -4,7 +4,7 @@ from typing import List
 
 
 class Timer:
-    """debug timer."""
+    """Debug timer."""
 
     def __init__(self):
         self.duration = None
@@ -63,7 +63,7 @@ class Timer:
 
     @staticmethod
     def format_duration(duration: float, acc: int = 3):
-        """format duration."""
+        """Format duration."""
         unit = 'ms'
         if duration < 1:
             duration *= 1000
@@ -76,7 +76,7 @@ class Timer:
 
     @staticmethod
     def format_flops(flops: float, acc: int = 3):
-        """compute flops."""
+        """Compute flops."""
         unit = ''
         if flops > (1 << 40):
             flops /= (1 << 40)
@@ -94,7 +94,7 @@ class Timer:
 
     @staticmethod
     def formatted_print(out_info: dict, title: str = None):
-        """formatted print."""
+        """Formatted print."""
         max_key_len = max(len(k) for k in out_info.keys())
         max_key_len = min(10, max_key_len)
         max_val_len = max(len(k) for k in out_info.values())

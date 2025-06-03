@@ -19,7 +19,7 @@ logger = get_logger('lmdeploy')
 
 
 def check_llava_install():
-    """check llava install."""
+    """Check llava install."""
     try:
         import llava  # noqa: F401
     except ImportError:
@@ -40,7 +40,7 @@ def _clip_vision_tower_load_model(self, **kwargs):
 
 @contextmanager
 def init_llava_vision_tower(config):
-    """skip download vision model if possible."""
+    """Skip download vision model if possible."""
     if getattr(config, 'unfreeze_mm_vision_tower', False):
         origin_func_path = [
             'llava.model.multimodal_encoder.clip_encoder.CLIPVisionTower.load_model'  # noqa: E501
@@ -207,7 +207,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
 
     @classmethod
     def match(cls, config: AutoConfig):
-        """check whether the config match the model."""
+        """Check whether the config match the model."""
         arch = config.architectures[0] if config.architectures else None
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
             # internvl-llava has vision_tower of OpenGVLab/xxx
@@ -232,7 +232,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
             self.n_token_per_image += 1
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
 
@@ -290,13 +290,13 @@ class LlavaVisionModel(LlavaHfVisionModel):
         self.mm_projector = model.model.mm_projector.half().eval()
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
-        """encode images."""
+        """Encode images."""
         image_features = self.vision_tower(images)
         image_features = self.mm_projector(image_features)
         return image_features
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to `super().preprocess() for spec."""
+        """Refer to `super().preprocess() for spec."""
         images = self.collect_images(messages)
         outputs = []
         for image, params in images:
@@ -312,7 +312,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:

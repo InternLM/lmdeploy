@@ -14,7 +14,7 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 
 
 def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):
-    """broadcast tensor."""
+    """Broadcast tensor."""
     if value.device.type == 'meta':
         value = torch.empty_like(value, device=device)
     dist.broadcast(value, src, group=dist.get_tp_group('gpu'))
@@ -28,7 +28,7 @@ class DPMeta:
 
     @classmethod
     def build(cls, seqlen: int):
-        """get dp meta."""
+        """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
 
         tp = dist_ctx.tp
@@ -54,7 +54,7 @@ class VisionModelInputs:
     input_multimodals: List[MultiModalTensor] = None
 
     def to_device(self, device: str, non_blocking: bool = False):
-        """to device."""
+        """To device."""
         out_dict = dict()
         for f in fields(self):
             k = f.name
@@ -81,7 +81,7 @@ class VisionModelInputs:
         return VisionModelInputs(**out_dict)
 
     def broadcast(self):
-        """broadcast inputs.
+        """Broadcast inputs.
 
         Do `dist.broadcast_object_list(inputs.to_device('meta'))`
         before broadcast tensors.
@@ -112,7 +112,7 @@ class VisionModelInputs:
         return VisionModelInputs(**out_dict)
 
     def get_inputs(self, history_lengths: torch.Tensor, seq_lengths: torch.Tensor):
-        """get vision embedding inputs."""
+        """Get vision embedding inputs."""
         input_embeddings = None
         input_embedding_indexing = None
         if self.input_embeddings is not None and len(self.input_embeddings) > 0:
@@ -154,7 +154,7 @@ class ModelInputs:
     dp_meta: 'DPMeta' = None
 
     def update(self, input_ids: torch.LongTensor):
-        """update input ids."""
+        """Update input ids."""
         assert self.is_decoding
         self.history_lengths = self.history_lengths + 1
         if input_ids.dim() == 1:
@@ -163,7 +163,7 @@ class ModelInputs:
         return self
 
     def split(self, split_size: int):
-        """split inputs."""
+        """Split inputs."""
         assert len(self.seq_length) == 1, ('Can not perform split on batched input.')
 
         input_ids = self.input_ids
@@ -246,7 +246,7 @@ class ModelInputs:
 
     @torch.inference_mode()
     def to_device(self, device: str, non_blocking: bool = False):
-        """to device."""
+        """To device."""
         out_dict = dict()
         for f in fields(self):
             k = f.name
@@ -260,7 +260,7 @@ class ModelInputs:
         return ModelInputs(**out_dict)
 
     def broadcast(self):
-        """broadcast inputs.
+        """Broadcast inputs.
 
         Do `dist.broadcast_object_list(inputs.to_device('meta'))`
         before broadcast tensors.
@@ -278,7 +278,7 @@ class ModelInputs:
         return ModelInputs(**out_dict)
 
     def build_dp_meta(self):
-        """build dp meta."""
+        """Build dp meta."""
         self.dp_meta = DPMeta.build(self.input_ids.numel())
 
     @classmethod
@@ -289,7 +289,7 @@ class ModelInputs:
                    device: str = 'cpu',
                    dummy_block_id: int = 0,
                    vocab_size: int = 1):
-        """make dummy inputs."""
+        """Make dummy inputs."""
         input_ids = torch.randint(0, vocab_size, (
             1,
             batch_size,
@@ -309,7 +309,7 @@ class ModelInputs:
         )
 
     def log_info(self):
-        """get log info."""
+        """Get log info."""
         ret = (f'num_tokens={self.input_ids.numel()}, batch_size={self.seq_length.numel()}'
                f', is_decoding={self.is_decoding}, has_vision={self.vision_inputs is not None}')
         return ret
@@ -317,7 +317,7 @@ class ModelInputs:
 
 @dataclass
 class StepContext:
-    """context of Model.
+    """Context of Model.
 
     patched model might need extra information to perform inference. This dataclass provide these infos and tools.
     """
@@ -355,7 +355,7 @@ class StepContext:
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
-        """build step context.
+        """Build step context.
 
         Args:
             inputs (ModelInputs): packaged model inputs.
@@ -427,7 +427,7 @@ class StepContext:
 
     @classmethod
     def get_position_ids_1d(cls, position_ids: torch.LongTensor, seq_length: torch.LongTensor):
-        """get 1d position_ids."""
+        """Get 1d position_ids."""
         if position_ids.size(0) == 1 or position_ids.size(1) == 1:
             position_ids_1d = position_ids.flatten()
         else:
@@ -450,7 +450,7 @@ class StepContextManager:
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
-        """build context."""
+        """Build context."""
         return StepContext.new(
             inputs,
             model_config,
@@ -459,19 +459,19 @@ class StepContextManager:
         )
 
     def set_context(self, ctx: StepContext):
-        """set context."""
+        """Set context."""
         self._current_ctx = ctx
 
     @contextmanager
     def context(self, ctx: StepContext):
-        """context context."""
+        """Context context."""
         old_ctx = self.current_context()
         self.set_context(ctx)
         yield ctx
         self.set_context(old_ctx)
 
     def current_context(self):
-        """get current_context."""
+        """Get current_context."""
         return self._current_ctx
 
 
@@ -485,7 +485,7 @@ def set_step_ctx_manager(mgr: StepContextManager):
 
 
 def get_step_ctx_manager():
-    """get device manager."""
+    """Get device manager."""
     return _CTX_MANAGER
 
 
