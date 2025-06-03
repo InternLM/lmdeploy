@@ -852,7 +852,7 @@ class Engine:
             return None
 
         # schedule decoding if no valid prefill reqs.
-        if prefill and len(scheduler_output.running) == 0 and not self.engine_config.role != EngineRole.Prefill:
+        if prefill and len(scheduler_output.running) == 0 and self.engine_config.role != EngineRole.Prefill:
             prefill = False
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
