@@ -39,6 +39,7 @@
 
 namespace turbomind::gemm {
 
+template<Order raster_order, bool is_grouped_gemm_>
 struct GemmUniversalSm90_v5 {
 
     static constexpr bool kDebug = false;
@@ -95,9 +96,9 @@ struct GemmUniversalSm90_v5 {
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
-    static constexpr auto is_grouped_gemm = false;
+    static constexpr auto is_grouped_gemm = is_grouped_gemm_;
 
-    using Scheduler = TileScheduler<kRowMajor, Cluster, true, true, TILE_M, TILE_N, false>;
+    using Scheduler = TileScheduler<raster_order, Cluster, true, true, TILE_M, TILE_N, is_grouped_gemm>;
 
     static constexpr int kMulticastU = is_grouped_gemm ? 1 : kMulticastA;
 
@@ -109,6 +110,9 @@ struct GemmUniversalSm90_v5 {
 
     static constexpr int kAlignmentU = 16 / sizeof(Tu);
     static constexpr int kBoxU       = TILE_M + (is_grouped_gemm ? kAlignmentU : 0);
+
+    // Alignment requirement for SMEM addr. This forbids multicast factor 8.
+    static_assert(kMulticastU == 1 || sizeof(Tu) * kBoxU / kMulticastU % 128 == 0);
 
     static constexpr int kTmaTxBytes =
         sizeof(Ta) * (TILE_M * TILE_K) + sizeof(Tb) * (TILE_N * TILE_K) + sizeof(Tu) * kBoxU;
@@ -125,6 +129,7 @@ struct GemmUniversalSm90_v5 {
         __align__(1024) Array<Tc, TILE_M * TILE_N> C;
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
+        __align__(128) CUtensorMap tma_desc_buf[5];  //
         int pipe_count[2];
     };
 
@@ -196,6 +201,10 @@ struct GemmUniversalSm90_v5 {
                 auto  smem_B = storage.source.B.data() + mc_offset_n * TILE_K;
                 auto& smem_U = storage.source.U;
 
+                if constexpr (is_grouped_gemm) {
+                    init_tma_descs<3>({&tm_a, &tm_b, &tm_u}, storage.tma_desc_buf);
+                }
+
                 sched.grid_init();
 
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
@@ -211,7 +220,45 @@ struct GemmUniversalSm90_v5 {
                     const auto tile_offset              = sched.tile_offset();
                     const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
 
+                    const CUtensorMap* Adesc = &tm_a;
+                    const CUtensorMap* Bdesc = &tm_b;
+                    const CUtensorMap* Udesc = &tm_u;
+
+                    if constexpr (is_grouped_gemm) {
+                        const int g = sched.group_idx_;
+
+                        Array<void*, 3> global_addrs;
+                        global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * (int64_t)param_A.stride;
+                        global_addrs[1] = ((void**)param_B.ptr)[g];
+
+                        const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
+                        const int end_u = round_up(param_U.offsets[g + 1], kAlignmentU);
+                        global_addrs[2] = (Tu*)param_U.ptr + beg_u;
+
+                        Array<int, 3> dims;
+                        dims[0] = param_A.offsets[g + 1] - param_A.offsets[g];
+                        dims[1] = sched.gemm_shape().y;
+                        dims[2] = end_u - beg_u;
+
+                        auto descs = update_tma_descs(tensormap_buf, storage.tma_desc_buf, global_addrs, dims);
+                        Adesc      = &descs[0];
+                        Bdesc      = &descs[1];
+                        Udesc      = &descs[2];
+
+                        PRAGMA_UNROLL
+                        for (int i = 0; i < 3; ++i) {
+                            cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)&descs[i]);
+                        }
+                    }
+
                     if (cute::elect_one_sync()) {
+
+                        // printf("READ %d %d %d %d %s\n",
+                        //        tile_offset.x,
+                        //        tile_offset.y,
+                        //        sched.cluster_idx_,
+                        //        sched.group_idx_,
+                        //        cluster_tile_p ? "true" : "false");
 
                         const int offset_k = iter_k_beg * TILE_K;
 
@@ -223,11 +270,12 @@ struct GemmUniversalSm90_v5 {
 
                         int k_iter = iter_k_end - iter_k_beg;
 
-                        GmemIteratorSm90<kMulticastA> gmem_A{&tm_a, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
-                        GmemIteratorSm90<kMulticastB> gmem_B{&tm_b, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
+                        GmemIteratorSm90<kMulticastA> gmem_A{Adesc, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
+                        GmemIteratorSm90<kMulticastB> gmem_B{Bdesc, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
 
+                        const int mc_offset_u = kMulticastU > 1 ? mc_offset_m : 0;
                         // column-major
-                        GmemIteratorSm90<kMulticastA> gmem_U{&tm_u, {offset_m + mc_offset_m, offset_k / 128}, {0, 1}};
+                        GmemIteratorSm90<kMulticastU> gmem_U{Udesc, {offset_m + mc_offset_u, offset_k / 128}, {0, 1}};
 
                         for (; k_iter > 0; --k_iter) {
                             int pipe = write_state.index();
@@ -235,7 +283,7 @@ struct GemmUniversalSm90_v5 {
                             ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
                             gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
                             gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
-                            gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_m, mask_A);
+                            gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_u, mask_A);
                             ++write_state;
                         }
                     }
@@ -245,13 +293,19 @@ struct GemmUniversalSm90_v5 {
         else {
             cutlass::arch::warpgroup_reg_alloc<112>();
 
+            const int math_group_idx = wg_idx / 2;
+
+            if constexpr (is_grouped_gemm) {
+                if (threadIdx.x % kMathGroupSize / WARP_SIZE == 0) {
+                    init_tma_descs<1>({&tm_c}, storage.tma_desc_buf + 3 + math_group_idx);
+                }
+            }
+
             sched.grid_init(kSchedStepSize);
 
             auto& smem_A = storage.source.A;
             auto& smem_B = storage.source.B;
             auto& smem_U = storage.source.U;
-
-            const int math_group_idx = wg_idx / 2;
 
             const int wg_idx_m = WG_M > 1 ? wg_idx % 2 % WG_M : 0;
             const int wg_idx_n = WG_N > 1 ? wg_idx % 2 / WG_M : 0;
@@ -276,6 +330,10 @@ struct GemmUniversalSm90_v5 {
                 constexpr int threads = WARPGORUPS * WARPGROUP_SIZE;
                 int           res     = 0;
 
+                // if (thread_idx == 0) {
+                //     printf("math_barrier_sync %4d, %4d, %4d\n", math_group_idx, math_group_idx ^ phase, alive);
+                // }
+
                 asm volatile("{\n"
                              "  .reg.pred p;\n"
                              "  setp.ne.b32 p, %3, 0;\n"
@@ -285,39 +343,56 @@ struct GemmUniversalSm90_v5 {
                              : "=r"(res)
                              : "r"(barrier_id), "r"(threads), "r"(alive));
 
+                // if (thread_idx == 0) {
+                //     printf("math_barrier_sync %4d, %4d, %4d DONE\n", math_group_idx, math_group_idx ^ phase, alive);
+                // }
+
                 return res;
             };
 
             cutlass::arch::NamedBarrier math_group_barrier(kMathGroupSize, 2 + math_group_idx);  // 2,3
 
-            sched.next(math_group_idx);
+            // sched.next(math_group_idx);
 
             if (math_group_idx == 1) {
+                sched.cluster_idx_ += (int)cute::cluster_grid_dims().x;
                 math_barrier_sync(1);
             }
 
             while (sched.next(kSchedStepSize)) {
                 auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
+                const auto tile_offset = sched.tile_offset();
+
+                // if (thread_idx == 0) {
+                //     printf("TILE %d %d %d %d %d %s\n",
+                //            sched.cluster_idx_,
+                //            math_group_idx,
+                //            tile_offset.x,
+                //            tile_offset.y,
+                //            sched.group_idx_,
+                //            cluster_tile_p ? "true" : "false");
+                // }
+
                 if (!cluster_tile_p) {
                     // OOB tile caused by swizzle pattern
+                    math_barrier_sync(0);
+                    if (thread_idx == 0) {
+                        storage.pipe_count[math_group_idx] = storage.pipe_count[math_group_idx ^ 1];
+                    }
+                    math_barrier_sync(1);
                     continue;
                 }
 
                 MMA_Atom::CRegisters frag_C;
                 MMA_Atom::CRegisters accum_C[MMA_ITER_M][MMA_ITER_N]{};
 
-                const auto tile_offset              = sched.tile_offset();
                 const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
 
                 const auto [M, N, K, L] = sched.gemm_shape();
 
                 const int offset_m = tile_offset.x * TILE_M;
                 const int offset_n = tile_offset.y * TILE_N;
-
-                // if (thread_idx == 0) {
-                //     printf("TILE %d %d\n", offset_m, offset_n);
-                // }
 
                 int k_iter = iter_k_end - iter_k_beg;
 
@@ -356,6 +431,14 @@ struct GemmUniversalSm90_v5 {
                     }
                 }
 
+                if constexpr (is_grouped_gemm) {
+                    if (thread_idx / WARP_SIZE == 0) {
+                        auto addr = (Tc*)param_C.ptr + param_C.offsets[sched.group_idx_] * (int64_t)param_C.stride;
+                        int  idx  = 3 + math_group_idx;
+                        update_tma_descs<1>(tensormap_buf + idx, storage.tma_desc_buf + idx, {addr}, {M});
+                    }
+                }
+
                 uint32_t pred_V{};
                 Fetch_V(pred_V,
                         param_V,
@@ -380,22 +463,24 @@ struct GemmUniversalSm90_v5 {
 
                 float     scale_U[MMA_ITER_M][2];
                 const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
-                auto      Load_U   = [&] {
+                int       align_U  = 0;
+                if constexpr (is_grouped_gemm) {
+                    align_U = param_U.offsets[sched.group_idx_] % kAlignmentU;
+                }
+                auto Load_U = [&] {
                     for (int m = 0; m < MMA_ITER_M; ++m) {
-                        scale_U[m][0] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M];
-                        scale_U[m][1] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M + 8];
+                        scale_U[m][0] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M];
+                        scale_U[m][1] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M + 8];
                     }
                 };
 
                 float scales[2][2];
                 auto  scale_accum = [&](int n) {  // cta_n = mma_iter_n * wg_n * mma_atom_n
-                    int m = 0;
-                    if (n == 0) {
-                        scales[0][0] = scale_U[m][0] * scale_V[0];
-                        scales[1][0] = scale_U[m][1] * scale_V[0];
-                        scales[0][1] = scale_U[m][0] * scale_V[1];
-                        scales[1][1] = scale_U[m][1] * scale_V[1];
-                    }
+                    int m        = 0;
+                    scales[0][0] = scale_U[m][0] * scale_V[0];
+                    scales[1][0] = scale_U[m][1] * scale_V[0];
+                    scales[0][1] = scale_U[m][0] * scale_V[1];
+                    scales[1][1] = scale_U[m][1] * scale_V[1];
                     PRAGMA_UNROLL
                     for (int c0 = 0; c0 < MMA_ATOM_N; c0 += OUTER_N) {
                         bool pred = (pred_V & (1U << (c0 / OUTER_N)));
@@ -436,6 +521,10 @@ struct GemmUniversalSm90_v5 {
 
                 pipe_state.advance(storage.pipe_count[math_group_idx ^ 1]);
 
+                // if (thread_idx == 0) {
+                //     printf("ACQUIRE %4d, %4d\n", math_group_idx, (int)pipe_state.count());
+                // }
+
                 smem_iter_A.Reset(pipe_state.index());
                 smem_iter_B.Reset(pipe_state.index());
                 Load_V();
@@ -460,8 +549,6 @@ struct GemmUniversalSm90_v5 {
                 smem_iter_B.Reset(pipe_state.index());
 
                 for (; k_iter > 1; --k_iter) {
-                    // smem_iter_A.Reset(pipe_state.index());
-                    // smem_iter_B.Reset(pipe_state.index());
                     cute::warpgroup_arrive();
                     gmma(0);
                     cute::warpgroup_wait<0>();
@@ -480,8 +567,6 @@ struct GemmUniversalSm90_v5 {
                     smem_iter_B.Reset(pipe_state.index());
                 }
 
-                // smem_iter_A.Reset(pipe_state.index());
-                // smem_iter_B.Reset(pipe_state.index());
                 cute::warpgroup_arrive();
                 gmma(0);
                 cute::warpgroup_wait<0>();
@@ -492,9 +577,9 @@ struct GemmUniversalSm90_v5 {
                 consumer_arrive();
                 ++pipe_state;
 
-                // const int thread_idx = threadIdx.x % kMathGroupSize;
                 if (thread_idx == 0) {
                     storage.pipe_count[math_group_idx] = pipe_state.count();
+                    // printf("RELEASE %4d, %4d\n", math_group_idx, (int)pipe_state.count());
                 }
 
                 math_barrier_sync(1);
@@ -515,10 +600,24 @@ struct GemmUniversalSm90_v5 {
                         const int m0 = m * MMA_ATOM_M + wg_idx_m * WG_TILE_M;
                         const int n0 = n * MMA_ATOM_N + wg_idx_n * WG_TILE_N;
 
+                        // PRAGMA_UNROLL
+                        // for (int i = 0; i < MMA_ATOM_N; i += 16) {
+                        //     __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
+
+                        //     int mm = m0 + warp_id % 4 * 16 + (lane_id & 8) + lane_id % 8;
+                        //     int nn = n0 + i + (lane_id & 16) / 2;
+
+                        //     auto& uvec = (Array<uint32_t, 4>&)tvec;
+
+                        //     cute::SM90_U32x4_STSM_N::copy(
+                        //         uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)storage.C[mm * TILE_N +
+                        //         nn]);
+                        // }
+
                         PRAGMA_UNROLL
                         for (int i = 0; i < MMA_ATOM_N; i += 16) {
                             __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
-
+                            // fill(tvec, Tc(255));
                             int mm = m0 + warp_id % 4 * 16 + (lane_id & 8);
                             int nn = n0 + i / N * N;
 
@@ -541,28 +640,50 @@ struct GemmUniversalSm90_v5 {
                 math_group_barrier.sync();
 
                 if (thread_idx < LayoutC::C1) {
-                    const int tma_n = thread_idx * LayoutC::C0;
+                    const void* Cdesc = &tm_c;
+                    const int   tma_n = thread_idx * LayoutC::C0;
+                    if constexpr (is_grouped_gemm) {
+                        Cdesc = &tensormap_buf[3 + math_group_idx + blockIdx.x * 5];
+                        cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
+                    }
                     cute::SM90_TMA_STORE::copy(
-                        &tm_c, &storage.C[thread_idx * TILE_M * LayoutC::C0], offset_n + tma_n, offset_m);
+                        Cdesc, &storage.C[thread_idx * TILE_M * LayoutC::C0], offset_n + tma_n, offset_m);
                     cute::tma_store_arrive();
                     cute::tma_store_wait<0>();
                 }
 
-                math_group_barrier.sync();
+                // math_group_barrier.sync();
 
             }  // scheduler loop
 
+            // if (thread_idx == 0) {
+            //     printf("TAIL %d\n", math_group_idx);
+            // }
+
             if (math_group_idx == 0) {
                 math_barrier_sync(0, 0);
+                if (thread_idx == 0) {
+                    storage.pipe_count[0] = storage.pipe_count[1];
+                }
                 while (math_barrier_sync(1, 0)) {
                     math_barrier_sync(0, 0);
+                    if (thread_idx == 0) {
+                        storage.pipe_count[0] = storage.pipe_count[1];
+                    }
                 }
             }
             else {
                 while (math_barrier_sync(0, 0)) {
+                    if (thread_idx == 0) {
+                        storage.pipe_count[1] = storage.pipe_count[0];
+                    }
                     math_barrier_sync(1, 0);
                 }
             }
+
+            // if (thread_idx == 0) {
+            //     printf("EXIT %d\n", math_group_idx);
+            // }
 
             if (threadIdx.x % kMathGroupSize < LayoutC::C1) {
                 cute::tma_store_wait<0>();
@@ -575,6 +696,56 @@ struct GemmUniversalSm90_v5 {
         }
 
     }  // operator()
+
+    template<int N>
+    __device__ void init_tma_descs(Array<const CUtensorMap*, N> param_desc, CUtensorMap* smem_desc)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+        if (lane_id < sizeof(CUtensorMap) / sizeof(uint2)) {
+            PRAGMA_UNROLL
+            for (int i = 0; i < N; ++i) {
+                ((uint2*)&smem_desc[i])[lane_id] = ((uint2*)param_desc[i])[lane_id];
+            }
+        }
+
+        __syncwarp();
+    }
+
+    template<int N>
+    __device__ CUtensorMap*
+    update_tma_descs(CUtensorMap* gmem_desc, CUtensorMap* smem_desc, Array<void*, N> global_addrs, Array<int, N> dims)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        if (lane_id == 0) {
+            PRAGMA_UNROLL
+            for (int i = 0; i < N; ++i) {
+                uint32_t uint_ptr = cast_smem_ptr_to_uint(&smem_desc[i]);
+                // clang-format off
+                asm volatile("tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%0], %1;" ::"r"(uint_ptr), "l"(global_addrs[i]));
+                if (i != 2) {
+                    asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 1, %1;" ::"r"(uint_ptr), "r"(dims[i]));
+                } else { // special case for U
+                    asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 0, %1;" ::"r"(uint_ptr), "r"(dims[i]));
+                }
+                // clang-format on
+            }
+        }
+
+        __syncwarp();
+
+        constexpr int kNumPerCta = 5;  // a,b,u,c0,c1
+        auto          gmem_ptr   = &gmem_desc[blockIdx.x * kNumPerCta];
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            uint32_t uint_ptr = cast_smem_ptr_to_uint(&smem_desc[i]);
+            // clang-format off
+            asm volatile("tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [%0], [%1], 128;" :: "l"(gmem_ptr + i), "r"(uint_ptr));
+            // clang-format on
+        }
+
+        return gmem_ptr;
+    }
 
     __device__ void Fetch_V(uint32_t&          pred_V,
                             const MatrixParam& param_V,

@@ -15,8 +15,13 @@ int main()
 
     auto test = gemm::get_test(gemm::TestPreset::kANY_e4m3_e4m3_bf16_TNN);
 
+    // test->Initialize(128, 128, 256, 0, 1, core::Context::stream().handle());
+
+    // test->Initialize(1536 / 4, 8192 * 16, 2048, 0, 1, core::Context::stream().handle());
+    // test->Initialize(2048, 8192 * 16, 1536 / 4, 0, 1, core::Context::stream().handle());
     // test->Initialize(384, 128, 1024, core::Context::stream().handle());
-    // test->Initialize(8192 * 4, 8192 * 4, 8192 * 4, 0, 1, core::Context::stream().handle());
+    test->Initialize(8192 * 4, 8192 * 4, 512, 0, 1, core::Context::stream().handle());
+    // test->Initialize(8192 * 2, 8192 * 2, 8192 * 2, 0, 1, core::Context::stream().handle());
     // test->Initialize(8192 * 4, 1, 8192 * 4, core::Context::stream().handle());p
     // test->Initialize(1024, 1024, 1024, core::Context::stream().handle());
     // test->Initialize(8192 * 2, 8192 * 2, 2048, 0, 0, core::Context::stream().handle());
@@ -27,10 +32,20 @@ int main()
 
     // test->Initialize(1536, 32768, 8192, 128, 8, core::Context::stream().handle());
 
-    const int tp = 1;
-    test->Initialize(768 / tp, 100, 2048, 128, 8, core::Context::stream().handle());
-    // test->Initialize(1536 / tp, 4096, 4096, 128, 8, core::Context::stream().handle());
-    // test->Initialize(4096, 16384, 1536 / tp, 128, 8, core::Context::stream().handle());
+    const int tp = 8;
+    const int bs = 32;
+
+    // deepseek-v3
+    // test->Initialize(2048 / tp, bs, 7168, 256, 8, core::Context::stream().handle());
+    // test->Initialize(7168, bs, 2048 / tp, 256, 8, core::Context::stream().handle());
+
+    // qwen3-30-a3
+    // test->Initialize(768 / tp, bs, 2048, 128, 8, core::Context::stream().handle());
+    // test->Initialize(2048, bs, 768 / tp, 128, 8, core::Context::stream().handle());
+
+    // qwen3-235-a22
+    // test->Initialize(1536 / tp, 16384, 4096, 128, 8, core::Context::stream().handle());
+    // test->Initialize(4096, 4096, 1536 / tp, 128, 8, core::Context::stream().handle());
 
     // test->Initialize(1536, 77, 4096, 8, 2, core::Context::stream().handle());
     // test->Initialize(1536, 256, 4096, 8, 2, core::Context::stream().handle());

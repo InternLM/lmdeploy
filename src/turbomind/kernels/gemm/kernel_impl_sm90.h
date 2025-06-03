@@ -399,6 +399,7 @@ public:
 
     int GetSwizzle(int m, int n, int k, int splits, int swizzle) const override
     {
+        // return swizzle;
         using Map        = typename Gemm::Scheduler;
         const auto tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
         return Map::get_log_tile(tiles, 1 << swizzle);
