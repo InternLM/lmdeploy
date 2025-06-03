@@ -10,6 +10,7 @@ from utils.run_client_chat import hf_command_line_test
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_tp1(config, model, communicator, cli_case_config, worker_id):
@@ -78,6 +79,7 @@ def test_hf_turbomind_chat_tp4(config, model, communicator, cli_case_config, wor
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, quant_policy=4))
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_kvint4_tp1(config, model, communicator, cli_case_config, worker_id):
@@ -146,6 +148,7 @@ def test_hf_turbomind_chat_kvint4_tp4(config, model, communicator, cli_case_conf
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, quant_policy=8))
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_kvint8_tp1(config, model, communicator, cli_case_config, worker_id):
@@ -314,6 +317,7 @@ def test_hf_turbomind_chat_fallback_backend_kvint8_tp2(config, model, communicat
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, model_type='base_model'))
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_base_tp1(config, model, communicator, cli_case_config, worker_id):

@@ -16,16 +16,20 @@ import aiohttp
 import numpy as np
 import requests
 import uvicorn
-import yaml
 from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from lmdeploy.pytorch.disagg.config import (DistServeRDMAConfig, EngineRole, MigrationProtocol, RDMALinkType,
+                                            ServingStrategy)
+from lmdeploy.pytorch.disagg.conn import PDConnectionPool
+from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
+from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
-from lmdeploy.serve.proxy.constants import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, Strategy, err_msg
+from lmdeploy.serve.proxy.constants import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -33,6 +37,7 @@ logger = get_logger('lmdeploy')
 
 class Status(BaseModel):
     """Status protocol consists of models' information."""
+    role: EngineRole = EngineRole.Hybrid
     models: Optional[List[str]] = Field(default=[], examples=[[]])
     unfinished: int = 0
     latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
@@ -72,36 +77,69 @@ class NodeManager:
 
     def __init__(self,
                  config_path: Optional[str] = None,
-                 strategy: str = 'min_expected_latency',
+                 serving_strategy: str = 'Hybrid',
+                 routing_strategy: str = 'min_expected_latency',
+                 migration_protocol: str = 'RDMA',
+                 link_type: str = 'RoCE',
+                 with_gdr: bool = True,
                  cache_status: Optional[bool] = True) -> None:
         self.nodes = dict()
-        self.strategy = Strategy.from_str(strategy)
+        self.serving_strategy = ServingStrategy[serving_strategy]
+        self.routing_strategy = RoutingStrategy.from_str(routing_strategy)
+
         self.cache_status = cache_status
         self.latencies = dict()
-        self.config_path = osp.join(osp.dirname(osp.realpath(__file__)), 'proxy_config.yml')
+        self.config_path = osp.join(osp.dirname(osp.realpath(__file__)), 'proxy_config.json')
         if config_path is not None:
             self.config_path = config_path
         if osp.exists(self.config_path) and self.cache_status:
             with open(self.config_path, 'r') as config_file:
-                self.nodes = yaml.safe_load(config_file)['nodes']
-                for url, status in self.nodes.items():
-                    latency = deque(status.get('latency', []), maxlen=LATENCY_DEQUE_LEN)
-                    status['latency'] = latency
-                    status = Status(**status)
-                    self.nodes[url] = status
+                if os.path.getsize(self.config_path) > 0:
+                    logger.info(f'loading node configuration: {self.config_path}')
+                    config = json.load(config_file)
+                    self.nodes = {
+                        node_url: Status.model_validate_json(node_status)
+                        for node_url, node_status in config.items()
+                    }
         self.heart_beat_thread = threading.Thread(target=heart_beat_controller, args=(self, ), daemon=True)
         self.heart_beat_thread.start()
         self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
 
+        # For PD Disaggregation
+        self.migration_protocol = MigrationProtocol[migration_protocol]
+        self.rdma_config = DistServeRDMAConfig(with_gdr=with_gdr, link_type=RDMALinkType[link_type])
+        self.pd_connection_pool = PDConnectionPool()
+        self.initialized = False
+
+    def get_nodes(self, role: EngineRole) -> Dict:
+        items = list(self.nodes.items())
+        return {node_url: node_status for (node_url, node_status) in items if node_status.role == role}
+
+    @property
+    def hybrid_nodes(self):
+        return self.get_nodes(EngineRole.Hybrid)
+
+    @property
+    def prefill_nodes(self):
+        return self.get_nodes(EngineRole.Prefill)
+
+    @property
+    def decode_nodes(self):
+        return self.get_nodes(EngineRole.Decode)
+
     def update_config_file(self):
         """Update the config file."""
         nodes = copy.deepcopy(self.nodes)
-        for url, status in nodes.items():
-            nodes[url] = status.model_dump()
-            nodes[url]['latency'] = list(status.latency)[-LATENCY_DEQUE_LEN:]
+        for _, status in nodes.items():
+            status.latency = deque(list(status.latency)[-LATENCY_DEQUE_LEN:])
         if self.cache_status:
             with open(self.config_path, 'w') as config_file:  # update cfg yml
-                yaml.dump(dict(nodes=nodes), config_file)
+                json.dump({
+                    node_url: node_status.model_dump_json()
+                    for node_url, node_status in nodes.items()
+                },
+                          config_file,
+                          indent=2)
 
     def add(self, node_url: str, status: Optional[Status] = None):
         """Add a node to the manager.
@@ -117,6 +155,7 @@ class NodeManager:
         if status is None:
             status = self.nodes.get(node_url, Status())
         if status.models != []:  # force register directly
+            self.remove(node_url)
             self.nodes[node_url] = status
             self.update_config_file()
             return
@@ -134,11 +173,47 @@ class NodeManager:
         if node_url in self.nodes.keys():
             self.nodes.pop(node_url)
             self.update_config_file()
+            dropped_conn = []
+            for conn in self.pd_connection_pool.pool:
+                if node_url in conn:
+                    dropped_conn.append(conn)
+            for conn in dropped_conn:
+                self.pd_connection_pool.drop(*conn)
+
+    def terminate_node(self, node_url: str):
+        """Terminate a node."""
+        success = True
+        if node_url in self.nodes:
+            self.nodes.pop(node_url)
+            headers = {'accept': 'application/json'}
+            try:
+                response = requests.get(f'{node_url}/terminate', headers=headers)
+                if response.status_code != 200:
+                    success = False
+                    logger.error(f'Failed to terminate node {node_url}, '
+                                 f'error_code={response.status_code}, '
+                                 f'error_msg={response.text}')
+            except:  # noqa
+                success = False
+        else:
+            success = False
+        self.update_config_file()
+        return success
+
+    def terminate_all_nodes(self):
+        """Terminate all nodes."""
+        node_url_li = list(self.nodes.keys())
+        all_success = True
+        for node_url in node_url_li:
+            if not self.terminate_node(node_url):
+                all_success = False
+        return all_success
 
     def remove_stale_nodes_by_expiration(self):
-        """remove stale nodes."""
+        """Remove stale nodes."""
         to_be_deleted = []
-        for node_url in self.nodes.keys():
+        node_urls = list(self.nodes.keys())
+        for node_url in node_urls:
             url = f'{node_url}/health'
             headers = {'accept': 'application/json'}
             try:
@@ -156,8 +231,9 @@ class NodeManager:
     def model_list(self):
         """Supported model list."""
         model_names = []
-        for node_url, node_status in self.nodes.items():
-            model_names.extend(node_status.models)
+        items = list(self.nodes.items())
+        for _, status in items:
+            model_names.extend(status.models)
         return model_names
 
     @property
@@ -165,7 +241,7 @@ class NodeManager:
         """Return the status."""
         return self.nodes
 
-    def get_node_url(self, model_name: str):
+    def get_node_url(self, model_name: str, role: EngineRole = EngineRole.Hybrid):
         """Add a node to the manager.
 
         Args:
@@ -177,11 +253,11 @@ class NodeManager:
 
         def get_matched_urls():
             urls_with_speeds, speeds, urls_without_speeds = [], [], []
-            for node_url, node_status in self.nodes.items():
-                if model_name in node_status.models:
-                    if node_status.speed is not None:
+            for node_url, status in self.get_nodes(role).items():
+                if model_name in status.models:
+                    if status.speed is not None:
                         urls_with_speeds.append(node_url)
-                        speeds.append(node_status.speed)
+                        speeds.append(status.speed)
                     else:
                         urls_without_speeds.append(node_url)
             all_matched_urls = urls_with_speeds + urls_without_speeds
@@ -193,7 +269,7 @@ class NodeManager:
             all_the_speeds = speeds + [average_speed] * len(urls_without_speeds)
             return all_matched_urls, all_the_speeds
 
-        if self.strategy == Strategy.RANDOM:
+        if self.routing_strategy == RoutingStrategy.RANDOM:
             all_matched_urls, all_the_speeds = get_matched_urls()
             if len(all_matched_urls) == 0:
                 return None
@@ -202,7 +278,7 @@ class NodeManager:
             index = random.choices(range(len(all_matched_urls)), weights=weights)[0]
             url = all_matched_urls[index]
             return url
-        elif self.strategy == Strategy.MIN_EXPECTED_LATENCY:
+        elif self.routing_strategy == RoutingStrategy.MIN_EXPECTED_LATENCY:
             all_matched_urls, all_the_speeds = get_matched_urls()
             if len(all_matched_urls) == 0:
                 return None
@@ -212,15 +288,15 @@ class NodeManager:
             all_indexes = [i for i in range(len(all_the_speeds))]
             random.shuffle(all_indexes)
             for index in all_indexes:
-                latency = self.nodes[all_matched_urls[index]].unfinished / all_the_speeds[index]
+                latency = self.get_nodes(role)[all_matched_urls[index]].unfinished / all_the_speeds[index]
                 if min_latency > latency:
                     min_latency = latency
                     min_index = index
             url = all_matched_urls[min_index]
             return url
-        elif self.strategy == Strategy.MIN_OBSERVED_LATENCY:
+        elif self.routing_strategy == RoutingStrategy.MIN_OBSERVED_LATENCY:
             all_matched_urls, latencies = [], []
-            for node_url, node_status in self.nodes.items():
+            for node_url, node_status in self.get_nodes(role).items():
                 if model_name in node_status.models:
                     if len(node_status.latency):
                         latencies.append(np.mean(np.array(node_status.latency)))
@@ -232,7 +308,7 @@ class NodeManager:
             index = np.argmin(np.array(latencies))
             return all_matched_urls[index]
         else:
-            raise ValueError(f'Invalid strategy: {self.strategy}')
+            raise ValueError(f'Invalid strategy: {self.routing_strategy}')
 
     async def check_request_model(self, model_name) -> Optional[JSONResponse]:
         """Check if a request is valid."""
@@ -263,7 +339,12 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    async def stream_generate(self, request: Dict, node_url: str, endpoint: str):
+    async def stream_generate(self,
+                              request: Dict,
+                              node_url: str,
+                              endpoint: str,
+                              prefill_url: Optional[str] = None,
+                              remote_session_id: int = None):
         """Return a generator to handle the input request.
 
         Args:
@@ -277,12 +358,16 @@ class NodeManager:
                     async for line in response.content:
                         if line.strip():
                             yield line + b'\n\n'
+                if prefill_url:
+                    async with session.post(f'{prefill_url}/distserve/free_cache',
+                                            json={'session_id': remote_session_id}) as response:
+                        await response.json()
         except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
             logger.error(f'catched an exception: {e}')
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, request: Dict, node_url: str, endpoint: str):
+    async def generate(self, request: Dict, node_url: str, endpoint: str, is_prefill: bool = False):
         """Return a the response of the input request.
 
         Args:
@@ -380,15 +465,57 @@ def add_node(node: Node, raw_request: Request = None):
 
 
 @app.post('/nodes/remove', dependencies=[Depends(check_api_key)])
-def remove_node(node_url: str):
+def remove_node(node: Node):
     """Show available models."""
     try:
+        node_url = node.url
         node_manager.remove(node_url)
         logger.info(f'delete node {node_url} successfully')
         return 'Deleted successfully'
     except:  # noqa
-        logger.error(f'delete node {node_url} failed.')
+        logger.error(f'delete node {node.url} failed.')
         return 'Failed to delete, please check the input url.'
+
+
+@app.post('/nodes/terminate', dependencies=[Depends(check_api_key)])
+def terminate_node(node: Node):
+    """Terminate nodes."""
+    try:
+        node_url = node.url
+        success = node_manager.terminate_node(node_url)
+        if not success:
+            return f'Failed to terminate node {node_url}'
+        return 'Terminated successfully'
+    except:  # noqa
+        logger.error(f'Terminate node {node_url} failed.')
+        return 'Failed to terminate node {node_url}, please check the input url.'
+
+
+@app.get('/nodes/terminate_all', dependencies=[Depends(check_api_key)])
+def terminate_node_all():
+    """Terminate nodes."""
+    try:
+        success = node_manager.terminate_all_nodes()
+        if not success:
+            return 'Failed to terminate all nodes'
+        return 'All nodes terminated successfully'
+    except:  # noqa
+        logger.error('Failed to terminate all nodes')
+        return 'Failed to terminate all nodes.'
+
+
+@app.post('/distserve/connection_warmup')
+async def connection_warmup():
+    await asyncio.gather(*[
+        node_manager.pd_connection_pool.connect(
+            PDConnectionMessage(
+                p_url=p_url,
+                d_url=d_url,
+                protocol=node_manager.migration_protocol,
+                rdma_config=node_manager.rdma_config,
+            )) for p_url in node_manager.prefill_nodes for d_url in node_manager.decode_nodes
+    ])
+    return JSONResponse({'SUCCESS': True})
 
 
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
@@ -450,21 +577,89 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     check_response = await node_manager.check_request_model(request.model)
     if check_response is not None:
         return check_response
-    node_url = node_manager.get_node_url(request.model)
-    if not node_url:
-        return node_manager.handle_unavailable_model(request.model)
 
-    logger.info(f'A request is dispatched to {node_url}')
-    request_dict = request.model_dump()
-    start = node_manager.pre_call(node_url)
-    if request.stream is True:
-        response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
-        background_task = node_manager.create_background_tasks(node_url, start)
-        return StreamingResponse(response, background=background_task)
+    if node_manager.serving_strategy == ServingStrategy.Hybrid:
+        node_url = node_manager.get_node_url(request.model)
+        if not node_url:
+            return node_manager.handle_unavailable_model(request.model)
+
+        logger.info(f'A request is dispatched to {node_url}')
+        request_dict = request.model_dump()
+        start = node_manager.pre_call(node_url)
+        if request.stream is True:
+            response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
+            background_task = node_manager.create_background_tasks(node_url, start)
+            return StreamingResponse(response, background=background_task)
+        else:
+            response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
+            node_manager.post_call(node_url, start)
+            return JSONResponse(json.loads(response))
+    elif node_manager.serving_strategy == ServingStrategy.DistServe:
+        request_dict = request.model_dump()
+
+        # Prefill
+        prefill_request_dict = copy.deepcopy(request_dict)
+        prefill_request_dict['max_tokens'] = 1
+        prefill_request_dict['stream'] = False
+        prefill_request_dict['with_cache'] = True
+        prefill_request_dict['preserve_cache'] = True
+
+        p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+        if not p_url:
+            return node_manager.handle_unavailable_model(request.model)
+        logger.info(f'A Prefill request is dispatched to {p_url}')
+
+        start = node_manager.pre_call(p_url)
+        prefill_info = json.loads(await node_manager.generate(prefill_request_dict,
+                                                              p_url,
+                                                              '/v1/chat/completions',
+                                                              is_prefill=True))
+        node_manager.post_call(p_url, start)
+
+        # # Decode
+        d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
+        if not d_url:
+            return node_manager.handle_unavailable_model(request.model)
+        logger.info(f'A Decode request is dispatched to {d_url}')
+
+        if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
+            await node_manager.pd_connection_pool.connect(
+                PDConnectionMessage(
+                    p_url=p_url,
+                    d_url=d_url,
+                    protocol=node_manager.migration_protocol,
+                    rdma_config=node_manager.rdma_config,
+                ))
+        request_dict['migration_request'] = MigrationRequest(
+            protocol=node_manager.migration_protocol,
+            remote_engine_id=p_url,
+            remote_session_id=int(prefill_info['id']),
+            remote_block_ids=prefill_info['cache_block_ids'],
+            remote_token_id=prefill_info['remote_token_ids'][-1],
+        ).model_dump(mode='json')
+
+        start = node_manager.pre_call(d_url)
+        if request.stream is True:
+            response = node_manager.stream_generate(request_dict,
+                                                    d_url,
+                                                    '/v1/chat/completions',
+                                                    prefill_url=p_url,
+                                                    remote_session_id=int(prefill_info['id']))
+            background_task = node_manager.create_background_tasks(d_url, start)
+            return StreamingResponse(response, background=background_task)
+        else:
+            try:
+                response = await node_manager.generate(request_dict, d_url, '/v1/chat/completions')
+                node_manager.post_call(d_url, start)
+                resp = JSONResponse(json.loads(response))
+            finally:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(f'{p_url}/distserve/free_cache', json={'session_id':
+                                                                                   prefill_info['id']}) as response:
+                        await response.json()
+                return resp
     else:
-        response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
-        node_manager.post_call(node_url, start)
-        return JSONResponse(json.loads(response))
+        raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
 
 @app.post('/v1/completions', dependencies=[Depends(check_api_key)])
@@ -507,37 +702,108 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     check_response = await node_manager.check_request_model(request.model)
     if check_response is not None:
         return check_response
-    node_url = node_manager.get_node_url(request.model)
-    if not node_url:
-        return node_manager.handle_unavailable_model(request.model)
+    if node_manager.serving_strategy == ServingStrategy.Hybrid:
+        node_url = node_manager.get_node_url(request.model)
+        if not node_url:
+            return node_manager.handle_unavailable_model(request.model)
 
-    logger.info(f'A request is dispatched to {node_url}')
-    request_dict = request.model_dump()
-    start = node_manager.pre_call(node_url)
-    if request.stream is True:
-        response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
-        background_task = node_manager.create_background_tasks(node_url, start)
-        return StreamingResponse(response, background=background_task)
+        logger.info(f'A request is dispatched to {node_url}')
+        request_dict = request.model_dump()
+        start = node_manager.pre_call(node_url)
+        if request.stream is True:
+            response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
+            background_task = node_manager.create_background_tasks(node_url, start)
+            return StreamingResponse(response, background=background_task)
+        else:
+            response = await node_manager.generate(request_dict, node_url, '/v1/completions')
+            node_manager.post_call(node_url, start)
+            return JSONResponse(json.loads(response))
+    elif node_manager.serving_strategy == ServingStrategy.DistServe:
+        request_dict = request.model_dump()
+
+        # Prefill
+        prefill_request_dict = copy.deepcopy(request_dict)
+        prefill_request_dict['max_tokens'] = 1
+        prefill_request_dict['stream'] = False
+        prefill_request_dict['with_cache'] = True
+        prefill_request_dict['preserve_cache'] = True
+
+        p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+        if not p_url:
+            return node_manager.handle_unavailable_model(request.model)
+        logger.info(f'A Prefill request is dispatched to {p_url}')
+
+        start = node_manager.pre_call(p_url)
+        prefill_info = json.loads(await node_manager.generate(prefill_request_dict,
+                                                              p_url,
+                                                              '/v1/completions',
+                                                              is_prefill=True))
+        node_manager.post_call(p_url, start)
+
+        # # Decode
+        d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
+        if not d_url:
+            return node_manager.handle_unavailable_model(request.model)
+        logger.info(f'A Decode request is dispatched to {d_url}')
+
+        if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
+            await node_manager.pd_connection_pool.connect(
+                PDConnectionMessage(
+                    p_url=p_url,
+                    d_url=d_url,
+                    protocol=node_manager.migration_protocol,
+                    rdma_config=node_manager.rdma_config,
+                ))
+
+        request_dict['migration_request'] = MigrationRequest(
+            protocol=node_manager.migration_protocol,
+            remote_engine_id=p_url,
+            remote_session_id=int(prefill_info['id']),
+            remote_block_ids=prefill_info['cache_block_ids'],
+            remote_token_id=prefill_info['remote_token_ids'][-1],
+        ).model_dump(mode='json')
+
+        start = node_manager.pre_call(d_url)
+        if request.stream is True:
+            response = node_manager.stream_generate(request_dict,
+                                                    d_url,
+                                                    '/v1/completions',
+                                                    prefill_url=p_url,
+                                                    remote_session_id=int(prefill_info['id']))
+            background_task = node_manager.create_background_tasks(d_url, start)
+            return StreamingResponse(response, background=background_task)
+        else:
+            response = await node_manager.generate(request_dict, d_url, '/v1/completions')
+            node_manager.post_call(d_url, start)
+            resp = JSONResponse(json.loads(response))
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f'{p_url}/distserve/free_cache', json={'session_id':
+                                                                               prefill_info['id']}) as response:
+                    await response.json()
+            return resp
     else:
-        response = await node_manager.generate(request_dict, node_url, '/v1/completions')
-        node_manager.post_call(node_url, start)
-        return JSONResponse(json.loads(response))
+        raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
 
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
-          strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
+          serving_strategy: Literal['Hybrid', 'DistServe'] = 'Hybrid',
+          routing_strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
+          link_type: Literal['RoCE', 'IB'] = 'ROCE',
+          migration_protocol: Literal['RDMA'] = 'RDMA',
           **kwargs):
     """To launch the proxy server.
 
     Args:
         server_name (str): the server name of the proxy. Default to '0.0.0.0'.
         server_port (str): the server port. Default to 8000.
-        strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
+        serving_strategy ('Hybrid' | 'DistServe'):  the strategy to serving. Hybrid default.
+            DistServe for PD Disaggregation.
+        route_strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
             the strategy to dispatch requests to nodes. Default to
             'min_expected_latency'
         api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
@@ -546,8 +812,16 @@ def proxy(server_name: str = '0.0.0.0',
         log_level (str): Set the log level. Default to INFO.
         disable_cache_status (str): Whether to cache the proxy status to
              proxy_config.yml.
+        migration_protocol: migration protocol when PD disaggregation. RDMA default.
     """  # noqa
-    node_manager.strategy = Strategy.from_str(strategy)
+    node_manager.serving_strategy = ServingStrategy[serving_strategy]
+    node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)
+    node_manager.migration_protocol = MigrationProtocol[migration_protocol]
+
+    node_manager.rdma_config = DistServeRDMAConfig(
+        link_type=RDMALinkType[link_type],
+        with_gdr=True,
+    )
     node_manager.cache_status = not disable_cache_status
     if api_keys is not None:
         if isinstance(api_keys, str):

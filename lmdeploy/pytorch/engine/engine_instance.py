@@ -14,7 +14,7 @@ InputMultiModalType = List[Dict[str, Any]]
 
 
 def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
-    """check if response has state."""
+    """Check if response has state."""
     if isinstance(state, ResponseType):
         state = [state]
     ret = resp.type in state
@@ -24,7 +24,7 @@ def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
 
 
 def _check_resp_success(resp: Response, warning_msg: str = None):
-    """check if response success."""
+    """Check if response success."""
     return _check_resp(resp, ResponseType.SUCCESS, warning_msg)
 
 
@@ -137,6 +137,9 @@ class EngineInstance:
             sampling_param=sampling_param,
             adapter_name=adapter_name,
             input_multimodals=multimodal,
+            migration_request=gen_config.migration_request,
+            with_cache=gen_config.with_cache,
+            preserve_cache=gen_config.preserve_cache,
         )
         logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
@@ -144,18 +147,19 @@ class EngineInstance:
         while True:
             resp = await self.req_sender.async_recv(resp)
 
+            cache_block_ids = resp.data.get('cache_block_ids', None)
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
-                yield EngineOutput(resp.type, token_ids, num_ids)
+                yield EngineOutput(resp.type, token_ids, num_ids, cache_block_ids=cache_block_ids)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
                 num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
-                yield EngineOutput(resp.type, token_ids, num_ids, logits=logits)
+                yield EngineOutput(resp.type, token_ids, num_ids, logits=logits, cache_block_ids=cache_block_ids)
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')
@@ -213,7 +217,7 @@ class EngineInstance:
         """
 
         def __call_async():
-            """call async."""
+            """Call async."""
             coro_gen = self.async_stream_infer(session_id,
                                                input_ids,
                                                multimodal=multimodal,

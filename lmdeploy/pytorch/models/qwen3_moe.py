@@ -168,7 +168,7 @@ class Qwen3MoeMLP(nn.Module):
 
 
 class Qwen3MoeSparseMoeBlock(nn.Module):
-    """moe block."""
+    """Moe block."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -231,7 +231,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
 
 class Qwen3MoeDecoderLayer(nn.Module):
-    """decoder layer."""
+    """Decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -368,7 +368,7 @@ class Qwen3MoeModel(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embed_tokens
 
 
@@ -413,7 +413,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -424,11 +424,11 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -437,7 +437,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -462,7 +462,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
-        """load weight experts."""
+        """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
                 continue
@@ -475,7 +475,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             load_weight(param, loaded_weight)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -495,7 +495,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
-        scale_suffix = '.weight_scale_inv'
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
@@ -504,8 +503,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-            if name.endswith(scale_suffix):
-                name = name[:-len(scale_suffix)] + '.scale'
 
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)

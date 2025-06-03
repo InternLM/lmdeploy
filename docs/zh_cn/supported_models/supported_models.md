@@ -109,7 +109,6 @@
 |          Phi-3.5-mini          |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |         Phi-3.5-vision         |      4.2B       | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
-|           Phi-4-mini           |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 
 ```{note}
 * [1] 目前，Mono-InternVL不支持FP16，因为数值不稳定。请改用BF16
@@ -118,25 +117,26 @@
 
 ## PyTorchEngine 华为昇腾平台
 
-|     Model      |   Size    | Type | FP16/BF16(eager) | FP16/BF16(graph) | W8A8(graph) | W4A16(eager) |
-| :------------: | :-------: | :--: | :--------------: | :--------------: | :---------: | :----------: |
-|     Llama2     | 7B - 70B  | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|     Llama3     |    8B     | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|    Llama3.1    |    8B     | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|   InternLM2    | 7B - 20B  | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|  InternLM2.5   | 7B - 20B  | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|   InternLM3    |    8B     | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|    Mixtral     |   8x7B    | LLM  |       Yes        |       Yes        |     No      |      No      |
-|  QWen1.5-MoE   |   A2.7B   | LLM  |       Yes        |        -         |     No      |      No      |
-|   QWen2(.5)    |    7B     | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|    QWen2-VL    |  2B, 7B   | MLLM |       Yes        |       Yes        |      -      |      -       |
-|   QWen2.5-VL   | 3B - 72B  | MLLM |       Yes        |       Yes        |      -      |      -       |
-|   QWen2-MoE    |  A14.57B  | LLM  |       Yes        |        -         |     No      |      No      |
-|     QWen3      | 0.6B-235B | LLM  |       Yes        |       Yes        |     No      |      No      |
-|  DeepSeek-V2   |    16B    | LLM  |        No        |       Yes        |     No      |      No      |
-| InternVL(v1.5) |  2B-26B   | MLLM |       Yes        |        -         |     Yes     |     Yes      |
-|   InternVL2    |  1B-40B   | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
-|  InternVL2.5   |  1B-78B   | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
-|   InternVL3    |  1B-78B   | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
-|  CogVLM2-chat  |    19B    | MLLM |       Yes        |        No        |      -      |      -       |
-|     GLM4V      |    9B     | MLLM |       Yes        |        No        |      -      |      -       |
+|                |           |      |  Atlas 800T A2   |  Atlas 800T A2   | Atlas 800T A2 | Atlas 800T A2 | Atlas 300I Duo |
+| :------------: | :-------: | :--: | :--------------: | :--------------: | :-----------: | :-----------: | :------------: |
+|     Model      |   Size    | Type | FP16/BF16(eager) | FP16/BF16(graph) |  W8A8(graph)  | W4A16(eager)  |  FP16(graph)   |
+|     Llama2     | 7B - 70B  | LLM  |       Yes        |       Yes        |      Yes      |      Yes      |       -        |
+|     Llama3     |    8B     | LLM  |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|    Llama3.1    |    8B     | LLM  |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|   InternLM2    | 7B - 20B  | LLM  |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|  InternLM2.5   | 7B - 20B  | LLM  |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|   InternLM3    |    8B     | LLM  |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|    Mixtral     |   8x7B    | LLM  |       Yes        |       Yes        |      No       |      No       |      Yes       |
+|  QWen1.5-MoE   |   A2.7B   | LLM  |       Yes        |        -         |      No       |      No       |       -        |
+|   QWen2(.5)    |    7B     | LLM  |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|    QWen2-VL    |  2B, 7B   | MLLM |       Yes        |       Yes        |       -       |       -       |       -        |
+|   QWen2.5-VL   | 3B - 72B  | MLLM |       Yes        |       Yes        |       -       |       -       |      Yes       |
+|   QWen2-MoE    |  A14.57B  | LLM  |       Yes        |        -         |      No       |      No       |       -        |
+|     QWen3      | 0.6B-235B | LLM  |       Yes        |       Yes        |      No       |      No       |      Yes       |
+|  DeepSeek-V2   |    16B    | LLM  |        No        |       Yes        |      No       |      No       |       -        |
+| InternVL(v1.5) |  2B-26B   | MLLM |       Yes        |        -         |      Yes      |      Yes      |       -        |
+|   InternVL2    |  1B-40B   | MLLM |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|  InternVL2.5   |  1B-78B   | MLLM |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|   InternVL3    |  1B-78B   | MLLM |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
+|  CogVLM2-chat  |    19B    | MLLM |       Yes        |        No        |       -       |       -       |       -        |
+|     GLM4V      |    9B     | MLLM |       Yes        |        No        |       -       |       -       |       -        |

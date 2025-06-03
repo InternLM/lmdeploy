@@ -13,7 +13,7 @@ logger = get_logger('lmdeploy')
 
 
 def _get_meta_flashmla(kv_seqlens, num_attention_heads):
-    """get meta for flashmla."""
+    """Get meta for flashmla."""
     import flash_mla_cuda
     tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(kv_seqlens.to(torch.int32),
                                                                           num_attention_heads, 1)
@@ -21,16 +21,16 @@ def _get_meta_flashmla(kv_seqlens, num_attention_heads):
 
 
 class CudaOpsBackend(DefaultOpsBackend):
-    """cuda layer backend."""
+    """Cuda layer backend."""
 
     @staticmethod
     def get_name() -> str:
-        """backend name."""
+        """Backend name."""
         return 'cuda'
 
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
-        """get cuda layer builder."""
+        """Get cuda layer builder."""
         if layer_type == OpType.PagedAttention:
             from .attention import TritonAttentionBuilder
             return TritonAttentionBuilder
@@ -79,7 +79,7 @@ class CudaOpsBackend(DefaultOpsBackend):
 
     @staticmethod
     def get_attention_metadata_cls():
-        """get attention metadata class."""
+        """Get attention metadata class."""
         from .attention import TritonAttentionMetadata
         return TritonAttentionMetadata
 
@@ -90,7 +90,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        """get k block shape."""
+        """Get k block shape."""
         return (
             block_size,
             num_heads,
@@ -104,7 +104,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        """get v block shape."""
+        """Get v block shape."""
         return (
             block_size,
             num_heads,
@@ -113,7 +113,7 @@ class CudaOpsBackend(DefaultOpsBackend):
 
     @classmethod
     def update_meta_flashmla(cls, attn_metadata, num_attention_heads):
-        """update meta for flashmla."""
+        """Update meta for flashmla."""
         tile_scheduler_metadata, num_splits = _get_meta_flashmla(attn_metadata.kv_seqlens.to(torch.int32),
                                                                  num_attention_heads)
         attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
@@ -124,7 +124,7 @@ class CudaOpsBackend(DefaultOpsBackend):
 
     @classmethod
     def update_step_context(cls, step_context):
-        """update step context."""
+        """Update step context."""
         attn_meta_cls = cls.get_attention_metadata_cls()
         q_seqlens = step_context.q_seqlens
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
@@ -179,7 +179,7 @@ class CudaOpsBackend(DefaultOpsBackend):
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
-        """build graph runner."""
+        """Build graph runner."""
         from .graph_runner import CUDAGraphRunner
         from .warmup_manager import WarmupMeta, get_warmup_manager
 
@@ -196,10 +196,10 @@ class CudaOpsBackend(DefaultOpsBackend):
 
     @staticmethod
     def device_count():
-        """get num available devices."""
+        """Get num available devices."""
         return torch.cuda.device_count()
 
     @staticmethod
     def support_ray():
-        """support ray."""
+        """Support ray."""
         return True

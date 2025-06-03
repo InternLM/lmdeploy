@@ -68,7 +68,7 @@ class SelfAttention(torch.nn.Module):
 
     @staticmethod
     def _extract_rope(states: torch.Tensor):
-        """extract rope."""
+        """Extract rope."""
         rope = states.chunk(2, -1)[0]
         rope = rope.unflatten(-1, (-1, 2))
         rope = rope.transpose(-2, -1).flatten(-2, -1).contiguous()
@@ -76,7 +76,7 @@ class SelfAttention(torch.nn.Module):
 
     @staticmethod
     def _fill_rope(states: torch.Tensor, rope: torch.Tensor):
-        """fill rope."""
+        """Fill rope."""
         rope_part = states.chunk(2, -1)[0]
         rope = rope.unflatten(-1, (2, -1))
         rope = rope.transpose(-2, -1).flatten(-2, -1)
@@ -247,7 +247,7 @@ class GLMTransformer(nn.Module):
         self.post_layer_norm = config.post_layer_norm
 
         def build_layer(layer_number):
-            """build layer."""
+            """Build layer."""
             return GLMBlock(config, layer_number, dtype=dtype, device=device)
 
         self.layers = torch.nn.ModuleList([build_layer(i + 1) for i in range(self.num_layers)])
@@ -257,7 +257,7 @@ class GLMTransformer(nn.Module):
             self.final_layernorm = RMSNorm(config.hidden_size, config.layernorm_epsilon, dtype=dtype, device=device)
 
     def _get_layer(self, layer_number: int):
-        """get layer."""
+        """Get layer."""
         return self.layers[layer_number]
 
     def forward(
@@ -304,7 +304,7 @@ class Embedding(nn.Module):
 
 
 class PatchEmbedding(nn.Module):
-    """vision embedding."""
+    """Vision embedding."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -328,7 +328,7 @@ class PatchEmbedding(nn.Module):
 
 
 class EVA2CLIPAttention(nn.Module):
-    """vision attention."""
+    """Vision attention."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -379,7 +379,7 @@ class EVA2CLIPAttention(nn.Module):
 
 
 class EVA2CLIPMLP(nn.Module):
-    """vision MLP."""
+    """Vision MLP."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -421,7 +421,7 @@ class EVA2CLIPMLP(nn.Module):
 
 
 class EVA2CLIPTransformerLayer(nn.Module):
-    """vision trans layer."""
+    """Vision trans layer."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -445,7 +445,7 @@ class EVA2CLIPTransformerLayer(nn.Module):
 
 
 class EVA2CLIPTransformer(nn.Module):
-    """vision transformer."""
+    """Vision transformer."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -493,7 +493,7 @@ class GLU(nn.Module):
 
 
 class EVA2CLIPModel(nn.Module):
-    """vision model."""
+    """Vision model."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -606,12 +606,12 @@ class ChatGLMModel(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embedding
 
 
 class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
-    """rewrote model of LlamaForCausalLM."""
+    """Rewrote model of LlamaForCausalLM."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -637,7 +637,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.transformer(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -650,11 +650,11 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.transformer.output_layer(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.transformer.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -663,7 +663,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -706,7 +706,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
                            past_key_values: List[List[torch.Tensor]],
                            inputs_embeds: Optional[torch.Tensor] = None,
                            context: StepContext = None):
-        """update model meta."""
+        """Update model meta."""
         model_metas = context.model_metas
         if not hasattr(self.config, 'vision_config'):
             return model_metas
@@ -780,7 +780,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         return new_model_metas
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
 
         params_dict = dict(self.named_parameters())
@@ -819,12 +819,12 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
                 load_weight(param, loaded_weight)
 
     def get_input_processor(self) -> BaseModelInputProcessor:
-        """get input processor."""
+        """Get input processor."""
         return self.input_processor
 
 
 class ChatGLMInputProcessor(BaseModelInputProcessor):
-    """input processor."""
+    """Input processor."""
 
     def __init__(self, config: PretrainedConfig, dtype) -> None:
         self.config = config
@@ -842,7 +842,7 @@ class ChatGLMInputProcessor(BaseModelInputProcessor):
                          input_ids: List[int],
                          input_multimodals: List[Dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
-        """prepare multimodal input."""
+        """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
 

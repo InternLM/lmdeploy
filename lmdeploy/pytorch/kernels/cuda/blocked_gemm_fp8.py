@@ -31,7 +31,7 @@ def _quant_fp8_kernel(
     GROUP_SIZE: tl.constexpr,
     NUM_STAGES: tl.constexpr,
 ):
-    """quant fp8 kernel."""
+    """Quant fp8 kernel."""
     group_id = tl.program_id(0)
     m_id_start = tl.program_id(1)
     m_id_stride = tl.num_programs(1)
@@ -63,7 +63,7 @@ def _quant_fp8_kernel(
 
 
 def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor):
-    """quant online."""
+    """Quant online."""
     M, K = A.shape
     num_groups = K // group_size
     M_out = out.size(0)
@@ -107,7 +107,7 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
 
 
 def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn, trans_scale: bool = False):
-    """quant fp8."""
+    """Quant fp8."""
     assert A.dim() == 2
     M, K = A.shape
     assert K % group_size == 0
@@ -121,7 +121,7 @@ def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3
 
 
 def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
-    """quant fp8 tma."""
+    """Quant fp8 tma."""
     from deep_gemm.jit_kernels.utils import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2
     M, K = A.shape
@@ -170,7 +170,7 @@ def _gemm_fp8_tma_kernel(
     BLOCK_K: tl.constexpr,
     GROUP_M: tl.constexpr,
 ):
-    """gemm fp8 kernel."""
+    """Gemm fp8 kernel."""
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -264,7 +264,7 @@ def _gemm_fp8_kernel(
     BLOCK_K: tl.constexpr,
     GROUP_M: tl.constexpr,
 ):
-    """gemm fp8 kernel."""
+    """Gemm fp8 kernel."""
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -324,7 +324,7 @@ def blocked_gemm_fp8(A: Tensor,
                      B: Tensor,
                      B_scale: torch.Tensor,
                      out_dtype: torch.dtype = torch.float16):
-    """gemm fp8."""
+    """Gemm fp8."""
 
     def grid(META):
         return (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
@@ -362,7 +362,7 @@ def blocked_gemm_fp8(A: Tensor,
         desc_b = desc_helper.get_tma_descriptor_kernel_param('desc_b')
 
         def _grid_tma(META):
-            """grid tma."""
+            """Grid tma."""
             BLOCK_M = META['BLOCK_M']
             BLOCK_N = META['BLOCK_N']
             desc_helper.fill_2d_tma_descriptor('desc_a',
@@ -465,7 +465,7 @@ def deep_gemm_fp8(A: Tensor,
                   B: Tensor,
                   B_scale: torch.Tensor,
                   out_dtype: torch.dtype = torch.bfloat16):
-    """deepgemm fp8."""
+    """Deepgemm fp8."""
     from deep_gemm.jit_kernels.gemm import gemm_fp8_fp8_bf16_nt
     M, K = A.shape
     N, _ = B.shape

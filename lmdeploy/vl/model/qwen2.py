@@ -7,7 +7,7 @@ from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 
 
 def check_qwen_vl_deps_install():
-    """check qwen_vl_utils."""
+    """Check qwen_vl_utils."""
     try:
         import qwen_vl_utils  # noqa: F401
     except ImportError:
@@ -35,7 +35,7 @@ class Qwen2VLModel(VisonModel):
         self.image_token_id = tokenizer.encode(image_token)[-1]
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to `super().preprocess()` for spec."""
+        """Refer to `super().preprocess()` for spec."""
         from qwen_vl_utils import process_vision_info
 
         images = self.collect_images(messages)
@@ -57,15 +57,22 @@ class Qwen2VLModel(VisonModel):
 
     def build_model(self):
         check_qwen_vl_deps_install()
-        from transformers import Qwen2VLForConditionalGeneration
+        arch = self.hf_config.architectures[0]
+        if arch == 'Qwen2VLForConditionalGeneration':
+            from transformers import Qwen2VLForConditionalGeneration as AutoModelCls
+        elif arch == 'Qwen2_5_VLForConditionalGeneration':
+            from transformers import Qwen2_5_VLForConditionalGeneration as AutoModelCls
+        else:
+            raise ValueError(f'Unsupported arch={arch}')
+
         if self.with_llm:
-            self.vl_model = Qwen2VLForConditionalGeneration.from_pretrained(self.model_path, device_map='cpu')
+            self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu')
         else:
             raise NotImplementedError('turbomind has not supported qwen2-vl yet')
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
@@ -79,7 +86,7 @@ class Qwen2VLModel(VisonModel):
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
@@ -106,6 +113,6 @@ class Qwen2VLModel(VisonModel):
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        """return to the information needed by pytorch engine."""
+        """Return to the information needed by pytorch engine."""
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

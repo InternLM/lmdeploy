@@ -28,7 +28,7 @@ class BaseLoader(ABC):
         self.item_count = defaultdict(int)
 
     def get_index(self, index_name: str, file_pattern: str) -> Tuple[dict, list]:
-        """get shards and weight map (if possible) for the model."""
+        """Get shards and weight map (if possible) for the model."""
         get_path = partial(osp.join, self.model_path)
         shards = []
         if index_name:
@@ -57,6 +57,8 @@ class SafetensorsLoader(BaseLoader):
             for shard in self.shards:
                 with safe_open(shard, 'pt') as f:
                     index.update({k: shard for k in f.keys()})
+        # self.index maps weight names to their containing safetensors file paths
+        self.index = index
         # count layer-wise parameters
         for k in index.keys():
             match = re.findall(self.pattern, k)
@@ -66,9 +68,15 @@ class SafetensorsLoader(BaseLoader):
     def items(self):
         params = defaultdict(dict)
         for shard in self.shards:
+            filename = osp.split(shard)[-1]
             with safe_open(shard, 'pt') as f:
                 misc = []
                 for k in f.keys():
+                    # Filtering logic:
+                    # - Exclude weights not found in the mapping
+                    # - Exclude duplicated weights (present in multiple files)
+                    if k not in self.index or self.index[k] != filename:
+                        continue
                     match = re.findall(self.pattern, k)
                     if not match:
                         misc.append(k)
@@ -81,27 +89,6 @@ class SafetensorsLoader(BaseLoader):
                 if misc:
                     yield (-1, {k: f.get_tensor(k) for k in misc})
         assert not params
-
-    # def items(self):
-    #     params = defaultdict(dict)
-    #     for shard in self.shards:
-    #         # with safe_open(shard, 'pt') as f:
-    #         with open(shard, 'rb') as f:
-    #             w = safetensors.torch.load(f.read())
-    #             misc = []
-    #             for k in w.keys():
-    #                 match = re.findall(self.pattern, k)
-    #                 if not match:
-    #                     misc.append(k)
-    #                 else:
-    #                     idx = int(match[0])
-    #                     param = params[idx]
-    #                     param[k] = w[k]
-    #                     if len(param) == self.item_count[idx]:
-    #                         yield (idx, params.pop(idx))
-    #             if misc:
-    #                 yield (-1, {k: w[k] for k in misc})
-    #     assert not params
 
 
 class PytorchLoader(BaseLoader):

@@ -33,9 +33,10 @@ async def infer(model, session_id: int, input_ids: List, gen_config: GenerationC
         token_latency_stats = [0] * (output_seqlen + 1)
         prev = time.perf_counter()
         n_prev_token = 0
-        """
-        The iterator provided by `stream_infer` denotes the number of generated tokens so far,
-        which is represented by the variable `n_token`.
+        """The iterator provided by `stream_infer` denotes the number of
+        generated tokens so far, which is represented by the variable
+        `n_token`.
+
         Please note that `n_token` is not a continuous value. In other words, during the iteration,
         its value might be 5, 7, 8, 16, and so on, rather than 1, 2, 3, 4, etc.
         So, it is quite difficult to get the latency of each generated token.
@@ -178,7 +179,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
 
     out_token_throughput = np.round(token_latency_stats.size / elapsed_time, 2)
     total_token_throughput = np.round(concurrency * test_round * (input_seqlen + output_seqlen) / elapsed_time, 2)
-    print(f'\n{"-" * 50}\ntotal time: {elapsed_time:.2f}s\n'
+    print(f'\n{" - " * 50}\ntotal time: {elapsed_time:.2f}s\n'
           f'concurrency: {concurrency}, test_round: {test_round}\n'
           f'input_tokens: {input_seqlen}, output_tokens: {output_seqlen}\n'
           f'first_token latency(min, max, ave): '
@@ -188,7 +189,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'{token_latency_ave}s\n'
           f'token_latency percentiles(50%,75%,95%,99%)(s): {percentiles}\n'
           f'throughput(output): {out_token_throughput} token/s\n'
-          f'throughput(total): {total_token_throughput} token/s\n{"-" * 50}')
+          f'throughput(total): {total_token_throughput} token/s\n{" - " * 50}')
     return model_path, \
         [first_token_latency_min, first_token_latency_max,
          first_token_latency_ave], \

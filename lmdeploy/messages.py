@@ -6,6 +6,9 @@ from typing import Callable, Dict, List, Literal, Optional
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
+from lmdeploy.pytorch.disagg.request import MigrationRequest
+
 from .tokenizer import Tokenizer
 from .utils import get_logger
 
@@ -13,13 +16,13 @@ logger = get_logger('lmdeploy')
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
-tensor for the next token, and returns a modified tensor of logits
-to sample from."""
+tensor for the next token, and returns a modified tensor of logits to sample
+from."""
 
 
 @dataclass
 class GenerationConfig:
-    """generation parameters used by inference engines.
+    """Generation parameters used by inference engines.
 
     Args:
         n (int): Define how many chat completion choices to generate for each
@@ -107,8 +110,13 @@ class GenerationConfig:
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
 
+    # for disaggregation
+    with_cache: bool = False
+    preserve_cache: bool = False
+    migration_request: Optional[MigrationRequest] = None
+
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
-        """convert stop_words/bad_sords to ids and append the ids to
+        """Convert stop_words/bad_sords to ids and append the ids to
         stop_token_ids/bad_token_ids."""
 
         def special_word_token_ids(words):
@@ -130,7 +138,7 @@ class GenerationConfig:
         self.bad_token_ids = list(set(bad_token_ids)) or None
 
     def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
-        """update the stop_token_ids."""
+        """Update the stop_token_ids."""
         stop_token_ids = set(self.stop_token_ids or [])
 
         # add tokenizer's eos_token_id
@@ -297,7 +305,14 @@ class PytorchEngineConfig:
             bit, set it to 4 or 8, respectively
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
+        empty_init (bool): Whether to load the model weights, you should set
+            it to True if you want to update weights after create the pipeline
         enable_microbatch (bool): enable microbatch for specified model
+        enable_eplb (bool): enable eplb for specified model
+        role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
+            'Decode']. Default to `EngineRole.Hybrid`.
+        migration_backend: migration backend. options: ['DLSlime'].
+            Default to `MigrationBackend.DLSlime`.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -322,7 +337,12 @@ class PytorchEngineConfig:
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
+    empty_init: bool = False
     enable_microbatch: bool = False
+    enable_eplb: bool = False
+
+    role: EngineRole = EngineRole.Hybrid
+    migration_backend: MigrationBackend = MigrationBackend.DLSlime
 
     def __post_init__(self):
         """Check input validation."""
@@ -404,6 +424,8 @@ class EngineOutput:
             may not equal to the length of token_ids
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
+        cache_block_ids (List[int]): send cache blocks back for migration in
+            Disaggregated LLM Serving when Prefill Engine is Done.
     """
     status: ResponseType
     token_ids: List[int]
@@ -411,6 +433,8 @@ class EngineOutput:
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
+
+    cache_block_ids: Optional[List[int]] = None
 
 
 @dataclass
