@@ -159,6 +159,12 @@ void LlamaTritonModel::handleMissingParams()
                        (int)model_param_.vocab_size);
     }
 
+    if (model_param_.sampling_vocab_size == 0) {
+        model_param_.sampling_vocab_size = model_param_.vocab_size;
+        TM_LOG_WARNING("[LlamaTritonModel] `sampling_vocab_size` is not set, default to `vocab_size` (%d).",
+                       (int)model_param_.vocab_size);
+    }
+
     if (!attn_param_.max_position_embeddings) {
         attn_param_.max_position_embeddings = 2048;
         TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
@@ -268,23 +274,24 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     const auto lora_reader      = reader["lora_config"];
     const auto engine_reader    = reader["engine_config"];
 
-    model_name_                     = model_reader["model_name"].as<std::string>();
-    model_param_.head_num           = model_reader["head_num"].as<int>();
-    model_param_.head_dim           = model_reader["size_per_head"].as<int>();
-    model_param_.kv_head_num        = model_reader["kv_head_num"].as<int>(0);
-    model_param_.hidden_units       = model_reader["hidden_units"].as<int>();
-    model_param_.layer_num          = model_reader["num_layer"].as<int>();
-    model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
-    model_param_.embedding_size     = model_reader["embedding_size"].as<int>();
-    model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
-    model_param_.tune_layer_num     = model_reader["tune_layer_num"].as<int>(1);
-    model_param_.mla.q_lora_rank    = model_reader["q_lora_rank"].as<int>();
-    model_param_.mla.kv_lora_rank   = model_reader["kv_lora_rank"].as<int>();
-    model_param_.mla.qk_rope_dim    = model_reader["qk_rope_dim"].as<int>();
-    model_param_.mla.v_head_dim     = model_reader["v_head_dim"].as<int>();
-    attn_param_.cache_block_seq_len = attention_reader["cache_block_seq_len"].as<int>(0);
-    model_param_.quant_policy       = engine_reader["quant_policy"].as<int>(0);
-    YAML::Node inter_size           = model_reader["inter_size"];
+    model_name_                      = model_reader["model_name"].as<std::string>();
+    model_param_.head_num            = model_reader["head_num"].as<int>();
+    model_param_.head_dim            = model_reader["size_per_head"].as<int>();
+    model_param_.kv_head_num         = model_reader["kv_head_num"].as<int>(0);
+    model_param_.hidden_units        = model_reader["hidden_units"].as<int>();
+    model_param_.layer_num           = model_reader["num_layer"].as<int>();
+    model_param_.vocab_size          = model_reader["vocab_size"].as<int>();
+    model_param_.embedding_size      = model_reader["embedding_size"].as<int>();
+    model_param_.sampling_vocab_size = model_reader["sampling_vocab_size"].as<int>(0);
+    model_param_.norm_eps            = model_reader["norm_eps"].as<float>();
+    model_param_.tune_layer_num      = model_reader["tune_layer_num"].as<int>(1);
+    model_param_.mla.q_lora_rank     = model_reader["q_lora_rank"].as<int>();
+    model_param_.mla.kv_lora_rank    = model_reader["kv_lora_rank"].as<int>();
+    model_param_.mla.qk_rope_dim     = model_reader["qk_rope_dim"].as<int>();
+    model_param_.mla.v_head_dim      = model_reader["v_head_dim"].as<int>();
+    attn_param_.cache_block_seq_len  = attention_reader["cache_block_seq_len"].as<int>(0);
+    model_param_.quant_policy        = engine_reader["quant_policy"].as<int>(0);
+    YAML::Node inter_size            = model_reader["inter_size"];
     for (auto it = inter_size.begin(); it != inter_size.end(); ++it) {
         model_param_.inter_size.push_back(it->as<int>());
     }
