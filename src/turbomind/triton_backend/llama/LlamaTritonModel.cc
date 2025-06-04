@@ -218,14 +218,13 @@ void LlamaTritonModel::handleMissingParams()
 
 LlamaTritonModel::~LlamaTritonModel()
 {
-    CudaDeviceGuard guard(getDevice());
     FT_CHECK(weights_.size() == engines_.size());
 
     gateway_->shutdown();
 
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
-        check_cuda_error(cudaSetDevice(engine_param_.devices[device_id]));
+        CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
         engines_[device_id].reset();
         weights_[device_id].reset();
         trim_default_mempool(engine_param_.devices[device_id]);
@@ -418,7 +417,7 @@ std::unique_ptr<ModelRequest> LlamaTritonModel::createModelInstance(int device_i
 
 void LlamaTritonModel::createSharedWeights(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(engine_param_.devices[device_id]));
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
     weights_[rank] =
         std::make_shared<LlamaWeight>(dtype_, model_param_, engine_params_.at(rank), lora_param_, moe_param_);
     // model inited with model_dir
@@ -434,7 +433,7 @@ TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 
 void LlamaTritonModel::processWeights(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(engine_param_.devices[device_id]));
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
     FT_CHECK(weights_[device_id] != nullptr);
 
     cudaDeviceProp props{};
@@ -470,7 +469,7 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
 
 void LlamaTritonModel::createEngine(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(engine_param_.devices[device_id]));
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
 
     auto ctx = std::make_unique<Context>(engine_param_.devices[device_id]);
 

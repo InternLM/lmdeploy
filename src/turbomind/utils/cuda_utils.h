@@ -180,15 +180,15 @@ class CudaDeviceGuard {
 public:
     CudaDeviceGuard(int device)
     {
-        cudaGetDevice(&last_device_id_);
+        check_cuda_error(cudaGetDevice(&last_device_id_));
         if (device != last_device_id_) {
-            cudaSetDevice(device);
+            check_cuda_error(cudaSetDevice(device));
         }
     }
 
     ~CudaDeviceGuard()
     {
-        cudaSetDevice(last_device_id_);
+        check_cuda_error(cudaSetDevice(last_device_id_));
     }
 
 private:

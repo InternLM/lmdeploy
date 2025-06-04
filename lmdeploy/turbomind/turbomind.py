@@ -310,7 +310,7 @@ class TurboMind:
         return model_comm
 
     def update_params(self, request: UpdateParamsRequest):
-        """update params."""
+        """Update params."""
 
         def _construct(item):
             func, args = item
