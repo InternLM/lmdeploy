@@ -332,7 +332,7 @@ def build_inputs_maker(engine: 'Engine'):
         return InputsMakerAsync(engine)
 
 
-class StatusLogger:
+class StatusProcessor:
 
     def __init__(self, engine: 'Engine'):
         self.engine = engine
@@ -1026,7 +1026,7 @@ class Engine:
 
     async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """Send responses."""
-        status_logger = StatusLogger(self)
+        status_processer = StatusProcessor(self)
 
         def __log_resps(outputs: List[InferOutput]):
             """Log resps."""
@@ -1047,11 +1047,11 @@ class Engine:
             """Send response callback."""
             __log_resps(step_outputs)
 
-            status_logger.reset_status()
+            status_processer.reset_status()
             for out in step_outputs:
-                status_logger.update_stats(out)
+                status_processer.update_stats(out)
                 __send_resp(out)
-            status_logger.record_stats()
+            status_processer.record_stats()
 
         while True:
             num_outs = que.qsize()
