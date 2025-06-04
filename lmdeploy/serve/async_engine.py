@@ -804,7 +804,7 @@ class AsyncEngine(LogitsMixin):
                                  len(input_ids),
                                  gen_len,
                                  finish_reason,
-                                 token_ids=token_ids,
+                                 token_ids=[],
                                  cache_block_ids=outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
