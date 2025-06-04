@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
+from multiprocessing.queues import Queue as MpQueue
+from queue import Queue
 from typing import List, Literal, Optional, Union
 
 from .archs import autoget_backend_config, get_task
@@ -92,6 +94,7 @@ def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
           backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+          model_params_que: Optional[Union[Queue, MpQueue]] = None,
           chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
@@ -122,6 +125,10 @@ def serve(model_path: str,
             `turbomind` backend.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): backend
             config instance. Default to none.
+        model_params_que (queue.Queue | multiprocessing.queues.Queue): model parameters.
+            The first item should be list of all names of a model (state_dict().keys()),
+            the following item should be part of state_dict(), and the last item should
+            be None, indicating the end of the queue.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         server_name (str): host ip for serving
@@ -156,6 +163,7 @@ def serve(model_path: str,
                    kwargs=dict(model_name=model_name,
                                backend=backend,
                                backend_config=backend_config,
+                               model_params_que=model_params_que,
                                chat_template_config=chat_template_config,
                                server_name=server_name,
                                server_port=server_port,
