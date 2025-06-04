@@ -793,7 +793,7 @@ def proxy(server_name: str = '0.0.0.0',
           ssl: bool = False,
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
-          link_type: Literal['RoCE', 'IB'] = 'ROCE',
+          link_type: Literal['RoCE', 'IB'] = 'RoCE',
           migration_protocol: Literal['RDMA'] = 'RDMA',
           **kwargs):
     """To launch the proxy server.
