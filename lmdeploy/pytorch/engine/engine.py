@@ -380,8 +380,6 @@ class StatusLogger:
                                               num_waiting_reqs=num_waiting,
                                               gpu_cache_usage=self.scheduler.usage)
 
-        print(self.iteration_stats)
-        print(self.scheduler_stats)
         for stat_logger in self.engine.stat_loggers:
             stat_logger.record(scheduler_stats=self.scheduler_stats, iteration_stats=self.iteration_stats)
 
