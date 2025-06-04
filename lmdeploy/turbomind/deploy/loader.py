@@ -7,7 +7,7 @@ from collections import defaultdict
 from functools import partial
 from glob import glob
 from queue import Queue
-from typing import Dict, Iterator, Tuple, Union
+from typing import Iterator, Tuple, Union
 
 import torch
 from safetensors import safe_open
@@ -139,7 +139,7 @@ class StateDictLoader:
     lm_head, norm).
     """
 
-    def __init__(self, queue: Queue[Dict[str, torch.Tensor]], pattern: str):
+    def __init__(self, queue: Queue, pattern: str):
         self.que = queue
         self.pattern = pattern
 
