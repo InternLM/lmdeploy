@@ -341,6 +341,12 @@ class StatusLogger:
         self.iteration_stats: IterationStats = None
         self.scheduler_stats: SchedulerStats = None
 
+    def reset_status(self):
+        """Reset previous status to avoid accumulcations in
+        self.engine.stat_loggers over multiple iterations."""
+        self.iteration_stats = None
+        self.scheduler_stats = None
+
     def update_stats(self, out: InferOutput):
         """Update status from inferoutput."""
         if not self.enable_metrics or out.req_state is None:
@@ -374,6 +380,8 @@ class StatusLogger:
                                               num_waiting_reqs=num_waiting,
                                               gpu_cache_usage=self.scheduler.usage)
 
+        print(self.iteration_stats)
+        print(self.scheduler_stats)
         for stat_logger in self.engine.stat_loggers:
             stat_logger.record(scheduler_stats=self.scheduler_stats, iteration_stats=self.iteration_stats)
 
@@ -1020,6 +1028,7 @@ class Engine:
 
     async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """Send responses."""
+        status_logger = StatusLogger(self)
 
         def __log_resps(outputs: List[InferOutput]):
             """Log resps."""
@@ -1040,11 +1049,10 @@ class Engine:
             """Send response callback."""
             __log_resps(step_outputs)
 
-            status_logger = StatusLogger(self)
+            status_logger.reset_status()
             for out in step_outputs:
                 status_logger.update_stats(out)
                 __send_resp(out)
-
             status_logger.record_stats()
 
         while True:
