@@ -103,7 +103,7 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
-    cfg.devices = cfg.devices if cfg.devices else list(range(cfg.device_num))
+    cfg.devices = cfg.devices or list(range(cfg.device_num))
 
 
 class TurboMind:
@@ -310,9 +310,19 @@ class TurboMind:
         return model_comm
 
     def update_params(self, request: UpdateParamsRequest):
-        """Update params."""
+        """Update params.
+
+        When using the this function, you need to set empty_init=True when creating the engine.
+
+        For each request, the serialized_named_tensors should be the full weights of a decoder layer or the misc weights
+        (embedding, norm, lm_haed). You should set finished=True when you call this function for the last time.
+        """
 
         def _construct(item):
+            """ Deserialize torch.Tensor
+            Args:
+                item (Tuple[Callable, Tuple]): the return of reduce_tensor
+            """
             func, args = item
             args = list(args)
             args[6] = torch.cuda.current_device()  # device id.

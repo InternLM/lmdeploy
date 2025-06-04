@@ -31,6 +31,7 @@
 #include <cusparseLt.h>
 #endif
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/logger.h"
@@ -188,7 +189,7 @@ public:
 
     ~CudaDeviceGuard()
     {
-        check_cuda_error(cudaSetDevice(last_device_id_));
+        TM_CHECK_EQ(cudaSetDevice(last_device_id_), cudaSuccess);
     }
 
 private:
