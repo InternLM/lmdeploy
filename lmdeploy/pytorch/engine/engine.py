@@ -343,7 +343,7 @@ class StatusLogger:
 
     def update_stats(self, out: InferOutput):
         """Update status from inferoutput."""
-        if not self.enable_metrics or out.req_stats is None:
+        if not self.enable_metrics or out.req_state is None:
             return
 
         if self.iteration_stats is None:
@@ -352,14 +352,14 @@ class StatusLogger:
         # update stats from output
         self.iteration_stats.update_from_output(output=out,
                                                 engine_core_timestamp=out.engine_core_timestamp,
-                                                is_prefilling=out.is_prefilling,
-                                                prompt_len=out.prompt_len,
-                                                req_stats=out.req_stats)
+                                                is_prefilling=out.req_state.is_prefilling,
+                                                prompt_len=out.req_state.prompt_len,
+                                                req_stats=out.req_state.stats)
         # update stats if request is finished
         if out.finish:
             self.iteration_stats.update_from_finished_request(finish_reason=out.resp.type,
-                                                              num_prompt_tokens=out.prompt_len,
-                                                              req_stats=out.req_stats)
+                                                              num_prompt_tokens=out.req_state.prompt_len,
+                                                              req_stats=out.req_state.stats)
 
     def record_stats(self):
         """Log stats to all registered loggers."""
