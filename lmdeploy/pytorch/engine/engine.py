@@ -10,7 +10,6 @@ import numpy as np
 import torch
 
 from lmdeploy.messages import EngineCoreEvent, PytorchEngineConfig, ResponseType
-from lmdeploy.metrics.loggers import StatLoggerBase
 from lmdeploy.metrics.stats import IterationStats, SchedulerStats
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -18,7 +17,7 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_ti
 
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
-from ..messages import MessageStatus, SchedulerSequence
+from ..messages import MessageStatus, RequestState, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .engine_checker import EngineChecker
@@ -49,6 +48,7 @@ class InferOutput:
     cache_block_ids: List[int] = None
 
     # for logging
+    req_state: RequestState = None
     engine_core_timestamp: float = None
     engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
 
@@ -332,6 +332,52 @@ def build_inputs_maker(engine: 'Engine'):
         return InputsMakerAsync(engine)
 
 
+class StatusLogger:
+
+    def __init__(self, engine: 'Engine'):
+        self.engine = engine
+        self.scheduler = engine.scheduler
+        self.enable_metrics: bool = engine.scheduler_config.enable_metrics
+        self.iteration_stats: IterationStats = None
+        self.scheduler_stats: SchedulerStats = None
+
+    def update_stats(self, out: InferOutput):
+        """Update status from inferoutput."""
+        if not self.enable_metrics or out.req_stats is None:
+            return
+
+        if self.iteration_stats is None:
+            self.iteration_stats = IterationStats()
+
+        # update stats from output
+        self.iteration_stats.update_from_output(output=out,
+                                                engine_core_timestamp=out.engine_core_timestamp,
+                                                is_prefilling=out.is_prefilling,
+                                                prompt_len=out.prompt_len,
+                                                req_stats=out.req_stats)
+        # update stats if request is finished
+        if out.finish:
+            self.iteration_stats.update_from_finished_request(finish_reason=out.resp.type,
+                                                              num_prompt_tokens=out.prompt_len,
+                                                              req_stats=out.req_stats)
+
+    def record_stats(self):
+        """Log stats to all registered loggers."""
+        if not self.enable_metrics:
+            return
+
+        # actual running requests
+        num_running = self.scheduler.num_locked()
+        # waiting to be scheduled + scheduled but not yet started
+        num_waiting = self.scheduler.num_waiting() + self.scheduler.num_running()
+        self.scheduler_stats = SchedulerStats(num_running_reqs=num_running,
+                                              num_waiting_reqs=num_waiting,
+                                              gpu_cache_usage=self.scheduler.usage)
+
+        for stat_logger in self.engine.stat_loggers:
+            stat_logger.record(scheduler_stats=self.scheduler_stats, iteration_stats=self.iteration_stats)
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -417,13 +463,6 @@ class Engine:
 
         # for migration loop management
         self.migration_event: asyncio.Event = None
-
-    @staticmethod
-    def _record_stats(stat_loggers: StatLoggerBase, scheduler_stats: SchedulerStats, iteration_stats: IterationStats):
-        """Log stats to all registered loggers."""
-        # [LoggingStatLogger, PrometheusStatLogger]
-        for stat_logger in stat_loggers:
-            stat_logger.record(scheduler_stats=scheduler_stats, iteration_stats=iteration_stats)
 
     @classmethod
     def from_pretrained(cls,
@@ -829,6 +868,7 @@ class Engine:
                               finish=finish,
                               token_ids=token_ids,
                               cache_block_ids=cache_block_ids,
+                              req_state=msg.req_state,
                               engine_core_timestamp=engine_core_timestamp,
                               engine_core_events=msg.engine_core_events)
             outputs[session_id] = out
@@ -978,8 +1018,7 @@ class Engine:
             await self.req_manager.step()
             has_runable_event.set()
 
-    async def _async_loop_send_responses(self, que: asyncio.Queue, log_que: asyncio.Queue,
-                                         forward_event: asyncio.Event):
+    async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """Send responses."""
 
         def __log_resps(outputs: List[InferOutput]):
@@ -989,36 +1028,6 @@ class Engine:
                 logger.debug(f'Response sessions: {session_ids}')
             elif logger.level <= logging.INFO:
                 logger.debug(f'Response: num_outputs={len(outputs)}.')
-
-        def __update_stats(out: InferOutput, iteration_stats: IterationStats):
-            session = self.scheduler.sessions.get(out.session_id)
-            if session is None:
-                logger.warning(f'Session {out.session_id} not found. Skipping stats update.')
-                return
-
-            sequences = list(session.sequences.values())
-            if not sequences:
-                logger.warning(f'No sequences found for session {out.session_id}. Skipping stats update.')
-                return
-
-            msg = sequences[0]
-            req_state = getattr(msg, 'req_state', None)
-            if req_state is None:
-                logger.warning(f'req_state not found for session {out.session_id}. Skipping stats update.')
-                return
-
-            if req_state and req_state.stats is not None:
-                # update stats from output
-                iteration_stats.update_from_output(output=out,
-                                                   engine_core_timestamp=out.engine_core_timestamp,
-                                                   is_prefilling=req_state.is_prefilling,
-                                                   prompt_len=req_state.prompt_len,
-                                                   req_stats=req_state.stats)
-                # update stats if request is finished
-                if out.finish:
-                    iteration_stats.update_from_finished_request(finish_reason=out.resp.type,
-                                                                 num_prompt_tokens=req_state.prompt_len,
-                                                                 req_stats=req_state.stats)
 
         def __send_resp(out: InferOutput):
             """Send response."""
@@ -1031,24 +1040,12 @@ class Engine:
             """Send response callback."""
             __log_resps(step_outputs)
 
-            if self.engine_config.enable_metrics:
-                iteration_stats = IterationStats()
-                # actual running requests
-                num_running_reqs = self.scheduler.num_locked()
-                # waiting to be scheduled or have been scheduled but not yet started execution
-                num_waiting_reqs = self.scheduler.num_waiting() + self.scheduler.num_running()
-                scheduler_stats = SchedulerStats(num_running_reqs=num_running_reqs,
-                                                 num_waiting_reqs=num_waiting_reqs,
-                                                 gpu_cache_usage=self.scheduler.usage)
-
+            status_logger = StatusLogger(self)
             for out in step_outputs:
-                if self.engine_config.enable_metrics:
-                    __update_stats(out=out, iteration_stats=iteration_stats)
-
+                status_logger.update_stats(out)
                 __send_resp(out)
 
-            if self.engine_config.enable_metrics:
-                log_que.put_nowait((scheduler_stats, iteration_stats))
+            status_logger.record_stats()
 
         while True:
             num_outs = que.qsize()
@@ -1060,16 +1057,6 @@ class Engine:
                 resps = (await que.get()).values()
             await self._await_forward_event(forward_event)
             __send_resps(resps)
-
-    async def _async_log_stats_task(self, log_que: asyncio.Queue):
-
-        while True:
-            (scheduler_stats, iteration_stats) = await log_que.get()
-
-            assert self.stat_loggers is not None, 'stat loggers cannot be None when enabling metrics'
-            self._record_stats(stat_loggers=self.stat_loggers,
-                               scheduler_stats=scheduler_stats,
-                               iteration_stats=iteration_stats)
 
     @torch.inference_mode()
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
@@ -1223,19 +1210,14 @@ class Engine:
                 forward_event, has_runable_event),
                                                    name='MainLoopPreprocessMessage')
 
-            # log task
-            logger.info('Starting async task MainLoopLogStats.')
-            log_que = asyncio.Queue()
-            log_stats_task = asyncio.create_task(self._async_log_stats_task(log_que), name='MainLoopLogStats')
-
             # response task
             logger.info('Starting async task MainLoopResponse.')
             resp_que = asyncio.Queue()
-            loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, log_que, forward_event),
+            loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
 
             loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, log_stats_task, loop_send_resp]
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
 
             if self.engine_config.role != EngineRole.Hybrid:
                 logger.info('Starting async task MigrationLoop.')
