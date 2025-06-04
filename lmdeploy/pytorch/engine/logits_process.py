@@ -279,10 +279,12 @@ class FusedLogitsProcessor:
     def __init__(self,
                  sampling_inputs: SamplingInputs,
                  ignore_eos: torch.Tensor,
-                 tokenizer: Optional[Tokenizer] = None):
+                 tokenizer: Optional[Tokenizer] = None,
+                 sampling_vocab_size: Optional[int] = None):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.ignore_eos = ignore_eos
         self.tokenizer = tokenizer
+        self.sampling_vocab_size = sampling_vocab_size
 
     async def _wait_stream_once(self):
         """Wait stream once."""
@@ -368,6 +370,9 @@ class FusedLogitsProcessor:
             seeds = sampling_inputs.random_seeds
             offsets = sampling_inputs.random_offsets
             return _multinomial_sampling(softmax_scores, seeds, offsets, indices)
+
+        if self.sampling_vocab_size is not None and logits.size(1) > self.sampling_vocab_size:
+            logits = logits[..., :self.sampling_vocab_size]
 
         if sampling_inputs.max_top_k == 1:
             return logits.argmax(-1)

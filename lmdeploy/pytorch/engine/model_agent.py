@@ -236,6 +236,10 @@ class BaseModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
         self.tokenizer = tokenizer
+        try:
+            self.sampling_vocab_size = len(tokenizer)
+        except BaseException:
+            self.sampling_vocab_size = None
 
         self._pre_in_que = None
         self._in_que = None
@@ -434,7 +438,10 @@ class BaseModelAgent:
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
             split_logits = __get_last_logits()
-            logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos, self.tokenizer)
+            logits_processor = FusedLogitsProcessor(sampling_inputs,
+                                                    ignore_eos,
+                                                    self.tokenizer,
+                                                    sampling_vocab_size=self.sampling_vocab_size)
             logits = await logits_processor(all_ids, guided_input_ids, split_logits)
             next_token_ids = logits_processor.sampling(logits)
 

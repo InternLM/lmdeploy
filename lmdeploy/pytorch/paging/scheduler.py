@@ -137,7 +137,6 @@ class Scheduler:
 
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
-
         running_migration: SeqList = []
         migrating_token_count = 0
 
@@ -161,12 +160,13 @@ class Scheduler:
             """Reorder waiting."""
             return sorted(self.waiting_migration, key=lambda seq: seq.arrive_time)
 
-        waiting = _reorder_migrating()
+        waiting_migration = _reorder_migrating()
 
-        while len(waiting) > 0:
-            seq = waiting.pop(0)
-            self.block_trie.match(waiting)
-            if not __evict_for_seq(seq, waiting):
+        max_batches = self.scheduler_config.max_batches - self.num_running() - self.num_locked()
+        while len(waiting_migration) > 0 and len(running_migration) < max_batches:
+            seq = waiting_migration.pop(0)
+            self.block_trie.match(waiting_migration)
+            if not __evict_for_seq(seq, waiting_migration):
                 break
 
             # allocate session memory
