@@ -58,7 +58,6 @@ jobs:
         run: |
           python3 -m pip cache dir
           python3 -m pip install --upgrade pip setuptools==69.5.1
-          python3 -m pip install torch==2.6.0 torchvision==0.21.0
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
       - name: Build lmdeploy
