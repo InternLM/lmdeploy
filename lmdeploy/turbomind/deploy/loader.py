@@ -68,14 +68,13 @@ class SafetensorsLoader(BaseLoader):
     def items(self):
         params = defaultdict(dict)
         for shard in self.shards:
-            filename = osp.split(shard)[-1]
             with safe_open(shard, 'pt') as f:
                 misc = []
                 for k in f.keys():
                     # Filtering logic:
                     # - Exclude weights not found in the mapping
                     # - Exclude duplicated weights (present in multiple files)
-                    if k not in self.index or self.index[k] != filename:
+                    if k not in self.index or self.index[k] != shard:
                         continue
                     match = re.findall(self.pattern, k)
                     if not match:
