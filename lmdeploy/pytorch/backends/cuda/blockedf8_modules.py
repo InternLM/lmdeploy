@@ -90,6 +90,8 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
 
     def warmup(self, warmup_meta: WarmupMeta):
         """warmup."""
+        import random
+
         from deep_gemm.jit_kernels.utils import get_m_alignment_for_contiguous_layout
         device = 'cuda'
         max_num_tokens = warmup_meta.max_num_tokens
@@ -101,7 +103,10 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         scale = torch.empty(((n + block_size - 1) // block_size, (k + block_size - 1) // block_size),
                             dtype=torch.float32,
                             device=device)
-        for m in range(alignment, range_end, alignment):
+        # shuffle ranges so ranks might compile different kernels concurrently.
+        ranges = list(range(alignment, range_end, alignment))
+        random.shuffle(ranges)
+        for m in ranges:
             inputs = torch.empty(m, k, dtype=self.out_dtype, device=device)
             input_quant, input_scale = quant_fp8_tma(inputs, self.block_size, dtype=weight.dtype)
             deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=inputs.dtype)
