@@ -2,6 +2,7 @@
 import asyncio
 import functools
 import logging
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -117,7 +118,14 @@ def get_logger(name: Optional[str] = None,
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     handlers = [stream_handler]
 
+    # set log_file from env
+    log_file = log_file or os.getenv('LMDEPLOY_LOG_FILE')
+
     if log_file is not None:
+        log_file = os.path.expanduser(log_file)
+        log_dir = os.path.dirname(log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         # Here, the default behaviour of the official logger is 'a'. Thus, we
         # provide an interface to change the file mode to the default
         # behaviour.
@@ -158,7 +166,7 @@ def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
 
 # TODO remove stop_word_offsets stuff and make it clean
 def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
-    """return list of stop-words to numpy.ndarray."""
+    """Return list of stop-words to numpy.ndarray."""
     import numpy as np
     if stop_words is None:
         return None
@@ -212,7 +220,7 @@ def get_model(pretrained_model_name_or_path: str, download_dir: str = None, revi
 
 
 def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
-    """logging timer."""
+    """Logging timer."""
 
     @contextmanager
     def __timer():
@@ -228,7 +236,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
 
         @functools.wraps(func)
         def __func_warpper(*args, **kwargs):
-            """func warpper."""
+            """Func warpper."""
             if logger.level > level:
                 return func(*args, **kwargs)
             with __timer():
@@ -236,7 +244,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
 
         @functools.wraps(func)
         def __async_warpper(*args, **kwargs):
-            """async warpper."""
+            """Async warpper."""
 
             async def __tmp():
                 if logger.level > level:

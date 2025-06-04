@@ -14,7 +14,7 @@ InputMultiModalType = List[Dict[str, Any]]
 
 
 def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
-    """check if response has state."""
+    """Check if response has state."""
     if isinstance(state, ResponseType):
         state = [state]
     ret = resp.type in state
@@ -24,7 +24,7 @@ def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
 
 
 def _check_resp_success(resp: Response, warning_msg: str = None):
-    """check if response success."""
+    """Check if response success."""
     return _check_resp(resp, ResponseType.SUCCESS, warning_msg)
 
 
@@ -217,7 +217,7 @@ class EngineInstance:
         """
 
         def __call_async():
-            """call async."""
+            """Call async."""
             coro_gen = self.async_stream_infer(session_id,
                                                input_ids,
                                                multimodal=multimodal,

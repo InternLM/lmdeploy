@@ -44,5 +44,5 @@ class DefaultApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
 
     @staticmethod
     def build():
-        """build implementation."""
+        """Build implementation."""
         return DefaultApplyRotaryEmbImpl()

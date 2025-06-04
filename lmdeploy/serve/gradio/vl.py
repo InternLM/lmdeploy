@@ -24,7 +24,7 @@ else:
 
 @dataclass
 class Session:
-    """chat session.
+    """Chat session.
 
     Args:
         _session_id (int): session_id for internal use.

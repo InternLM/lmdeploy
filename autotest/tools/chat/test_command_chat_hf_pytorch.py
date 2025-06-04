@@ -69,6 +69,25 @@ def test_hf_pytorch_chat_tp4(config, model, cli_case_config, worker_id):
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
+@pytest.mark.gpu_num_8
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=8))
+def test_hf_pytorch_chat_tp8(config, model, cli_case_config, worker_id):
+    usercase = 'chat_testcase'
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'pytorch',
+                                                 cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=8))
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, quant_policy=4))
@@ -185,6 +204,26 @@ def test_hf_pytorch_chat_kvin8_tp4(config, model, cli_case_config, worker_id):
                                                  model,
                                                  'pytorch',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
+                                                 extra='--quant-policy 8')
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_pytorch_chat
+@pytest.mark.gpu_num_8
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=8, quant_policy=8))
+def test_hf_pytorch_chat_kvint8_tp8(config, model, cli_case_config, worker_id):
+    usercase = 'chat_testcase'
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'pytorch',
+                                                 cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=8),
                                                  extra='--quant-policy 8')
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
