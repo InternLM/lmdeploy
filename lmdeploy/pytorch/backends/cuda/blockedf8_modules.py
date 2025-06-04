@@ -69,6 +69,7 @@ class TritonLinearBlockedF8Builder(LinearBlockedF8Builder):
             logger.debug('build with DeepGemmLinearBlockedF8Impl')
             return DeepGemmLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
         except:  # noqa
+            logger.warning('Failed to import deep_gemm, LinearBlockedF8 fallback to triton implementation.')
             return TritonLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
 
 
