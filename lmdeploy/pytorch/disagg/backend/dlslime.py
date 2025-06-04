@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import json
+import os
 from typing import Dict, List
 
 from dlslime import Assignment as DLSlimeAssignment
@@ -13,6 +15,22 @@ from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, Migrati
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 logger = get_logger('lmdeploy')
+
+LMDEPLOY_USE_ASYNC_MIGRATION = os.environ.get('LMDEPLOY_USE_ASYNC_MIGRATION')
+
+
+async def read_batch_coroutine(endpoint: RDMAEndpoint, batch: List[DLSlimeAssignment]):
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def _completion_handler(status: int):
+        loop.call_soon_threadsafe(future.set_result, status)
+
+    endpoint.read_batch_with_callback(
+        batch,
+        _completion_handler,
+    )
+    await future
 
 
 class DLSlimeMigrationManagement:
@@ -45,15 +63,7 @@ class DLSlimeMigrationManagement:
     def connect(self, connect_request: DistServeConnectionRequest):
         self.endpoint[connect_request.protocol].connect(json.loads(connect_request.remote_endpoint_info))
 
-    def p2p_migrate(self, assignment: MigrationAssignment, async_op=False):
-        MAX_NUM_READ_BATCH = 4096
-
-        def split(batch: List[DLSlimeAssignment]):
-            batch_split = []
-            for i in range(0, len(batch), MAX_NUM_READ_BATCH):
-                batch_split.append(batch[i:i + MAX_NUM_READ_BATCH])
-            return batch_split
-
+    async def p2p_migrate(self, assignment: MigrationAssignment, async_op=False):
         batch = [
             DLSlimeAssignment(
                 mr_key=assign.mr_key,
@@ -62,9 +72,21 @@ class DLSlimeMigrationManagement:
                 length=assign.length,
             ) for assign in assignment.batch
         ]
-        batch_splited = split(batch)
-        for b_split in batch_splited:
-            self.endpoint[assignment.protocol].read_batch(b_split)
+
+        if not LMDEPLOY_USE_ASYNC_MIGRATION:
+            MAX_NUM_READ_BATCH = 4096
+
+            def split(batch: List[DLSlimeAssignment]):
+                batch_split = []
+                for i in range(0, len(batch), MAX_NUM_READ_BATCH):
+                    batch_split.append(batch[i:i + MAX_NUM_READ_BATCH])
+                return batch_split
+
+            batch_splited = split(batch)
+            for b_split in batch_splited:
+                self.endpoint[assignment.protocol].read_batch(b_split)
+        else:
+            await read_batch_coroutine(self.endpoint, batch)
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)

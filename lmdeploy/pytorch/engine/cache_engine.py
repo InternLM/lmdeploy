@@ -336,7 +336,7 @@ class CacheEngine:
     def p2p_connect(self, migration_conn_request: DistServeConnectionRequest):
         self.migration_backend_impl.p2p_connect(migration_conn_request[self.tp_rank])
 
-    def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
+    async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
 
         def get_assignment_len():
             head_dim = self.model_config.get_head_size()
@@ -369,7 +369,7 @@ class CacheEngine:
                 assignment_batch.extend(
                     get_assignment_batch(str(i), blocks_to_migration, assignment_len, layer_stride,
                                          remote_layer_stride))
-        self.migration_backend_impl.p2p_migrate(
+        await self.migration_backend_impl.p2p_migrate(
             MigrationAssignment(
                 protocol=migration_execution_inputs.protocol,
                 remote_engine_id=remote_engine_id,
