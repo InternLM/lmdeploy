@@ -1268,7 +1268,7 @@ def serve(model_path: str,
         task = None
         try:
             if getattr(backend_config, 'enable_metrics', False):
-                log_interval = 5.
+                log_interval = 10.
 
                 async def _force_log():
                     while True:
