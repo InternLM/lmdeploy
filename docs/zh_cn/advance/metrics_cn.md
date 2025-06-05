@@ -98,7 +98,7 @@ datasources:
 ```
   environment:
 - GF_AUTH_ANONYMOUS_ENABLED=true
-- GF_SERVER_HTTP_PORT=3090  # <= Add this line
+- GF_SERVER_HTTP_PORT=3090  # <= 添加此行
 ```
 
 方案二：使用端口映射
@@ -108,7 +108,7 @@ grafana:
   image: grafana/grafana:latest
   container_name: grafana
   ports:
-  - "3090:3000"  # <= Host:Container port mapping
+  - "3090:3000"  # <= 主机端口:容器端口映射
 ```
 
 - **仪表盘无数据**
