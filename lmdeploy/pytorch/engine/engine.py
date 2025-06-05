@@ -341,7 +341,7 @@ class StatusProcessor:
         self.iteration_stats: IterationStats = None
         self.scheduler_stats: SchedulerStats = None
 
-    def reset_status(self):
+    def reset_stats(self):
         """Reset previous status to avoid accumulcations in
         self.engine.stat_loggers over multiple iterations."""
         self.iteration_stats = None
@@ -1047,7 +1047,7 @@ class Engine:
             """Send response callback."""
             __log_resps(step_outputs)
 
-            status_processer.reset_status()
+            status_processer.reset_stats()
             for out in step_outputs:
                 status_processer.update_stats(out)
                 __send_resp(out)
