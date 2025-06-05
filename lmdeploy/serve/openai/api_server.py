@@ -489,12 +489,15 @@ async def chat_completions_v1(raw_request: Request = None):
                 if tool_delta is not None:
                     delta_message.tool_calls = tool_delta.tool_calls
                     delta_message.content = tool_delta.content
+                    delta_message.reasoning_content = tool_delta.reasoning_content
                     if isinstance(tool_delta.tool_calls, List) and len(tool_delta.tool_calls):
                         streaming_tools = True
+                else:
+                    continue
                 previous_text = current_text
                 previous_token_ids = current_token_ids
             elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+                logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
             if VariableInterface.reasoning_parser is not None:
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
@@ -556,12 +559,14 @@ async def chat_completions_v1(raw_request: Request = None):
             if isinstance(tool_calls, List) and len(tool_calls):
                 if final_res.finish_reason == 'stop':
                     final_res.finish_reason = 'tool_calls'
+            if tool_call_info.reasoning_content is not None:
+                reasoning_content = tool_call_info.reasoning_content
 
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-        logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+        logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
     if VariableInterface.reasoning_parser is not None:
         reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
