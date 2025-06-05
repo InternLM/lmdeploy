@@ -184,7 +184,8 @@ struct GemmUniversalSm90_v3 {
 
             cutlass::arch::NamedBarrier producers_bar(WARP_SIZE * 2, 5);
 
-            const int warp_id = cutlass::canonical_warp_idx_sync();
+            const int  warp_id = cutlass::canonical_warp_idx_sync();
+            const bool cta_0   = cute::block_id_in_cluster().x == 0;
 
             if (warp_id % 4 == 0) {
 
@@ -207,47 +208,23 @@ struct GemmUniversalSm90_v3 {
 
                 typename Scheduler::PipelineState sched_state{};
 
-                // while (sched.next(1)) {
-
-                int iters = 0;
-
-                bool need_sync = cute::block_id_in_cluster().x == 0;
-
                 while (sched.consume_next(storage.sched, sched_state)) {
-                    // if (need_sync) {
-                    //     // if (threadIdx.x % WARP_SIZE == 0) {
-                    //     //     printf("arrive_unaligned\n");
-                    //     // }
-                    //     producers_bar.arrive_and_wait_unaligned();
-                    //     // if (threadIdx.x % WARP_SIZE == 0) {
-                    //     //     printf("arrive_unaligned DONE\n");
-                    //     // }
-                    // }
 
                     auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
                     if (!cluster_tile_p) {
                         // OOB tile caused by swizzle pattern
-
-                        if (need_sync) {
-                            // if (threadIdx.x % WARP_SIZE == 0) {
-                            //     printf("arrive_unaligned\n");
-                            // }
+                        if (cta_0) {
                             producers_bar.arrive_unaligned();
-                            // producers_bar.arrive_unaligned();
-                            // if (threadIdx.x % WARP_SIZE == 0) {
-                            //     printf("arrive_unaligned DONE\n");
-                            // }
                         }
+                        sched.comsume_release(storage.sched, sched_state);
                         continue;
                     }
-
-                    ++iters;
 
                     const auto tile_offset              = sched.tile_offset();
                     const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
 
-                    const int g = sched.group_idx_;
+                    const int g = sched.info_->group_idx;
 
                     const CUtensorMap* Adesc = &tm_a;
                     const CUtensorMap* Bdesc = &tm_b;
@@ -256,7 +233,6 @@ struct GemmUniversalSm90_v3 {
                     if constexpr (is_grouped_gemm) {
                         Array<void*, 3> global_addrs;
                         global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * (int64_t)param_A.stride;
-                        // global_addrs[1] = (Tb*)param_B.ptr + param_B.offsets[g] * (int64_t)param_B.stride;
                         global_addrs[1] = ((void**)param_B.ptr)[g];
 
                         const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
@@ -265,7 +241,6 @@ struct GemmUniversalSm90_v3 {
 
                         Array<int, 3> dims;
                         dims[0] = param_A.offsets[g + 1] - param_A.offsets[g];
-                        // dims[1] = param_B.offsets[g + 1] - param_B.offsets[g];
                         dims[1] = sched.gemm_shape().y;
                         dims[2] = end_u - beg_u;
 
@@ -309,49 +284,21 @@ struct GemmUniversalSm90_v3 {
                         }
                     }
 
-                    if (need_sync) {
-                        // if (threadIdx.x % WARP_SIZE == 0) {
-                        //     printf("arrive_unaligned\n");
-                        // }
-
+                    if (cta_0) {
                         producers_bar.arrive_unaligned();
-                        // producers_bar.arrive_and_wait_unaligned();
-
-                        // if (threadIdx.x % WARP_SIZE == 0) {
-                        //     printf("arrive_unaligned DONE\n");
-                        // }
                     }
+
+                    sched.comsume_release(storage.sched, sched_state);
 
                 }  // scheduler loop
 
-                // if (threadIdx.x % WARP_SIZE == 0) {
-                //     printf("iters %d\n", iters);
-                // }
-
-                // if (threadIdx.x % WARP_SIZE == 0) {
-                //     printf("BYE from producer %4d\n", blockIdx.x);
-                // }
+                sched.comsume_release(storage.sched, sched_state);
             }
-            else if (warp_id % 4 == 1) {
+            else if (warp_id % 4 == 1 && cta_0) {
                 typename Scheduler::PipelineState sched_state{0, 1, 0};
-                int                               iters = 1;
                 while (sched.produce_next(storage.sched, sched_state)) {
-                    // if (threadIdx.x % WARP_SIZE == 0) {
-                    //     printf("arrive_and_wait_unaligned\n");
-                    // }
                     producers_bar.arrive_and_wait_unaligned();
-                    // if (threadIdx.x % WARP_SIZE == 0) {
-                    //     printf("arrive_and_wait_unaligned DONE\n");
-                    // }
-                    ++iters;
                 }
-
-                // if (threadIdx.x % WARP_SIZE == 0) {
-                //     printf("BYE from sched %4d\n", blockIdx.x);
-                // }
-                // if (cute::block_id_in_cluster().x == 0) {
-                //     sched.producer_tail(storage.sched, sched_state, iters);
-                // }
             }
         }
         else {
@@ -395,6 +342,7 @@ struct GemmUniversalSm90_v3 {
 
                 if (!cluster_tile_p) {
                     // OOB tile caused by swizzle pattern
+                    sched.comsume_release(storage.sched, sched_state);
                     continue;
                 }
 
@@ -433,21 +381,16 @@ struct GemmUniversalSm90_v3 {
                             consumer_arrive();
                             ++pipe_state;
                         }
+                        sched.comsume_release(storage.sched, sched_state);
                         continue;
                     }
                 }
 
+                const int g = sched.info_->group_idx;
+
                 uint32_t pred_V{};
-                Fetch_V(pred_V,
-                        param_V,
-                        K,
-                        N,
-                        sched.tile_offset().y * TILE_N,
-                        wg_idx,
-                        wg_idx_n,
-                        sched.group_idx_,
-                        storage,
-                        cta_tile_p);
+                Fetch_V(
+                    pred_V, param_V, K, N, sched.tile_offset().y * TILE_N, wg_idx, wg_idx_n, g, storage, cta_tile_p);
 
                 float scale_V[2];
                 int   iter_V{};
@@ -463,7 +406,7 @@ struct GemmUniversalSm90_v3 {
                 const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
                 int       align_U  = 0;
                 if constexpr (is_grouped_gemm) {
-                    align_U = param_U.offsets[sched.group_idx_] % kAlignmentU;
+                    align_U = param_U.offsets[g] % kAlignmentU;
                 }
                 auto Load_U = [&] {
                     for (int m = 0; m < MMA_ITER_M; ++m) {
@@ -583,7 +526,7 @@ struct GemmUniversalSm90_v3 {
 
                 if constexpr (is_grouped_gemm) {
                     if (wg_lane / WARP_SIZE == 0) {
-                        const int g           = sched.group_idx_;
+                        const int g           = sched.info_->group_idx;
                         auto      global_addr = (Tc*)param_C.ptr + param_C.offsets[g] * (int64_t)param_C.stride;
                         int       idx         = 3 + wg_idx;
                         Cdesc =
@@ -647,7 +590,11 @@ struct GemmUniversalSm90_v3 {
                     cute::tma_store_arrive();
                 }
 
+                sched.comsume_release(storage.sched, sched_state);
+
             }  // scheduler loop
+
+            sched.comsume_release(storage.sched, sched_state);
 
             if (threadIdx.x % WARPGROUP_SIZE < LayoutC::C1) {
                 cute::tma_store_wait<0>();

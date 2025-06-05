@@ -101,6 +101,7 @@ struct TileScheduler {
     using PipelineState = cutlass::PipelineState<Stages>;
 
     struct Tile {
+        int alive;
         int group_idx;
         int is_valid_cta;
         int is_valid_cluster;
@@ -110,12 +111,15 @@ struct TileScheduler {
     };
 
     struct Storage {
-        int cluster_idx[Stages];
+        // int cluster_idx[Stages];
 
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
-        // Tile tile[Stages];
+        __align__(128) uint64_t sync_bar;
+        Tile tile[Stages];
     };
+
+    Tile* info_;
 
     // cutlass::FastDivmod swizzled_shape_x;
 
@@ -126,6 +130,7 @@ public:
             cutlass::arch::ClusterBarrier::init(&storage.producer_bar[i], 1);
             cutlass::arch::ClusterBarrier::init(&storage.consumer_bar[i], consumer_num);
         }
+        cutlass::arch::ClusterBarrier::init(&storage.sync_bar, 1);
     }
 
     TM_HOST_DEVICE void init(int4 gemm_shape, int log_tile, int3 tile_shape)
@@ -303,111 +308,113 @@ public:
 
     TM_DEVICE bool produce_next(Storage& store, cutlass::PipelineState<Stages>& pipe)
     {
+        const int lane_id = cutlass::canonical_lane_idx();
+
+        if (lane_id == 0) {
+            cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
+            cluster_idx_ = atomicAdd(next_cluster_id_, 1);
+        }
+
+        cluster_idx_ = __shfl_sync((uint32_t)-1, cluster_idx_, 0);
+
+        Tile* tile{};
 
         if constexpr (Cluster::size == 1) {
-            if (threadIdx.x % WARP_SIZE == 0) {
-                // printf("PWAIT %d\n", pipe.index());
-                cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
-                cluster_idx_ = atomicAdd(next_cluster_id_, 1);
-                // printf("PGET %d\n", cluster_idx_);
-                store.cluster_idx[pipe.index()] = cluster_idx_;
-                // printf("PPOST %d\n", pipe.index());
-                cutlass::arch::ClusterBarrier::arrive(&store.producer_bar[pipe.index()]);
-                ++pipe;
-            }
-            cluster_idx_ = __shfl_sync((uint32_t)-1, cluster_idx_, 0);
+            tile = &store.tile[pipe.index()];
         }
         else {
-            if (cute::block_id_in_cluster().x == 0) {
-                const int lane_id = cutlass::canonical_lane_idx();
-                if (lane_id == 0) {
-                    cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
-                    cluster_idx_ = atomicAdd(next_cluster_id_, 1);
-                    // printf("%d PGET %d\n", clus, cluster_idx_);
-                    store.cluster_idx[pipe.index()] = cluster_idx_;
-                }
-                cluster_idx_  = __shfl_sync((uint32_t)-1, cluster_idx_, 0);
-                if (lane_id < Cluster::size) {
-                    *(int*)map_to_cta(&store.cluster_idx[pipe.index()], lane_id) = cluster_idx_;
-                }
-                mbarrier_arrive_cluster(&store.producer_bar[pipe.index()], lane_id, lane_id < Cluster::size);
-                ++pipe;
-            }
-            else {
-                return false;
+            if (lane_id < Cluster::size) {
+                tile = (Tile*)map_to_cta(&store.tile[pipe.index()], lane_id);
             }
         }
 
-        return cluster_idx_ < clusters_;
-    }
+        int alive = cluster_idx_ < clusters_;
+        if (alive) {
+            if constexpr (is_grouped_gemm) {
+                update();
+                unswizzle(cluster_idx_ - group_beg_);
+            }
+            else {
+                unswizzle(cluster_idx_);
+            }
+            if (lane_id < Cluster::size) {
+                tile->is_valid_cta     = is_valid_.x;
+                tile->is_valid_cluster = is_valid_.y;
+                tile->tile_idx_x       = tile_offset_.x;
+                tile->tile_idx_y       = tile_offset_.y;
+                if constexpr (is_grouped_gemm) {
+                    tile->group_idx = group_idx_;
+                    tile->dim       = offsets_[group_idx_ + 1] - offsets_[group_idx_];
+                }
+            }
+        }
 
-    // TM_DEVICE void producer_tail(Storage& store, cutlass::PipelineState<Stages>& pipe, int iters)
-    // {
-    //     iters = min(iters, 2);
-    //     for (int i = 0; i < iters; ++i) {
-    //         cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
-    //         ++pipe;
-    //     }
-    // }
+        if (lane_id < Cluster::size) {
+            tile->alive = alive;
+        }
+
+        if constexpr (Cluster::size == 1) {
+            if (lane_id == 0) {
+                cutlass::arch::ClusterBarrier::arrive(&store.producer_bar[pipe.index()]);
+            }
+        }
+        else {
+            mbarrier_arrive_cluster(&store.producer_bar[pipe.index()], lane_id, lane_id < Cluster::size);
+        }
+
+        ++pipe;
+
+        return alive;
+    }
 
     TM_DEVICE bool consume_next(Storage& store, cutlass::PipelineState<Stages>& pipe)
     {
         if constexpr (Cluster::size == 1) {
-            // if (threadIdx.x == 256) {
-            //     printf("CWAIT %d\n", pipe.index());
-            // }
             cutlass::arch::ClusterBarrier::wait(&store.producer_bar[pipe.index()], pipe.phase());
-            cluster_idx_ = store.cluster_idx[pipe.index()];
-            // if (threadIdx.x == 256) {
-            //     printf("CGET %d\n", cluster_idx_);
-            //     printf("CPOST %d\n", pipe.index());
-            // }
+        }
+        else {
+            mbarrier_wait_cluster(&store.producer_bar[pipe.index()], pipe.phase());
+        }
+
+        info_ = &store.tile[pipe.index()];
+
+        return info_->alive;
+    }
+
+    TM_DEVICE void comsume_release(Storage& store, cutlass::PipelineState<Stages>& pipe)
+    {
+        __syncwarp();
+
+        if constexpr (Cluster::size == 1) {
             if (cutlass::elect_one_sync()) {
                 cutlass::arch::ClusterBarrier::arrive(&store.consumer_bar[pipe.index()]);
             }
-            ++pipe;
         }
         else {
-            // cutlass::arch::ClusterBarrier::wait(&store.producer_bar[pipe.index()], pipe.phase());
-            mbarrier_wait_cluster(&store.producer_bar[pipe.index()], pipe.phase());
-            cluster_idx_ = store.cluster_idx[pipe.index()];
-            __syncwarp();
             cutlass::arch::ClusterBarrier::arrive(&store.consumer_bar[pipe.index()], 0, cutlass::elect_one_sync());
-            ++pipe;
         }
 
-        // if (threadIdx.x == 0) {
-        //     printf("READ %d\n", cluster_idx_);
-        // }
-
-        if (cluster_idx_ >= clusters_) {
-            return false;
-        }
-
-        if constexpr (is_grouped_gemm) {
-            update();
-            unswizzle(cluster_idx_ - group_beg_);
-        }
-        else {
-            unswizzle(cluster_idx_);
-        }
-
-        return true;
-    }
-
-    TM_DEVICE explicit operator bool() const
-    {
-        return cluster_idx_ < clusters_;
+        ++pipe;
     }
 
     TM_DEVICE int2 is_valid_tile() const
     {
-        return is_valid_;
+
+        return {info_->is_valid_cta, info_->is_valid_cluster};
+
+        // return is_valid_;
     }
 
     TM_DEVICE int4 gemm_shape() const
     {
-        return gemm_shape_;
+        if constexpr (is_grouped_gemm) {
+            auto shape = gemm_shape_;
+            shape.x    = info_->dim;
+            return shape;
+        }
+        else {
+            return gemm_shape_;
+        }
     }
 
     TM_DEVICE int2 tiled_shape() const
@@ -417,12 +424,14 @@ public:
 
     TM_DEVICE int2 tile_offset() const
     {
-        return tile_offset_;
+        return {info_->tile_idx_x, info_->tile_idx_y};
+        // return tile_offset_;
     }
 
     TM_DEVICE int2 iter_k_range() const
     {
-        return iter_k_range_;
+        // return iter_k_range_;
+        return {0, k_iters_};
     }
 
     TM_DEVICE int tile_id() const
