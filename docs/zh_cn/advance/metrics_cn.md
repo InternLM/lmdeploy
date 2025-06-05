@@ -56,8 +56,6 @@ docker compose up
 
 1. **端口冲突**
 
-Check if any services are occupying ports `30000` (LMDeploy server port), `9090` (Prometheus port), or `3000` (Grafana port). You can either stop the conflicting running ports or modify the config files as follows:
-
 检查端口 `30000` (LMDeploy 服务端口)、`9090` (Prometheus 端口) 或 `3000` (Grafana 端口) 是否被占用。解决方案，关闭冲突的端口或如下修改配置文件：
 
 - 修改 Prometheus 抓取的 LMDeploy 服务端口
