@@ -16,7 +16,7 @@ from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServ
 
 logger = get_logger('lmdeploy')
 
-LMDEPLOY_USE_ASYNC_MIGRATION = os.environ.get('LMDEPLOY_USE_ASYNC_MIGRATION')
+LMDEPLOY_USE_ASYNC_MIGRATION = os.environ.get('LMDEPLOY_USE_ASYNC_MIGRATION', None)
 
 
 async def read_batch_coroutine(endpoint: RDMAEndpoint, batch: List[DLSlimeAssignment]):
@@ -86,7 +86,7 @@ class DLSlimeMigrationManagement:
             for b_split in batch_splited:
                 self.endpoint[assignment.protocol].read_batch(b_split)
         else:
-            await read_batch_coroutine(self.endpoint, batch)
+            await read_batch_coroutine(self.endpoint[assignment.protocol], batch)
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)
@@ -107,8 +107,8 @@ class DLSlimeBackend(MigrationBackendImpl):
     def p2p_connect(self, conn_req: DistServeConnectionRequest):
         self.links[conn_req.remote_engine_id].connect(conn_req)
 
-    def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
-        self.links[assignment.remote_engine_id].p2p_migrate(assignment, async_op=async_op)
+    async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
+        await self.links[assignment.remote_engine_id].p2p_migrate(assignment, async_op=async_op)
 
     def store(self, assignment: MigrationAssignment, async_op: bool = False):
         raise NotImplementedError
