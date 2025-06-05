@@ -102,7 +102,7 @@ Option 1: Add `GF_SERVER_HTTP_PORT` to the environment section.
 - GF_SERVER_HTTP_PORT=3090  # <= Add this line
 ```
 
-Option 2: Use port mapping:
+Option 2: Use port mapping.
 
 ```
 grafana:
