@@ -17,11 +17,11 @@ This section describes how to set up the monitoring stack (Prometheus + Grafana)
 1. **Start your LMDeploy server with metrics enabled**
 
 ```
-lmdeploy serve api_server models--Qwen--Qwen2.5-7B-Instruct --server-port 30000 --enable-metrics
+lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct --enable-metrics
 ```
 
 Replace the model path according to your needs.
-By default, the metrics endpoint will be available at `http://<lmdeploy_server_host>:30000/metrics`.
+By default, the metrics endpoint will be available at `http://<lmdeploy_server_host>:23333/metrics`.
 
 2. **Navigate to the monitoring directory**
 
@@ -57,7 +57,7 @@ The LMDeploy dashboard is pre-configured and should be available automatically.
 
 1. **Port conflicts**
 
-Check if any services are occupying ports `30000` (LMDeploy server port), `9090` (Prometheus port), or `3000` (Grafana port). You can either stop the conflicting running ports or modify the config files as follows:
+Check if any services are occupying ports `23333` (LMDeploy server port), `9090` (Prometheus port), or `3000` (Grafana port). You can either stop the conflicting running ports or modify the config files as follows:
 
 - Modify LMDeploy server port for Prometheus scrape
 
@@ -72,7 +72,7 @@ scrape_configs:
   - job_name: lmdeploy
     static_configs:
       - targets:
-          - '127.0.0.1:30000' # <= Modify this LMDeploy server port 30000, need to match the running server port
+          - '127.0.0.1:23333' # <= Modify this LMDeploy server port 23333, need to match the running server port
 ```
 
 - Modify Prometheus port
@@ -117,7 +117,7 @@ grafana:
 Try to send some requests to the LMDeploy server to create certain traffic
 
 ```
-python3 benchmark/profile_pipeline_api.py ShareGPT_V3_unfiltered_cleaned_split.json models--Qwen--Qwen2.5-7B-Instruct
+python3 benchmark/profile_pipeline_api.py ShareGPT_V3_unfiltered_cleaned_split.json Qwen/Qwen2.5-7B-Instruct
 ```
 
 After refreshing, you should be able to see data on the dashboard.

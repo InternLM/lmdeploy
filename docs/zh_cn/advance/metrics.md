@@ -17,10 +17,10 @@ LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视�
 1. **启动已启用指标的 LMDeploy 服务**
 
 ```
-lmdeploy serve api_server models--Qwen--Qwen2.5-7B-Instruct --server-port 30000 --enable-metrics
+lmdeploy serve api_server Qwen/Qwen2.5-7B-Instruct --enable-metrics
 ```
 
-请根据需求替换模型路径。默认 metrics endpoint 位于 `http://<lmdeploy_server_host>:30000/metrics`。
+请根据需求替换模型路径。默认 metrics endpoint 位于 `http://<lmdeploy_server_host>:23333/metrics`。
 
 2. **进入监控目录**
 
@@ -56,7 +56,7 @@ docker compose up
 
 1. **端口冲突**
 
-检查端口 `30000` (LMDeploy 服务端口)、`9090` (Prometheus 端口) 或 `3000` (Grafana 端口) 是否被占用。解决方案，关闭冲突的端口或如下修改配置文件：
+检查端口 `23333` (LMDeploy 服务端口)、`9090` (Prometheus 端口) 或 `3000` (Grafana 端口) 是否被占用。解决方案，关闭冲突的端口或如下修改配置文件：
 
 - 修改 Prometheus 抓取的 LMDeploy 服务端口
 
@@ -71,7 +71,7 @@ scrape_configs:
   - job_name: lmdeploy
     static_configs:
       - targets:
-          - '127.0.0.1:30000' # <= 修改此处的 LMDeploy 服务端口 30000，需与实际运行端口一致
+          - '127.0.0.1:23333' # <= 修改此处的 LMDeploy 服务端口 23333，需与实际运行端口一致
 ```
 
 - 修改 Prometheus 端口
@@ -116,7 +116,7 @@ grafana:
 尝试向 LMDeploy 服务发送请求生成流量：
 
 ```
-python3 benchmark/profile_pipeline_api.py ShareGPT_V3_unfiltered_cleaned_split.json models--Qwen--Qwen2.5-7B-Instruct
+python3 benchmark/profile_pipeline_api.py ShareGPT_V3_unfiltered_cleaned_split.json Qwen/Qwen2.5-7B-Instruct
 ```
 
 刷新后仪表盘应显示数据。
