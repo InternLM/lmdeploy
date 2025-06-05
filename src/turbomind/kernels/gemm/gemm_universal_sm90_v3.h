@@ -71,7 +71,7 @@ struct GemmUniversalSm90_v3 {
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
 
     static constexpr int kMulticastA = 1;
-    static constexpr int kMulticastB = 1;
+    static constexpr int kMulticastB = 2;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
@@ -204,7 +204,8 @@ struct GemmUniversalSm90_v3 {
                 sched.grid_init();
 
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
-                cutlass::PipelineState<2>      sched_state{};
+
+                typename Scheduler::PipelineState sched_state{};
 
                 // while (sched.next(1)) {
 
@@ -332,8 +333,8 @@ struct GemmUniversalSm90_v3 {
                 // }
             }
             else if (warp_id % 4 == 1) {
-                cutlass::PipelineState<2> sched_state{0, 1, 0};
-                int                       iters = 1;
+                typename Scheduler::PipelineState sched_state{0, 1, 0};
+                int                               iters = 1;
                 while (sched.produce_next(storage.sched, sched_state)) {
                     // if (threadIdx.x % WARP_SIZE == 0) {
                     //     printf("arrive_and_wait_unaligned\n");
@@ -386,7 +387,7 @@ struct GemmUniversalSm90_v3 {
 
             cutlass::PipelineState<Stages> pipe_state{};
 
-            cutlass::PipelineState<2> sched_state{};
+            typename Scheduler::PipelineState sched_state{};
 
             // while (sched.next(kSchedWarpGroups)) {
             while (sched.consume_next(storage.sched, sched_state)) {

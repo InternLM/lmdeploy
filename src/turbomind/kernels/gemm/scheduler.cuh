@@ -48,6 +48,13 @@ TM_DEVICE void mbarrier_wait_cluster(uint64_t* mbar, uint32_t phase)
                  : "r"(smem_addr), "r"(phase), "r"(ticks));
 }
 
+TM_DEVICE void* map_to_cta(void* ptr, int cta_id)
+{
+    void* ret;
+    asm volatile("mapa.u64 %0, %1, %2;\n" : "=l"(ret) : "l"(ptr), "r"(cta_id));
+    return ret;
+}
+
 template<Order order, class Cluster, int striped_m, bool striped_n, int tile_m, int tile_n, bool is_grouped_gemm>
 struct TileScheduler {
     int4 gemm_shape_;
@@ -89,10 +96,25 @@ struct TileScheduler {
 
     int* next_cluster_id_;
 
+    static constexpr int Stages = 4;
+
+    using PipelineState = cutlass::PipelineState<Stages>;
+
+    struct Tile {
+        int group_idx;
+        int is_valid_cta;
+        int is_valid_cluster;
+        int tile_idx_x;
+        int tile_idx_y;
+        int dim;
+    };
+
     struct Storage {
-        int cluster_idx[2];
-        __align__(128) uint64_t producer_bar[2];
-        __align__(128) uint64_t consumer_bar[2];
+        int cluster_idx[Stages];
+
+        __align__(128) uint64_t producer_bar[Stages];
+        __align__(128) uint64_t consumer_bar[Stages];
+        // Tile tile[Stages];
     };
 
     // cutlass::FastDivmod swizzled_shape_x;
@@ -100,7 +122,7 @@ struct TileScheduler {
 public:
     TM_DEVICE void init_dyanmic(Storage& storage, int consumer_num)
     {
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < Stages; ++i) {
             cutlass::arch::ClusterBarrier::init(&storage.producer_bar[i], 1);
             cutlass::arch::ClusterBarrier::init(&storage.consumer_bar[i], consumer_num);
         }
@@ -279,7 +301,7 @@ public:
         return true;
     }
 
-    TM_DEVICE bool produce_next(Storage& store, cutlass::PipelineState<2>& pipe)
+    TM_DEVICE bool produce_next(Storage& store, cutlass::PipelineState<Stages>& pipe)
     {
 
         if constexpr (Cluster::size == 1) {
@@ -305,16 +327,10 @@ public:
                     store.cluster_idx[pipe.index()] = cluster_idx_;
                 }
                 cluster_idx_  = __shfl_sync((uint32_t)-1, cluster_idx_, 0);
-                uint32_t addr = cast_smem_ptr_to_uint(&store.cluster_idx[pipe.index()]);
                 if (lane_id < Cluster::size) {
-                    asm volatile("mapa.shared::cluster.u32 %0, %1, %2;\n" : "=r"(addr) : "r"(addr), "r"(lane_id));
-                    asm volatile("st.shared::cluster.s32 [%0], %1;\n" ::"r"(addr), "r"(cluster_idx_));
+                    *(int*)map_to_cta(&store.cluster_idx[pipe.index()], lane_id) = cluster_idx_;
                 }
-                // __syncwarp();
-                // cutlass::arch::ClusterBarrier::arrive(
-                    // &store.producer_bar[pipe.index()], lane_id, lane_id < Cluster::size);
                 mbarrier_arrive_cluster(&store.producer_bar[pipe.index()], lane_id, lane_id < Cluster::size);
-                // __syncwarp();
                 ++pipe;
             }
             else {
@@ -325,16 +341,16 @@ public:
         return cluster_idx_ < clusters_;
     }
 
-    TM_DEVICE void producer_tail(Storage& store, cutlass::PipelineState<2>& pipe, int iters)
-    {
-        iters = min(iters, 2);
-        for (int i = 0; i < iters; ++i) {
-            cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
-            ++pipe;
-        }
-    }
+    // TM_DEVICE void producer_tail(Storage& store, cutlass::PipelineState<Stages>& pipe, int iters)
+    // {
+    //     iters = min(iters, 2);
+    //     for (int i = 0; i < iters; ++i) {
+    //         cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
+    //         ++pipe;
+    //     }
+    // }
 
-    TM_DEVICE bool consume_next(Storage& store, cutlass::PipelineState<2>& pipe)
+    TM_DEVICE bool consume_next(Storage& store, cutlass::PipelineState<Stages>& pipe)
     {
         if constexpr (Cluster::size == 1) {
             // if (threadIdx.x == 256) {
