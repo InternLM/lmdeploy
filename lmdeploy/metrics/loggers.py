@@ -7,14 +7,11 @@ from datetime import datetime
 from typing import List, Optional
 
 import numpy as np
-import prometheus_client
 
 from lmdeploy.metrics.stats import IterationStats, SchedulerStats
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
-
-prometheus_client.disable_created_metrics()
 
 
 class StatLoggerBase(ABC):
@@ -81,14 +78,21 @@ class LoggingStatLogger(StatLoggerBase):
 class PrometheusStatLogger(StatLoggerBase):
 
     def __init__(self, model_name: str, max_model_len: int, dp_rank: int = 0):
+        try:
+            import prometheus_client
+            prometheus_client.disable_created_metrics()  # disable noisy creation timestamp gauge in prometheus
+        except ImportError:
+            raise ImportError(
+                'To use metrics system , please install prometheus_client by `pip install prometheus_client`')
+
         self.dp_rank = dp_rank
 
-        # unregister any existing lmdeploy collectors
+        # Unregister any existing lmdeploy collectors
         for collector in list(prometheus_client.REGISTRY._collector_to_names):
             if hasattr(collector, '_name') and 'lmdeploy' in collector._name:
                 prometheus_client.REGISTRY.unregister(collector)
 
-        # config information
+        # Config information
         self.info_backend_config = prometheus_client.Info(name='lmdeploy:backend_config',
                                                           documentation='information of backend_config')
 
