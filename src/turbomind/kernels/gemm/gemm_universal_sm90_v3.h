@@ -210,9 +210,7 @@ struct GemmUniversalSm90_v3 {
 
                 while (sched.consume_next(storage.sched, sched_state)) {
 
-                    auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
-
-                    if (!cluster_tile_p) {
+                    if (!sched.info_->is_valid_cluster) {
                         // OOB tile caused by swizzle pattern
                         if (cta_0) {
                             producers_bar.arrive_unaligned();
@@ -290,10 +288,9 @@ struct GemmUniversalSm90_v3 {
                     sched.comsume_release(storage.sched, sched_state);
 
                 }  // scheduler loop
-
-                // sched.comsume_release(storage.sched, sched_state);
             }
             else if (warp_id % 4 == 1 && cta_0) {
+                sched.grid_init();
                 typename Scheduler::PipelineState sched_state{0, 1, 0};
                 while (sched.produce_next(storage.sched, sched_state)) {
                     producers_bar.arrive_and_wait_unaligned();
@@ -597,10 +594,6 @@ struct GemmUniversalSm90_v3 {
                 sched.consume_next(storage.sched, sched_state);
 
             }  // scheduler loop
-
-            // sched.comsume_release(storage.sched, sched_state);
-
-            __pipeline_wait_prior(0);
 
             if (threadIdx.x % WARPGROUP_SIZE < LayoutC::C1) {
                 cute::tma_store_wait<0>();

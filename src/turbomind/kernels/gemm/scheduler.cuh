@@ -111,8 +111,6 @@ struct TileScheduler {
     };
 
     struct Storage {
-        // int cluster_idx[Stages];
-
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
         __align__(128) uint64_t sync_bar;
@@ -248,8 +246,8 @@ public:
 
         iter_k_range_ = {0, k_iters_};
 
-        is_valid_.x = tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y;
         is_valid_.y = cluster_tile_offset.x < cluster_tiles_.x && cluster_tile_offset.y < cluster_tiles_.y;
+        is_valid_.x = is_valid_.y && tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y;
     }
 
     TM_DEVICE int get_start_index(int g)
@@ -259,7 +257,7 @@ public:
         return (swizzle_tile_x_.div(__ldg(&offsets_[g])) + g) * swizzle_unit_.x * padded_cluster_tiles_.y;
     }
 
-    TM_DEVICE bool update()
+    TM_DEVICE bool update_sync()
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
 
@@ -296,7 +294,7 @@ public:
         }
 
         if constexpr (is_grouped_gemm) {
-            update();
+            update_sync();
             unswizzle(cluster_idx_ - group_beg_);
         }
         else {
@@ -328,16 +326,15 @@ public:
             }
         }
 
-        int alive = cluster_idx_ < clusters_;
+        const int alive = cluster_idx_ < clusters_;
+
         if (alive) {
             if constexpr (is_grouped_gemm) {
-                update();
-                unswizzle(cluster_idx_ - group_beg_, lane_id);
-            }
-            else {
-                unswizzle(cluster_idx_, lane_id);
+                update_sync();
             }
             if (lane_id < Cluster::size) {
+                int group_beg = is_grouped_gemm ? group_beg_ : 0;
+                unswizzle(cluster_idx_ - group_beg, lane_id);
                 tile->is_valid_cta     = is_valid_.x;
                 tile->is_valid_cluster = is_valid_.y;
                 tile->offset_m         = tile_offset_.x * tile_.x;
