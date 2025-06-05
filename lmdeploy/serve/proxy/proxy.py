@@ -165,6 +165,7 @@ class NodeManager:
             status.models = client.available_models
             self.nodes[node_url] = status
         except requests.exceptions.RequestException as e:  # noqa
+            logger.error(f'exception happened when adding node {node_url}, {e}')
             return self.handle_api_timeout(node_url)
         self.update_config_file()
 
@@ -193,9 +194,12 @@ class NodeManager:
                     logger.error(f'Failed to terminate node {node_url}, '
                                  f'error_code={response.status_code}, '
                                  f'error_msg={response.text}')
-            except:  # noqa
+            except Exception as e:  # noqa
+                logger.error(f'exception happened when terminating node {node_url}, {e}')
                 success = False
         else:
+            logger.error(f'terminating node {node_url} failed since it does not exist. '
+            'May try /nodes/status to check the node list')
             success = False
         self.update_config_file()
         return success
