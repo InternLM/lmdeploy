@@ -71,7 +71,7 @@ struct GemmUniversalSm90_v3 {
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
 
     static constexpr int kMulticastA = 1;
-    static constexpr int kMulticastB = 2;
+    static constexpr int kMulticastB = 1;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
@@ -127,6 +127,7 @@ struct GemmUniversalSm90_v3 {
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
         __align__(128) CUtensorMap tma_desc_buf[5];  //
+        typename Scheduler::Storage sched;
     };
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
@@ -164,6 +165,7 @@ struct GemmUniversalSm90_v3 {
                 ProducerBar::init(&producer_bar[s], 1);
                 ConsumerBar::init(&consumer_bar[s], WARPGORUPS * kClusterSize * 4);
             }
+            sched.init_dyanmic(storage.sched, kClusterSize * (WARPGORUPS * 4 + 1));
             cutlass::arch::fence_view_async_shared();
             if constexpr (kClusterSize > 1) {
                 cutlass::arch::fence_barrier_init();
@@ -180,8 +182,9 @@ struct GemmUniversalSm90_v3 {
             static_assert(TILE_M % kMulticastA == 0);
             static_assert(TILE_N % kMulticastB == 0);
 
-            // if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
-            const int warp_id = __shfl_sync((uint32_t)-1, threadIdx.x / WARP_SIZE, 0);
+            cutlass::arch::NamedBarrier producers_bar(WARP_SIZE * 2, 5);
+
+            const int warp_id = cutlass::canonical_warp_idx_sync();
 
             if (warp_id % 4 == 0) {
 
@@ -201,17 +204,44 @@ struct GemmUniversalSm90_v3 {
                 sched.grid_init();
 
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
+                cutlass::PipelineState<2>      sched_state{};
+
+                // while (sched.next(1)) {
 
                 int iters = 0;
 
-                while (sched.next()) {
+                bool need_sync = cute::block_id_in_cluster().x == 0;
+
+                while (sched.consume_next(storage.sched, sched_state)) {
+                    // if (need_sync) {
+                    //     // if (threadIdx.x % WARP_SIZE == 0) {
+                    //     //     printf("arrive_unaligned\n");
+                    //     // }
+                    //     producers_bar.arrive_and_wait_unaligned();
+                    //     // if (threadIdx.x % WARP_SIZE == 0) {
+                    //     //     printf("arrive_unaligned DONE\n");
+                    //     // }
+                    // }
 
                     auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
                     if (!cluster_tile_p) {
                         // OOB tile caused by swizzle pattern
+
+                        if (need_sync) {
+                            // if (threadIdx.x % WARP_SIZE == 0) {
+                            //     printf("arrive_unaligned\n");
+                            // }
+                            producers_bar.arrive_unaligned();
+                            // producers_bar.arrive_unaligned();
+                            // if (threadIdx.x % WARP_SIZE == 0) {
+                            //     printf("arrive_unaligned DONE\n");
+                            // }
+                        }
                         continue;
                     }
+
+                    ++iters;
 
                     const auto tile_offset              = sched.tile_offset();
                     const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
@@ -250,7 +280,6 @@ struct GemmUniversalSm90_v3 {
                     }
 
                     if (cute::elect_one_sync()) {
-
                         const int offset_k = iter_k_beg * TILE_K;
 
                         const uint16_t mask_A = cluster.mask_m();
@@ -279,11 +308,48 @@ struct GemmUniversalSm90_v3 {
                         }
                     }
 
+                    if (need_sync) {
+                        // if (threadIdx.x % WARP_SIZE == 0) {
+                        //     printf("arrive_unaligned\n");
+                        // }
+
+                        producers_bar.arrive_unaligned();
+                        // producers_bar.arrive_and_wait_unaligned();
+
+                        // if (threadIdx.x % WARP_SIZE == 0) {
+                        //     printf("arrive_unaligned DONE\n");
+                        // }
+                    }
+
+                }  // scheduler loop
+
+                // if (threadIdx.x % WARP_SIZE == 0) {
+                //     printf("iters %d\n", iters);
+                // }
+
+                // if (threadIdx.x % WARP_SIZE == 0) {
+                //     printf("BYE from producer %4d\n", blockIdx.x);
+                // }
+            }
+            else if (warp_id % 4 == 1) {
+                cutlass::PipelineState<2> sched_state{0, 1, 0};
+                int                       iters = 1;
+                while (sched.produce_next(storage.sched, sched_state)) {
+                    // if (threadIdx.x % WARP_SIZE == 0) {
+                    //     printf("arrive_and_wait_unaligned\n");
+                    // }
+                    producers_bar.arrive_and_wait_unaligned();
+                    // if (threadIdx.x % WARP_SIZE == 0) {
+                    //     printf("arrive_and_wait_unaligned DONE\n");
+                    // }
                     ++iters;
                 }
 
                 // if (threadIdx.x % WARP_SIZE == 0) {
-                //     printf("%4d run %4d iters\n", blockIdx.x, iters);
+                //     printf("BYE from sched %4d\n", blockIdx.x);
+                // }
+                // if (cute::block_id_in_cluster().x == 0) {
+                //     sched.producer_tail(storage.sched, sched_state, iters);
                 // }
             }
         }
@@ -320,7 +386,10 @@ struct GemmUniversalSm90_v3 {
 
             cutlass::PipelineState<Stages> pipe_state{};
 
-            while (sched.next(kSchedWarpGroups)) {
+            cutlass::PipelineState<2> sched_state{};
+
+            // while (sched.next(kSchedWarpGroups)) {
+            while (sched.consume_next(storage.sched, sched_state)) {
                 auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
                 if (!cluster_tile_p) {
@@ -582,6 +651,10 @@ struct GemmUniversalSm90_v3 {
             if (threadIdx.x % WARPGROUP_SIZE < LayoutC::C1) {
                 cute::tma_store_wait<0>();
             }
+
+            // if (threadIdx.x == 0) {
+            //     printf("BYE from comsumer %d\n", blockIdx.x);
+            // }
         }
 
         if constexpr (kClusterSize > 1) {

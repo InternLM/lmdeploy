@@ -3,6 +3,7 @@
 #pragma once
 
 #include "cute/util/debug.hpp"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/gemm/context.h"
@@ -205,6 +206,8 @@ public:
             Sched sched{};
             sched.init(shape, swizzle, {TILE_M, TILE_N, TILE_K});
 
+            sched.next_cluster_id_ = TM_CHECK_NOTNULL(workspace.flags);
+
             sched.offsets_ = Adesc.offsets;
 
             return sched;
@@ -216,6 +219,8 @@ public:
 
         constexpr int kTileM = Gemm::TILE_M;
         constexpr int kTileN = Gemm::TILE_N;
+
+        check_cuda_error(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
 
         // std::cout << "A: " << Adesc << "\n";
         auto tm_a = make_2d_tma_desc((void*)A, Adesc, {kTileM / kMulticastA, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);

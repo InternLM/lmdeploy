@@ -5,13 +5,48 @@
 #include "cutlass/fast_math.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 #include "cute/arch/cluster_sm90.hpp"
+#include "cutlass/arch/barrier.h"
 #include "cutlass/cutlass.h"
+#include "cutlass/pipeline/sm90_pipeline.hpp"
+
+#include <cooperative_groups.h>
 
 namespace turbomind::gemm {
+
+TM_DEVICE void mbarrier_arrive_cluster(uint64_t* mbar, int cta_id, int pred)
+{
+    uint32_t smem_addr = cast_smem_ptr_to_uint(mbar);
+    if (pred) {
+        asm volatile("{\n"
+                     ".reg .b32 remAddr32;\n"
+                     "mapa.shared::cluster.u32  remAddr32, %0, %1;\n"
+                     "mbarrier.arrive.release.cluster.shared::cluster.b64  _, [remAddr32];\n"
+                     "}"
+                     :
+                     : "r"(smem_addr), "r"(cta_id));
+    }
+}
+
+TM_DEVICE void mbarrier_wait_cluster(uint64_t* mbar, uint32_t phase)
+{
+    uint32_t smem_addr = cast_smem_ptr_to_uint(mbar);
+    uint32_t ticks     = 0x989680;
+    asm volatile("{\n"
+                 ".reg .pred       P1; \n"
+                 "LAB_WAIT: \n"
+                 "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 P1, [%0], %1, %2; \n"
+                 "@P1 bra DONE; \n"
+                 "bra     LAB_WAIT; \n"
+                 "DONE: \n"
+                 "}"
+                 :
+                 : "r"(smem_addr), "r"(phase), "r"(ticks));
+}
 
 template<Order order, class Cluster, int striped_m, bool striped_n, int tile_m, int tile_n, bool is_grouped_gemm>
 struct TileScheduler {
@@ -52,9 +87,25 @@ struct TileScheduler {
 
     bool is_next_ = true;
 
+    int* next_cluster_id_;
+
+    struct Storage {
+        int cluster_idx[2];
+        __align__(128) uint64_t producer_bar[2];
+        __align__(128) uint64_t consumer_bar[2];
+    };
+
     // cutlass::FastDivmod swizzled_shape_x;
 
 public:
+    TM_DEVICE void init_dyanmic(Storage& storage, int consumer_num)
+    {
+        for (int i = 0; i < 2; ++i) {
+            cutlass::arch::ClusterBarrier::init(&storage.producer_bar[i], 1);
+            cutlass::arch::ClusterBarrier::init(&storage.consumer_bar[i], consumer_num);
+        }
+    }
+
     TM_HOST_DEVICE void init(int4 gemm_shape, int log_tile, int3 tile_shape)
     {
         gemm_shape_ = gemm_shape;
@@ -212,6 +263,106 @@ public:
     TM_DEVICE bool next(int n = 1)
     {
         cluster_idx_ += n * (int)cute::cluster_grid_dims().x;
+
+        if (cluster_idx_ >= clusters_) {
+            return false;
+        }
+
+        if constexpr (is_grouped_gemm) {
+            update();
+            unswizzle(cluster_idx_ - group_beg_);
+        }
+        else {
+            unswizzle(cluster_idx_);
+        }
+
+        return true;
+    }
+
+    TM_DEVICE bool produce_next(Storage& store, cutlass::PipelineState<2>& pipe)
+    {
+
+        if constexpr (Cluster::size == 1) {
+            if (threadIdx.x % WARP_SIZE == 0) {
+                // printf("PWAIT %d\n", pipe.index());
+                cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
+                cluster_idx_ = atomicAdd(next_cluster_id_, 1);
+                // printf("PGET %d\n", cluster_idx_);
+                store.cluster_idx[pipe.index()] = cluster_idx_;
+                // printf("PPOST %d\n", pipe.index());
+                cutlass::arch::ClusterBarrier::arrive(&store.producer_bar[pipe.index()]);
+                ++pipe;
+            }
+            cluster_idx_ = __shfl_sync((uint32_t)-1, cluster_idx_, 0);
+        }
+        else {
+            if (cute::block_id_in_cluster().x == 0) {
+                const int lane_id = cutlass::canonical_lane_idx();
+                if (lane_id == 0) {
+                    cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
+                    cluster_idx_ = atomicAdd(next_cluster_id_, 1);
+                    // printf("%d PGET %d\n", clus, cluster_idx_);
+                    store.cluster_idx[pipe.index()] = cluster_idx_;
+                }
+                cluster_idx_  = __shfl_sync((uint32_t)-1, cluster_idx_, 0);
+                uint32_t addr = cast_smem_ptr_to_uint(&store.cluster_idx[pipe.index()]);
+                if (lane_id < Cluster::size) {
+                    asm volatile("mapa.shared::cluster.u32 %0, %1, %2;\n" : "=r"(addr) : "r"(addr), "r"(lane_id));
+                    asm volatile("st.shared::cluster.s32 [%0], %1;\n" ::"r"(addr), "r"(cluster_idx_));
+                }
+                // __syncwarp();
+                // cutlass::arch::ClusterBarrier::arrive(
+                    // &store.producer_bar[pipe.index()], lane_id, lane_id < Cluster::size);
+                mbarrier_arrive_cluster(&store.producer_bar[pipe.index()], lane_id, lane_id < Cluster::size);
+                // __syncwarp();
+                ++pipe;
+            }
+            else {
+                return false;
+            }
+        }
+
+        return cluster_idx_ < clusters_;
+    }
+
+    TM_DEVICE void producer_tail(Storage& store, cutlass::PipelineState<2>& pipe, int iters)
+    {
+        iters = min(iters, 2);
+        for (int i = 0; i < iters; ++i) {
+            cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
+            ++pipe;
+        }
+    }
+
+    TM_DEVICE bool consume_next(Storage& store, cutlass::PipelineState<2>& pipe)
+    {
+        if constexpr (Cluster::size == 1) {
+            // if (threadIdx.x == 256) {
+            //     printf("CWAIT %d\n", pipe.index());
+            // }
+            cutlass::arch::ClusterBarrier::wait(&store.producer_bar[pipe.index()], pipe.phase());
+            cluster_idx_ = store.cluster_idx[pipe.index()];
+            // if (threadIdx.x == 256) {
+            //     printf("CGET %d\n", cluster_idx_);
+            //     printf("CPOST %d\n", pipe.index());
+            // }
+            if (cutlass::elect_one_sync()) {
+                cutlass::arch::ClusterBarrier::arrive(&store.consumer_bar[pipe.index()]);
+            }
+            ++pipe;
+        }
+        else {
+            // cutlass::arch::ClusterBarrier::wait(&store.producer_bar[pipe.index()], pipe.phase());
+            mbarrier_wait_cluster(&store.producer_bar[pipe.index()], pipe.phase());
+            cluster_idx_ = store.cluster_idx[pipe.index()];
+            __syncwarp();
+            cutlass::arch::ClusterBarrier::arrive(&store.consumer_bar[pipe.index()], 0, cutlass::elect_one_sync());
+            ++pipe;
+        }
+
+        // if (threadIdx.x == 0) {
+        //     printf("READ %d\n", cluster_idx_);
+        // }
 
         if (cluster_idx_ >= clusters_) {
             return false;

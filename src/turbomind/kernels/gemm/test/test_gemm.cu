@@ -11,7 +11,8 @@ using namespace turbomind;
 int main()
 {
 
-    core::ContextGuard ctx{core::Stream::create(), core::Allocator{kCPU}, core::Allocator{kDEVICE}};
+    auto               stream = core::Stream::create();
+    core::ContextGuard ctx{stream, core::Allocator{kCPU}, core::Allocator{stream, false}};
 
     auto test = gemm::get_test(gemm::TestPreset::kANY_e4m3_e4m3_bf16_TNN);
 
@@ -20,7 +21,7 @@ int main()
     // test->Initialize(1536 / 4, 8192 * 16, 2048, 0, 1, core::Context::stream().handle());
     // test->Initialize(2048, 8192 * 16, 1536 / 4, 0, 1, core::Context::stream().handle());
     // test->Initialize(384, 128, 1024, core::Context::stream().handle());
-    test->Initialize(8192 * 4, 8192 * 4, 512, 0, 1, core::Context::stream().handle());
+    // test->Initialize(8192 * 4, 8192 * 4, 512, 0, 1, core::Context::stream().handle());
     // test->Initialize(8192 * 2, 8192 * 2, 8192 * 2, 0, 1, core::Context::stream().handle());
     // test->Initialize(8192 * 4, 1, 8192 * 4, core::Context::stream().handle());p
     // test->Initialize(1024, 1024, 1024, core::Context::stream().handle());
@@ -33,10 +34,10 @@ int main()
     // test->Initialize(1536, 32768, 8192, 128, 8, core::Context::stream().handle());
 
     const int tp = 8;
-    const int bs = 32;
+    const int bs = 1024;
 
     // deepseek-v3
-    // test->Initialize(2048 / tp, bs, 7168, 256, 8, core::Context::stream().handle());
+    test->Initialize(2048 / tp * 2, bs, 7168, 256, 8, core::Context::stream().handle());
     // test->Initialize(7168, bs, 2048 / tp, 256, 8, core::Context::stream().handle());
 
     // qwen3-30-a3

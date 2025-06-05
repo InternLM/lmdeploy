@@ -11,6 +11,7 @@
 #include <cuda_bf16.h>
 
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_type.h"
 
@@ -78,6 +79,8 @@ public:
 
         workspace.tensormaps_size = 4096 * sizeof(CUtensorMap);
         cudaMalloc(&workspace.tensormaps, workspace.tensormaps_size);
+        cudaMalloc(&workspace.flags, sizeof(int));
+        // TM_CHECK_NOTNULL(workspace.flags);
     }
 
     auto create_(int rows, int cols, DataType type, Order order, int num = 1)
