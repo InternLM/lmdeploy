@@ -17,7 +17,7 @@ This section describes how to set up the monitoring stack (Prometheus + Grafana)
 1. **Start your LMDeploy server with metrics enabled**
 
 ```
-lmdeploy serve api_server models--Qwen--Qwen2.5-7B-Instruct -server-port 30000 --enable-metrics
+lmdeploy serve api_server models--Qwen--Qwen2.5-7B-Instruct --server-port 30000 --enable-metrics
 ```
 
 Replace the model path according to your needs.

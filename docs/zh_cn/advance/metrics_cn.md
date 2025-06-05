@@ -17,7 +17,7 @@ LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视�
 1. **启动已启用指标的 LMDeploy 服务**
 
 ```
-lmdeploy serve api_server models--Qwen--Qwen2.5-7B-Instruct -server-port 30000 --enable-metrics
+lmdeploy serve api_server models--Qwen--Qwen2.5-7B-Instruct --server-port 30000 --enable-metrics
 ```
 
 请根据需求替换模型路径。默认 metrics endpoint 位于 `http://<lmdeploy_server_host>:30000/metrics`。
