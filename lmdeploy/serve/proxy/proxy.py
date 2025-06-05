@@ -199,7 +199,7 @@ class NodeManager:
                 success = False
         else:
             logger.error(f'terminating node {node_url} failed since it does not exist. '
-            'May try /nodes/status to check the node list')
+                         'May try /nodes/status to check the node list')
             success = False
         self.update_config_file()
         return success
