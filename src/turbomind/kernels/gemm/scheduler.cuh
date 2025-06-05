@@ -105,8 +105,8 @@ struct TileScheduler {
         int group_idx;
         int is_valid_cta;
         int is_valid_cluster;
-        int tile_idx_x;
-        int tile_idx_y;
+        int offset_m;
+        int offset_n;
         int dim;
     };
 
@@ -215,7 +215,7 @@ public:
         cluster_idx_ = (int)cute::cluster_id_in_grid().x - n * (int)cute::cluster_grid_dims().x;
     }
 
-    TM_DEVICE void unswizzle(int cluster_idx)
+    TM_DEVICE void unswizzle(int cluster_idx, int cta_id)
     {
         int cluster_idx_x, cluster_idx_y;
 
@@ -227,7 +227,7 @@ public:
             swizzle_tile_x_(cluster_idx_y, cluster_idx_x, cluster_idx);
         }
 
-        auto [cluster_cta_m, cluster_cta_n] = Cluster::cta_mn(cute::block_id_in_cluster().x);
+        auto [cluster_cta_m, cluster_cta_n] = Cluster::cta_mn(cta_id);
 
         const int offset_x = cluster_cta_m * (striped_m ? cluster_tiles_.x : 1);
         const int offset_y = cluster_cta_n * (striped_n ? cluster_tiles_.y : 1);
@@ -332,16 +332,16 @@ public:
         if (alive) {
             if constexpr (is_grouped_gemm) {
                 update();
-                unswizzle(cluster_idx_ - group_beg_);
+                unswizzle(cluster_idx_ - group_beg_, lane_id);
             }
             else {
-                unswizzle(cluster_idx_);
+                unswizzle(cluster_idx_, lane_id);
             }
             if (lane_id < Cluster::size) {
                 tile->is_valid_cta     = is_valid_.x;
                 tile->is_valid_cluster = is_valid_.y;
-                tile->tile_idx_x       = tile_offset_.x;
-                tile->tile_idx_y       = tile_offset_.y;
+                tile->offset_m         = tile_offset_.x * tile_.x;
+                tile->offset_n         = tile_offset_.y * tile_.y;
                 if constexpr (is_grouped_gemm) {
                     tile->group_idx = group_idx_;
                     tile->dim       = offsets_[group_idx_ + 1] - offsets_[group_idx_];
