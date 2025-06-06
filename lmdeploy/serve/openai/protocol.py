@@ -161,6 +161,7 @@ class ExtractedToolCallInformation(BaseModel):
     # content - per OpenAI spec, content AND tool calls can be returned rarely
     # But some models will do this intentionally
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
