@@ -65,10 +65,10 @@ class CudaGraphMixin:
                                                    device=device)
         input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
         if getattr(self.config, 'use_flash_mla', False) is True:
-            import flash_mla_cuda
+            import flash_mla
 
             # create buffers for flash mla
-            input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla_cuda.get_mla_metadata(
+            input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
                 torch.ones(max_batches, dtype=torch.int32, device=device), self.config.num_attention_heads, 1)
 
         # flash_mla requires block_offsets and kv_lens int32
@@ -122,9 +122,9 @@ class CudaGraphMixin:
         attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
         if getattr(self.config, 'use_flash_mla', False) is True:
-            import flash_mla_cuda
-            tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(
-                attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads, 1)
+            import flash_mla
+            tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
+                                                                             self.config.num_attention_heads, 1)
             # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
             input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
             input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])
