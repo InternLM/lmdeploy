@@ -447,7 +447,12 @@ def blocked_gemm_fp8(A: Tensor,
 @contextmanager
 def _log_jit_build(M: int, N: int, K: int):
     from deep_gemm.jit.runtime import RuntimeCache
-    origin_func = RuntimeCache.__getitem__
+
+    if hasattr(RuntimeCache, 'get'):
+        func_name = 'get'
+    else:
+        func_name = '__getitem__'
+    origin_func = getattr(RuntimeCache, func_name)
 
     def __patched_func(self, *args, **kwargs):
         ret = origin_func(self, *args, **kwargs)
@@ -455,9 +460,9 @@ def _log_jit_build(M: int, N: int, K: int):
             logger.warning(f'DeepGemm build <gemm_fp8_fp8_bf16_nt>: M={M}, N={N}, K={K}. Please waiting.')
         return ret
 
-    RuntimeCache.__getitem__ = __patched_func
+    setattr(RuntimeCache, func_name, __patched_func)
     yield
-    RuntimeCache.__getitem__ = origin_func
+    setattr(RuntimeCache, func_name, origin_func)
 
 
 def deep_gemm_fp8(A: Tensor,

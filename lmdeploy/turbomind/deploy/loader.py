@@ -6,7 +6,8 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import partial
 from glob import glob
-from typing import Iterator, Tuple
+from queue import Queue
+from typing import Iterator, Tuple, Union
 
 import torch
 from safetensors import safe_open
@@ -54,10 +55,13 @@ class SafetensorsLoader(BaseLoader):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
+            # there is no model.safetensors.index.json in the model_path,
+            # read tensor form the safetensor file and update the index
             for shard in self.shards:
+                filename = osp.basename(shard)
                 with safe_open(shard, 'pt') as f:
-                    index.update({k: shard for k in f.keys()})
-        # self.index maps weight names to their containing safetensors file paths
+                    index.update({k: filename for k in f.keys()})
+        # self.index maps weight names to their corresponding safetensors file name
         self.index = index
         # count layer-wise parameters
         for k in index.keys():
@@ -68,9 +72,9 @@ class SafetensorsLoader(BaseLoader):
     def items(self):
         params = defaultdict(dict)
         for shard in self.shards:
-            filename = osp.split(shard)[-1]
             with safe_open(shard, 'pt') as f:
                 misc = []
+                filename = osp.basename(shard)
                 for k in f.keys():
                     # Filtering logic:
                     # - Exclude weights not found in the mapping
@@ -131,8 +135,41 @@ class PytorchLoader(BaseLoader):
             yield (idx, params.pop(idx))
 
 
-def create_loader(model_path: str, pattern: str) -> BaseLoader:
+class StateDictLoader:
+    """This loader is used for `update_params`.
+
+    Currently, the item in the queue should be full state dict of a decoder layer or the meta of the model (embedding,
+    lm_head, norm).
+    """
+
+    def __init__(self, queue: Queue, pattern: str):
+        self.que = queue
+        self.pattern = pattern
+
+    def items(self):
+        for data in iter(self.que.get, None):
+            # If data is state dict of a decoder layer, any key will match the pattern.
+            # Otherwise, none of the keys will match the pattern.
+            for k in data.keys():
+                match = re.findall(self.pattern, k)
+                break
+
+            if not match:
+                yield (-1, data)
+            else:
+                idx = int(match[0])
+                yield (idx, data)
+
+            torch.cuda.empty_cache()
+            self.que.task_done()
+
+
+def create_loader(model_path: Union[str, Queue], pattern: str) -> BaseLoader:
     args = (model_path, pattern)
+
+    if isinstance(model_path, Queue):
+        # used for `update_params`
+        return StateDictLoader(*args)
 
     if osp.exists(osp.join(model_path, SAFE_WEIGHT_INDEX_NAME)):
         return SafetensorsLoader(*args, index_name=SAFE_WEIGHT_INDEX_NAME)

@@ -9,7 +9,7 @@ from lmdeploy.model import MODELS
 def get_conda_allcate_prefix(config, model):
     cuda_prefix = ''
     tp_num = get_tp_num(config, model)
-    if tp_num is None:
+    if tp_num is None or tp_num == 8:
         return cuda_prefix
     available_cuda = _get_available_cude()
     if len(available_cuda) < tp_num:
