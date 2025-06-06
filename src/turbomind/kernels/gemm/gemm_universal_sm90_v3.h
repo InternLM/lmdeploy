@@ -210,81 +210,77 @@ struct GemmUniversalSm90_v3 {
 
                 while (sched.consume_next(storage.sched, sched_state)) {
 
-                    if (!sched.info_->is_valid_cluster) {
-                        // OOB tile caused by swizzle pattern
-                        if (cta_0) {
-                            producers_bar.arrive_unaligned();
+                    if (sched.info_->is_valid_cluster) {
+
+                        const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
+
+                        const CUtensorMap* Adesc = &tm_a;
+                        const CUtensorMap* Bdesc = &tm_b;
+                        const CUtensorMap* Udesc = &tm_u;
+
+                        if constexpr (is_grouped_gemm) {
+                            const int g = sched.info_->group_idx;
+
+                            Array<void*, 3> global_addrs;
+                            global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * (int64_t)param_A.stride;
+                            global_addrs[1] = ((void**)param_B.ptr)[g];
+
+                            const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
+                            const int end_u = round_up(param_U.offsets[g + 1], kAlignmentU);
+                            global_addrs[2] = (Tu*)param_U.ptr + beg_u;
+
+                            Array<int, 3> dims;
+                            dims[0] = param_A.offsets[g + 1] - param_A.offsets[g];
+                            dims[1] = sched.gemm_shape().y;
+                            dims[2] = end_u - beg_u;
+
+                            auto descs = update_tma_descs(tensormap_buf, storage.tma_desc_buf, global_addrs, dims);
+                            Adesc      = &descs[0];
+                            Bdesc      = &descs[1];
+                            Udesc      = &descs[2];
+
+                            PRAGMA_UNROLL
+                            for (int i = 0; i < 3; ++i) {
+                                cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)&descs[i]);
+                            }
                         }
-                        sched.comsume_release(storage.sched, sched_state);
-                        continue;
-                    }
 
-                    const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
+                        if (cute::elect_one_sync()) {
+                            const int offset_k = iter_k_beg * TILE_K;
 
-                    const int g = sched.info_->group_idx;
+                            const uint16_t mask_A = cluster.mask_m();
+                            const uint16_t mask_B = cluster.mask_n();
 
-                    const CUtensorMap* Adesc = &tm_a;
-                    const CUtensorMap* Bdesc = &tm_b;
-                    const CUtensorMap* Udesc = &tm_u;
+                            const int offset_m = sched.info_->offset_m;
+                            const int offset_n = sched.info_->offset_n;
 
-                    if constexpr (is_grouped_gemm) {
-                        Array<void*, 3> global_addrs;
-                        global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * (int64_t)param_A.stride;
-                        global_addrs[1] = ((void**)param_B.ptr)[g];
+                            int k_iter = iter_k_end - iter_k_beg;
 
-                        const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
-                        const int end_u = round_up(param_U.offsets[g + 1], kAlignmentU);
-                        global_addrs[2] = (Tu*)param_U.ptr + beg_u;
+                            GmemIteratorSm90<kMulticastA> gmem_A{
+                                Adesc, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
+                            GmemIteratorSm90<kMulticastB> gmem_B{
+                                Bdesc, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
 
-                        Array<int, 3> dims;
-                        dims[0] = param_A.offsets[g + 1] - param_A.offsets[g];
-                        dims[1] = sched.gemm_shape().y;
-                        dims[2] = end_u - beg_u;
+                            const int mc_offset_u = kMulticastU > 1 ? mc_offset_m : 0;
+                            // column-major
+                            GmemIteratorSm90<kMulticastU> gmem_U{
+                                Udesc, {offset_m + mc_offset_u, offset_k / 128}, {0, 1}};
 
-                        auto descs = update_tma_descs(tensormap_buf, storage.tma_desc_buf, global_addrs, dims);
-                        Adesc      = &descs[0];
-                        Bdesc      = &descs[1];
-                        Udesc      = &descs[2];
-
-                        PRAGMA_UNROLL
-                        for (int i = 0; i < 3; ++i) {
-                            cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)&descs[i]);
-                        }
-                    }
-
-                    if (cute::elect_one_sync()) {
-                        const int offset_k = iter_k_beg * TILE_K;
-
-                        const uint16_t mask_A = cluster.mask_m();
-                        const uint16_t mask_B = cluster.mask_n();
-
-                        const int offset_m = sched.info_->offset_m;
-                        const int offset_n = sched.info_->offset_n;
-
-                        int k_iter = iter_k_end - iter_k_beg;
-
-                        GmemIteratorSm90<kMulticastA> gmem_A{Adesc, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
-                        GmemIteratorSm90<kMulticastB> gmem_B{Bdesc, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
-
-                        const int mc_offset_u = kMulticastU > 1 ? mc_offset_m : 0;
-                        // column-major
-                        GmemIteratorSm90<kMulticastU> gmem_U{Udesc, {offset_m + mc_offset_u, offset_k / 128}, {0, 1}};
-
-                        for (; k_iter > 0; --k_iter) {
-                            int pipe = write_state.index();
-                            ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
-                            ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
-                            gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
-                            gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
-                            gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_u, mask_A);
-                            ++write_state;
+                            for (; k_iter > 0; --k_iter) {
+                                int pipe = write_state.index();
+                                ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
+                                ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
+                                gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
+                                gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
+                                gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_u, mask_A);
+                                ++write_state;
+                            }
                         }
                     }
 
                     if (cta_0) {
                         producers_bar.arrive_unaligned();
                     }
-
                     sched.comsume_release(storage.sched, sched_state);
 
                 }  // scheduler loop
