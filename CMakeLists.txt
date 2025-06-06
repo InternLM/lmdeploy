@@ -39,27 +39,25 @@ include(FetchContent)
 
 if (BUILD_TEST)
   FetchContent_Declare(
-    repo-cutlass
-    GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-    GIT_TAG        6f47420213f757831fae65c686aa471749fa8d60
-    GIT_SHALLOW ON
-  )
-
-  set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
-
-  FetchContent_MakeAvailable(repo-cutlass)
-
-  set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
-  set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/turbomind/cutlass_extensions/include)
-
-
-  FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG        v3.8.0
   )
   FetchContent_MakeAvailable(Catch2)
 endif()
+
+
+FetchContent_Declare(
+  repo-cutlass
+  GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
+  GIT_TAG        v3.9.2
+  GIT_SHALLOW ON
+)
+
+set(CUTLASS_ENABLE_SM90_EXTENDED_MMA_SHAPES ON CACHE BOOL "Enable extended GMMA shapes")
+set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
+
+FetchContent_MakeAvailable(repo-cutlass)
 
 FetchContent_Declare(
   yaml-cpp
@@ -129,10 +127,13 @@ if (NOT CMAKE_CUDA_ARCHITECTURES)
     list(APPEND CMAKE_CUDA_ARCHITECTURES 86-real)
   endif ()
   if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.8")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real 90-real)
+    list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real)
+  endif ()
+  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.0")
+    list(APPEND CMAKE_CUDA_ARCHITECTURES 90a-real)
   endif ()
   if (MSVC)
-    list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90-real)
+    list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real)
   endif ()
 endif ()
 

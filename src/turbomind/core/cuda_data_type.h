@@ -1,5 +1,9 @@
-#include <cublas_v2.h>
+
+
+#include <cuda.h>
 #include <cuda_runtime.h>
+
+#include <cublas_v2.h>
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -51,6 +55,22 @@ constexpr DataType from_cuda_dtype(cudaDataType type) {
         case CUDA_R_8F_E5M2: return kFloat8_e5m2;
         default:
             throw std::runtime_error("Not supported " + std::string{std::to_string(type)});
+    }
+}
+
+constexpr CUtensorMapDataType to_CUtensorMap_dtype(DataType type) {
+    switch (type) {
+        case kFloat32: 
+            return CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
+        case kFloat16: 
+            return CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
+        case kBfloat16: 
+            return CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
+        case kFloat8_e4m3:
+        case kFloat8_e5m2:
+            return CU_TENSOR_MAP_DATA_TYPE_UINT8;
+        default:
+            throw std::runtime_error("Not supported " + std::string{to_string(type)});
     }
 }
 

@@ -80,7 +80,7 @@ std::pair<float, cudaError_t> Measurer::ColdRun(LaunchSpec spec, const Launcher&
         cudaEventElapsedTime(&ms, ev_beg_, ev_end_);
     }
     else {
-        std::cerr << cudaGetErrorString(status) << std::endl;
+        TM_CHECK(status == cudaSuccess) << cudaGetErrorString(status);
     }
 
     return {ms, status};

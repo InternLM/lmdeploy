@@ -218,8 +218,8 @@ constexpr const char* to_string(DataType type) {
         case kFloat32: return "f32";
         case kFloat64: return "f64";
         case kBfloat16: return "bf16";
-        case kFloat8_e4m3: return "f8_e4m3";
-        case kFloat8_e5m2: return "f8_e5m2";
+        case kFloat8_e4m3: return "e4m3";
+        case kFloat8_e5m2: return "e5m2";
         case kUint2: return "u2";
         case kUint4: return "u4";
         case kUint6: return "u8";

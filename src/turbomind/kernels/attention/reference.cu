@@ -314,57 +314,8 @@ void Reference<T>::Execute(
                                                  0,
                                                  stream_);
     }
-    else if (type_ == kFLASH_ATTENTION) {
-
-        for (int i = 0; i < batch_size_; ++i) {
-            key_cache_ptrs_[i] = k_cache + i * kv_head_num_ * max_k_len_ * head_dim_;
-            val_cache_ptrs_[i] = v_cache + i * kv_head_num_ * max_k_len_ * head_dim_;
-        }
-
-        using AttentionOp = FlashAttentionOp<T>;
-        using Layout      = typename AttentionOp::AttentionLayout;
-        Layout layout_q{int(head_num_ * max_q_len_ * head_dim_), int(head_dim_), int(max_q_len_ * head_dim_)};
-        Layout layout_k{int(head_num_ * max_k_len_ * head_dim_),
-                        int(head_dim_),
-                        int(max_k_len_ * head_dim_),
-                        false,
-                        0,
-                        key_cache_ptrs_.data().get()};
-        Layout layout_v{int(head_num_ * max_k_len_ * head_dim_),
-                        int(head_dim_),
-                        int(max_k_len_ * head_dim_),
-                        false,
-                        0,
-                        val_cache_ptrs_.data().get()};
-        Layout layout_o{
-            int(head_num_ * max_q_len_ * head_dim_),
-            int(head_num_ * head_dim_),
-            int(head_dim_),
-            true,
-        };
-        size_t                       group_size = size_t(head_num_ / kv_head_num_);
-        AttentionOp                  flash_attention(batch_size_, head_num_, max_k_len_, max_q_len_, head_dim_);
-        typename AttentionOp::Params attn_params{output,
-                                                 q_.data().get(),
-                                                 nullptr,             // k ptr
-                                                 nullptr,             // v ptr
-                                                 mask_.data().get(),  // attention mask
-                                                 nullptr,             // qk buf float
-                                                 cu_q_seqlens_.data().get(),
-                                                 nullptr,
-                                                 nullptr,
-                                                 k_seqlens_.data().get(),
-                                                 group_size,
-                                                 layout_q,
-                                                 layout_k,
-                                                 layout_v,
-                                                 layout_o};
-
-        //
-        flash_attention(attn_params, stream_);
-    }
     else {
-        std::abort();
+        throw std::runtime_error("not implemented");
     }
 }
 

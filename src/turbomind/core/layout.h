@@ -79,7 +79,7 @@ public:
         return true;
     }
 
-    Layout permute(const vector<int>& dims)
+    Layout permute(const vector<int>& dims) const
     {
         TM_CHECK((int)dims.size() == rank());
         auto a = *this;
@@ -88,6 +88,16 @@ public:
             a.stride_[i] = stride_[dims[i]];
         }
         return a;
+    }
+
+    Layout transpose(int a, int b) const
+    {
+        TM_CHECK_LT(a, rank());
+        TM_CHECK_LT(b, rank());
+        auto x = *this;
+        std::swap(x.shape_[a], x.shape_[b]);
+        std::swap(x.stride_[a], x.stride_[b]);
+        return x;
     }
 
     ssize_t offset(const vector<ssize_t>& idxs) const
@@ -133,6 +143,16 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const Layout& x);
+
+    friend bool operator==(const Layout& a, const Layout& b)
+    {
+        return a.shape_ == b.shape_ && a.stride_ == b.stride_;
+    }
+
+    friend bool operator!=(const Layout& a, const Layout& b)
+    {
+        return !(a == b);
+    }
 
 private:
     int wrap(int dim) const noexcept
