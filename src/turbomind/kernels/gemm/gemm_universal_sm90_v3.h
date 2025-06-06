@@ -202,35 +202,37 @@ struct GemmUniversalSm90_v3 {
                     init_tma_descs<3>({&tm_a, &tm_b, &tm_u}, storage.tma_desc_buf);
                 }
 
-                sched.grid_init();
-
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
 
-                typename Scheduler::PipelineState sched_state{};
+                auto sched_state = sched.init_consumer(storage.sched);
 
-                while (sched.consume_next(storage.sched, sched_state)) {
+                typename Scheduler::Tile* tile;
 
-                    if (sched.info_->is_valid_cluster) {
+                while (sched_state.acquire(tile)) {
 
-                        const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
+                    if (tile->is_valid_cluster) {
 
                         const CUtensorMap* Adesc = &tm_a;
                         const CUtensorMap* Bdesc = &tm_b;
                         const CUtensorMap* Udesc = &tm_u;
 
                         if constexpr (is_grouped_gemm) {
-                            const int g = sched.info_->group_idx;
+                            const int g = tile->group_idx;
+
+                            const int m  = tile->m;
+                            const int m0 = tile->m0;
+                            const int m1 = m0 + m;
 
                             Array<void*, 3> global_addrs;
-                            global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * (int64_t)param_A.stride;
+                            global_addrs[0] = (Ta*)param_A.ptr + m0 * (int64_t)param_A.stride;
                             global_addrs[1] = ((void**)param_B.ptr)[g];
 
-                            const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
-                            const int end_u = round_up(param_U.offsets[g + 1], kAlignmentU);
+                            const int beg_u = m0 / kAlignmentU * kAlignmentU;
+                            const int end_u = round_up(m1, kAlignmentU);
                             global_addrs[2] = (Tu*)param_U.ptr + beg_u;
 
                             Array<int, 3> dims;
-                            dims[0] = param_A.offsets[g + 1] - param_A.offsets[g];
+                            dims[0] = m;
                             dims[1] = sched.gemm_shape().y;
                             dims[2] = end_u - beg_u;
 
@@ -246,15 +248,15 @@ struct GemmUniversalSm90_v3 {
                         }
 
                         if (cute::elect_one_sync()) {
-                            const int offset_k = iter_k_beg * TILE_K;
+                            const int offset_k = 0;
 
                             const uint16_t mask_A = cluster.mask_m();
                             const uint16_t mask_B = cluster.mask_n();
 
-                            const int offset_m = sched.info_->offset_m;
-                            const int offset_n = sched.info_->offset_n;
+                            const int offset_m = tile->offset_m;
+                            const int offset_n = tile->offset_n;
 
-                            int k_iter = iter_k_end - iter_k_beg;
+                            int k_iter = sched.k_iters_;
 
                             GmemIteratorSm90<kMulticastA> gmem_A{
                                 Adesc, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
@@ -278,25 +280,27 @@ struct GemmUniversalSm90_v3 {
                         }
                     }
 
-                    if (cta_0) {
-                        producers_bar.arrive_unaligned();
+                    if constexpr (Scheduler::is_dynamic) {
+                        if (cta_0) {
+                            producers_bar.arrive_unaligned();
+                        }
                     }
-                    sched.comsume_release(storage.sched, sched_state);
+
+                    sched_state.release();
 
                 }  // scheduler loop
             }
             else if (warp_id % 4 == 1 && cta_0) {
-                sched.grid_init();
-                typename Scheduler::PipelineState sched_state{0, 1, 0};
-                while (sched.produce_next(storage.sched, sched_state)) {
-                    producers_bar.arrive_and_wait_unaligned();
+                auto sched_state = sched.init_producer(storage.sched);
+                while (sched_state.next()) {
+                    if constexpr (Scheduler::is_dynamic) {
+                        producers_bar.arrive_and_wait_unaligned();
+                    }
                 }
             }
         }
         else {
             cutlass::arch::warpgroup_reg_alloc<232>();
-
-            sched.grid_init(kSchedWarpGroups);
 
             if constexpr (is_grouped_gemm) {
                 if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
@@ -326,8 +330,6 @@ struct GemmUniversalSm90_v3 {
 
             cutlass::PipelineState<Stages> pipe_state{};
 
-            typename Scheduler::PipelineState sched_state{};
-
             const int warp_id = cutlass::canonical_warp_idx_sync();
             const int lane_id = cutlass::canonical_lane_idx();
 
@@ -343,11 +345,15 @@ struct GemmUniversalSm90_v3 {
                 }
             };
 
-            sched.consume_next(storage.sched, sched_state);
+            auto sched_state = sched.init_consumer(storage.sched);
 
-            while (sched.info_->alive) {
+            typename Scheduler::Tile* tile;
 
-                if (sched.info_->is_valid_cta) {
+            sched_state.acquire(tile);
+
+            while (tile->alive) {
+
+                if (tile->is_valid_cta) {
                     MMA_Atom::CRegisters frag_C[MMA_ITER_M][MMA_ITER_N];
                     MMA_Atom::CRegisters accum_C[MMA_ITER_M][MMA_ITER_N]{};
 
@@ -359,12 +365,12 @@ struct GemmUniversalSm90_v3 {
                                 param_V,
                                 K,
                                 N,
-                                sched.info_->offset_n,
+                                tile->offset_n,
                                 wg_idx,
                                 wg_idx_n,
-                                sched.info_->group_idx,
+                                tile->group_idx,
                                 storage,
-                                sched.info_->is_valid_cta);
+                                tile->is_valid_cta);
                     };
 
                     fetch_V();
@@ -383,7 +389,7 @@ struct GemmUniversalSm90_v3 {
                     const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
                     int       align_U  = 0;
                     if constexpr (is_grouped_gemm) {
-                        align_U = param_U.offsets[sched.info_->group_idx] % kAlignmentU;
+                        align_U = tile->m0 % kAlignmentU;
                     }
                     auto Load_U = [&] {
                         for (int m = 0; m < MMA_ITER_M; ++m) {
@@ -499,16 +505,14 @@ struct GemmUniversalSm90_v3 {
                     consumer_arrive();
                     ++pipe_state;
 
-                    const int   M     = sched.gemm_shape().x;
                     const void* Cdesc = &tm_c;
 
                     if constexpr (is_grouped_gemm) {
                         if (wg_lane / WARP_SIZE == 0) {
-                            auto global_addr =
-                                (Tc*)param_C.ptr + param_C.offsets[sched.info_->group_idx] * (int64_t)param_C.stride;
-                            int idx = 3 + wg_idx;
-                            Cdesc   = update_tma_descs<1>(
-                                tensormap_buf + idx, storage.tma_desc_buf + idx, {global_addr}, {M});
+                            auto global_addr = (Tc*)param_C.ptr + tile->m0 * (int64_t)param_C.stride;
+                            int  idx         = 3 + wg_idx;
+                            Cdesc            = update_tma_descs<1>(
+                                tensormap_buf + idx, storage.tma_desc_buf + idx, {global_addr}, {tile->m});
                         }
                     }
 
@@ -558,8 +562,8 @@ struct GemmUniversalSm90_v3 {
 
                     wg_barrier.sync();
 
-                    const int offset_m = sched.info_->offset_m;
-                    const int offset_n = sched.info_->offset_n;
+                    const int offset_m = tile->offset_m;
+                    const int offset_n = tile->offset_n;
 
                     if (wg_lane < LayoutC::C1) {
                         const int tma_n = wg_lane * LayoutC::C0;
@@ -575,7 +579,7 @@ struct GemmUniversalSm90_v3 {
                 }
                 else {
                     if constexpr (kClusterSize > 1) {
-                        if (sched.info_->is_valid_cluster) {
+                        if (tile->is_valid_cluster) {
                             int k_iter = sched.k_iters_;
                             for (; k_iter > 0; --k_iter) {
                                 ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
@@ -586,8 +590,8 @@ struct GemmUniversalSm90_v3 {
                     }
                 }
 
-                sched.comsume_release(storage.sched, sched_state);
-                sched.consume_next(storage.sched, sched_state);
+                sched_state.release();
+                sched_state.acquire(tile);
 
             }  // scheduler loop
 

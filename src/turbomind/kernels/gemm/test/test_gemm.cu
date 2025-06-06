@@ -21,7 +21,8 @@ int main()
     // test->Initialize(1536 / 4, 8192 * 16, 2048, 0, 1, core::Context::stream().handle());
     // test->Initialize(2048, 8192 * 16, 1536 / 4, 0, 1, core::Context::stream().handle());
     // test->Initialize(384, 128, 1024, core::Context::stream().handle());
-    // test->Initialize(8192 * 4, 8192 * 4, 512, 0, 1, core::Context::stream().handle());
+    // test->Initialize(8192 * 4, 8192 * 4, 8192 * 4, 0, 1, core::Context::stream().handle());
+    // test->Initialize(384, 128, 1024, 1, 1, core::Context::stream().handle());
     // test->Initialize(8192 * 2, 8192 * 2, 8192 * 2, 0, 1, core::Context::stream().handle());
     // test->Initialize(8192 * 4, 1, 8192 * 4, core::Context::stream().handle());p
     // test->Initialize(1024, 1024, 1024, core::Context::stream().handle());
@@ -34,7 +35,7 @@ int main()
     // test->Initialize(1536, 32768, 8192, 128, 8, core::Context::stream().handle());
 
     const int tp = 8;
-    const int bs = 1024;
+    const int bs = 16384;
 
     // deepseek-v3
     test->Initialize(2048 / tp * 2, bs, 7168, 256, 8, core::Context::stream().handle());

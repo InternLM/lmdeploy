@@ -57,20 +57,21 @@ TM_DEVICE void* map_to_cta(void* ptr, int cta_id)
 
 template<Order order, class Cluster, int striped_m, bool striped_n, int tile_m, int tile_n, bool is_grouped_gemm>
 struct TileScheduler {
+
+    static constexpr bool is_dynamic = true;
+    static constexpr int  Stages     = 4;
+
+    static constexpr int2 tile_{tile_m, tile_n};
+    static constexpr int2 cluster_tile_{tile_m * Cluster::M, tile_n* Cluster::N};
+
     int4 gemm_shape_;
     int2 tiled_shape_;
-    // int3 tile_shape_;
-    int log_tile_;
 
+    int log_tile_;
     int k_iters_;
 
     int2 tile_offset_;
     int2 iter_k_range_;
-
-    int cluster_idx_;
-
-    static constexpr int2 tile_{tile_m, tile_n};
-    static constexpr int2 cluster_tile_{tile_m * Cluster::M, tile_n* Cluster::N};
 
     int clusters_;
 
@@ -83,20 +84,9 @@ struct TileScheduler {
     cutlass::FastDivmod swizzle_tile_x_;
     /////////////
 
-    int2 is_valid_;  // {is_valid_cta_tile, is_valid_cluster_tile}
-
     const int* offsets_;
 
-    int group_idx_ = -1;
-
-    int group_beg_ = 0;
-    int group_end_ = 0;
-
-    bool is_next_ = true;
-
     int* next_cluster_id_;
-
-    static constexpr int Stages = 4;
 
     using PipelineState = cutlass::PipelineState<Stages>;
 
@@ -107,28 +97,54 @@ struct TileScheduler {
         int is_valid_cluster;
         int offset_m;
         int offset_n;
-        int dim;
+        int m0;
+        int m;
     };
 
     struct Storage {
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
-        __align__(128) uint64_t sync_bar;
+        // __align__(128) uint64_t sync_bar;
         Tile tile[Stages];
     };
 
-    Tile* info_;
+    struct ConsumerState {
+        PipelineState  pipe;
+        Storage&       store;
+        TileScheduler& sched;
 
-    // cutlass::FastDivmod swizzled_shape_x;
+        TM_DEVICE bool acquire(Tile*& tile)
+        {
+            return sched.acquire(*this, tile);
+        }
+
+        TM_DEVICE void release()
+        {
+            return sched.release(*this);
+        }
+    };
+
+    struct ProducerState {
+        PipelineState  pipe;
+        int            group_idx;
+        int            cluster_idx;
+        Storage&       store;
+        TileScheduler& sched;
+
+        TM_DEVICE bool next()
+        {
+            return sched.next(*this);
+        }
+    };
 
 public:
-    TM_DEVICE void init_dyanmic(Storage& storage, int consumer_num)
+    TM_DEVICE void init_dyanmic(Storage& store, int consumer_num)
     {
         for (int i = 0; i < Stages; ++i) {
-            cutlass::arch::ClusterBarrier::init(&storage.producer_bar[i], 1);
-            cutlass::arch::ClusterBarrier::init(&storage.consumer_bar[i], consumer_num);
+            cutlass::arch::ClusterBarrier::init(&store.producer_bar[i], 1);
+            cutlass::arch::ClusterBarrier::init(&store.consumer_bar[i], consumer_num);
         }
-        cutlass::arch::ClusterBarrier::init(&storage.sync_bar, 1);
+        // cutlass::arch::ClusterBarrier::init(&store.sync_bar, 1);
     }
 
     TM_HOST_DEVICE void init(int4 gemm_shape, int log_tile, int3 tile_shape)
@@ -208,18 +224,39 @@ public:
         }
     }
 
-    TM_DEVICE void grid_init(int n = 1)
+    TM_DEVICE ProducerState init_producer(Storage& store)
     {
-        cluster_idx_ = (int)cute::cluster_id_in_grid().x - n * (int)cute::cluster_grid_dims().x;
+        int group_id   = -1;
+        int cluster_id = 0;
+        if constexpr (!is_dynamic) {
+            cluster_id = (int)cute::cluster_id_in_grid().x;
+        }
+        return {
+            PipelineState{0, 1, 0},
+            group_id,
+            cluster_id,
+            store,
+            *this,
+        };
     }
 
-    TM_DEVICE void unswizzle(int cluster_idx, int cta_id)
+    TM_DEVICE ConsumerState init_consumer(Storage& store)
+    {
+        return {
+            PipelineState{},
+            store,
+            *this,
+        };
+    }
+
+    TM_DEVICE void
+    unswizzle(Tile& tile, int cluster_idx, int cta_id, int2 cta_tiles, int2 cluster_tiles, int2 swizzle_tiles) const
     {
         int cluster_idx_x, cluster_idx_y;
 
         if constexpr (is_grouped_gemm) {
-            cluster_idx_x = cluster_idx % swizzled_cluster_tiles_.x;
-            cluster_idx_y = cluster_idx / swizzled_cluster_tiles_.x;
+            cluster_idx_x = cluster_idx % swizzle_tiles.x;
+            cluster_idx_y = cluster_idx / swizzle_tiles.x;
         }
         else {
             swizzle_tile_x_(cluster_idx_y, cluster_idx_x, cluster_idx);
@@ -227,8 +264,8 @@ public:
 
         auto [cluster_cta_m, cluster_cta_n] = Cluster::cta_mn(cta_id);
 
-        const int offset_x = cluster_cta_m * (striped_m ? cluster_tiles_.x : 1);
-        const int offset_y = cluster_cta_n * (striped_n ? cluster_tiles_.y : 1);
+        const int offset_x = cluster_cta_m * (striped_m ? cluster_tiles.x : 1);
+        const int offset_y = cluster_cta_n * (striped_n ? cluster_tiles.y : 1);
 
         int2 cluster_tile_offset;
 
@@ -241,79 +278,79 @@ public:
                                    (cluster_idx_x >> log_tile_)};
         }
 
-        tile_offset_ = {offset_x + cluster_tile_offset.x * (striped_m ? 1 : Cluster::M),
-                        offset_y + cluster_tile_offset.y * (striped_n ? 1 : Cluster::N)};
-
-        iter_k_range_ = {0, k_iters_};
-
-        is_valid_.y = cluster_tile_offset.x < cluster_tiles_.x && cluster_tile_offset.y < cluster_tiles_.y;
-        is_valid_.x = is_valid_.y && tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y;
+        // `tile` may be on DSMEM
+        int tile_idx_x        = offset_x + cluster_tile_offset.x * (striped_m ? 1 : Cluster::M);
+        int tile_idx_y        = offset_y + cluster_tile_offset.y * (striped_n ? 1 : Cluster::N);
+        tile.offset_m         = tile_idx_x * tile_.x;
+        tile.offset_n         = tile_idx_y * tile_.y;
+        int valid_cluster_p   = cluster_tile_offset.x < cluster_tiles.x && cluster_tile_offset.y < cluster_tiles.y;
+        tile.is_valid_cta     = valid_cluster_p && tile_idx_x < cta_tiles.x && tile_idx_y < cta_tiles.y;
+        tile.is_valid_cluster = valid_cluster_p;
     }
 
-    TM_DEVICE int get_start_index(int g)
+    TM_DEVICE int get_start_index(int g) const
     {
         // return (__ldg(&offsets_[g]) / (cluster_tile_.x * swizzle_unit_.x) + g) * swizzle_unit_.x
         //        * padded_cluster_tiles_.y;
         return (swizzle_tile_x_.div(__ldg(&offsets_[g])) + g) * swizzle_unit_.x * padded_cluster_tiles_.y;
     }
 
-    TM_DEVICE bool update_sync()
+    TM_DEVICE bool update_sync(int   cluster_idx,
+                               int&  group_idx,
+                               int&  group_beg,
+                               int&  group_m0,
+                               int&  group_m,
+                               int2& tiled_shape,
+                               int2& cluster_tiles,
+                               int2& swizzled_tiles) const
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
 
         uint32_t mask = 0;
 
-        for (int g = lane_id + group_idx_; mask == 0; g += WARP_SIZE) {
-            int pred   = g < gemm_shape_.w && cluster_idx_ < get_start_index(g + 1);
-            mask       = __ballot_sync((uint32_t)-1, pred);
-            group_idx_ = g;
+        for (int g = lane_id + group_idx; mask == 0; g += WARP_SIZE) {
+            int pred  = g < gemm_shape_.w && cluster_idx < get_start_index(g + 1);
+            mask      = __ballot_sync((uint32_t)-1, pred);
+            group_idx = g;
         }
 
-        // NOTE: __ffs = BREV + FLO
-        group_idx_ = __shfl_sync((uint32_t)-1, group_idx_, __ffs(mask) - 1);
+        // NOTE: __ffs = BREV + FLO, try __clz(int)
+        group_idx = __shfl_sync((uint32_t)-1, group_idx, __ffs(mask) - 1);
 
-        gemm_shape_.x = __ldg(&offsets_[group_idx_ + 1]) - __ldg(&offsets_[group_idx_]);
+        group_m0 = __ldg(&offsets_[group_idx]);
+        group_m  = __ldg(&offsets_[group_idx + 1]) - group_m0;
 
-        group_beg_ = get_start_index(group_idx_);
-        group_end_ = get_start_index(group_idx_ + 1);
+        group_beg = get_start_index(group_idx);
 
-        tiled_shape_.x   = cdiv(gemm_shape_.x, tile_.x);
-        cluster_tiles_.x = cdiv(gemm_shape_.x, cluster_tile_.x);
+        tiled_shape.x   = cdiv(group_m, tile_.x);
+        cluster_tiles.x = cdiv(group_m, cluster_tile_.x);
 
-        swizzled_cluster_tiles_ = get_swizzled_shape(cluster_tiles_, log_tile_);
+        swizzled_tiles = get_swizzled_shape(cluster_tiles, log_tile_);
 
         return true;
     }
 
-    TM_DEVICE bool next(int n = 1)
-    {
-        cluster_idx_ += n * (int)cute::cluster_grid_dims().x;
-
-        if (cluster_idx_ >= clusters_) {
-            return false;
-        }
-
-        if constexpr (is_grouped_gemm) {
-            update_sync();
-            unswizzle(cluster_idx_ - group_beg_);
-        }
-        else {
-            unswizzle(cluster_idx_);
-        }
-
-        return true;
-    }
-
-    TM_DEVICE bool produce_next(Storage& store, cutlass::PipelineState<Stages>& pipe)
+    TM_DEVICE bool next(ProducerState& state)
     {
         const int lane_id = cutlass::canonical_lane_idx();
 
-        if (lane_id == 0) {
-            cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
-            cluster_idx_ = atomicAdd(next_cluster_id_, 1);
-        }
+        auto& store = state.store;
+        auto& pipe  = state.pipe;
 
-        cluster_idx_ = __shfl_sync((uint32_t)-1, cluster_idx_, 0);
+        int cluster_idx{};
+
+        if constexpr (is_dynamic) {
+            if (lane_id == 0) {
+                cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
+                cluster_idx = atomicAdd(next_cluster_id_, 1);
+            }
+            cluster_idx = __shfl_sync((uint32_t)-1, cluster_idx, 0);
+        }
+        else {
+            cutlass::arch::ClusterBarrier::wait(&store.consumer_bar[pipe.index()], pipe.phase());
+            cluster_idx = state.cluster_idx;
+            state.cluster_idx += (int)cute::cluster_grid_dims().x;
+        }
 
         Tile* tile{};
 
@@ -326,22 +363,36 @@ public:
             }
         }
 
-        const int alive = cluster_idx_ < clusters_;
+        const int alive = cluster_idx < clusters_;
 
         if (alive) {
+            int  group_beg     = 0;
+            int  group_m0      = 0;
+            int  group_m       = 0;
+            auto cta_tiles     = tiled_shape_;
+            auto cluster_tiles = cluster_tiles_;
+            auto swizzle_tiles = swizzled_cluster_tiles_;
             if constexpr (is_grouped_gemm) {
-                update_sync();
+                update_sync(cluster_idx,  //
+                            state.group_idx,
+                            group_beg,
+                            group_m0,
+                            group_m,
+                            cta_tiles,
+                            cluster_tiles,
+                            swizzle_tiles);
             }
             if (lane_id < Cluster::size) {
-                int group_beg = is_grouped_gemm ? group_beg_ : 0;
-                unswizzle(cluster_idx_ - group_beg, lane_id);
-                tile->is_valid_cta     = is_valid_.x;
-                tile->is_valid_cluster = is_valid_.y;
-                tile->offset_m         = tile_offset_.x * tile_.x;
-                tile->offset_n         = tile_offset_.y * tile_.y;
+                unswizzle(*tile,  //
+                          cluster_idx - group_beg,
+                          lane_id,
+                          cta_tiles,
+                          cluster_tiles,
+                          swizzle_tiles);
                 if constexpr (is_grouped_gemm) {
-                    tile->group_idx = group_idx_;
-                    tile->dim       = offsets_[group_idx_ + 1] - offsets_[group_idx_];
+                    tile->group_idx = state.group_idx;
+                    tile->m0        = group_m0;
+                    tile->m         = group_m;
                 }
             }
         }
@@ -364,8 +415,11 @@ public:
         return alive;
     }
 
-    TM_DEVICE bool consume_next(Storage& store, cutlass::PipelineState<Stages>& pipe)
+    TM_DEVICE bool acquire(ConsumerState& state, Tile*& tile)
     {
+        auto& store = state.store;
+        auto& pipe  = state.pipe;
+
         if constexpr (Cluster::size == 1) {
             cutlass::arch::ClusterBarrier::wait(&store.producer_bar[pipe.index()], pipe.phase());
         }
@@ -373,13 +427,16 @@ public:
             mbarrier_wait_cluster(&store.producer_bar[pipe.index()], pipe.phase());
         }
 
-        info_ = &store.tile[pipe.index()];
+        tile = &store.tile[pipe.index()];
 
-        return info_->alive;
+        return tile->alive;
     }
 
-    TM_DEVICE void comsume_release(Storage& store, cutlass::PipelineState<Stages>& pipe)
+    TM_DEVICE void release(ConsumerState& state)
     {
+        auto& store = state.store;
+        auto& pipe  = state.pipe;
+
         __syncwarp();
 
         if constexpr (Cluster::size == 1) {
@@ -394,46 +451,14 @@ public:
         ++pipe;
     }
 
-    TM_DEVICE int2 is_valid_tile() const
-    {
-
-        return {info_->is_valid_cta, info_->is_valid_cluster};
-
-        // return is_valid_;
-    }
-
     TM_DEVICE int4 gemm_shape() const
     {
-        if constexpr (is_grouped_gemm) {
-            auto shape = gemm_shape_;
-            shape.x    = info_->dim;
-            return shape;
-        }
-        else {
-            return gemm_shape_;
-        }
+        return gemm_shape_;
     }
 
     TM_DEVICE int2 tiled_shape() const
     {
         return tiled_shape_;
-    }
-
-    TM_DEVICE int2 tile_offset() const
-    {
-        return {info_->tile_idx_x, info_->tile_idx_y};
-        // return tile_offset_;
-    }
-
-    TM_DEVICE int2 iter_k_range() const
-    {
-        // return iter_k_range_;
-        return {0, k_iters_};
-    }
-
-    TM_DEVICE int tile_id() const
-    {
-        return tile_offset_.x * tiled_shape_.y + tile_offset_.y;
     }
 };
 
