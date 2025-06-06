@@ -966,7 +966,7 @@ class DPForwardInputsMaker:
             self._update_is_decoding(forward_inputs)
             return forward_inputs
 
-        # wait untile has inputs or prev forward finish
+        # wait until has inputs or prev forward finish
         while self._in_que.qsize() == 0 and not self._ready_event.query():
             await asyncio.sleep(0.001)
 
