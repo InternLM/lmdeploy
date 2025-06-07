@@ -10,10 +10,6 @@ def get_cuda_autotune_config():
             'BLOCK_SIZE_N': 64,
             'GROUP_SIZE_M': 8,
         }, num_stages=3, num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_N': 128,
-            'GROUP_SIZE_M': 8,
-        }, num_stages=3, num_warps=4),
     ]
 
 
