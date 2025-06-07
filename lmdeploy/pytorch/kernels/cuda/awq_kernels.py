@@ -10,6 +10,10 @@ def get_cuda_autotune_config():
             'BLOCK_SIZE_N': 64,
             'GROUP_SIZE_M': 8,
         }, num_stages=3, num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_N': 128,
+            'GROUP_SIZE_M': 8,
+        }, num_stages=3, num_warps=4),
     ]
 
 
@@ -81,6 +85,7 @@ def _unpack_weight(weight):
 @triton.autotune(
     configs=get_cuda_autotune_config(),
     key=['N', 'K'],
+    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def awq_linear_kernel(
