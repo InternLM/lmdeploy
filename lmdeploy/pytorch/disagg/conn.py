@@ -129,9 +129,7 @@ class PDConnectionPool:
                                                        nvlink_config=conn_req.nvlink_config)
 
                 prefill_endpoint_info = await p2p_initialize(conn_req.p_url, prefill_init_req)
-                print(f'prefill_endpoint_info: {prefill_endpoint_info}')
                 decode_endpoint_info = await p2p_initialize(conn_req.d_url, decode_init_req)
-                print(f'decode_endpoint_info: {decode_endpoint_info}')
 
                 # Step 3. Connection
                 prefill_endpoint_conn_reqs = [
