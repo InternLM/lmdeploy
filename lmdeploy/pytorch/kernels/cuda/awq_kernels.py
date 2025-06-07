@@ -85,6 +85,7 @@ def _unpack_weight(weight):
 @triton.autotune(
     configs=get_cuda_autotune_config(),
     key=['N', 'K'],
+    reset_to_zero=['c_ptr'],
 )
 @triton.jit
 def awq_linear_kernel(
