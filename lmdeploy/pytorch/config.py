@@ -85,8 +85,7 @@ class CacheConfig:
 
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
-    #TODO: Modify to mooncake
-    migration_backend: MigrationBackend = MigrationBackend.Mooncake
+    migration_backend: MigrationBackend = MigrationBackend.DLSlime
 
     def __post_init__(self):
         """Post init."""
