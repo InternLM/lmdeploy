@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal
 
 import torch
 
+from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 
 
@@ -50,7 +51,7 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
 
 @dataclass
 class BackendConfig:
-    """backend config."""
+    """Backend config."""
     eager_mode: bool = True
     device_type: str = 'cuda'
 
@@ -88,7 +89,7 @@ class CacheConfig:
     migration_backend: MigrationBackend = MigrationBackend.Mooncake
 
     def __post_init__(self):
-        """post init."""
+        """Post init."""
         from lmdeploy.utils import get_logger
         logger = get_logger('lmdeploy')
         if self.window_size > 1 and self.enable_prefix_caching:
@@ -103,11 +104,12 @@ class DistConfig:
     ep: int = 1
     dp_rank: int = 0
     enable_microbatch: bool = False
+    enable_eplb: bool = False
     world_size: int = None
     attn_config: 'DistConfig' = None
 
     def __post_init__(self):
-        """post init."""
+        """Post init."""
         assert self.dp_rank < self.dp
         assert self.dp >= 1
         if self.dp == 1:
@@ -120,7 +122,7 @@ class DistConfig:
         self.attn_config = attn_config
 
     def need_dummy_batch(self):
-        """need dummy batch."""
+        """Need dummy batch."""
         if self.dp == 1:
             return False
         return self.tp > 1 or self.ep > 1
@@ -148,7 +150,7 @@ class ModelConfig:
     use_flash_mla: bool = False
 
     def get_head_size(self):
-        """get head size."""
+        """Get head size."""
         return self.head_dim
 
     @classmethod
@@ -180,7 +182,7 @@ class ModelConfig:
                        model_path: str = None,
                        dtype: str = 'auto',
                        dist_config: DistConfig = None):
-        """from huggingface config."""
+        """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
         if dist_config is None:
             dist_config = DistConfig()
@@ -217,5 +219,14 @@ class ModelConfig:
 
 @dataclass
 class MiscConfig:
+    prefill_interval: int = 16
     custom_module_map: str = None
     empty_init: bool = False
+
+    @classmethod
+    def from_engine_config(cls, engine_config: PytorchEngineConfig):
+        """From engine config."""
+        misc_config = cls(custom_module_map=engine_config.custom_module_map,
+                          empty_init=engine_config.empty_init,
+                          prefill_interval=engine_config.prefill_interval)
+        return misc_config

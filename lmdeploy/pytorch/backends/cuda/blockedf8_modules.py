@@ -14,7 +14,7 @@ logger = get_logger('lmdeploy')
 
 
 def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
-    """reduce scatter."""
+    """Reduce scatter."""
     outs = out.split(tp_sizes, -2)
     out = outs[rank]
     outs = list(outs)
@@ -23,7 +23,7 @@ def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
 
 
 class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
-    """triton linear blocked f8 implementation."""
+    """Triton linear blocked f8 implementation."""
 
     def __init__(self, in_features: int, out_features: int, block_size: int, out_dtype: torch.dtype = torch.float16):
         self.in_features = in_features
@@ -42,7 +42,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
         """forward."""
         x_shape = x.shape
         x = x.flatten(0, -2)
-        input_quant, input_scale = quant_fp8(x, self.block_size, dtype=weight.dtype)
+        input_quant, input_scale = quant_fp8(x, self.block_size, dtype=weight.dtype, trans_scale=True)
 
         out = blocked_gemm_fp8(input_quant, input_scale, weight.t(), scale.t(), out_dtype=x.dtype)
         if bias is not None:
@@ -59,7 +59,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
 
 
 class TritonLinearBlockedF8Builder(LinearBlockedF8Builder):
-    """triton linear blocked f8 implementation builder."""
+    """Triton linear blocked f8 implementation builder."""
 
     @staticmethod
     def build(in_features: int, out_features: int, block_size: int = 128, bias: bool = True, dtype: torch.dtype = None):
@@ -69,6 +69,7 @@ class TritonLinearBlockedF8Builder(LinearBlockedF8Builder):
             logger.debug('build with DeepGemmLinearBlockedF8Impl')
             return DeepGemmLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
         except:  # noqa
+            logger.warning('Failed to import deep_gemm, LinearBlockedF8 fallback to triton implementation.')
             return TritonLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
 
 
@@ -89,6 +90,8 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
 
     def warmup(self, warmup_meta: WarmupMeta):
         """warmup."""
+        import random
+
         from deep_gemm.jit_kernels.utils import get_m_alignment_for_contiguous_layout
         device = 'cuda'
         max_num_tokens = warmup_meta.max_num_tokens
@@ -100,7 +103,10 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         scale = torch.empty(((n + block_size - 1) // block_size, (k + block_size - 1) // block_size),
                             dtype=torch.float32,
                             device=device)
-        for m in range(alignment, range_end, alignment):
+        # shuffle ranges so ranks might compile different kernels concurrently.
+        ranges = list(range(alignment, range_end, alignment))
+        random.shuffle(ranges)
+        for m in ranges:
             inputs = torch.empty(m, k, dtype=self.out_dtype, device=device)
             input_quant, input_scale = quant_fp8_tma(inputs, self.block_size, dtype=weight.dtype)
             deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=inputs.dtype)

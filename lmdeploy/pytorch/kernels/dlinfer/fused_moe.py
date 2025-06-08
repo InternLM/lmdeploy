@@ -12,5 +12,5 @@ def fused_moe(
     topk: int,
     renormalize: bool,
 ):
-    """dlinfer fused moe."""
+    """Dlinfer fused moe."""
     return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize)

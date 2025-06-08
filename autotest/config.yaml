@@ -4,32 +4,37 @@ dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
 benchmark_path: /nvme/qa_test_models/benchmark-reports
 dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+env_tag: a100
 
 tp_config:
-    internlm2-chat-20b: 2
-    Baichuan2-13B-Chat: 2
-    Mixtral-8x7B-Instruct-v0.1: 2
-    Qwen-VL-Chat: 2
-    llava-v1.5-13b: 2
+    Llama-4-Scout-17B-16E-Instruct: 4
+    Meta-Llama-3-1-70B-Instruct: 4
+    Llama-3.2-11B-Vision-Instruct: 2 # set tp == 2 for test
     internlm2_5-20b-chat: 2
     internlm2_5-20b: 2
-    Meta-Llama-3-1-70B-Instruct: 4
+    internlm2-chat-20b: 2
     internlm2_5-7b-chat-1m: 4
-    Qwen2-7B-Instruct-GPTQ-Int4: 2
-    InternVL2-26B: 2
-    InternVL2-40B: 4
+    InternVL3-38B: 2
     InternVL2_5-26B: 2
     InternVL2_5-26B-MPO: 2
     InternVL2_5-38B: 4
-    MiniCPM-V-2_6: 2
+    InternVL2-40B: 4
+    Qwen3-235B-A22B: 8
+    Qwen3-32B: 2
+    Qwen3-30B-A3B: 2
+    Qwen3-30B-A3B-Base: 2
+    Qwen-VL-Chat: 2
     Qwen2.5-72B-Instruct: 4
-    gemma-2-27b-it: 2
     DeepSeek-V2-Lite-Chat: 2
     DeepSeek-R1-Distill-Qwen-32B: 2
     deepseek-vl2: 2
-    InternVL3-38B: 2
-    Qwen2.5-32B-Instruct: 4
-    Llama-3.2-11B-Vision-Instruct: 2 # set tp == 2 for test
+    Baichuan2-13B-Chat: 2
+    Mixtral-8x7B-Instruct-v0.1: 2
+    llava-v1.5-13b: 2
+    MiniCPM-V-2_6: 2
+    gemma-2-27b-it: 2
+    InternVL2-Llama3-76B-AWQ: 4
+
 
 turbomind_chat_model:
     - meta-llama/Llama-3.2-1B-Instruct
@@ -40,39 +45,38 @@ turbomind_chat_model:
     - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm3-8b-instruct
+    - internlm/internlm3-8b-instruct-awq
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
-    - internlm/internlm2-chat-20b
-    - internlm/internlm2-chat-20b-4bits
     - internlm/internlm-xcomposer2-4khd-7b
     - internlm/internlm-xcomposer2d5-7b
+    - OpenGVLab/InternVL3-2B
+    - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL3-38B
     - OpenGVLab/InternVL2_5-26B-MPO
     - OpenGVLab/InternVL2_5-1B
     - OpenGVLab/InternVL2_5-8B
     - OpenGVLab/InternVL2_5-26B
     - OpenGVLab/InternVL2_5-38B
-    - OpenGVLab/InternVL2-1B
     - OpenGVLab/InternVL2-2B
-    - OpenGVLab/InternVL2-8B
-    - OpenGVLab/InternVL2-26B
     - OpenGVLab/InternVL2-40B
     - OpenGVLab/InternVL-Chat-V1-5
     - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
     - OpenGVLab/InternVL2-Llama3-76B-AWQ
-    - Qwen/Qwen2-7B-Instruct
-    - Qwen/Qwen2-7B-Instruct-AWQ
-    - Qwen/Qwen2-1.5B-Instruct
-    - Qwen/Qwen1.5-7B-Chat
-    - Qwen/Qwen1.5-4B-Chat-AWQ
-    - Qwen/Qwen1.5-MoE-A2.7B-Chat
-    - Qwen/Qwen-VL-Chat
+    - Qwen/Qwen3-0.6B
+    - Qwen/Qwen3-4B
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen2.5-0.5B-Instruct
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
-    - Qwen/Qwen2-7B-Instruct-GPTQ-Int4
     - Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
+    - Qwen/Qwen1.5-7B-Chat
+    - Qwen/Qwen1.5-4B-Chat-AWQ
+    - Qwen/Qwen1.5-MoE-A2.7B-Chat
+    - Qwen/Qwen-VL-Chat
     - mistralai/Mistral-7B-Instruct-v0.3
     - mistralai/Mistral-Nemo-Instruct-2407
     - mistralai/Mixtral-8x7B-Instruct-v0.1
@@ -95,50 +99,55 @@ turbomind_chat_model:
     - allenai/Molmo-7B-D-0924
 
 pytorch_chat_model:
-    - meta-llama/Meta-Llama-3-8B-Instruct
-    - meta-llama/Meta-Llama-3-1-8B-Instruct
-    - meta-llama/Meta-Llama-3-1-70B-Instruct
+    - meta-llama/Llama-4-Scout-17B-16E-Instruct
     - meta-llama/Llama-3.2-1B-Instruct
     - meta-llama/Llama-3.2-3B-Instruct
     - meta-llama/Llama-3.2-11B-Vision-Instruct
+    - meta-llama/Meta-Llama-3-1-8B-Instruct
+    - meta-llama/Meta-Llama-3-1-70B-Instruct
+    - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Llama-2-7b-chat-hf
     - internlm/internlm3-8b-instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
-    - internlm/internlm2-chat-20b
+    - OpenGVLab/InternVL3-2B
+    - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL3-38B
     - OpenGVLab/InternVL2_5-26B-MPO
     - OpenGVLab/InternVL2_5-1B
     - OpenGVLab/InternVL2_5-8B
     - OpenGVLab/InternVL2_5-26B
     - OpenGVLab/InternVL2_5-38B
-    - OpenGVLab/InternVL2-1B
     - OpenGVLab/InternVL2-2B
     - OpenGVLab/InternVL2-4B
-    - OpenGVLab/InternVL2-8B
-    - OpenGVLab/InternVL2-26B
     - OpenGVLab/InternVL2-40B
     - OpenGVLab/InternVL-Chat-V1-5
+    - OpenGVLab/InternVL2-Llama3-76B-AWQ
     - OpenGVLab/Mono-InternVL-2B
-    - baichuan-inc/Baichuan2-7B-Chat
-    - baichuan-inc/Baichuan2-13B-Chat
-    - 01-ai/Yi-6B-Chat
-    - Qwen/Qwen2-7B-Instruct
-    - Qwen/Qwen2-1.5B-Instruct
+    - Qwen/Qwen3-0.6B
+    - Qwen/Qwen3-4B
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen2.5-0.5B-Instruct
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
-    - Qwen/Qwen2.5-VL-7B-Instruct
     - Qwen/Qwen1.5-7B-Chat
+    - Qwen/Qwen1.5-4B-Chat-AWQ
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
+    - Qwen/Qwen2.5-VL-7B-Instruct
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
     - mistralai/Mistral-7B-Instruct-v0.3
     - mistralai/Mixtral-8x7B-Instruct-v0.1
-    - google/gemma-7b-it
+    - google/gemma-3-12b-it
     - google/gemma-2-9b-it
     - google/gemma-2-27b-it
+    - google/gemma-7b-it
+    - baichuan-inc/Baichuan2-7B-Chat
+    - baichuan-inc/Baichuan2-13B-Chat
+    - 01-ai/Yi-6B-Chat
     - deepseek-ai/DeepSeek-R1-Distill-Llama-8B
     - deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
     - deepseek-ai/deepseek-moe-16b-chat
@@ -150,6 +159,9 @@ pytorch_chat_model:
     - THUDM/glm-4-9b-chat
     - THUDM/codegeex4-all-9b
     - openbmb/MiniCPM-V-2_6
+    - microsoft/Phi-4-mini-instruct
+    - microsoft/Phi-3.5-mini-instruct
+    - microsoft/Phi-3.5-vision-instruct
     - microsoft/Phi-3-mini-4k-instruct
     - microsoft/Phi-3-vision-128k-instruct
 
@@ -163,14 +175,14 @@ turbomind_vl_model:
     - OpenGVLab/InternVL2_5-26B-MPO
     - OpenGVLab/InternVL-Chat-V1-5
     - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
+    - OpenGVLab/InternVL3-2B
+    - OpenGVLab/InternVL3-8B
+    - OpenGVLab/InternVL3-38B
     - OpenGVLab/InternVL2_5-1B
     - OpenGVLab/InternVL2_5-8B
     - OpenGVLab/InternVL2_5-26B
     - OpenGVLab/InternVL2_5-38B
-    - OpenGVLab/InternVL2-1B
     - OpenGVLab/InternVL2-2B
-    - OpenGVLab/InternVL2-8B
-    - OpenGVLab/InternVL2-26B
     - OpenGVLab/InternVL2-40B
     - OpenGVLab/InternVL2-Llama3-76B-AWQ
     - internlm/internlm-xcomposer2d5-7b
@@ -183,16 +195,15 @@ pytorch_vl_model:
     - OpenGVLab/InternVL2_5-26B-MPO
     - OpenGVLab/InternVL-Chat-V1-5
     - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
+    - OpenGVLab/InternVL3-2B
+    - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL3-38B
     - OpenGVLab/InternVL2_5-1B
     - OpenGVLab/InternVL2_5-8B
     - OpenGVLab/InternVL2_5-26B
     - OpenGVLab/InternVL2_5-38B
-    - OpenGVLab/InternVL2-1B
     - OpenGVLab/InternVL2-2B
     - OpenGVLab/InternVL2-4B
-    - OpenGVLab/InternVL2-8B
-    - OpenGVLab/InternVL2-26B
     - OpenGVLab/InternVL2-40B
     - OpenGVLab/Mono-InternVL-2B
     - Qwen/Qwen2-VL-2B-Instruct
@@ -206,12 +217,16 @@ pytorch_vl_model:
     - microsoft/Phi-3.5-vision-instruct
 
 turbomind_base_model:
+    - Qwen/Qwen3-8B-Base
+    - Qwen/Qwen3-30B-A3B-Base
     - internlm/internlm2_5-7b
     - internlm/internlm2_5-1_8b
     - internlm/internlm2_5-20b
     - codellama/CodeLlama-7b-hf
 
 pytorch_base_model:
+    - Qwen/Qwen3-8B-Base
+    - Qwen/Qwen3-30B-A3B-Base
     - internlm/internlm2_5-7b
     - internlm/internlm2_5-1_8b
     - internlm/internlm2_5-20b
@@ -220,6 +235,9 @@ pytorch_base_model:
 turbomind_quatization:
     no_awq:
         - meta-llama/Meta-Llama-3-1-70B-Instruct
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-30B-A3B-Base
         - Qwen/Qwen1.5-MoE-A2.7B-Chat
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
@@ -234,24 +252,25 @@ turbomind_quatization:
         - internlm/internlm2_5-7b-chat
     no_kvint4:
         - meta-llama/Llama-3.2-1B-Instruct
-        - OpenGVLab/InternVL2-1B
+        - OpenGVLab/InternVL3-2B
+        - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL2_5-1B
         - openbmb/MiniCPM-V-2_6
-        - Qwen/Qwen2-7B-Instruct
-        - Qwen/Qwen2-7B-Instruct-AWQ
-        - Qwen/Qwen2-1.5B-Instruct
-        - Qwen/Qwen1.5-7B-Chat
-        - Qwen/Qwen1.5-4B-Chat-AWQ
-        - Qwen/Qwen1.5-MoE-A2.7B-Chat
-        - Qwen/Qwen-VL-Chat
+        - Qwen/Qwen3-0.6B
+        - Qwen/Qwen3-4B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-30B-A3B-Base
         - Qwen/Qwen2.5-0.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - Qwen/Qwen2.5-32B-Instruct
         - Qwen/Qwen2.5-72B-Instruct
-        - Qwen/Qwen2-VL-2B-Instruct
-        - Qwen/Qwen2-VL-7B-Instruct
-        - Qwen/Qwen2-7B-Instruct-GPTQ-Int4
-        - Qwen/Qwen2.5-VL-7B-Instruct
+        - Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
+        - Qwen/Qwen1.5-7B-Chat
+        - Qwen/Qwen1.5-4B-Chat-AWQ
+        - Qwen/Qwen1.5-MoE-A2.7B-Chat
+        - microsoft/Phi-3.5-mini-instruct
         - allenai/Molmo-7B-D-0924
         - deepseek-ai/DeepSeek-V2-Lite-Chat
     no_kvint8:
@@ -265,12 +284,12 @@ pytorch_quatization:
         - internlm/internlm3-8b-instruct
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-20b-chat
-        - internlm/internlm2-chat-20b
         - OpenGVLab/InternVL-Chat-V1-5
         - 01-ai/Yi-6B-Chat
+        - Qwen/Qwen3-0.6B
+        - Qwen/Qwen3-4B
+        - Qwen/Qwen3-32B
         - Qwen/Qwen1.5-7B-Chat
-        - Qwen/Qwen2-7B-Instruct
-        - Qwen/Qwen2-1.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
@@ -280,14 +299,11 @@ pytorch_quatization:
         - meta-llama/Llama-3.2-1B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm3-8b-instruct
-        - internlm/internlm2-chat-20b
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-20b-chat
         - 01-ai/Yi-6B-Chat
         - mistralai/Mistral-7B-Instruct-v0.3
         - Qwen/Qwen1.5-7B-Chat
-        - Qwen/Qwen2-7B-Instruct
-        - Qwen/Qwen2-1.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
         - internlm/internlm2_5-20b
@@ -295,27 +311,32 @@ pytorch_quatization:
         - meta-llama/Meta-Llama-3-1-8B-Instruct
     no_kvint4:
         - meta-llama/Llama-3.2-1B-Instruct
-        - OpenGVLab/InternVL2-1B
+        - OpenGVLab/InternVL3-2B
+        - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL2-4B
         - OpenGVLab/InternVL2_5-1B
-        - Qwen/Qwen2-7B-Instruct
-        - Qwen/Qwen2-7B-Instruct-AWQ
-        - Qwen/Qwen2-1.5B-Instruct
-        - Qwen/Qwen1.5-7B-Chat
-        - Qwen/Qwen1.5-4B-Chat-AWQ
-        - Qwen/Qwen1.5-MoE-A2.7B-Chat
-        - Qwen/Qwen-VL-Chat
+        - Qwen/Qwen3-0.6B
+        - Qwen/Qwen3-4B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-30B-A3B-Base
         - Qwen/Qwen2.5-0.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - Qwen/Qwen2.5-32B-Instruct
         - Qwen/Qwen2.5-72B-Instruct
+        - Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
+        - Qwen/Qwen1.5-7B-Chat
+        - Qwen/Qwen1.5-4B-Chat-AWQ
+        - Qwen/Qwen1.5-MoE-A2.7B-Chat
+        - Qwen/Qwen2.5-VL-7B-Instruct
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
-        - Qwen/Qwen2.5-VL-7B-Instruct
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - microsoft/Phi-3-mini-4k-instruct
         - microsoft/Phi-3-vision-128k-instruct
         - microsoft/Phi-3.5-vision-instruct
+        - microsoft/Phi-3.5-mini-instruct
         - openbmb/MiniCPM-V-2_6
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
@@ -331,16 +352,15 @@ longtext_model:
 benchmark_model:
     - meta-llama/Llama-2-7b-chat-hf
     - meta-llama/Meta-Llama-3-1-8B-Instruct
-    - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - internlm/internlm3-8b-instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
     - THUDM/glm-4-9b-chat
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
-    - mistralai/Mistral-7B-Instruct-v0.3
-    - mistralai/Mixtral-8x7B-Instruct-v0.1
     - deepseek-ai/DeepSeek-V2-Lite-Chat
-    - allenai/Molmo-7B-D-0924

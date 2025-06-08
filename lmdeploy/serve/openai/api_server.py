@@ -10,7 +10,9 @@ from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
@@ -142,7 +144,7 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
                                 all_token_ids: List[int] = None,
                                 state: DetokenizeState = None,
                                 spaces_between_special_tokens: bool = True):
-    """create openai LogProbs for completion.
+    """Create openai LogProbs for completion.
 
     Args:
         tokenizer (Tokenizer): tokenizer.
@@ -196,7 +198,7 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
 def _create_chat_completion_logprobs(tokenizer: Tokenizer,
                                      token_ids: List[int] = None,
                                      logprobs: List[Dict[int, float]] = None):
-    """create openai LogProbs for chat.completion.
+    """Create openai LogProbs for chat.completion.
 
     Args:
         tokenizer (Tokenizer): tokenizer.
@@ -237,7 +239,7 @@ async def health() -> Response:
 
 @router.get('/terminate')
 async def terminate():
-    """terminate server."""
+    """Terminate server."""
     import signal
 
     if not VariableInterface.allow_terminate_by_client:
@@ -427,6 +429,7 @@ async def chat_completions_v1(raw_request: Request = None):
         sequence_end=True,
         do_preprocess=not isinstance(request.messages, str),  # text completion for string input
         adapter_name=adapter_name,
+        enable_thinking=request.enable_thinking,
     )
 
     def create_stream_response_json(index: int,
@@ -490,7 +493,9 @@ async def chat_completions_v1(raw_request: Request = None):
                         streaming_tools = True
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif VariableInterface.reasoning_parser is not None:
+            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+            if VariableInterface.reasoning_parser is not None:
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 current_token_ids = current_token_ids + delta_token_ids
@@ -506,8 +511,6 @@ async def chat_completions_v1(raw_request: Request = None):
                     delta_message.content = reasoning_delta.content
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
@@ -557,11 +560,11 @@ async def chat_completions_v1(raw_request: Request = None):
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
-    # assume reasoning uncompatible with tool call
-    elif VariableInterface.reasoning_parser is not None:
-        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+
+    if VariableInterface.reasoning_parser is not None:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -873,8 +876,6 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 @router.post('/update_weights', dependencies=[Depends(check_api_key)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
-    if VariableInterface.async_engine.backend != 'pytorch':
-        return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
 
@@ -1075,7 +1076,7 @@ def handle_torchrun():
 @router.on_event('startup')
 async def startup_event():
     async_engine = VariableInterface.async_engine
-    async_engine.start_loop()
+    async_engine.start_loop(use_async_api=True)
 
     if VariableInterface.proxy_url is None:
         return
@@ -1089,9 +1090,20 @@ async def startup_event():
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail='Service registration failed')
+            raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
+
+
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handler for RequestValidationError."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content=jsonable_encoder({
+            'detail': exc.errors(),
+            'body': exc.body
+        }),
+    )
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -1216,6 +1228,7 @@ def serve(model_path: str,
         app = FastAPI(docs_url='/')
 
     app.include_router(router)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
     if allow_origins:
         app.add_middleware(
@@ -1263,7 +1276,7 @@ def serve(model_path: str,
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
-                log_level='info',
+                log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
                 ssl_keyfile=ssl_keyfile,
                 ssl_certfile=ssl_certfile)
 

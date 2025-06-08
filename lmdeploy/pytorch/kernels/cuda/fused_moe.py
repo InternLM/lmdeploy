@@ -5,11 +5,26 @@ import triton
 import triton.language as tl
 
 from .activation import silu_and_mul
-from .triton_utils import get_kernel_meta
 
 
 def get_cuda_autotune_config():
     return [
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 256,
+            'BLOCK_SIZE_K': 64,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=3,
+                      num_warps=8),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 256,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
         triton.Config({
             'BLOCK_SIZE_M': 128,
             'BLOCK_SIZE_N': 128,
@@ -37,11 +52,21 @@ def get_cuda_autotune_config():
     ]
 
 
+def _config_prune_func(config: dict, *args, **kwargs):
+    """Fused moe config prune."""
+    device_cap = torch.cuda.get_device_capability()
+    num_sm9x = 2
+
+    if device_cap[0] >= 9:
+        return config[:num_sm9x]
+    else:
+        return config[num_sm9x:]
+
+
 @triton.autotune(
     configs=get_cuda_autotune_config(),
-    key=['N', 'K', 'M_NP2'],
-    warmup=10,
-    rep=25,
+    key=['N', 'K', 'tune_hint'],
+    prune_configs_by=dict(early_config_prune=_config_prune_func),
 )
 @triton.jit
 def fused_moe_kernel(
@@ -67,12 +92,13 @@ def fused_moe_kernel(
     GROUP_SIZE_M: tl.constexpr,
     M_NP2: tl.constexpr,
     ENABLE_WEIGHTS: tl.constexpr,
+    tune_hint: tl.constexpr,
     top_k: tl.constexpr,
     expert_offset: tl.constexpr,
     reindex_a: tl.constexpr,
     reindex_c: tl.constexpr,
 ):
-    """fused moe kernel."""
+    """Fused moe kernel."""
     exp_id = tl.program_id(1)
     pid = tl.program_id(0)
 
@@ -154,13 +180,14 @@ def fused_moe_kernel_launcher(
     reindex_a: bool = True,
     reindex_c: bool = True,
 ):
-    """fused moe kernel launcher."""
+    """Fused moe kernel launcher."""
 
     if num_tokens is None:
         num_tokens = A.size(0)
     M_NP2 = triton.next_power_of_2(num_tokens)
     M_NP2 = max(64, M_NP2)
     E, N, K = B.shape
+    tune_hint = min(2, triton.cdiv(M_NP2, 512))
 
     def _grid_fn(META):
         grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), E)
@@ -170,7 +197,6 @@ def fused_moe_kernel_launcher(
     C = C.flatten(0, -2)
 
     grid = _grid_fn
-    kernel_meta = get_kernel_meta(A)
     fused_moe_kernel[grid](
         A,
         B,
@@ -189,12 +215,12 @@ def fused_moe_kernel_launcher(
         stride_cm=C.stride(0),
         stride_cn=C.stride(1),
         ENABLE_WEIGHTS=enable_weights,
+        tune_hint=tune_hint,
         top_k=top_k,
         expert_offset=expert_offset,
         reindex_a=reindex_a,
         reindex_c=reindex_c,
         M_NP2=M_NP2,
-        **kernel_meta,
     )
 
 
@@ -235,7 +261,7 @@ def _get_exp_mask_kernel(
 
 
 def _get_exp_mask(topk_ids: torch.Tensor, num_experts: int):
-    """get exp mask."""
+    """Get exp mask."""
     assert topk_ids.dim() == 2
     M, topk = topk_ids.shape
     assert topk <= num_experts
@@ -278,7 +304,7 @@ def _get_start_end_kernel(
     topk: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """get start end kernel."""
+    """Get start end kernel."""
     token_start = tl.program_id(0)
 
     offs_exp = tl.arange(0, BLOCK_N)
@@ -315,7 +341,7 @@ def _get_start_end_kernel(
 
 
 def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
-    """get start end."""
+    """Get start end."""
     num_experts, num_tokens = exp_cum.shape
 
     start_end = exp_cum.new_empty(2, num_experts)
@@ -348,7 +374,7 @@ def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
 
 
 def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
-    """get sorted idx."""
+    """Get sorted idx."""
     assert topk_ids.dim() == 2
     _, topk = topk_ids.shape
 
@@ -372,7 +398,7 @@ def _renormalize(topk_weights: torch.Tensor, renormalize: bool):
 
 
 def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device, zeros: bool):
-    """make intermediate."""
+    """Make intermediate."""
     if zeros:
         return torch.zeros(shape, dtype=dtype, device=device)
     else:
@@ -388,7 +414,7 @@ def fused_moe(hidden_states: torch.Tensor,
               expert_offset: int = 0,
               num_experts: int = None,
               renormalize: bool = False) -> torch.Tensor:
-    """fused moe."""
+    """Fused moe."""
     M = hidden_states.size(0)
     E, N, _ = w1.shape
     if num_experts is None:

@@ -3,15 +3,15 @@ from packaging import version
 
 from .base import BaseChecker
 
-MAX_TRITON_VERSION = '3.1.0'
+MAX_TRITON_VERSION = '3.2.0'
 MIN_TRITON_VERSION = '3.0.0'
 
 
 class TritonChecker(BaseChecker):
-    """check triton is available."""
+    """Check triton is available."""
 
     def check_version(self):
-        """check version."""
+        """Check version."""
         logger = self.get_logger()
 
         # version check

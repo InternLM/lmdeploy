@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections import defaultdict
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional
 
@@ -14,7 +15,7 @@ from .utils import div_up
 
 
 class MoeType(Enum):
-    """batch ecex type."""
+    """Batch ecex type."""
     Default = auto()
     DSSyncDecode = auto()
     DSAsyncDecode = auto()
@@ -23,7 +24,7 @@ class MoeType(Enum):
 
 
 class SoftmaxTopK(nn.Module):
-    """softmax topk."""
+    """Softmax topk."""
 
     def __init__(self, top_k: int, dim: int = -1):
         super().__init__()
@@ -37,14 +38,14 @@ class SoftmaxTopK(nn.Module):
 
 
 def create_mlp_weights(hidden_dim: int, ffn_dim: int, num_experts: int, dtype: torch.dtype, device: torch.device):
-    """create weights."""
+    """Create weights."""
     gate_up_weights = torch.empty((num_experts, ffn_dim * 2, hidden_dim), dtype=dtype, device=device)
     down_weights = torch.empty((num_experts, hidden_dim, ffn_dim), dtype=dtype, device=device)
     return gate_up_weights, down_weights
 
 
 def _update_args(hidden_dim: int, ffn_dim: int):
-    """update args."""
+    """Update args."""
     world_size, _ = get_tp_world_rank()
     assert ffn_dim % world_size == 0
     ffn_dim = ffn_dim // world_size
@@ -52,7 +53,7 @@ def _update_args(hidden_dim: int, ffn_dim: int):
 
 
 class LinearWeights(nn.Module):
-    """fused moe linear weights."""
+    """Fused moe linear weights."""
 
     def __init__(self,
                  num_experts: int,
@@ -73,20 +74,22 @@ class LinearWeights(nn.Module):
         self.half_out = out_features // 2
 
         if self.ep:
-            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
+            self.expert_map = defaultdict(list)
+            for idx, eid in enumerate(expert_list):
+                self.expert_map[eid].append(idx)
             self.weight.weight_loader = self.weight_loader_ep
         else:
             self.weight.weight_loader = self.weight_loader_tp
 
     def update_weight(self, weight: torch.Tensor):
-        """update weight."""
+        """Update weight."""
         weight_loader = self.weight.weight_loader
         weight = torch.nn.Parameter(weight, requires_grad=False)
         weight.weight_loader = weight_loader
         self.register_parameter('weight', weight)
 
     def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
-        """weight loader."""
+        """Weight loader."""
         world_size, rank = get_tp_world_rank()
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.half_out]
@@ -104,26 +107,27 @@ class LinearWeights(nn.Module):
         param_data.copy_(weight)
 
     def weight_loader_ep(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
-        """weight loader."""
+        """Weight loader."""
         expert_list = self.expert_list
         if expert_id not in expert_list:
             return
 
         expert_map = self.expert_map
-        param_id = expert_map[expert_id]
-        if shard_id == 'gate':
-            param_data = param.data[param_id, :self.half_out]
-        elif shard_id == 'up':
-            param_data = param.data[param_id, self.half_out:]
-        elif shard_id == 'down':
-            param_data = param.data[param_id]
-        else:
-            raise RuntimeError(f'Unknown shard_id: {shard_id}')
-        param_data.copy_(loaded_weight)
+        param_ids = expert_map[expert_id]
+        for param_id in param_ids:
+            if shard_id == 'gate':
+                param_data = param.data[param_id, :self.half_out]
+            elif shard_id == 'up':
+                param_data = param.data[param_id, self.half_out:]
+            elif shard_id == 'down':
+                param_data = param.data[param_id]
+            else:
+                raise RuntimeError(f'Unknown shard_id: {shard_id}')
+            param_data.copy_(loaded_weight)
 
 
 def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
-    """gather input."""
+    """Gather input."""
     shape0 = x.shape[:-2]
     shape1 = x.shape[-1:]
     shapes = [shape0 + (size, ) + shape1 for size in tp_sizes]
@@ -134,7 +138,7 @@ def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
 
 
 def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
-    """reduce scatter."""
+    """Reduce scatter."""
     _, rank = get_tp_world_rank()
     out = out.transpose(0, -2)
     if not out.is_contiguous():
@@ -186,7 +190,7 @@ def _moe_reduce(ret, enable_ep):
 
 
 class FusedMoE(nn.Module):
-    """fused moe."""
+    """Fused moe."""
 
     def __init__(self,
                  hidden_dim: int,
@@ -247,7 +251,7 @@ class FusedMoE(nn.Module):
         self.enable_ep = enable_ep
 
     def update_weights(self):
-        """update weights."""
+        """Update weights."""
         gate_up_weights, down_weights = self.impl.update_weights(self.gate_up.weight, self.down.weight)
         self.gate_up.update_weight(gate_up_weights)
         self.down.update_weight(down_weights)
@@ -264,7 +268,7 @@ class FusedMoE(nn.Module):
 
 
 class LinearWeightsW8A8(LinearWeights):
-    """fused moe linear w8a8 weights."""
+    """Fused moe linear w8a8 weights."""
 
     def __init__(self,
                  num_experts: int,
@@ -295,7 +299,7 @@ class LinearWeightsW8A8(LinearWeights):
             self.scale.weight_loader = self.weight_loader_scale_tp
 
     def update_weight(self, weight: torch.Tensor, scale: torch.Tensor):
-        """update weight."""
+        """Update weight."""
         super().update_weight(weight=weight)
         weight_loader = self.scale.weight_loader
         scale = torch.nn.Parameter(scale, requires_grad=False)
@@ -304,7 +308,7 @@ class LinearWeightsW8A8(LinearWeights):
 
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
-        """weight loader scale tp."""
+        """Weight loader scale tp."""
         world_size, rank = get_tp_world_rank()
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.half_out]
@@ -322,7 +326,7 @@ class LinearWeightsW8A8(LinearWeights):
 
 
 class FusedMoEW8A8(nn.Module):
-    """fused moe w8a8."""
+    """Fused moe w8a8."""
 
     def __init__(self,
                  hidden_dim: int,
@@ -382,7 +386,7 @@ class FusedMoEW8A8(nn.Module):
         self.all_reduce = all_reduce
 
     def update_weights(self):
-        """update weights."""
+        """Update weights."""
         (gate_up_weights, down_weights, gate_up_scale,
          down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.scale,
                                                 self.down.scale)
@@ -398,7 +402,7 @@ class FusedMoEW8A8(nn.Module):
 
 
 class LinearWeightsBlockedF8(LinearWeights):
-    """fused moe linear blocked fp8 weights."""
+    """Fused moe linear blocked fp8 weights."""
 
     def __init__(self,
                  num_experts: int,
@@ -428,13 +432,12 @@ class LinearWeightsBlockedF8(LinearWeights):
         self.register_parameter('weight_scale_inv', weight_scale_inv)
 
         if self.ep:
-            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_ep
         else:
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_tp
 
     def update_weight(self, weight: torch.Tensor, weight_scale_inv: torch.Tensor):
-        """update weight."""
+        """Update weight."""
         super().update_weight(weight=weight)
         weight_loader = self.weight_scale_inv.weight_loader
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
@@ -446,12 +449,13 @@ class LinearWeightsBlockedF8(LinearWeights):
         expert_list = self.expert_list
         if expert_id not in expert_list:
             return
-        expert_id = self.expert_map[expert_id]
-        self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
+        expert_ids = self.expert_map[expert_id]
+        for expert_id in expert_ids:
+            self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
 
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
-        """weight loader scale tp."""
+        """Weight loader scale tp."""
         world_size, rank = get_tp_world_rank()
         block_size = self.block_size
         half_out = self.half_out // block_size
@@ -471,7 +475,7 @@ class LinearWeightsBlockedF8(LinearWeights):
 
 
 class FusedMoEBlockedF8(nn.Module):
-    """fused moe blocked f8."""
+    """Fused moe blocked f8."""
 
     def __init__(self,
                  hidden_dim: int,
@@ -543,7 +547,7 @@ class FusedMoEBlockedF8(nn.Module):
         self.all_reduce = all_reduce
 
     def update_weights(self):
-        """update weights."""
+        """Update weights."""
         (gate_up_weights, down_weights, gate_up_scale,
          down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.weight_scale_inv,
                                                 self.down.weight_scale_inv)
@@ -737,7 +741,7 @@ def build_fused_moe(
     quant_config: Any = None,
     layer_idx: int = 0,
 ):
-    """fused moe builder."""
+    """Fused moe builder."""
 
     if quant_config is None:
         return FusedMoE(

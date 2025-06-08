@@ -136,6 +136,7 @@ class ChatCompletionRequest(BaseModel):
     seed: Optional[int] = None
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
     min_p: float = 0.0
+    enable_thinking: Optional[bool] = None
 
 
 class FunctionCall(BaseModel):
@@ -377,5 +378,5 @@ class GenerateResponse(BaseModel):
 
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
-    serialized_named_tensors: Union[str, List[str]]
+    serialized_named_tensors: Union[str, List[str], Dict]
     finished: bool = False

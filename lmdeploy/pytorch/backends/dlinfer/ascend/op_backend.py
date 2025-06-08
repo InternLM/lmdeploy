@@ -87,7 +87,7 @@ class AscendKVQuantMeta:
 
 
 class AscendOpsBackend(DlinferOpsBackend):
-    """ascend layer backend."""
+    """Ascend layer backend."""
     enable_graph = False
     half_negative_inf = torch.finfo(torch.float16).min
     total_slots = None
@@ -96,7 +96,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
     @staticmethod
     def get_name() -> str:
-        """backend name."""
+        """Backend name."""
         return 'ascend'
 
     @staticmethod
@@ -137,7 +137,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
     @classmethod
     def update_step_context(cls, step_context):
-        """update step context."""
+        """Update step context."""
 
         def get_total_slots():
             if cls.total_slots is None:
@@ -308,7 +308,7 @@ class AscendOpsBackend(DlinferOpsBackend):
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
-        """build graph runner."""
+        """Build graph runner."""
         from .graph_runner import AscendGraphRunner
         ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
         AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
@@ -316,7 +316,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
     @staticmethod
     def get_transdata_func():
-        """get transdata function."""
+        """Get transdata function."""
         if AscendOpsBackend.transdata_func is None:
             import dlinfer
             from dlinfer.ops import transdata
@@ -347,13 +347,11 @@ class AscendOpsBackend(DlinferOpsBackend):
 
     @staticmethod
     def device_count():
-        """get num available devices."""
+        """Get num available devices."""
         return torch.npu.device_count()
 
     @staticmethod
     def support_ray():
-        """support ray."""
-        rank_table_file = os.environ.get('ASCEND_RANK_TABLE_FILE_PATH', None)
-        if rank_table_file:
-            return True
-        return False
+        """Support ray."""
+        os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
+        return True

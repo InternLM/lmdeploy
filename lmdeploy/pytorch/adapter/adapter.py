@@ -8,7 +8,7 @@ from torch import nn
 
 
 def get_ranks_and_scalings(target_name: str, cfgs: Iterable, device: torch.device = None):
-    """get ranks and scalings."""
+    """Get ranks and scalings."""
     ranks = []
     scalings = []
     for cfg in cfgs:
@@ -24,7 +24,7 @@ def get_ranks_and_scalings(target_name: str, cfgs: Iterable, device: torch.devic
 
 
 def find_all_target(model: torch.nn.Module, target_name: str):
-    """find all targets."""
+    """Find all targets."""
     # find packed name
     packed_name = target_name
     pack_idx = None
@@ -46,7 +46,7 @@ def find_all_target(model: torch.nn.Module, target_name: str):
 
 
 def get_layer_index(key: str, layers_pattern: str = None):
-    """get layer index of the lora linear."""
+    """Get layer index of the lora linear."""
     if isinstance(layers_pattern, str):
         layers_pattern = [layers_pattern]
     if layers_pattern is None or len(layers_pattern) == 0:
@@ -61,7 +61,7 @@ def get_layer_index(key: str, layers_pattern: str = None):
 
 
 def _get_reverse_pack_map(model: nn.Module):
-    """get reverse pack map."""
+    """Get reverse pack map."""
     packed_modules_mapping = getattr(model, 'packed_modules_mapping', dict())
     reverse_map = dict()
     for pack_name, names in packed_modules_mapping.items():
@@ -71,7 +71,7 @@ def _get_reverse_pack_map(model: nn.Module):
 
 
 def _get_key_map(reverse_map: Dict[str, str]):
-    """get key map."""
+    """Get key map."""
     key_map = dict()
     for name, pack_name in reverse_map.items():
         key = f'.{name}'
@@ -82,7 +82,7 @@ def _get_key_map(reverse_map: Dict[str, str]):
 
 
 def load_lora_weights(model: nn.Module, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
-    """load lora weights."""
+    """Load lora weights."""
     from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
     prefix_len = len('base_model.model.')
     w_len = len('.weight')
@@ -109,7 +109,7 @@ def load_lora_weights(model: nn.Module, weights: Iterable[Tuple[str, torch.Tenso
 
 
 class AdapterManager:
-    """adapter manager."""
+    """Adapter manager."""
 
     def __init__(self, adapters: Dict[str, str]):
         if adapters is None:

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import torch
 import triton
 from triton import language as tl
 
@@ -7,6 +8,10 @@ def get_cuda_autotune_config():
     return [
         triton.Config({
             'BLOCK_SIZE_N': 64,
+            'GROUP_SIZE_M': 8,
+        }, num_stages=3, num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_N': 128,
             'GROUP_SIZE_M': 8,
         }, num_stages=3, num_warps=4),
     ]
@@ -54,7 +59,7 @@ def _dequant_s4_to_f16x2(weight, shift: tl.constexpr, is_top: tl.constexpr):
 
 @triton.jit
 def _unpack_weight(weight):
-    """unpack weight."""
+    """Unpack weight."""
     # broadcast and shift
     width: tl.constexpr = 8
     BLOCK_SIZE_K: tl.constexpr = weight.shape[0]
@@ -103,12 +108,14 @@ def awq_linear_kernel(
         stride_cn: tl.constexpr,
         # Meta-parameters
         SPLIT_K: tl.constexpr,
+        NUM_STAGES: tl.constexpr,
         BLOCK_SIZE_M: tl.constexpr,
         BLOCK_SIZE_N: tl.constexpr,
         BLOCK_SIZE_K: tl.constexpr,  #
         GROUP_SIZE_M: tl.constexpr,  #
 ):
     """Kernel for computing the matmul C = A x B.
+
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
 
@@ -161,15 +168,15 @@ def awq_linear_kernel(
     s_ptrs += SPLIT_K * stride_sk
     qz_ptrs += SPLIT_K * stride_zk
 
-    for k in tl.range(k_start, k_last, SPLIT_K, num_stages=3):
-
-        # load a
-        a = tl.load(a_ptrs)
+    for k in tl.range(k_start, k_last, SPLIT_K, num_stages=NUM_STAGES):
 
         # unpack b
         z = _unpack_weight(qz)
         w = _unpack_weight(qw)
         b = (w - z) * s
+
+        # load a
+        a = tl.load(a_ptrs)
 
         # load next q
         mask = k + SPLIT_K < k_last
@@ -202,7 +209,7 @@ def awq_linear_kernel(
 
 
 def awq_linear(x, qweight, scales, qzeros):
-    """awq linear."""
+    """Awq linear."""
     M = x.size(0)
     K = qweight.size(0)
     N = scales.size(1)
@@ -220,6 +227,14 @@ def awq_linear(x, qweight, scales, qzeros):
         out = scales.new_zeros(M, N)
     else:
         out = scales.new_empty(M, N)
+
+    props = torch.cuda.get_device_properties(x.device)
+    if props.major == 9:
+        num_stages = 2
+    elif props.major == 8 and props.minor in [6, 9]:
+        num_stages = 2
+    else:
+        num_stages = 3
 
     BLOCK_SIZE_M = triton.next_power_of_2(M)
     BLOCK_SIZE_M = max(16, min(128, BLOCK_SIZE_M))
@@ -248,6 +263,7 @@ def awq_linear(x, qweight, scales, qzeros):
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_K=group_size,
         SPLIT_K=SPLIT_K,
+        NUM_STAGES=num_stages,
     )
 
     return out

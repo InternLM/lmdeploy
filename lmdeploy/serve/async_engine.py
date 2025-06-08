@@ -77,7 +77,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
 
 
 def _append_response(dst: Response, src: Response):
-    """dst += src."""
+    """Dst += src."""
     if not dst:
         return src
     dst.text += src.text
@@ -115,7 +115,7 @@ class Session:
         self.history: List[Tuple[Any, str]] = []
 
     def _merge_response(self, resp: Response, step: Union[Response, GenOut]):
-        """merge response."""
+        """Merge response."""
         resp.text += step.text if isinstance(step, Response) else step.response
         resp.input_token_len = step.input_token_len
         resp.generate_token_len = step.generate_token_len
@@ -124,11 +124,11 @@ class Session:
 
     @property
     def response(self) -> Response:
-        """return response."""
+        """Return response."""
         return self._response
 
     def close(self):
-        """release engine storage for this session."""
+        """Release engine storage for this session."""
         if self._engine:
             self._engine._run(coro=self._engine.end_session(self._id)).result()
             self._engine = None
@@ -558,6 +558,7 @@ class AsyncEngine(LogitsMixin):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
+                                enable_thinking: Optional[bool] = None,
                                 **kwargs):
         if do_preprocess:
             # use adapter's chat template if possible
@@ -566,7 +567,7 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools)
+        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools, enable_thinking=enable_thinking)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -616,6 +617,7 @@ class AsyncEngine(LogitsMixin):
             skip_stop_tokens: bool = True,
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
+            enable_thinking: Optional[bool] = None,
             **kwargs):
         """Generate responses.
 
@@ -670,7 +672,8 @@ class AsyncEngine(LogitsMixin):
                                                         do_preprocess,
                                                         sequence_start,
                                                         adapter_name,
-                                                        tools=tools)
+                                                        tools=tools,
+                                                        enable_thinking=enable_thinking)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,
@@ -801,7 +804,7 @@ class AsyncEngine(LogitsMixin):
                                  len(input_ids),
                                  gen_len,
                                  finish_reason,
-                                 token_ids=token_ids,
+                                 token_ids=[],
                                  cache_block_ids=outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
@@ -897,10 +900,28 @@ class AsyncEngine(LogitsMixin):
 
         return session
 
-    def start_loop(self):
-        """start engine loop."""
+    def start_loop(self, use_async_api=False):
+        """Start engine loop.
+
+        When using pytorch backend with dp > 1, all dp_rank should receive at least one request before it can start
+        processing (warmup). Since pytorch engine will bound to event loop, the pipeline can only choose either the
+        synchronous apis(__call__, stream_infer, etc.) or the asynchronous api (generate) during its lifetime.
+
+        The purpose of this function is to allow users to choose whether to use the synchronous interface or the
+        asynchronous interface for the pipeline.
+        """
         if hasattr(self.engine, 'start_loop'):
-            return self.engine.start_loop()
+            if use_async_api:
+                return self.engine.start_loop()
+            else:
+                fut = concurrent.futures.Future()
+
+                def _start_loop(fut):
+                    res = self.engine.start_loop()
+                    fut.set_result(res)
+
+                self.internal_thread.loop.call_soon_threadsafe(_start_loop, fut)
+                return fut.result()
         else:
             return True
 

@@ -6,14 +6,14 @@ import torch
 
 
 class LinearW4A16Impl(ABC):
-    """w4a16 linear implementation."""
+    """W4a16 linear implementation."""
 
     def update_weights(self,
                        qweight: torch.Tensor,
                        scales: torch.Tensor,
                        qzeros: torch.Tensor,
                        bias: Optional[torch.Tensor] = None):
-        """update weights."""
+        """Update weights."""
         return qweight, scales, qzeros, bias
 
     @abstractmethod
@@ -23,7 +23,7 @@ class LinearW4A16Impl(ABC):
 
 
 class LinearW4A16Builder(ABC):
-    """w4a16 linear implementation builder."""
+    """W4a16 linear implementation builder."""
 
     @staticmethod
     @abstractmethod
