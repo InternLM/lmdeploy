@@ -41,7 +41,7 @@ def get_rdma_nics():
                     device_name = line.split()[0].strip()
                     rdma_nics.append(device_name)
     except Exception as e:
-        print(f"Error executing ibv_devices command: {e}")
+        log.info(f"Error executing ibv_devices command: {e}")
 
     return rdma_nics
 
@@ -143,7 +143,7 @@ class MooncakeMigrationManagement:
             'offset': register_mr_request.offset
         }
 
-        print(f"Registered memory region with key {register_mr_request.remote_engine_id}, "
+        log.info(f"Registered memory region with key {register_mr_request.remote_engine_id}, "
               f"addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}")
 
     @property
@@ -163,7 +163,7 @@ class MooncakeMigrationManagement:
             'session_id': f"{self.hostname}:{self.port}"
         }
 
-        print(f"Generated endpoint info for remote engine {self.remote_engine_id}: "
+        log.info(f"Generated endpoint info for remote engine {self.remote_engine_id}: "
               f"session_id={endpoint_info['session_id']}, "
               f"mr_count={len(mr_info)}")
 
@@ -182,10 +182,9 @@ class MooncakeMigrationManagement:
             logger.debug(f"Remote buffer {remote_engine_id}: addr=0x{buffer_info['addr']:x}, "
                          f"length={buffer_info['length']}")
 
-        print(
-            f"Connecting to remote engine {
-                self.remote_engine_id} at {
-                self.remote_url}")
+        log.info(
+            f"Connecting to remote engine {self.remote_engine_id} at {self.remote_url}"
+        )
 
     def p2p_migrate(self, assignment: MigrationAssignment,
                     async_op: bool = False):
@@ -195,7 +194,6 @@ class MooncakeMigrationManagement:
                 f"No connection established to remote engine {
                     self.remote_engine_id}")
 
-        # TODO: Remove i in loop
         for i, task in enumerate(assignment.batch):
             if assignment.remote_engine_id not in self.local_kv_table:
                 raise RuntimeError(
@@ -215,21 +213,21 @@ class MooncakeMigrationManagement:
             remote_buffer_info = self.remote_kv_table[self.local_engine_id]
             remote_addr = remote_buffer_info['addr'] + task.target_offset
 
-            print(f"Task {i}: Migrating {task.length} bytes")
-            print(f"  Local Engine: {self.local_engine_id}")
-            print(f"  Remote Engine: {assignment.remote_engine_id}")
-            print(f"  MR Key: {task.mr_key}")
-            print(
+            log.info(f"Task {i}: Migrating {task.length} bytes")
+            log.info(f"  Local Engine: {self.local_engine_id}")
+            log.info(f"  Remote Engine: {assignment.remote_engine_id}")
+            log.info(f"  MR Key: {task.mr_key}")
+            log.info(
                 f"  Local:  0x{
                     local_buffer_info['addr']:x} + {
                     task.source_offset} = 0x{
                     local_addr:x}")
-            print(
+            log.info(
                 f"  Remote: 0x{
                     remote_buffer_info['addr']:x} + {
                     task.target_offset} = 0x{
                     remote_addr:x}")
-            print(f"  Session: {self.remote_url}")
+            log.info(f"  Session: {self.remote_url}")
 
             result = self.engine.transfer_sync_read(
                 self.remote_url,
