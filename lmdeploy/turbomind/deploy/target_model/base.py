@@ -27,7 +27,7 @@ def tprint(*args, **kwargs):
 
 
 def _weight_dtype_map(weight_type: str, default=None):
-    """map literal data type to torch dtype."""
+    """Map literal data type to torch dtype."""
 
     _WEIGHT_DTYPE_MAP = dict(int4=torch.float16, float16=torch.float16, float32=torch.float16, bfloat16=torch.bfloat16)
 
@@ -106,29 +106,29 @@ class BaseOutputModel(ABC):
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 
     def update_attention_config(self):
-        """update attention config according to input model's model info."""
+        """Update attention config according to input model's model info."""
         final_cfg = config_to_dict(self.attention_config)
         final_cfg.update(self.input_model_info)
         self.attention_config = config_from_dict(AttentionConfig, final_cfg)
 
     def update_lora_config(self):
-        """update lora config according to input model's model info."""
+        """Update lora config according to input model's model info."""
         final_cfg = config_to_dict(self.lora_config)
         final_cfg.update(self.input_model_info)
         self.lora_config = config_from_dict(LoraConfig, final_cfg)
 
     def export_config(self) -> None:
-        """export turbomind config."""
+        """Export turbomind config."""
         if self.to_file:
             config_path = osp.join(self.out_dir, 'config.yaml')
             with open(config_path, 'w') as f:
                 yaml.safe_dump(self.tm_config.to_dict(), f)
 
     def export_weight(self, param: torch.Tensor, name: str) -> None:
-        """export turbomind weight."""
+        """Export turbomind weight."""
 
         def _tofile(tensor, path):
-            """to file."""
+            """To file."""
             if tensor.dtype == torch.bfloat16:
                 tensor = tensor.view(torch.half)
             tensor.contiguous().cpu().numpy().tofile(path)
@@ -162,7 +162,7 @@ class BaseOutputModel(ABC):
             tprint('skip export', name, param.shape)
 
     def save_split(self, tensor: torch.Tensor, name: str, split_dim=None, split_num=1, copy=False) -> None:
-        """save split.
+        """Save split.
 
         - 2D input
             shape must be (input_dims, output_dims)
@@ -205,11 +205,12 @@ class BaseOutputModel(ABC):
             if self.model(i, reader):
                 pbar.update(1)
         pbar.close()
-        # manually clean up meta reader
-        if hasattr(self.input_model, 'meta_reader'):
-            self.input_model.meta_reader.clean_up(True)
-            del self.input_model.meta_reader
-            torch.cuda.empty_cache()
+
+    def export_iter(self):
+        self.export_config()
+        for i, reader in self.input_model.readers():
+            self.model(i, reader)
+            yield i
 
     @property
     def tm_config(self):

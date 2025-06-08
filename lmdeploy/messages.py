@@ -16,13 +16,13 @@ logger = get_logger('lmdeploy')
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
-tensor for the next token, and returns a modified tensor of logits
-to sample from."""
+tensor for the next token, and returns a modified tensor of logits to sample
+from."""
 
 
 @dataclass
 class GenerationConfig:
-    """generation parameters used by inference engines.
+    """Generation parameters used by inference engines.
 
     Args:
         n (int): Define how many chat completion choices to generate for each
@@ -116,7 +116,7 @@ class GenerationConfig:
     migration_request: Optional[MigrationRequest] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
-        """convert stop_words/bad_sords to ids and append the ids to
+        """Convert stop_words/bad_sords to ids and append the ids to
         stop_token_ids/bad_token_ids."""
 
         def special_word_token_ids(words):
@@ -138,7 +138,7 @@ class GenerationConfig:
         self.bad_token_ids = list(set(bad_token_ids)) or None
 
     def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
-        """update the stop_token_ids."""
+        """Update the stop_token_ids."""
         stop_token_ids = set(self.stop_token_ids or [])
 
         # add tokenizer's eos_token_id
@@ -219,6 +219,9 @@ class TurbomindEngineConfig:
             "Dynamic SplitFuse"-like scheduling
         max_prefill_iters(int): the max number of forward pass during prefill
             stage
+        devices(List[int]): the used devices
+        empty_init (bool): Whether to load the model weights, you should set
+            it to True if you want to update weights after create the pipeline
     """
 
     dtype: str = 'auto'
@@ -245,6 +248,8 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    devices: Optional[List[int]] = None
+    empty_init: bool = False
     communicator: str = 'nccl'
 
     def __post_init__(self):
@@ -308,6 +313,7 @@ class PytorchEngineConfig:
         empty_init (bool): Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
         enable_microbatch (bool): enable microbatch for specified model
+        enable_eplb (bool): enable eplb for specified model
         role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime'].
@@ -338,6 +344,7 @@ class PytorchEngineConfig:
     distributed_executor_backend: str = None
     empty_init: bool = False
     enable_microbatch: bool = False
+    enable_eplb: bool = False
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime

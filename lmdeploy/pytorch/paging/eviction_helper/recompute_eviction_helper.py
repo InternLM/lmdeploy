@@ -6,10 +6,10 @@ from .base_eviction_helper import BaseEvictionHelper
 
 
 class RecomputeEvictionHelper(BaseEvictionHelper):
-    """recompute eviction."""
+    """Recompute eviction."""
 
     def evict_for_seq(self, seq: SchedulerSequence, evictable_seqs: List[SchedulerSequence], prealloc_size: int):
-        """evict seqs."""
+        """Evict seqs."""
         block_manager = self.block_manager
         block_trie = self.block_trie
         num_required_blocks = block_manager.num_required_blocks(seq, prealloc_size)
@@ -22,6 +22,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             evict_seq = evictable_seqs.pop(0)
 
             block_manager.free(evict_seq)
+            evict_seq.set_step(0)
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True

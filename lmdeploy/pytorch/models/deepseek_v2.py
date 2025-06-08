@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
@@ -25,10 +25,18 @@ from .utils.cudagraph import CudaGraphMixin
 
 logger = get_logger('lmdeploy')
 
+try:
+    import dlblas
+    from dlblas.layers.moe import eplb
+    use_dlblas = True
+except Exception:
+    use_dlblas = False
+    logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
+
 
 # microbatch
 class ExecType(Enum):
-    """batch ecex type."""
+    """Batch ecex type."""
     One = auto()
     Two0101 = auto()
     Two0110 = auto()
@@ -210,7 +218,7 @@ def get_new_input(hidden_states, rotary_pos_emb, past_key_values, residual, attn
 
 
 def get_split_flags(attn_metadata, num=2):
-    """split flags for seqlens and startloc, support 2 only."""
+    """Split flags for seqlens and startloc, support 2 only."""
     assert num == 2
     if attn_metadata.is_decoding:
         batch_size = attn_metadata.q_start_loc.numel()
@@ -260,7 +268,7 @@ def split_input(hidden_states,
                 moe_start_idx,
                 moe_end_idx,
                 num=2):
-    """split input, support 1 or 2 only."""
+    """Split input, support 1 or 2 only."""
     # one batch
     if num == 1:
         input = {
@@ -326,7 +334,7 @@ def yarn_get_mscale(scale=1, mscale=1):
 
 
 class DeepseekV2BMM(nn.Module):
-    """wrapped bmm."""
+    """Wrapped bmm."""
 
     def __init__(self, batch: int, in_features: int, out_features: int, dtype: torch.dtype, device: torch.device):
         super().__init__()
@@ -344,24 +352,24 @@ class DeepseekV2BMM(nn.Module):
         self.device = device
 
     def _get_tp_world_rank(self):
-        """get tp world rank."""
+        """Get tp world rank."""
         dist_ctx = get_dist_manager().current_context()
         if dist_ctx.dp == 1:
             return get_tp_world_rank()
         return 1, 0
 
     def _update_batch(self, batch: int):
-        """update out features."""
+        """Update out features."""
         world_size, _ = self._get_tp_world_rank()
         batch = batch // world_size
         return batch
 
     def create_weight(self, batch: int, in_features: int, out_features: int, dtype: torch.dtype, device: torch.device):
-        """create weight."""
+        """Create weight."""
         return torch.empty((batch, in_features, out_features), dtype=dtype, device=device)
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
-        """weight loader."""
+        """Weight loader."""
         world_size, rank = self._get_tp_world_rank()
         weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
@@ -372,7 +380,7 @@ class DeepseekV2BMM(nn.Module):
 
 
 class DeepseekV2Attention(nn.Module):
-    """deepseekv2 attention."""
+    """Deepseekv2 attention."""
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -477,7 +485,7 @@ class DeepseekV2Attention(nn.Module):
         )
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
-        """q proj."""
+        """Q proj."""
         q_len = hidden_states.size(1)
 
         query_states = hidden_states.new_empty(q_len, num_heads, nope_size + pe_size)
@@ -495,7 +503,7 @@ class DeepseekV2Attention(nn.Module):
         return query_states, q_pe
 
     def _kv_proj(self, hidden_states, nope_size: int):
-        """kv proj."""
+        """Kv proj."""
         # (q_len, 1, nope_size + pe_size)
         key_states = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
         # (q_len, 1, pe_size)
@@ -507,7 +515,7 @@ class DeepseekV2Attention(nn.Module):
         return key_states, value_states, k_pe
 
     def _qkv_proj(self, hidden_states: torch.Tensor, num_heads: int):
-        """qkv proj."""
+        """Qkv proj."""
         nope_size = self.kv_lora_rank
         pe_size = self.qk_rope_head_dim
         query_states, q_pe = self._q_proj(hidden_states, num_heads, nope_size, pe_size)
@@ -569,7 +577,7 @@ class DeepseekV2Attention(nn.Module):
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None, info: Any = None):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -592,17 +600,12 @@ class MoEGate(nn.Module):
             self.e_score_correction_bias = nn.Parameter(
                 torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k)
-        try:
-            import dlblas
-            self.dlblas_fused_gate = dlblas.moe_fused_gate
-        except Exception:
-            self.dlblas_fused_gate = None
-            logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
+        self.eplb_dispatch_info = info
 
     def _compute_scores(self, logits: torch.Tensor):
-        """compute scores."""
+        """Compute scores."""
         if self.scoring_func == 'softmax':
             scores = logits.softmax(dim=-1, dtype=torch.float32)
         elif self.scoring_func == 'sigmoid':
@@ -634,10 +637,9 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
-        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize
-              and self.dlblas_fused_gate is not None):
-            topk_weight, topk_idx = self.dlblas_fused_gate(router_logits, self.e_score_correction_bias, self.n_group,
-                                                           self.topk_group, self.top_k)
+        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize and use_dlblas):
+            topk_weight, topk_idx = dlblas.moe_fused_gate(router_logits, self.e_score_correction_bias, self.n_group,
+                                                          self.topk_group, self.top_k)
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
@@ -655,7 +657,7 @@ class MoEGate(nn.Module):
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
-        if self.renormalize and self.dlblas_fused_gate is None:
+        if self.renormalize and not use_dlblas:
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
             if not topk_weight.is_contiguous():
@@ -663,6 +665,9 @@ class MoEGate(nn.Module):
 
         if not self.renormalize or self.topk_method == 'noaux_tc':
             topk_weight = topk_weight * self.routed_scaling_factor
+
+        if self.eplb_dispatch_info is not None:
+            topk_idx = eplb.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
 
         return topk_weight, topk_idx
 
@@ -684,12 +689,19 @@ class DeepseekV2MoE(nn.Module):
         self.n_group = config.n_group
         self.topk_group = config.topk_group
 
-        self.gate = MoEGate(config, dtype=dtype, device=device)
-
         dist_ctx = get_dist_manager().current_context()
         dp = dist_ctx.dp
         world_size = dist_ctx.world_size
         moe_all_reduce = dp > 1 and dist_ctx.tp > 1
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            eplb_dispatch_info = eplb.EPLBDispatchInfo.init_new(
+                ep_rank=dist_ctx.ep_rank,
+                layer_idx=layer_idx,
+            )
+            self.num_experts = eplb.get_global_eplb_metadata().num_physical_experts()
+            self.gate = MoEGate(config, dtype=dtype, device=device, info=eplb_dispatch_info)
+        else:
+            self.gate = MoEGate(config, dtype=dtype, device=device, info=None)
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -702,7 +714,6 @@ class DeepseekV2MoE(nn.Module):
             quant_config=quantization_config,
             layer_idx=layer_idx,
         )
-
         self.shared_experts = None
         if config.n_shared_experts is not None:
             intermediate_size = (config.moe_intermediate_size * config.n_shared_experts)
@@ -949,7 +960,7 @@ class DeepseekV2DecoderLayer(nn.Module):
 
 
 class DeepseekV2Model(nn.Module):
-    """mixtral model."""
+    """Mixtral model."""
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -961,6 +972,15 @@ class DeepseekV2Model(nn.Module):
                                          self.padding_idx,
                                          dtype=dtype,
                                          device=device)
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            if not use_dlblas:
+                raise ImportError('To enable eplb, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
+            ep_size, _ = get_ep_world_rank()
+            eplb.init_global_eplb_metadata(
+                ep_size=ep_size,
+                num_routed_experts=config.n_routed_experts,
+                num_hidden_layers=config.num_hidden_layers,
+            )
         self.layers = nn.ModuleList([
             DeepseekV2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
@@ -1108,12 +1128,12 @@ class DeepseekV2Model(nn.Module):
         return hidden_states, residual
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embed_tokens
 
 
 class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
-    """mixture model for causalLM."""
+    """Mixture model for causalLM."""
 
     def __init__(self,
                  config: Any,
@@ -1169,11 +1189,11 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -1182,7 +1202,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
@@ -1216,7 +1236,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
-        """load weight experts."""
+        """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
                 continue
@@ -1230,7 +1250,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                                update_pe_mapping: List):
-        """load weight attention."""
+        """Load weight attention."""
         device = next(iter(params_dict.values())).device
 
         def __update_pe(weight, head_dim: int, pe_dim_offset: int):
@@ -1247,7 +1267,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             return weight
 
         def __load_kcvc(name: str, weight: torch.Tensor):
-            """load kc and vc from weight."""
+            """Load kc and vc from weight."""
             config = self.config
             v_head_dim = config.v_head_dim
             qk_nope_head_dim = config.qk_nope_head_dim
@@ -1262,7 +1282,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             load_weight(param_vc, w_vc)
 
         def __dequant_weight(weight: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype):
-            """dequant weight."""
+            """Dequant weight."""
             dim_w0, dim_w1 = weight.shape
             dim_s0, dim_s1 = scale.shape
             assert dim_w0 % dim_s0 == 0
@@ -1277,7 +1297,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             return weight
 
         def __load_kcvc_blocked_fp8(name: str, loaded_weight: torch.Tensor):
-            """dequant weight."""
+            """Dequant weight."""
             if name.endswith('.weight'):
                 weight_name = name
                 scale_name = name.replace('.weight', '.scale')
@@ -1322,7 +1342,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 load_weight(param, loaded_weight)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
 
         def __skip_nextn(name, nextn_keys):
             for nextn_key in nextn_keys:

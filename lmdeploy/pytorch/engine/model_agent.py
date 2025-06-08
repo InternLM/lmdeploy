@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 import torch
 import torch.distributed as dist
+from torch.profiler import ProfilerActivity, profile, record_function
 
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
@@ -27,13 +28,96 @@ from .logits_process import FusedLogitsProcessor, SamplingInputs
 logger = get_logger('lmdeploy')
 
 
+class AgentProfiler:
+
+    def __init__(self, dist_ctx: DistContext, stream: torch.Stream):
+        from lmdeploy.pytorch import envs
+        self.rank = dist_ctx.rank
+        self.dp_rank = dist_ctx.dp_rank
+        self.dp = dist_ctx.dp
+        self.stream = stream
+        self.profiler = None
+        if self.dp == 1:
+            self.name = f'rank[{self.rank}]'
+        else:
+            self.name = f'dp_rank[{self.dp_rank}]'
+
+        self.delay = envs.torch_profile_delay
+        self.duration = envs.torch_profile_duration
+
+        self.profiler = self._build_profiler()
+        self.prefix = envs.torch_profile_output_prefix
+        self._task = None
+        self._started = False
+        if self.dp > 1 and self.duration < 0:
+            logger.warning('Do not support duration<=0 for dp > 1.')
+            self.profiler = None
+
+    def _build_profiler(self):
+        from lmdeploy.pytorch import envs
+        activities = []
+        if envs.torch_profile_cpu:
+            activities.append(ProfilerActivity.CPU)
+        if envs.torch_profile_cuda:
+            activities.append(ProfilerActivity.CUDA)
+        if len(activities) > 0:
+            logger.warning(f'Profiler start on {self.name}. '
+                           'Please Note that profiling might harm performance.')
+            profiler = profile(activities=activities)
+            return profiler
+        else:
+            return None
+
+    def dump(self):
+        """Dump profile result."""
+        if self.profiler is None:
+            return
+
+        if not self._started:
+            logger.warning(f'Profiler {self.name} not started, skip dump.')
+            return
+
+        try:
+            self.profiler.stop()
+            rank = self.rank if self.dp == 1 else self.dp_rank
+            dump_path = f'{self.prefix}{rank}.json'
+            self.profiler.export_chrome_trace(dump_path)
+            logger.warning(f'Profiler {self.name} dump to {dump_path}.')
+        except Exception as e:
+            logger.error(f'Failed to dump profile {self.name} result: {e}')
+        finally:
+            self.profiler = None
+
+    async def profile_task(self):
+        """Profile task."""
+        if self.profiler is None:
+            return
+
+        # start profiler with delay
+        await asyncio.sleep(self.delay)
+        self.profiler.start()
+        self._started = True
+
+        if self.duration <= 0:
+            return
+
+        # dump profiler
+        await asyncio.sleep(self.duration)
+        self.dump()
+
+    def create_task(self):
+        """Create task."""
+        event_loop = asyncio.get_event_loop()
+        self._task = event_loop.create_task(self.profile_task())
+
+
 def msg_with_rank(rank: int, msg: str):
-    """return message with rank."""
+    """Return message with rank."""
     return f'rank[{rank}] - {msg}'
 
 
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
-    """perform cache swapping."""
+    """Perform cache swapping."""
     issued_cache_op = False
     if len(swap_in_map) > 0:
         cache_engine.swap_in(swap_in_map)
@@ -53,7 +137,7 @@ def model_forward(
     cache_engine: CacheEngine,
     stream: torch.cuda.Stream = None,
 ):
-    """perform model forward."""
+    """Perform model forward."""
     stream = stream or torch.cuda.current_stream()
     with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
@@ -78,8 +162,9 @@ def model_forward(
     return dict(hidden_states=output, model_metas=model_metas)
 
 
+@record_function('stopping_criteria')
 def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
-    """batched stopping criteria."""
+    """Batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
     stopped = num_appendable_ids <= 0
     if stop_words is not None:
@@ -102,7 +187,7 @@ def _try_to_cuda(val, non_blocking: bool = False):
 
 
 class DistGatherScalar:
-    """distribute value gather."""
+    """Distribute value gather."""
 
     def __init__(self, val, size: int, device: str = 'cpu', group: dist.ProcessGroup = None):
         self.val = val
@@ -125,30 +210,69 @@ class DistGatherScalar:
 SwapMap = Dict[int, int]
 
 
-class AutoModelAgent:
-    """Base model agent."""
+class BaseModelAgent:
+    """Base model agent.
 
-    def __init__(
-        self,
-        model_config: ModelConfig,
-        cache_config: CacheConfig,
-        tokenizer: Any,
-        dist_ctx: DistContext,
-        device_ctx: DeviceContext,
-    ):
+    load model on local gpu
+
+    Args:
+        model_path (str): The hugging face model path.
+        model_config (ModelConfig): The config of the model.
+        cache_config (CacheConfig): The config of the cache info.
+        trust_remote_code (bool): Trust remote code
+    """
+
+    def __init__(self,
+                 model_path: str,
+                 model_config: ModelConfig,
+                 cache_config: CacheConfig,
+                 backend_config: BackendConfig,
+                 misc_config: MiscConfig,
+                 tokenizer: Any,
+                 dist_ctx: DistContext,
+                 device_ctx: DeviceContext,
+                 adapters: Dict[str, str] = None):
+
         self.model_config = model_config
         self.cache_config = cache_config
         self.tokenizer = tokenizer
+        try:
+            self.sampling_vocab_size = len(tokenizer)
+        except BaseException:
+            self.sampling_vocab_size = None
 
+        self._pre_in_que = None
         self._in_que = None
         self._out_que = None
         self._background_task = None
+        self._preprocess_task = None
 
         self.stream = torch.cuda.Stream()
         self.out_stream = torch.cuda.Stream()
 
         self.dist_ctx = dist_ctx
         self.device_ctx = device_ctx
+
+        device = 'cuda'
+        self.backend_config = backend_config
+        self.misc_config = misc_config
+        rank = dist_ctx.rank
+
+        self.model_path = model_path
+        self.adapters = adapters
+        self.device = device
+        self.rank = rank
+
+        tp_rank = dist_ctx.tp_rank
+        tp = dist_ctx.tp
+        world_size = dist_ctx.world_size
+        self.tp = tp
+        self.world_size = world_size
+        self.tp_rank = tp_rank
+
+        self.patched_model = None
+        self.cache_engine = None
+        self.profiler: AgentProfiler = None
 
     @contextmanager
     def all_context(self):
@@ -157,53 +281,16 @@ class AutoModelAgent:
         with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
             yield
 
-    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        raise NotImplementedError('NotImplemented.')
-
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-        raise NotImplementedError('Not implemented.')
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """get logits of model output."""
-        raise NotImplementedError('Not implemented.')
-
-    def get_input_processor(self):
-        """get input processor."""
-        raise NotImplementedError('Not implemented.')
-
-    def build_model(self):
-        """build model."""
-        raise NotImplementedError('Not implemented.')
-
-    def build_graph_runner(self):
-        """build graph runner."""
-        raise NotImplementedError('Not Implemented.')
-
-    def build_cache_engine(self):
-        """build cache engine."""
-        raise NotImplementedError('Not Implemented.')
-
-    def release(self):
-        """release."""
-        raise NotImplementedError('Not Implemented.')
-
     def set_cache_config(self, cache_config: CacheConfig):
-        """set all cache config."""
+        """Set all cache config."""
         self.cache_config = cache_config
 
     def set_model_config(self, model_config: ModelConfig):
-        """set model config."""
+        """Set model config."""
         self.model_config = model_config
 
     def get_free_mem(self):
-        """gather available memory."""
+        """Gather available memory."""
         with self.all_context():
             torch.cuda.empty_cache()
             gpu_mem_physical_free, _ = get_gpu_memory()
@@ -228,12 +315,12 @@ class AutoModelAgent:
         return_logits: bool,
         sync_long_context: bool,
     ):
-        """model forward."""
+        """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
 
         class _OutputGather:
-            """output gather."""
+            """Output gather."""
 
             def __init__(self, max_seq_len):
                 self._max_seq_len = max_seq_len
@@ -258,7 +345,7 @@ class AutoModelAgent:
                 self._output = out_logits
 
             def get_output(self):
-                """get tmp_output."""
+                """Get tmp_output."""
                 if not return_logits:
                     return self._output[:, -1:]
                 torch.cuda.synchronize()
@@ -274,7 +361,7 @@ class AutoModelAgent:
                 return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         async def __long_context_single_forward(new_inputs, max_seqlen: int):
-            """one large sequence."""
+            """One large sequence."""
             dist_ctx = get_dist_manager().current_context()
             dp = dist_ctx.dp
             model_metas = new_inputs[0].model_metas
@@ -336,10 +423,10 @@ class AutoModelAgent:
 
     async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
                                     sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
-        """sampling logits."""
+        """Sampling logits."""
 
         def __get_last_logits():
-            """get last logits."""
+            """Get last logits."""
             seq_length = inputs.seq_length
             if len(seq_length) == logits.size(0):
                 return logits
@@ -347,15 +434,21 @@ class AutoModelAgent:
             last_idx = seq_length.cumsum(-1) - 1
             return logits[last_idx, :]
 
-        split_logits = __get_last_logits()
-        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos, self.tokenizer)
-        logits = await logits_processor(all_ids, guided_input_ids, split_logits)
-        next_token_ids = logits_processor.sampling(logits)
+        # record function does not support async function
+        # so we can not decorate it on async_sampling_logits
+        with record_function('sampling_logits'):
+            split_logits = __get_last_logits()
+            logits_processor = FusedLogitsProcessor(sampling_inputs,
+                                                    ignore_eos,
+                                                    self.tokenizer,
+                                                    sampling_vocab_size=self.sampling_vocab_size)
+            logits = await logits_processor(all_ids, guided_input_ids, split_logits)
+            next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
 
     def _push_output(self, output: dict):
-        """push output."""
+        """Push output."""
         event = torch.cuda.Event()
         event.record()
         output['event'] = event
@@ -388,12 +481,13 @@ class AutoModelAgent:
         is_dummy: bool = False,
         sync_long_context: bool = False,
     ):
-        """asyc forward task."""
+        """Asyc forward task."""
 
         dist_ctx = get_dist_manager().current_context()
 
+        @record_function('update_inputs_for_next_step')
         def __update_inputs(next_token_ids, model_metas):
-            """update inputs."""
+            """Update inputs."""
             nonlocal all_ids, guided_input_ids, swap_in_map, swap_out_map
             swap_in_map = dict()
             swap_out_map = dict()
@@ -406,22 +500,9 @@ class AutoModelAgent:
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
-        def __try_copy_everything():
-            """try copy all inputs."""
-            nonlocal inputs, all_ids, guided_input_ids, sampling_inputs, num_appendable_ids, num_ignore_eos
-            non_blocking = True
-            inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
-            all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
-            guided_input_ids = _try_to_cuda(guided_input_ids, non_blocking=non_blocking)
-            sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
-            num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
-            num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
-
-            self.stream.synchronize()
-
         @asynccontextmanager
         async def __prepare_dp():
-            """prepare dp."""
+            """Prepare dp."""
             if dp == 1:
                 yield
                 return
@@ -477,7 +558,7 @@ class AutoModelAgent:
         # is_all_dummy would be updated in __prepare_dp
         is_all_dummy = False
         async with __prepare_dp():
-            __try_copy_everything()
+            pass
 
         need_output = dp > 1 or rank % tp == 0
 
@@ -543,10 +624,9 @@ class AutoModelAgent:
             if is_decoding and idx < loop_count - 1:
                 __update_inputs(next_token_ids, model_metas)
 
-    @torch.inference_mode()
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
-        """async loop background."""
-        with self.all_context(), torch.cuda.stream(self.stream):
+        """Async loop background."""
+        with self.all_context(), torch.cuda.stream(self.stream), torch.inference_mode():
             while True:
                 forward_inputs = await self._in_que.get()
 
@@ -556,40 +636,99 @@ class AutoModelAgent:
                 if forward_event is not None:
                     forward_event.set()
 
+    async def _async_loop_inputs_preprocess(self):
+        """Async loop inputs preprocess."""
+        non_blocking = True
+        keys = ['inputs', 'all_ids', 'guided_input_ids', 'sampling_inputs', 'num_appendable_ids', 'num_ignore_eos']
+        while True:
+            forward_inputs = await self._pre_in_que.get()
+
+            logger.debug('preprocessing forward inputs.')
+            with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
+                for k in keys:
+                    if k not in forward_inputs:
+                        continue
+                    forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
+                self.out_stream.synchronize()
+            logger.debug('preprocessing forward inputs done.')
+            self._in_que.put_nowait(forward_inputs)
+
     @staticmethod
-    def _on_finish_callback(task: asyncio.Task, ptask: asyncio.Task) -> None:
-        """raise exception on finish."""
+    def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
+        """Raise exception on finish."""
         task_name = task.get_name()
         try:
             task.result()
         except asyncio.CancelledError:
             logger.debug(f'Task <{task_name}> cancelled.')
             return
-        except Exception:
+        except BaseException:
             logger.exception(f'Task <{task_name}> failed')
         finally:
-            if not task.done():
-                task.cancel()
-            if not ptask.done():
-                ptask.cancel()
+            for ptask in ptasks:
+                if not ptask.done():
+                    ptask.cancel()
 
     def start(self, forward_event: asyncio.Event = None):
-        """start event loop."""
+        """Start event loop."""
         event_loop = asyncio.get_event_loop()
+        self._pre_in_que = asyncio.Queue()
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
+
+        tasks_to_cancel = [asyncio.current_task()]
+
+        # forward task
+        logger.debug('Create task ModelAgentLoop.')
         self._background_task = event_loop.create_task(self._async_loop_background(forward_event),
                                                        name='ModelAgentLoop')
-        done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
-        self._background_task.add_done_callback(done_callback)
+        tasks_to_cancel.append(self._background_task)
+
+        # preprocess inputs task
+        logger.debug('Create task ModelAgentPreprocess.')
+        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(),
+                                                       name='ModelAgentPreprocess')
+        tasks_to_cancel.append(self._preprocess_task)
+
+        # profiler
+        self.profiler = AgentProfiler(self.dist_ctx, self.stream)
+        self.profiler.create_task()
+
+        # binding done task
+        logger.debug('binding done callback.')
+        backgroup_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
+        self._background_task.add_done_callback(backgroup_done_callback)
+        preprocess_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
+        self._preprocess_task.add_done_callback(preprocess_done_callback)
 
     def stop(self):
-        """stop task."""
+        """Stop task."""
+        if self.dist_ctx.dp > 1:
+            return
+
+        if self.profiler is not None:
+            self.profiler.dump()
+
         if self._background_task is not None:
             if not self._background_task.done():
                 self._background_task.cancel()
 
+        if self._preprocess_task is not None:
+            if not self._preprocess_task.done():
+                self._preprocess_task.cancel()
+
     async def stop_async(self):
+        """Stop task."""
+        if self.dist_ctx.dp > 1:
+            return
+
+        if self.profiler is not None:
+            # dirty hack for profiler
+            while not self.stream.query():
+                logger.debug('Profiler waiting for stream finish.')
+                await asyncio.sleep(1)
+            self.profiler.dump()
+
         if self._background_task is not None:
             if not self._background_task.done():
                 self._background_task.cancel()
@@ -598,13 +737,21 @@ class AutoModelAgent:
                 except asyncio.CancelledError:
                     logger.debug('ModelAgent background task cancelled.')
 
+        if self._preprocess_task is not None:
+            if not self._preprocess_task.done():
+                self._preprocess_task.cancel()
+                try:
+                    await self._preprocess_task
+                except asyncio.CancelledError:
+                    logger.debug('ModelAgent preprocess task cancelled.')
+
     def set_forward_inputs(self, inputs):
-        """set forward inputs."""
-        assert self._in_que is not None, ('Please start backendground task before forward.')
-        self._in_que.put_nowait(inputs)
+        """Set forward inputs."""
+        assert self._pre_in_que is not None, ('Please start backendground task before forward.')
+        self._pre_in_que.put_nowait(inputs)
 
     async def get_output_async(self):
-        """async get output."""
+        """Async get output."""
         assert self._out_que is not None, ('Please start backendground task before forward.')
         out = await self._out_que.get()
         if out is None:
@@ -613,65 +760,15 @@ class AutoModelAgent:
         event = out.pop('event')
         while not event.query():
             await asyncio.sleep(0.001)
-        with torch.cuda.stream(self.out_stream):
+        with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
         return out
 
-
-class BaseModelAgent(AutoModelAgent):
-    """Base model agent.
-
-    load model on local gpu
-
-    Args:
-        model_path (str): The hugging face model path.
-        model_config (ModelConfig): The config of the model.
-        cache_config (CacheConfig): The config of the cache info.
-        trust_remote_code (bool): Trust remote code
-    """
-
-    def __init__(self,
-                 model_path: str,
-                 model_config: ModelConfig,
-                 cache_config: CacheConfig,
-                 backend_config: BackendConfig,
-                 misc_config: MiscConfig,
-                 tokenizer: Any,
-                 dist_ctx: DistContext,
-                 device_ctx: DeviceContext,
-                 adapters: Dict[str, str] = None):
-        super().__init__(
-            model_config=model_config,
-            cache_config=cache_config,
-            tokenizer=tokenizer,
-            dist_ctx=dist_ctx,
-            device_ctx=device_ctx,
-        )
-        device = 'cuda'
-        self.backend_config = backend_config
-        self.misc_config = misc_config
-        rank = dist_ctx.rank
-
-        self.model_path = model_path
-        self.adapters = adapters
-        self.device = device
-        self.rank = rank
-
-        tp_rank = dist_ctx.tp_rank
-        tp = dist_ctx.tp
-        world_size = dist_ctx.world_size
-        self.tp = tp
-        self.world_size = world_size
-        self.tp_rank = tp_rank
-
-        self.patched_model = None
-        self.cache_engine = None
-
     def _build_model(self):
-        """build patched model."""
+        """Build patched model."""
         model_path = self.model_path
         adapters = self.adapters
         device = self.device
@@ -690,12 +787,12 @@ class BaseModelAgent(AutoModelAgent):
         self.patched_model = patched_model
 
     def build_model(self):
-        """build model api."""
+        """Build model api."""
         with self.all_context():
             self._build_model()
 
     def build_graph_runner(self):
-        """build graph runner."""
+        """Build graph runner."""
         with self.all_context():
             backend = get_backend()
             self.patched_model = backend.build_graph_runner(self.patched_model,
@@ -705,7 +802,7 @@ class BaseModelAgent(AutoModelAgent):
                                                             device=self.device)
 
     def build_cache_engine(self):
-        """build cache engine."""
+        """Build cache engine."""
         with self.all_context():
             dist_ctx = self.dist_ctx
             attn_dist_cfg = dist_ctx.dist_config.attn_config
@@ -728,7 +825,7 @@ class BaseModelAgent(AutoModelAgent):
         return output
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        """model forward.
+        """Model forward.
 
         Args:
             inputs (Dict): The input data comes from _make_inputs.
@@ -739,22 +836,23 @@ class BaseModelAgent(AutoModelAgent):
         await asyncio.sleep(0)
         return output
 
+    @record_function('get_logits')
     def get_logits(self, hidden_states: torch.Tensor):
-        """get logits of model output."""
+        """Get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
 
     def get_input_processor(self):
-        """get input processor.."""
+        """Get input processor.."""
         return self.patched_model.get_input_processor()
 
     def reset_graph_runner(self):
-        """reset graph runner to prevent tp hanging."""
+        """Reset graph runner to prevent tp hanging."""
         if hasattr(self.patched_model, 'reset'):
             self.patched_model.reset()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
-        """update params."""
+        """Update params."""
 
         # modified from https://github.com/vllm-project/vllm/blob/v0.8.5/examples/offline_inference/rlhf_utils.py#L82
         def _construct(item):
@@ -797,7 +895,7 @@ def build_model_agent(model_path: str,
                       dist_ctx: DistContext = None,
                       device_ctx: DeviceContext = None,
                       adapters: Dict[str, str] = None):
-    """create model agent.
+    """Create model agent.
 
     Args:
         model_path (str): the path of the input model

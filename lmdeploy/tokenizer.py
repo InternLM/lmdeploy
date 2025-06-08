@@ -91,17 +91,17 @@ class HuggingFaceTokenizer:
                 'Please upgrade to the required version.')
 
     def get_vocab(self):
-        """get vocab."""
+        """Get vocab."""
         return self.model.get_vocab()
 
     @property
     def vocab_size(self):
-        """vocabulary size."""
+        """Vocabulary size."""
         return self.model.vocab_size
 
     @property
     def vocab_size_with_added(self):
-        """vocabulary size with added vocab."""
+        """Vocabulary size with added vocab."""
         if self._vocab_size_with_added is not None:
             return self._vocab_size_with_added
         self._vocab_size_with_added = len(self.model.get_vocab())
@@ -109,17 +109,17 @@ class HuggingFaceTokenizer:
 
     @property
     def bos_token_id(self):
-        """begin of the sentence token id."""
+        """Begin of the sentence token id."""
         return self.model.bos_token_id
 
     @property
     def eos_token_id(self):
-        """end of the sentence token id."""
+        """End of the sentence token id."""
         return self.model.eos_token_id
 
     @property
     def prefix_space_tokens(self):
-        """tokens without prefix space."""
+        """Tokens without prefix space."""
         if self._prefix_space_tokens is None:
             vocab = self.model.convert_ids_to_tokens(list(range(self.vocab_size)))
             self._prefix_space_tokens = {
@@ -129,7 +129,7 @@ class HuggingFaceTokenizer:
         return self._prefix_space_tokens
 
     def _maybe_add_prefix_space(self, tokens: List[int], decoded: str):
-        """maybe add prefix space for incremental decoding."""
+        """Maybe add prefix space for incremental decoding."""
         if len(tokens) and not decoded.startswith(' ') and\
                 tokens[0] in self.prefix_space_tokens:
             return ' ' + decoded
@@ -341,7 +341,7 @@ class HuggingFaceTokenizer:
 
 
 class ChatGLM4Tokenizer(HuggingFaceTokenizer):
-    """tokenizer of GLM4."""
+    """Tokenizer of GLM4."""
 
     def __init__(self, model_path):
         super(ChatGLM4Tokenizer, self).__init__(model_path)
@@ -356,14 +356,14 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
         self.model._pad = __pad
 
     def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
-        """tokenize a prompt."""
+        """Tokenize a prompt."""
         # ChtGLM4Tokenizer hardcode `add_speical_tokens=False` when tokenizing
         # a prompt. Refer to https://huggingface.co/THUDM/glm-4-9b-chat/blob/main/tokenization_chatglm.py#L227 # noqa E501
         return super(ChatGLM4Tokenizer, self).encode(s, add_bos, add_special_tokens=False, **kwargs)
 
 
 class ChatGLMTokenizer(HuggingFaceTokenizer):
-    """tokenizer of GLM2."""
+    """Tokenizer of GLM2."""
 
     def __init__(self, model_path):
         super(ChatGLMTokenizer, self).__init__(model_path)
@@ -399,21 +399,21 @@ class Tokenizer:
 
     @property
     def vocab_size(self):
-        """vocabulary size."""
+        """Vocabulary size."""
         return self.model.vocab_size
 
     @property
     def bos_token_id(self):
-        """begin of the sentence token id."""
+        """Begin of the sentence token id."""
         return self.model.bos_token_id
 
     @property
     def eos_token_id(self):
-        """end of the sentence token id."""
+        """End of the sentence token id."""
         return self.model.eos_token_id
 
     def get_vocab(self):
-        """get vocab."""
+        """Get vocab."""
         return self.model.get_vocab()
 
     def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):

@@ -45,8 +45,7 @@ class QRMSNorm(nn.Module):
         """Class method to create a QRMSNorm instance from a floating-point
         module.
 
-        `initialization = True` for real init.
-        `initialization = False` for dummy init.
+        `initialization = True` for real init. `initialization = False` for dummy init.
         """
         hidden_size = mod.weight.shape[0]
         eps = mod.variance_epsilon
@@ -103,8 +102,7 @@ class QLinear(nn.Module):
         """Class method to create a QLinear instance from a floating-point
         module.
 
-        `initialization = True` for real init.
-        `initialization = False` for dummy init.
+        `initialization = True` for real init. `initialization = False` for dummy init.
         """
         q_mod = cls(mod.in_features,
                     mod.out_features,

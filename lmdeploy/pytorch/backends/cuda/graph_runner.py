@@ -2,6 +2,7 @@
 from typing import Any, Dict, List, Tuple
 
 import torch
+from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
@@ -28,12 +29,12 @@ def next_power_of_2(n: int):
 
 
 def _false(*args, **kwargs):
-    """default value of not support cuda graph."""
+    """Default value of not support cuda graph."""
     return False
 
 
 class CUDASingleGraphRunner:
-    """cuda single graph runner."""
+    """Cuda single graph runner."""
 
     def __init__(
         self,
@@ -68,8 +69,9 @@ class CUDASingleGraphRunner:
         self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
 
+    @record_function('capture_cudagraph')
     def capture(self, **kwargs):
-        """capture graph."""
+        """Capture graph."""
         logger.debug(f'Capturing graph with meta: {self.meta}')
         self.meta.input_buffers = self.model.make_buffers_cudagraph(self.meta, **kwargs)
         padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
@@ -90,6 +92,7 @@ class CUDASingleGraphRunner:
         self.meta.output_buffers = output_buffers
         return output
 
+    @record_function('forward_cudagraph')
     def forward(self, **kwargs):
         """forward."""
         num_tokens = kwargs['input_ids'].size(-1)
@@ -108,7 +111,7 @@ class CUDASingleGraphRunner:
 
 
 class CUDAGraphRunner(GraphRunner):
-    """cuda graph runner."""
+    """Cuda graph runner."""
 
     def __init__(self, model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                  backend_config: BackendConfig, device: torch.device):
@@ -124,7 +127,7 @@ class CUDAGraphRunner(GraphRunner):
         self.has_try_compile_model: bool = False
 
     def check_enable_graph(self):
-        """check enable graph."""
+        """Check enable graph."""
         if self.backend_config.eager_mode:
             return _false
 
@@ -142,7 +145,7 @@ class CUDAGraphRunner(GraphRunner):
 
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
                       attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
-        """get graph key."""
+        """Get graph key."""
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
@@ -161,7 +164,8 @@ class CUDAGraphRunner(GraphRunner):
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:
-            return self.model(**kwargs)
+            with record_function('forward_eager'):
+                return self.model(**kwargs)
 
         graph_key = self.get_graph_key(**kwargs)
         max_tokens = graph_key[0]
@@ -183,13 +187,14 @@ class CUDAGraphRunner(GraphRunner):
         output = runner.forward(**kwargs)
         return output
 
+    @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
-        """prepare inputs."""
+        """Prepare inputs."""
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
@@ -197,11 +202,11 @@ class CUDAGraphRunner(GraphRunner):
         )
 
     def reset(self):
-        """remove all graphs to prevent hanging on exit."""
+        """Remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
 
     def update_inputs(self, inputs):
-        """update inputs."""
+        """Update inputs."""
         if self.backend_config.eager_mode:
             return inputs
         is_decoding = inputs.is_decoding

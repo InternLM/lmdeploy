@@ -5,9 +5,11 @@ import json
 import os
 import random
 from queue import Queue
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
+import numpy as np
 from tqdm import tqdm
+from transformers import PreTrainedTokenizerBase
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
@@ -16,15 +18,18 @@ from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
-get_logger('lmdeploy').setLevel('WARNING')
+get_logger('lmdeploy').setLevel('ERROR')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
-def sample_requests(
+def sample_sharegpt_requests(
     dataset_path: str,
     num_requests: int,
-    tokenizer: Tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
+    fixed_output_len: Optional[int] = None,
 ) -> List[Tuple[str, int, int]]:
+    if fixed_output_len is not None and fixed_output_len < 4:
+        raise ValueError('output_len too small')
     # Load the dataset.
     with open(dataset_path) as f:
         dataset = json.load(f)
@@ -32,36 +37,100 @@ def sample_requests(
     dataset = [data for data in dataset if len(data['conversations']) >= 2]
     # Only keep the first two turns of each conversation.
     dataset = [(data['conversations'][0]['value'], data['conversations'][1]['value']) for data in dataset]
-    # remove the empty prompts
-    dataset = [(query, answer) for query, answer in dataset if len(query) > 0]
-    # pre-sample to avoid go through all the dataset
-    dataset = random.sample(dataset, max(int(num_requests * 1.2), 1000))
 
-    # Tokenize the prompts and completions.
-    prompts = [prompt for prompt, _ in dataset]
-    prompt_token_ids = tokenizer(prompts).input_ids
-    completions = [completion for _, completion in dataset]
-    completion_token_ids = tokenizer(completions).input_ids
-    tokenized_dataset = []
-    for i in range(len(dataset)):
-        output_len = len(completion_token_ids[i])
-        tokenized_dataset.append((prompts[i], prompt_token_ids[i], output_len))
+    # Shuffle the dataset.
+    random.shuffle(dataset)
 
-    # Filter out too long sequences.
+    # Filter out sequences that are too long or too short
     filtered_dataset: List[Tuple[str, int, int]] = []
-    for prompt, prompt_token_ids, output_len in tokenized_dataset:
+    for i in range(len(dataset)):
+        if len(filtered_dataset) == num_requests:
+            break
+
+        # Tokenize the prompts and completions.
+        prompt = dataset[i][0]
+        prompt_token_ids = tokenizer.encode(prompt)
+        completion = dataset[i][1]
+        completion_token_ids = tokenizer.encode(completion)
         prompt_len = len(prompt_token_ids)
+        output_len = (len(completion_token_ids) if fixed_output_len is None else fixed_output_len)
         if prompt_len < 4 or output_len < 4:
             # Prune too short sequences.
             continue
-        if prompt_len > 1024 or prompt_len + output_len > 2048:
+        if prompt_len > 1024 or (prompt_len + output_len > 2048 and fixed_output_len is None):
             # Prune too long sequences.
             continue
         filtered_dataset.append((prompt, prompt_len, output_len))
 
-    # Sample the requests.
-    sampled_requests = random.sample(filtered_dataset, num_requests)
-    return sampled_requests
+    print(f'#Input tokens: {np.sum([x[1] for x in filtered_dataset])}')
+    print(f'#Output tokens: {np.sum([x[2] for x in filtered_dataset])}')
+    return filtered_dataset
+
+
+def sample_random_requests(
+    input_len: int,
+    output_len: int,
+    num_prompts: int,
+    range_ratio: float,
+    tokenizer: PreTrainedTokenizerBase,
+    dataset_path: str,
+) -> List[Tuple[str, int, int]]:
+
+    input_lens = np.random.randint(
+        max(int(input_len * range_ratio), 1),
+        input_len + 1,
+        size=num_prompts,
+    )
+    output_lens = np.random.randint(
+        int(output_len * range_ratio),
+        output_len + 1,
+        size=num_prompts,
+    )
+
+    if True:
+        # Sample token ids from ShareGPT and repeat/truncate them to
+        # satisfy the input_lens
+
+        # Load the dataset.
+        with open(dataset_path) as f:
+            dataset = json.load(f)
+        # Filter out the conversations with less than 2 turns.
+        dataset = [data for data in dataset if len(data['conversations']) >= 2]
+        # Only keep the first two turns of each conversation.
+        dataset = [(data['conversations'][0]['value'], data['conversations'][1]['value']) for data in dataset]
+        # remove the empty prompt
+        dataset = [(query, answer) for query, answer in dataset if len(query) > 0]
+
+        # Shuffle the dataset.
+        random.shuffle(dataset)
+
+        # Filter out sequences that are too long or too short
+        input_requests: List[Tuple[str, int, int]] = []
+        for i in range(num_prompts):
+            # Tokenize the prompts and completions.
+            prompt = dataset[i][0]
+            prompt_token_ids = tokenizer.encode(prompt)
+            prompt_len = len(prompt_token_ids)
+
+            if prompt_len > input_lens[i]:
+                input_ids = prompt_token_ids[:input_lens[i]]
+            else:
+                ratio = (input_lens[i] + prompt_len - 1) // prompt_len
+                input_ids = (prompt_token_ids * ratio)[:input_lens[i]]
+            prompt = tokenizer.decode(input_ids)
+            input_requests.append((prompt, int(input_lens[i]), int(output_lens[i])))
+    else:
+        # Sample token ids from random integers.
+        # This can cause some NaN issues.
+        offsets = np.random.randint(0, tokenizer.vocab_size, size=num_prompts)
+        input_requests = []
+        for i in range(num_prompts):
+            prompt = tokenizer.decode([(offsets[i] + i + j) % tokenizer.vocab_size for j in range(input_lens[i])])
+            input_requests.append((prompt, int(input_lens[i]), int(output_lens[i])))
+
+    print(f'#Input tokens: {np.sum(input_lens)}')
+    print(f'#Output tokens: {np.sum(output_lens)}')
+    return input_requests
 
 
 class Engine:
@@ -74,7 +143,6 @@ class Engine:
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
             tm_model = PytorchEngine(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
-
         self.tm_model = tm_model
         self.pbar = None
 
@@ -196,6 +264,37 @@ def parse_args():
                         default=None,
                         choices=['uni', 'mp', 'ray'],
                         help='backend of executor backend')
+    parser.add_argument('--dataset-name',
+                        type=str,
+                        default='sharegpt',
+                        choices=['sharegpt', 'random'],
+                        help='Name of the dataset to benchmark on.')
+    parser.add_argument(
+        '--sharegpt-output-len',
+        type=int,
+        default=None,
+        help='Output length for each request. Overrides the output length '
+        'from the ShareGPT dataset.',
+    )
+    parser.add_argument(
+        '--random-input-len',
+        type=int,
+        help='Number of input tokens per request, used only for random '
+        'dataset.',
+    )
+    parser.add_argument(
+        '--random-output-len',
+        type=int,
+        help='Number of output tokens per request, used only for random '
+        'dataset.',
+    )
+    parser.add_argument(
+        '--random-range-ratio',
+        type=float,
+        default=0.0,
+        help='Range of sampled ratio of input/output length, '
+        'used only for random dataset.',
+    )
     # other args
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
@@ -207,7 +306,6 @@ def parse_args():
     ArgumentHelper.eager_mode(pt_group)
 
     tp_act = ArgumentHelper.tp(pt_group)
-    session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
@@ -217,7 +315,6 @@ def parse_args():
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
-    tb_group._group_actions.append(session_len_act)
     tb_group._group_actions.append(cache_count_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
@@ -239,7 +336,6 @@ def main():
     random.seed(args.seed)
     if args.backend == 'turbomind':
         engine_config = TurbomindEngineConfig(
-            session_len=args.session_len,
             max_batch_size=args.concurrency // args.dp,
             tp=args.tp,
             dp=args.dp,
@@ -255,7 +351,6 @@ def main():
         )
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
-            session_len=args.session_len,
             cache_max_entry_count=args.cache_max_entry_count,
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
@@ -273,7 +368,27 @@ def main():
 
     engine = Engine(args.model_path, engine_config)
 
-    requests = sample_requests(args.dataset, args.num_prompts, engine.tokenizer)
+    if args.dataset_name == 'sharegpt':
+        assert args.random_input_len is None and args.random_output_len is None
+        requests = sample_sharegpt_requests(
+            dataset_path=args.dataset,
+            num_requests=args.num_prompts,
+            tokenizer=engine.tokenizer.model.model,
+            fixed_output_len=args.sharegpt_output_len,
+        )
+    elif args.dataset_name == 'random':
+        assert args.random_input_len is not None and \
+            args.random_output_len is not None
+        requests = sample_random_requests(
+            input_len=args.random_input_len,
+            output_len=args.random_output_len,
+            num_prompts=args.num_prompts,
+            range_ratio=args.random_range_ratio,
+            tokenizer=engine.tokenizer.model.model,
+            dataset_path=args.dataset,
+        )
+    else:
+        raise ValueError(f'Unknown dataset: {args.dataset_name}')
 
     stream_output = not args.no_stream_output
 
@@ -296,7 +411,16 @@ def main():
     profiler.compute_metrics()
     profiler.summarize(title='Profile Throughput', hyperparams=hyperparams)
     if args.csv:
-        profiler.save_csv(args.csv, (('batch', args.concurrency), ('num_prompts', args.num_prompts)))
+        profiler.save_csv(args.csv, (
+            ('backend', args.backend),
+            ('bs', args.concurrency),
+            ('dataset_name', args.dataset_name),
+            ('sharegpt_output_len', args.sharegpt_output_len),
+            ('random_input_len', args.random_input_len),
+            ('random_output_len', args.random_output_len),
+            ('random_range_ratio', args.random_range_ratio),
+            ('num_prompts', args.num_prompts),
+        ))
 
 
 if __name__ == '__main__':

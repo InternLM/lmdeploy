@@ -11,7 +11,7 @@ from lmdeploy.messages import TurbomindEngineConfig
 
 
 def config_from_dict(cls, env):
-    """initiate an instance of a config class from a dict."""
+    """Initiate an instance of a config class from a dict."""
     params = inspect.signature(cls).parameters
     used = {k: v for k, v in env.items() if k in params and v is not None}
 
@@ -26,7 +26,7 @@ def config_from_dict(cls, env):
 
 
 def config_to_dict(config):
-    """export config to a dict."""
+    """Export config to a dict."""
     if not config:
         return dict()
     assert isinstance(config, (ModelConfig, AttentionConfig, LoraConfig)), \
@@ -152,11 +152,14 @@ class TurbomindModelConfig:
             if self.attention_config.rope_param is None:
                 # some ut will create empty RopeParam, will check base/dim in src code
                 self.attention_config.rope_param = RopeParam(type='', base=0, dim=0)
-            self.attention_config.rope_param.__dict__.update(type='dynamic', factor=config.rope_scaling_factor)
+            self.attention_config.rope_param.__dict__.update(
+                type='dynamic',
+                factor=config.rope_scaling_factor,
+                max_position_embeddings=self.attention_config.max_position_embeddings)
 
     @classmethod
     def from_dict(cls, config: dict = {}):
-        """construct TurbomindModelConfig instance from config in a dict."""
+        """Construct TurbomindModelConfig instance from config in a dict."""
         _cfg = {field.name: config.get(field.name, {}) for field in fields(TurbomindModelConfig)}
 
         return TurbomindModelConfig(model_config=config_from_dict(ModelConfig, _cfg['model_config']),
@@ -164,7 +167,7 @@ class TurbomindModelConfig:
                                     lora_config=config_from_dict(LoraConfig, _cfg['lora_config']))
 
     def to_dict(self):
-        """export to a dict."""
+        """Export to a dict."""
         return dict(model_config=config_to_dict(self.model_config),
                     attention_config=config_to_dict(self.attention_config),
                     lora_config=config_to_dict(self.lora_config))

@@ -11,7 +11,7 @@ logger = get_logger('lmdeploy')
 
 
 def check_trans_version():
-    """check if the installed version of the 'transformers' library is smaller
+    """Check if the installed version of the 'transformers' library is smaller
     than the specified version."""
     import transformers
     from packaging import version
@@ -31,7 +31,7 @@ class LLama4VisionModel(VisonModel):
 
     @classmethod
     def match(cls, config: AutoConfig):
-        """check whether the config match the model."""
+        """Check whether the config match the model."""
         arch = config.architectures[0]
         return arch == cls._arch
 
@@ -53,13 +53,13 @@ class LLama4VisionModel(VisonModel):
         )['images_kwargs']
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         # TODO, implement for tubomind engine
         raise NotImplementedError()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refers to `super.preprocess() for spec."""
+        """Refers to `super.preprocess() for spec."""
         images = self.collect_images(messages)
         outputs = []
         processor = self.processor
@@ -85,7 +85,7 @@ class LLama4VisionModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
@@ -100,7 +100,7 @@ class LLama4VisionModel(VisonModel):
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
@@ -119,7 +119,7 @@ class LLama4VisionModel(VisonModel):
         return prompt, IMAGE_TOKEN
 
     def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
-        """auxiliary function to pack the preprocessing results in a format
+        """Auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
 
         Args:
