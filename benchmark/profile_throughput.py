@@ -18,7 +18,7 @@ from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
-get_logger('lmdeploy').setLevel('WARNING')
+get_logger('lmdeploy').setLevel('ERROR')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
@@ -143,7 +143,6 @@ class Engine:
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
             tm_model = PytorchEngine(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
-
         self.tm_model = tm_model
         self.pbar = None
 
@@ -307,7 +306,6 @@ def parse_args():
     ArgumentHelper.eager_mode(pt_group)
 
     tp_act = ArgumentHelper.tp(pt_group)
-    session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
@@ -317,7 +315,6 @@ def parse_args():
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
-    tb_group._group_actions.append(session_len_act)
     tb_group._group_actions.append(cache_count_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
@@ -339,7 +336,6 @@ def main():
     random.seed(args.seed)
     if args.backend == 'turbomind':
         engine_config = TurbomindEngineConfig(
-            session_len=args.session_len,
             max_batch_size=args.concurrency // args.dp,
             tp=args.tp,
             dp=args.dp,
@@ -355,7 +351,6 @@ def main():
         )
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
-            session_len=args.session_len,
             cache_max_entry_count=args.cache_max_entry_count,
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
@@ -416,7 +411,16 @@ def main():
     profiler.compute_metrics()
     profiler.summarize(title='Profile Throughput', hyperparams=hyperparams)
     if args.csv:
-        profiler.save_csv(args.csv, (('batch', args.concurrency), ('num_prompts', args.num_prompts)))
+        profiler.save_csv(args.csv, (
+            ('backend', args.backend),
+            ('bs', args.concurrency),
+            ('dataset_name', args.dataset_name),
+            ('sharegpt_output_len', args.sharegpt_output_len),
+            ('random_input_len', args.random_input_len),
+            ('random_output_len', args.random_output_len),
+            ('random_range_ratio', args.random_range_ratio),
+            ('num_prompts', args.num_prompts),
+        ))
 
 
 if __name__ == '__main__':

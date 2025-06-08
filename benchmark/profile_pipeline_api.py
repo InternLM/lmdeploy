@@ -343,7 +343,17 @@ def main():
     profiler.summarize(title='Profile Pipeline API', hyperparams=hyperparams)
 
     if args.csv:
-        profiler.save_csv(args.csv, (('batch', args.concurrency), ('num_prompts', args.num_prompts)))
+        # profiler.save_csv(args.csv, (('batch', args.concurrency), ('num_prompts', args.num_prompts)))
+        profiler.save_csv(args.csv, (
+            ('backend', args.backend),
+            ('bs', args.concurrency),
+            ('dataset_name', args.dataset_name),
+            ('sharegpt_output_len', args.sharegpt_output_len),
+            ('random_input_len', args.random_input_len),
+            ('random_output_len', args.random_output_len),
+            ('random_range_ratio', args.random_range_ratio),
+            ('num_prompts', args.num_prompts),
+        ))
 
 
 if __name__ == '__main__':

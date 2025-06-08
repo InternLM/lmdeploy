@@ -53,10 +53,10 @@ def wait_server_ready(server_ip, server_port):
                 return True
         except Exception as e:
             print(f'connect to server http://{server_ip}:{server_port} failed {e}')
-            time.sleep(10)
+            time.sleep(5)
 
 
-def get_client_cmd(backend, server_ip, server_port, clinet_config):
+def get_client_cmd(backend, server_ip, server_port, client_config):
     if backend in ['turbomind', 'pytorch']:
         cmd = [
             'python3', 'benchmark/profile_restful_api.py', '--backend', 'lmdeploy', '--host', server_ip, '--port',
@@ -69,7 +69,7 @@ def get_client_cmd(backend, server_ip, server_port, clinet_config):
     else:
         print(f'Unknown backend: {backend}')
         return
-    for key, value in clinet_config.items():
+    for key, value in client_config.items():
         # change the key like 'dataset_path' to 'dataset-path' to suit the optional when performing
         # "python3 benchmark/profile_restful_api.py"
         key = key.replace('_', '-')
@@ -103,7 +103,7 @@ def benchmark(model_path, backend, server_config, data_config):
         assert isinstance(data_config, List) and all(isinstance(d, Dict) for d in data_config)
         for data in data_config:
             data['output_file'] = output_file
-            client_cmd = get_client_cmd(backend, server_ip, server_port, **data)
+            client_cmd = get_client_cmd(backend, server_ip, server_port, data)
             print(f"Running client command: {' '.join(client_cmd)}")
             subprocess.run(client_cmd, check=True)
     finally:
