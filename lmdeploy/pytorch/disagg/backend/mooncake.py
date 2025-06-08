@@ -24,10 +24,7 @@ def get_rdma_nics():
     rdma_nics = []
 
     try:
-        result = subprocess.run(
-            ['ibv_devices'],
-            stdout=subprocess.PIPE,
-            text=True)
+        result = subprocess.run(['ibv_devices'], stdout=subprocess.PIPE, text=True)
         if result.returncode == 0:
             # Parse ibv_devices output
             # Sample output:
@@ -41,7 +38,7 @@ def get_rdma_nics():
                     device_name = line.split()[0].strip()
                     rdma_nics.append(device_name)
     except Exception as e:
-        log.info(f"Error executing ibv_devices command: {e}")
+        logger.info(f"Error executing ibv_devices command: {e}")
 
     return rdma_nics
 
@@ -80,8 +77,12 @@ class MooncakeMigrationManagement:
             ) from e
 
         self.rank = init_request.rank
-        self.local_engine_config: DistServeEngineConfig = init_request.local_engine_config
-        self.remote_engine_config: DistServeEngineConfig = init_request.remote_engine_config
+        self.local_engine_config: DistServeEngineConfig = (
+            init_request.local_engine_config
+        )
+        self.remote_engine_config: DistServeEngineConfig = (
+            init_request.remote_engine_config
+        )
         self.local_engine_id = init_request.local_engine_id
         self.remote_engine_id = init_request.remote_engine_id
 
@@ -117,16 +118,17 @@ class MooncakeMigrationManagement:
 
         # Initialize the engine
         result = self.engine.initialize(
-            self.hostname, metadata_server, protocol, device_name)
+            self.hostname, metadata_server, protocol, device_name
+        )
         if result != 0:
-            raise RuntimeError(
-                f"Failed to initialize Mooncake engine: {result}")
+            raise RuntimeError(f"Failed to initialize Mooncake engine: {result}")
 
-        logger.info(f"Mooncake engine initialized for remote_engine_id {self.remote_engine_id} "
-                    f"with hostname {self.hostname}, RPC port: {self.engine.get_rpc_port()}")
+        logger.info(
+            f"Mooncake engine initialized for remote_engine_id {self.remote_engine_id} "
+            f"with hostname {self.hostname}, RPC port: {self.engine.get_rpc_port()}"
+        )
 
-    def register_memory_region(
-            self, register_mr_request: DistServeRegisterMRMessage):
+    def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         """Register memory region for this connection."""
         # Transmit buffer address to int
         buffer_addr = register_mr_request.addr
@@ -140,11 +142,13 @@ class MooncakeMigrationManagement:
         self.local_kv_table[register_mr_request.remote_engine_id] = {
             'addr': buffer_addr,
             'length': buffer_length,
-            'offset': register_mr_request.offset
+            'offset': register_mr_request.offset,
         }
 
-        log.info(f"Registered memory region with key {register_mr_request.remote_engine_id}, "
-              f"addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}")
+        logger.info(
+            f"Registered memory region with key {register_mr_request.remote_engine_id}, "
+            f"addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}"
+        )
 
     @property
     def endpoint_info(self) -> Dict:
@@ -155,17 +159,19 @@ class MooncakeMigrationManagement:
             mr_info[remote_engine_id] = {
                 'addr': buffer_info['addr'],
                 'length': buffer_info['length'],
-                'offset': buffer_info['offset']
+                'offset': buffer_info['offset'],
             }
 
         endpoint_info = {
             'mr_info': mr_info,
-            'session_id': f"{self.hostname}:{self.port}"
+            'session_id': f"{self.hostname}:{self.port}",
         }
 
-        log.info(f"Generated endpoint info for remote engine {self.remote_engine_id}: "
-              f"session_id={endpoint_info['session_id']}, "
-              f"mr_count={len(mr_info)}")
+        logger.info(
+            f"Generated endpoint info for remote engine {self.remote_engine_id}: "
+            f"session_id={endpoint_info['session_id']}, "
+            f"mr_count={len(mr_info)}"
+        )
 
         return endpoint_info
 
@@ -176,34 +182,34 @@ class MooncakeMigrationManagement:
         self.remote_url = remote_endpoint_info['session_id']
         self.remote_kv_table = remote_endpoint_info['mr_info']
 
-        logger.info(
-            f"Received remote buffer info: {len(self.remote_kv_table)} regions")
+        logger.info(f"Received remote buffer info: {len(self.remote_kv_table)} regions")
         for remote_engine_id, buffer_info in self.remote_kv_table.items():
-            logger.debug(f"Remote buffer {remote_engine_id}: addr=0x{buffer_info['addr']:x}, "
-                         f"length={buffer_info['length']}")
+            logger.debug(
+                f"Remote buffer {remote_engine_id}: addr=0x{buffer_info['addr']:x}, "
+                f"length={buffer_info['length']}"
+            )
 
-        log.info(
+        logger.info(
             f"Connecting to remote engine {self.remote_engine_id} at {self.remote_url}"
         )
 
-    def p2p_migrate(self, assignment: MigrationAssignment,
-                    async_op: bool = False):
+    def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         """Migrate data to the remote engine."""
         if not self.remote_url:
             raise RuntimeError(
-                f"No connection established to remote engine {
-                    self.remote_engine_id}")
+                f"No connection established to remote engine {self.remote_engine_id}"
+            )
 
         for i, task in enumerate(assignment.batch):
             if assignment.remote_engine_id not in self.local_kv_table:
                 raise RuntimeError(
-                    f"Memory region with id {
-                        assignment.remote_engine_id} not registered")
+                    f"Memory region with id {assignment.remote_engine_id} not registered"
+                )
 
             if self.local_engine_id not in self.remote_kv_table:
                 raise RuntimeError(
-                    f"Remote memory region with id {
-                        self.local_engine_id} not registered")
+                    f"Remote memory region with id {self.local_engine_id} not registered"
+                )
 
             # Get local buffer information
             local_buffer_info = self.local_kv_table[assignment.remote_engine_id]
@@ -213,21 +219,17 @@ class MooncakeMigrationManagement:
             remote_buffer_info = self.remote_kv_table[self.local_engine_id]
             remote_addr = remote_buffer_info['addr'] + task.target_offset
 
-            log.info(f"Task {i}: Migrating {task.length} bytes")
-            log.info(f"  Local Engine: {self.local_engine_id}")
-            log.info(f"  Remote Engine: {assignment.remote_engine_id}")
-            log.info(f"  MR Key: {task.mr_key}")
-            log.info(
-                f"  Local:  0x{
-                    local_buffer_info['addr']:x} + {
-                    task.source_offset} = 0x{
-                    local_addr:x}")
-            log.info(
-                f"  Remote: 0x{
-                    remote_buffer_info['addr']:x} + {
-                    task.target_offset} = 0x{
-                    remote_addr:x}")
-            log.info(f"  Session: {self.remote_url}")
+            logger.info(f"Task {i}: Migrating {task.length} bytes")
+            logger.info(f"  Local Engine: {self.local_engine_id}")
+            logger.info(f"  Remote Engine: {assignment.remote_engine_id}")
+            logger.info(f"  MR Key: {task.mr_key}")
+            logger.info(
+                f"  Local:  0x{local_buffer_info['addr']:x} + {task.source_offset} = 0x{local_addr:x}"
+            )
+            logger.info(
+                f"  Remote: 0x{remote_buffer_info['addr']:x} + {task.target_offset} = 0x{remote_addr:x}"
+            )
+            logger.info(f"  Session: {self.remote_url}")
 
             result = self.engine.transfer_sync_read(
                 self.remote_url,
@@ -236,8 +238,7 @@ class MooncakeMigrationManagement:
                 task.length,
             )
             if result != 0:
-                raise RuntimeError(
-                    f"Failed to perform sync transfer: {result}")
+                raise RuntimeError(f"Failed to perform sync transfer: {result}")
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.Mooncake.name)
@@ -250,25 +251,27 @@ class MooncakeBackend(MigrationBackendImpl):
     def p2p_initialize(self, init_request: DistServeInitRequest):
         """Initialize p2p connection for a specific remote engine."""
         self.links[init_request.remote_engine_id] = MooncakeMigrationManagement(
-            init_request)
+            init_request
+        )
 
-    def register_memory_region(
-            self, register_mr_request: DistServeRegisterMRMessage):
+    def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         """Register memory region for a specific remote engine connection."""
         if register_mr_request.remote_engine_id not in self.links:
             raise RuntimeError(
                 f"No connection initialized for remote engine {
-                    register_mr_request.remote_engine_id}")
+                    register_mr_request.remote_engine_id}"
+            )
 
         self.links[register_mr_request.remote_engine_id].register_memory_region(
-            register_mr_request)
+            register_mr_request
+        )
 
-    def endpoint_info(self, remote_engine_id: int,
-                      protocol: MigrationProtocol):
+    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         """Get endpoint information for a specific remote engine."""
         if remote_engine_id not in self.links:
             raise RuntimeError(
-                f"No connection initialized for remote engine {remote_engine_id}")
+                f"No connection initialized for remote engine {remote_engine_id}"
+            )
 
         return self.links[remote_engine_id].endpoint_info
 
@@ -276,26 +279,24 @@ class MooncakeBackend(MigrationBackendImpl):
         """Connect to a specific remote engine."""
         if connect_request.remote_engine_id not in self.links:
             raise RuntimeError(
-                f"No connection initialized for remote engine {
-                    connect_request.remote_engine_id}")
+                f"No connection initialized for remote engine {connect_request.remote_engine_id}"
+            )
 
         self.links[connect_request.remote_engine_id].connect(connect_request)
 
-    def p2p_migrate(self, assignment: MigrationAssignment,
-                    async_op: bool = False):
+    def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         """Migrate data to a specific remote engine."""
         if assignment.remote_engine_id not in self.links:
             raise RuntimeError(
-                f"No connection established to remote engine {
-                    assignment.remote_engine_id}")
+                f"No connection established to remote engine {assignment.remote_engine_id}"
+            )
 
         self.links[assignment.remote_engine_id].p2p_migrate(
-            assignment, async_op=async_op)
+            assignment, async_op=async_op
+        )
 
     def store(self, assignment: MigrationAssignment, async_op: bool = False):
-        """Store operation - not implemented for Mooncake"""
         raise NotImplementedError
 
     def load(self, assignment: MigrationAssignment, async_op: bool = False):
-        """Load operation - not implemented for Mooncake"""
         raise NotImplementedError
