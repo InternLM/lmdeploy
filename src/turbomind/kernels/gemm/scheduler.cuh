@@ -64,11 +64,11 @@ constexpr int member_offset(M T::* member)
     return reinterpret_cast<std::size_t>(&(reinterpret_cast<T*>(0)->*member));
 }
 
-template<Order order, class Cluster, int striped_m, bool striped_n, int tile_m, int tile_n, bool is_grouped_gemm>
+template<Order order, class Cluster, int striped_m, bool striped_n, int tile_m, int tile_n, int Stages_, bool is_grouped_gemm>
 struct TileScheduler {
 
-    static constexpr bool is_dynamic = true;
-    static constexpr int  Stages     = 5;
+    static constexpr bool is_dynamic = is_grouped_gemm;
+    static constexpr int  Stages     = Stages_;
 
     static constexpr int2 tile_{tile_m, tile_n};
     static constexpr int2 cluster_tile_{tile_m * Cluster::M, tile_n* Cluster::N};

@@ -222,7 +222,9 @@ public:
         constexpr int kTileM = Gemm::TILE_M;
         constexpr int kTileN = Gemm::TILE_N;
 
-        check_cuda_error(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
+        if (Gemm::Scheduler::is_dynamic) {
+            check_cuda_error(cudaMemsetAsync(workspace.flags, 0, sizeof(int), stream));
+        }
 
         // std::cout << "A: " << Adesc << "\n";
         auto tm_a = make_2d_tma_desc((void*)A, Adesc, {kTileM / kMulticastA, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);

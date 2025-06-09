@@ -96,7 +96,7 @@ struct GemmUniversalSm90_v5 {
 
     static constexpr auto is_grouped_gemm = is_grouped_gemm_;
 
-    using Scheduler = TileScheduler<raster_order, Cluster, true, true, TILE_M, TILE_N, is_grouped_gemm>;
+    using Scheduler = TileScheduler<raster_order, Cluster, true, true, TILE_M, TILE_N, Stages, is_grouped_gemm>;
 
     static constexpr int kMulticastU = is_grouped_gemm ? 1 : kMulticastA;
 
