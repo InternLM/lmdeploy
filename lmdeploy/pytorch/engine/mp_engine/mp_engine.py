@@ -106,19 +106,12 @@ class MPEngine:
             self.port = self.shared_dict['rpc_server_port']
 
     @staticmethod
-    def _mp_proc(*args, **kwargs):
-        """Mp process function."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(MPEngine._mp_proc_async(*args, **kwargs))
-
-    @staticmethod
-    async def _mp_proc_async(shared_dict: dict,
-                             condition: mp.Condition,
-                             model_path: str,
-                             tokenizer: object,
-                             engine_config: PytorchEngineConfig = None,
-                             log_level: str = 'WARNING'):
+    def _mp_proc(shared_dict: dict,
+                 condition: mp.Condition,
+                 model_path: str,
+                 tokenizer: object,
+                 engine_config: PytorchEngineConfig = None,
+                 log_level: str = 'WARNING'):
         """Mp process function."""
         from lmdeploy.pytorch.engine import Engine
         from lmdeploy.tokenizer import Tokenizer
@@ -140,15 +133,22 @@ class MPEngine:
             tokenizer=tokenizer,
             engine_config=engine_config,
         )
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(MPEngine._mp_proc_async(server, engine))
+        except KeyboardInterrupt:
+            logger.info('Received KeyboardInterrupt, stopping mp process.')
+        finally:
+            server.stop()
+            engine.close()
+
+    @staticmethod
+    async def _mp_proc_async(server, engine):
+        """Mp process function."""
         instance_pool = EngineInstancePool(engine)
 
-        # register methods
-        def __close():
-            """Close the engine."""
-            engine.close()
-            server.stop()
-
-        server.register_method('close', __close)
         server.register_method('end_session', engine.end_session)
         server.register_method('get_engine_config', engine.get_engine_config)
         server.register_method('get_model_config', engine.get_model_config)
@@ -158,8 +158,11 @@ class MPEngine:
         server.register_method('instance_async_cancel', instance_pool.async_cancel)
         server.register_method('instance_async_stream_infer', instance_pool.async_stream_infer)
 
-        # run server
-        await server.run()
+        try:
+            # run server
+            await server.run()
+        except Exception as e:
+            logger.error(f'RPC Server stopped with exception: {e}')
 
     def _collective_rpc(self, func, *args, **kwargs):
         """Collective rpc call."""
@@ -175,10 +178,10 @@ class MPEngine:
 
     def close(self) -> None:
         """Close mp engine."""
-        self._collective_rpc('close')
-        self.proc.join(timeout=3)
-        self.proc.terminate()
+        logger.info('Closing mp engine.')
         self.rpc_client.stop()
+        self.proc.kill()
+        self.proc.join(10)
 
     def start_loop(self) -> None:
         """Start mp engine loop."""

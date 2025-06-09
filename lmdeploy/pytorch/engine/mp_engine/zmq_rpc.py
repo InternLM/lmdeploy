@@ -299,10 +299,15 @@ class AsyncRPCClient:
     async def listen(self):
         self._listen_task = asyncio.current_task()
         self.running = True
-        while self.running:
-            reply = await self.async_socket.recv()
-            reply = pickle.loads(reply)
-            self._set_reply(reply)
+        try:
+            while self.running:
+                reply = await self.async_socket.recv()
+                reply = pickle.loads(reply)
+                self._set_reply(reply)
+        except zmq.ZMQError:
+            logger.exception('AsyncRPCClient listen error')
+        finally:
+            self.running = False
 
     def stop(self):
         """Stop the client."""
