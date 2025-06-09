@@ -1,3 +1,4 @@
+import collections
 import json
 from typing import List, Tuple
 
@@ -6,6 +7,8 @@ import pytest
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
 from lmdeploy.serve.openai.tool_parser.qwen3_parser import Qwen3ToolParser
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser
+
+TestExpects = collections.namedtuple('TestExpects', 'func_name location')
 
 
 class DummyTokenizer:
@@ -17,7 +20,7 @@ class DummyTokenizer:
         return [ord(c) for c in text]
 
 
-delta_text_sequence = [
+DELTA_TEXT_SEQUENCE = [
     '<think>',
     '\n',
     '好的',
@@ -131,6 +134,29 @@ delta_text_sequence = [
     '</tool_call>',
 ]
 
+DELTA_TEXT_SEQUENCE_MULTIPLE_CALLS = DELTA_TEXT_SEQUENCE + [
+    '\n\n',
+    '<tool_call>',
+    '\n',
+    '{"',
+    'name',
+    '":',
+    ' "',
+    'get',
+    '_weather',
+    '",',
+    ' "',
+    'arguments',
+    '":',
+    ' {"',
+    'location',
+    '":',
+    ' "',
+    '上海',
+    '"}}\n',
+    '</tool_call>',
+]
+
 EXPECTED_CONTENT = ''
 EXPECTED_REASONING_CONTENT = ''.join((
     '好的，用户问的是北京的天气怎么样。我需要调用get_weather这个工具来获取信息。',
@@ -141,25 +167,27 @@ EXPECTED_REASONING_CONTENT = ''.join((
 ))
 
 
-@pytest.mark.parametrize(
-    "parser",
-    [
-        # Qwen2d5ToolParser(tokenizer=DummyTokenizer()), # not pass
-        Qwen3ToolParser(tokenizer=DummyTokenizer()),
-    ])
-def test_parser_stream(parser: ToolParser):
+@pytest.mark.parametrize(('text_sequence', 'expects'), [
+    (DELTA_TEXT_SEQUENCE, [TestExpects('get_weather', '北京')]),
+    (DELTA_TEXT_SEQUENCE_MULTIPLE_CALLS, [TestExpects('get_weather', '北京'),
+                                          TestExpects('get_weather', '上海')]),
+])
+def test_parser_stream(text_sequence: List[str], expects: List[TestExpects]):
+    parser = Qwen3ToolParser(tokenizer=DummyTokenizer())
     request = ChatCompletionRequest(model='qwen', messages=[])
-    content, reasoning_content, tool_calls = _stream_parse(parser, request)
-    assert len(tool_calls) == 1
-    assert tool_calls[0].function.name == 'get_weather'
-    args = json.loads(tool_calls[0].function.arguments)
-    assert args['location'] == '北京'
-    assert content.strip() == EXPECTED_CONTENT
-    assert reasoning_content.strip() == EXPECTED_REASONING_CONTENT
+    content, reasoning_content, tool_calls = _stream_parse(parser, request, text_sequence)
+    assert len(tool_calls) == len(expects)
+    for parsed_call, expected_call in zip(tool_calls, expects):
+        assert parsed_call.function.name == expected_call.func_name
+        args = json.loads(parsed_call.function.arguments)
+        assert args['location'] == expected_call.location
+        assert content.strip() == EXPECTED_CONTENT
+        assert reasoning_content.strip() == EXPECTED_REASONING_CONTENT
 
 
-def _stream_parse(parser: ToolParser, request: ChatCompletionRequest) -> Tuple[str, str, List[DeltaToolCall]]:
-    # Call parser.extract_tool_calls_streaming with delta_text specified in `delta_text_sequence`.
+def _stream_parse(parser: ToolParser, request: ChatCompletionRequest,
+                  text_sequence: List[str]) -> Tuple[str, str, List[DeltaToolCall]]:
+    # Call parser.extract_tool_calls_streaming with delta_text specified in `DELTA_TEXT_SEQUENCE`.
     # `current_text` and `previous_text` init values and update logic
     # can be found in lmdeploy/serve/openai/api_server.py:455-523.
     content = ''
@@ -168,7 +196,7 @@ def _stream_parse(parser: ToolParser, request: ChatCompletionRequest) -> Tuple[s
 
     previous_text = ''
     current_text = ''
-    for delta_text in delta_text_sequence:
+    for delta_text in text_sequence:
         current_text += delta_text
         tool_delta = parser.extract_tool_calls_streaming(previous_text=previous_text,
                                                          current_text=current_text,
@@ -199,13 +227,16 @@ def _stream_parse(parser: ToolParser, request: ChatCompletionRequest) -> Tuple[s
     return content, reasoning_content, list(sorted(tool_calls.values(), key=lambda x: x.index))
 
 
-@pytest.mark.parametrize("parser", [
-    Qwen3ToolParser(tokenizer=DummyTokenizer()),
+@pytest.mark.parametrize(('text_sequence', 'expects'), [
+    (DELTA_TEXT_SEQUENCE, [TestExpects('get_weather', '北京')]),
+    (DELTA_TEXT_SEQUENCE_MULTIPLE_CALLS, [TestExpects('get_weather', '北京'),
+                                          TestExpects('get_weather', '上海')]),
 ])
-def test_parser_nonstream(parser: ToolParser):
+def test_parser_nonstream(text_sequence: List[str], expects: List[TestExpects]):
+    parser = Qwen3ToolParser(tokenizer=DummyTokenizer())
     request = ChatCompletionRequest(model='qwen', messages=[])
     full_text = ''
-    for delta_text in delta_text_sequence:
+    for delta_text in text_sequence:
         full_text += delta_text
 
     extracted_info = parser.extract_tool_calls(full_text, request)
@@ -213,9 +244,10 @@ def test_parser_nonstream(parser: ToolParser):
     reasoning_content = extracted_info.reasoning_content
     tool_calls = extracted_info.tool_calls
 
-    assert len(tool_calls) == 1
-    assert tool_calls[0].function.name == 'get_weather'
-    args = json.loads(tool_calls[0].function.arguments)
-    assert args['location'] == '北京'
-    assert content.strip() == EXPECTED_CONTENT
-    assert reasoning_content.strip() == EXPECTED_REASONING_CONTENT
+    assert len(tool_calls) == len(expects)
+    for parsed_call, expected_call in zip(tool_calls, expects):
+        assert parsed_call.function.name == expected_call.func_name
+        args = json.loads(parsed_call.function.arguments)
+        assert args['location'] == expected_call.location
+        assert content == EXPECTED_CONTENT
+        assert reasoning_content == EXPECTED_REASONING_CONTENT
