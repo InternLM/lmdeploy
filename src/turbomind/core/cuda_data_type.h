@@ -58,6 +58,8 @@ constexpr DataType from_cuda_dtype(cudaDataType type) {
     }
 }
 
+#if CUDA_VERSION >= 12000
+
 constexpr CUtensorMapDataType to_CUtensorMap_dtype(DataType type) {
     switch (type) {
         case kFloat32: 
@@ -73,6 +75,8 @@ constexpr CUtensorMapDataType to_CUtensorMap_dtype(DataType type) {
             throw std::runtime_error("Not supported " + std::string{to_string(type)});
     }
 }
+
+#endif
 
 // clang-format on
 
