@@ -165,6 +165,7 @@ class NodeManager:
             status.models = client.available_models
             self.nodes[node_url] = status
         except requests.exceptions.RequestException as e:  # noqa
+            logger.error(f'exception happened when adding node {node_url}, {e}')
             return self.handle_api_timeout(node_url)
         self.update_config_file()
 
@@ -193,9 +194,12 @@ class NodeManager:
                     logger.error(f'Failed to terminate node {node_url}, '
                                  f'error_code={response.status_code}, '
                                  f'error_msg={response.text}')
-            except:  # noqa
+            except Exception as e:  # noqa
+                logger.error(f'exception happened when terminating node {node_url}, {e}')
                 success = False
         else:
+            logger.error(f'terminating node {node_url} failed since it does not exist. '
+                         'May try /nodes/status to check the node list')
             success = False
         self.update_config_file()
         return success
@@ -793,7 +797,7 @@ def proxy(server_name: str = '0.0.0.0',
           ssl: bool = False,
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
-          link_type: Literal['RoCE', 'IB'] = 'ROCE',
+          link_type: Literal['RoCE', 'IB'] = 'RoCE',
           migration_protocol: Literal['RDMA'] = 'RDMA',
           **kwargs):
     """To launch the proxy server.
@@ -833,10 +837,11 @@ def proxy(server_name: str = '0.0.0.0',
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
     logger.setLevel(log_level)
+    uvicorn_log_level = os.getenv('UVICORN_LOG_LEVEL', 'info').lower()
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
-                log_level='info',
+                log_level=uvicorn_log_level,
                 ssl_keyfile=ssl_keyfile,
                 ssl_certfile=ssl_certfile)
 
