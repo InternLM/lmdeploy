@@ -5,6 +5,8 @@
 
 namespace turbomind::gemm {
 
+#if CUDA_VERSION >= 12000
+
 namespace {
 
 PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled()
@@ -90,5 +92,7 @@ CUtensorMap make_2d_tma_desc(void* ptr, const MatrixLayout& desc, uint2 smem_sha
     return make_2d_tma_desc(
         ptr, desc.type, desc.rows, desc.cols, smem_shape.x, smem_shape.y, desc.order, swizzle, desc.ld);
 }
+
+#endif
 
 }  // namespace turbomind::gemm
