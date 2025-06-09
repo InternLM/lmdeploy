@@ -162,6 +162,8 @@ inline void myAssert(bool result, const char* const file, int const line, std::s
 
 int getSMVersion();
 
+int getSMCount();
+
 std::string getDeviceName();
 
 template<class T>

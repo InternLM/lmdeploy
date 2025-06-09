@@ -145,16 +145,19 @@ public:
         auto func = gemm_kernel_sm90<Gemm>;
 
         if (smem_size_ > (48 << 10)) {
-            cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);
+            check_cuda_error(cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_));
         }
 
         if (1) {
-            cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
+            check_cuda_error(cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16));
         }
 
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&desc_.max_active_ctas, func, Gemm::CTA_SIZE, smem_size_);
+        check_cuda_error(
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&desc_.max_active_ctas, func, Gemm::CTA_SIZE, smem_size_));
 
-        cudaFuncGetAttributes(&desc_.attr, func);
+        check_cuda_error(cudaFuncGetAttributes(&desc_.attr, func));
+
+        sm_count_ = getSMCount();
 
         name_ = GetName();
     }
@@ -254,7 +257,7 @@ public:
             // tm_v = make_2d_tma_desc((void*)V, Vdesc, {box_v.y, box_v.x}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
-        static constexpr int sm_count = 132;
+        const int sm_count = sm_count_;
 
         static constexpr int cluster_size = Gemm::kClusterSize;
 
@@ -453,6 +456,9 @@ public:
         }
         return Kernel::is_feasible(desc);
     }
+
+private:
+    int sm_count_ = 0;
 };
 
 }  // namespace turbomind::gemm
