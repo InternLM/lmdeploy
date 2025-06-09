@@ -73,6 +73,10 @@ def get_client_cmd(backend, server_ip, server_port, client_config):
         # change the key like 'dataset_path' to 'dataset-path' to suit the optional when performing
         # "python3 benchmark/profile_restful_api.py"
         key = key.replace('_', '-')
+        if key == 'disable-warmup':
+            if str(value).lower() == 'true':
+                cmd.append(f'--{key}')
+            continue
         cmd.append(f'--{key}')
         cmd.append(str(value))
     return cmd
