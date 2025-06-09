@@ -99,12 +99,15 @@ struct TileScheduler {
         int offset_n;
         int m0;
         int m;
+        int pad[1];
     };
 
+    // If `Tile` has power-of-2 size, generated code would be slower
+    static_assert((sizeof(Tile) & (sizeof(Tile) - 1)) != 0);
+
     struct Storage {
-        __align__(128) uint64_t producer_bar[Stages];
-        __align__(128) uint64_t consumer_bar[Stages];
-        // __align__(128) uint64_t sync_bar;
+        __align__(8) uint64_t producer_bar[Stages];
+        __align__(8) uint64_t consumer_bar[Stages];
         Tile tile[Stages];
     };
 
