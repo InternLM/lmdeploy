@@ -57,9 +57,10 @@ def wait_server_ready(server_ip, server_port):
 
 
 def get_client_cmd(backend, server_ip, server_port, client_config):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
     if backend in ['turbomind', 'pytorch']:
         cmd = [
-            'python3', 'benchmark/profile_restful_api.py', '--backend', 'lmdeploy', '--host', server_ip, '--port',
+            'python3', f'{current_dir}/profile_restful_api.py', '--backend', 'lmdeploy', '--host', server_ip, '--port',
             str(server_port)
         ]
     elif backend == 'sglang':
