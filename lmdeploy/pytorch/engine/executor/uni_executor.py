@@ -118,6 +118,6 @@ class UniExecutor(ExecutorBase):
 
     async def migrate(self, batch: MigrationExecutionBatch):
         """KV Cache Migration."""
-        return self.model_agent.cache_engine.migrate(batch)
+        return await self.model_agent.cache_engine.migrate(batch)
 
     """ PD Disaggregation API End """
