@@ -46,7 +46,7 @@ class TestZMQRPC:
         assert result == 'test1: method'
 
         idx = 0
-        async for result in await client.async_stream_call('streaming_method', 'test3'):
+        async for result in client.async_stream_call('streaming_method', 'test3'):
             assert result == f'test3: streaming method {idx}'
             idx += 1
 

@@ -17,7 +17,7 @@ class EngineInstancePool:
     def __init__(self, engine):
         from lmdeploy.pytorch.engine import Engine
         self.engine: Engine = engine
-        self.num_instance = self.engine.engine_config.max_batch_size + 32
+        self.num_instance = self.engine.engine_config.max_batch_size
         self.pool = None
 
     def create_instance_pool(self, num_instance: int):
@@ -171,7 +171,7 @@ class MPEngine:
 
     async def _collective_rpc_streaming_async(self, func, *args, **kwargs):
         """Collective rpc call."""
-        return await self.rpc_client.async_stream_call(func, *args, **kwargs)
+        return self.rpc_client.async_stream_call(func, *args, **kwargs)
 
     def close(self) -> None:
         """Close mp engine."""

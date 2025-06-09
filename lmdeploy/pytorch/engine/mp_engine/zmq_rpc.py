@@ -43,6 +43,15 @@ class AsyncRPCServer:
         self.methods: Dict[str, Callable] = {}
         self.running = False
 
+        # streaming
+        self.stream_output = dict()
+        self._stream_idx = 0
+
+    def _get_next_stream_id(self):
+        """Get next stream id."""
+        self._stream_idx += 1
+        return self._stream_idx
+
     def register_method(self, name: str, func: Callable):
         """Register method."""
         if asyncio.iscoroutinefunction(func):
@@ -77,20 +86,40 @@ class AsyncRPCServer:
             response = dict(success=False, request_id=request_id, error=str(e))
         self.send_multipart(client_id, response)
 
-    async def _method_async_streaming_task(self, client_id, request_id, method: Callable, args: tuple, kwargs: Dict):
+    async def _method_async_streaming_task(self, stream_id, method: Callable, args: tuple, kwargs: Dict):
         """Call method in a task for streaming."""
+        stream_out = dict(
+            event=asyncio.Event(),
+            result=None,
+            stopped=False,
+        )
+        self.stream_output[stream_id] = stream_out
         try:
             generator = method(*args, **kwargs)
-            result = await anext(generator)
-            async for next_result in generator:
-                response = dict(success=True, request_id=request_id, result=result, streaming_end=False)
-                self.send_multipart(client_id, response)
-                result = next_result
-            response = dict(success=True, request_id=request_id, result=result, streaming_end=True)
-            self.send_multipart(client_id, response)
+            async for result in generator:
+                stream_out['result'] = result
+                stream_out['event'].set()
         except Exception as e:
-            response = dict(success=False, request_id=request_id, error=str(e))
-            self.send_multipart(client_id, response)
+            stream_out['error'] = e
+            stream_out['event'].set()
+        finally:
+            stream_out['stopped'] = True
+
+    async def get_stream_output(self, stream_id: int):
+        """Get streaming output."""
+        if stream_id not in self.stream_output:
+            raise ValueError(f'Stream ID {stream_id} not found')
+        stream_out = self.stream_output[stream_id]
+        event = stream_out['event']
+        await stream_out['event'].wait()
+        event.clear()
+        result = stream_out['result']
+        stopped = stream_out['stopped']
+        if stopped:
+            self.stream_output.pop(stream_id)
+        if 'error' in stream_out:
+            raise Exception(stream_out['error'])
+        return result, stopped
 
     def call_method_async(self, client_id, method: Callable, request: Dict):
         """Call method async."""
@@ -102,8 +131,10 @@ class AsyncRPCServer:
         name = f'{method_name}_{client_id}'
         if request.get('streaming', False):
             # if method is a streaming method, use a different task
-            event_loop.create_task(self._method_async_streaming_task(client_id, request_id, method, args, kwargs),
-                                   name=name)
+            stream_id = self._get_next_stream_id()
+            event_loop.create_task(self._method_async_streaming_task(stream_id, method, args, kwargs), name=name)
+            response = dict(success=True, request_id=request_id, result=stream_id)
+            self.send_multipart(client_id, response)
         else:
             event_loop.create_task(self._method_async_task(client_id, request_id, method, args, kwargs), name=name)
 
@@ -132,6 +163,8 @@ class AsyncRPCServer:
         poller = zmq.Poller()
         poller.register(self.socket, zmq.POLLIN)
         event_loop = asyncio.get_event_loop()
+
+        self.register_method('_asyncrpcserver_get_stream_output', self.get_stream_output)
         try:
             while self.running:
                 events = await event_loop.run_in_executor(None, poller.poll, 100)  # 100ms timeout
@@ -196,7 +229,6 @@ class AsyncRPCClient:
         self.async_socket.connect(address)
 
         self.pending = {}
-        self.stream_pending = {}
         self._listen_task = None
         self.running = False
 
@@ -209,26 +241,9 @@ class AsyncRPCClient:
         else:
             future.set_exception(Exception(reply['error']))
 
-    def _set_reply_streaming(self, request_id: int, reply: Dict):
-        """Streaming reply handler for async socket."""
-        logger.debug(f'recv stream reply request_id: {request_id}')
-        result = self.stream_pending[request_id]
-        if reply['success']:
-            stopped = reply.get('streaming_end', False)
-            result.set_result(reply['result'], stopped=stopped)
-            if stopped:
-                self.stream_pending.pop(request_id)
-        else:
-            result.set_result(reply['result'], True)
-            self.stream_pending.pop(request_id)
-            raise Exception(reply['error'])
-
     def _set_reply(self, reply: Dict):
         request_id = reply['request_id']
-        if request_id in self.pending:
-            self._set_reply_default(request_id, reply)
-        elif request_id in self.stream_pending:
-            self._set_reply_streaming(request_id, reply)
+        self._set_reply_default(request_id, reply)
 
     def _try_start_listen(self):
         """Try to start listening on async socket."""
@@ -256,41 +271,35 @@ class AsyncRPCClient:
         else:
             raise Exception(reply['error'])
 
-    async def async_call(self, method, *args, **kwargs):
+    async def _async_call_impl(self, method, streaming, *args, **kwargs):
         self._try_start_listen()
         request_id = str(uuid4())
         future = asyncio.Future()
         self.pending[request_id] = future
 
         logger.debug(f'call method: {method}, request_id: {request_id}')
-        data = pickle.dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs))
+        data = pickle.dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs, streaming=streaming))
         await self.async_socket.send(data)
 
         return await future
 
-    async def async_stream_call(self, method, *args, **kwargs):
-        self._try_start_listen()
-        request_id = str(uuid4())
-        output = StreamingOutput()
-        self.stream_pending[request_id] = output
+    async def async_call(self, method, *args, **kwargs):
+        """Async call."""
+        return await self._async_call_impl(method, False, *args, **kwargs)
 
-        logger.debug(f'call method: {method}, request_id: {request_id}')
-        data = pickle.dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs, streaming=True))
-        await self.async_socket.send(data)
-        return output
+    async def async_stream_call(self, method, *args, **kwargs):
+        """Streaming call."""
+        stream_id = await self._async_call_impl(method, True, *args, **kwargs)
+
+        stopped = False
+        while not stopped:
+            output, stopped = await self.async_call('_asyncrpcserver_get_stream_output', stream_id)
+            yield output
 
     async def listen(self):
         self._listen_task = asyncio.current_task()
         self.running = True
         while self.running:
-            # # get as many replies as possible from sync socket
-            # while True:
-            #     try:
-            #         reply = self.sync_socket.recv(zmq.NOBLOCK)
-            #         reply = pickle.loads(reply)
-            #         self._set_reply(reply)
-            #     except zmq.Again:
-            #         break
             reply = await self.async_socket.recv()
             reply = pickle.loads(reply)
             self._set_reply(reply)
