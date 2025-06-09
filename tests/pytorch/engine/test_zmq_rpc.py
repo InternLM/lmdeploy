@@ -6,7 +6,10 @@ class TestZMQRPC:
 
     def sub_proc(self, shared_dict=None, condition=None):
         from lmdeploy.pytorch.engine.mp_engine.zmq_rpc import AsyncRPCServer
-        server = AsyncRPCServer(shared_dict, condition)
+        server = AsyncRPCServer()
+        with condition:
+            shared_dict['rpc_server_port'] = server.port
+            condition.notify()
 
         async def streaming_method(name):
             for i in range(3):

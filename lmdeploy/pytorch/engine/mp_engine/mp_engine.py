@@ -97,6 +97,7 @@ class MPEngine:
                                                 engine_config=engine_config,
                                                 log_level=log_level,
                                             )),
+                                            name='mp_engine_proc',
                                             daemon=True)
             self.proc.start()
             logger.debug('Receiving rpc server port from mp process.')
@@ -121,7 +122,10 @@ class MPEngine:
         logger.setLevel(log_level)
 
         # create an async rpc server
-        server = AsyncRPCServer(shared_dict, condition)
+        server = AsyncRPCServer()
+        with condition:
+            shared_dict['rpc_server_port'] = server.port
+            condition.notify()
 
         # create engine
         if engine_config is not None:

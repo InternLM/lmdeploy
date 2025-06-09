@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import inspect
-import multiprocessing as mp
 import pickle
 from typing import Callable, Dict
 from uuid import uuid4
@@ -31,21 +30,20 @@ def _task_callback(task: asyncio.Task) -> None:
 
 class AsyncRPCServer:
 
-    def __init__(self, shared_dict: dict = None, condition: mp.Condition = None):
+    def __init__(self):
         address = 'tcp://*'
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.ROUTER)
         self.port = self.socket.bind_to_random_port(address)
-        if condition is not None:
-            with condition:
-                shared_dict['rpc_server_port'] = self.port
-                condition.notify()
         self.methods: Dict[str, Callable] = {}
         self.running = False
 
         # streaming
         self.stream_output = dict()
         self._stream_idx = 0
+
+    def get_port(self):
+        return self.port
 
     def _get_next_stream_id(self):
         """Get next stream id."""
@@ -184,32 +182,6 @@ class AsyncRPCServer:
         self.running = False
 
 
-class StreamingOutput:
-    """Streaming output."""
-
-    def __init__(self):
-        self.event = asyncio.Event()
-        self.stopped = False
-        self.result = None
-
-    def set_result(self, result, stopped: bool = False):
-        """Set result for streaming output."""
-        self.result = result
-        self.stopped = stopped
-        self.event.set()
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        """Awaitable for streaming output."""
-        if self.stopped and not self.event.is_set():
-            raise StopAsyncIteration
-        await self.event.wait()
-        self.event.clear()
-        return self.result
-
-
 class AsyncRPCClient:
 
     def __init__(self, port: int = 5555):
@@ -236,10 +208,13 @@ class AsyncRPCClient:
         """Default reply handler for sync socket."""
         logger.debug(f'recv reply request_id: {request_id}')
         future: asyncio.Future = self.pending.pop(request_id)
-        if reply['success']:
-            future.set_result(reply['result'])
-        else:
-            future.set_exception(Exception(reply['error']))
+        try:
+            if reply['success']:
+                future.set_result(reply['result'])
+            else:
+                future.set_exception(Exception(reply['error']))
+        except Exception as e:
+            logger.debug(f'Set future failed with exception: {e}')
 
     def _set_reply(self, reply: Dict):
         request_id = reply['request_id']
@@ -308,12 +283,17 @@ class AsyncRPCClient:
             logger.exception('AsyncRPCClient listen error')
         finally:
             self.running = False
+            self.close_sockets()
 
     def stop(self):
         """Stop the client."""
         self.running = False
         if self._listen_task is not None:
             self._listen_task.cancel()
+        self.close_sockets()
+
+    def close_sockets(self):
+        """Close sockets."""
         self.async_socket.close()
         self.sync_socket.close()
         self.async_ctx.term()
