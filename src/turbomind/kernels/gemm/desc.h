@@ -94,6 +94,7 @@ struct KernelDesc {
     int       policy_b;
     int3      cta_tile;
     int3      mma_tile;
+    int2      cluster_shape;
     int3      align;
     int2      c_tile;
     int       stages;

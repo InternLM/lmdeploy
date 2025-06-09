@@ -128,6 +128,8 @@ public:
         desc_.c_tile   = {TILE_M, TILE_N};  // {Gemm::Epilogue::TM, Gemm::Epilogue::TN};
         desc_.op_class = OpClass::kGMMA_s64n16;
 
+        desc_.cluster_shape = {Gemm::Cluster::M, Gemm::Cluster::N};
+
         smem_size_ = Gemm::kSmemSize;
 
         desc_.stages  = Gemm::Stages;

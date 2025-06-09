@@ -79,6 +79,8 @@ public:
         desc_.c_tile   = {Gemm::Epilogue::TM, Gemm::Epilogue::TN};
         desc_.op_class = Impl::kOpClass;
 
+        desc_.cluster_shape = {1, 1};
+
         smem_size_ = sizeof(typename Gemm::SharedStorage);
 
         desc_.stages  = Impl::Stages;

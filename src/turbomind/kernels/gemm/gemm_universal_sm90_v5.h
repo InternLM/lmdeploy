@@ -39,7 +39,7 @@
 
 namespace turbomind::gemm {
 
-template<Order raster_order, bool is_grouped_gemm_>
+template<Order raster_order, int multicast_a, int multicast_b, bool is_grouped_gemm_>
 struct GemmUniversalSm90_v5 {
 
     static constexpr bool kDebug = false;
@@ -70,8 +70,8 @@ struct GemmUniversalSm90_v5 {
     static constexpr int MMA_ITER_N = WG_TILE_N / MMA_ATOM_N;
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
 
-    static constexpr int kMulticastA = 1;
-    static constexpr int kMulticastB = 2;
+    static constexpr int kMulticastA = multicast_a;
+    static constexpr int kMulticastB = multicast_b;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
