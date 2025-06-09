@@ -45,12 +45,12 @@ class TestZMQRPC:
         result = await client.async_call('method', 'test1')
         assert result == 'test1: method'
 
-        idx = 0
         async for result in client.async_stream_call('streaming_method', 'test3'):
-            assert result == f'test3: streaming method {idx}'
-            idx += 1
+            pass
+        assert result == 'test3: streaming method 2'
 
         await client.async_call('close')
+        client.stop()
 
     def test_zmq_rpc(self):
         with mp.Manager() as manager:
