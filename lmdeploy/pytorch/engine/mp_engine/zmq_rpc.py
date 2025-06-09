@@ -14,6 +14,21 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
+def _task_callback(task: asyncio.Task) -> None:
+    """Raise exception on finish."""
+    task_name = task.get_name()
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.debug(f'Task <{task_name}> cancelled.')
+        return
+    except Exception:
+        logger.exception(f'Task <{task_name}> failed')
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 class AsyncRPCServer:
 
     def __init__(self, shared_dict: dict = None, condition: mp.Condition = None):
@@ -124,6 +139,13 @@ class AsyncRPCServer:
                     await self.call_and_response()
         except zmq.ZMQError:
             logger.exception('ZMQRPCServer error')
+        except Exception:
+            logger.exception('AsyncRPCServer error')
+        finally:
+            logger.info('Stopping AsyncRPCServer...')
+            self.socket.close()
+            self.context.term()
+            self.running = False
 
     def stop(self):
         self.running = False
@@ -176,6 +198,7 @@ class AsyncRPCClient:
         self.pending = {}
         self.stream_pending = {}
         self._listen_task = None
+        self.running = False
 
     def _set_reply_default(self, request_id: int, reply: Dict):
         """Default reply handler for sync socket."""
@@ -211,7 +234,8 @@ class AsyncRPCClient:
         """Try to start listening on async socket."""
         if self._listen_task is None or self._listen_task.done():
             logger.debug('Starting async listen task...')
-            self._listen_task = asyncio.create_task(self.listen())
+            self._listen_task = asyncio.create_task(self.listen(), name='AsyncRPCClient.listen')
+            self._listen_task.add_done_callback(_task_callback)
 
     def call(self, method, *args, **kwargs):
         request_id = str(uuid4())
@@ -257,7 +281,26 @@ class AsyncRPCClient:
 
     async def listen(self):
         self._listen_task = asyncio.current_task()
-        while True:
+        self.running = True
+        while self.running:
+            # # get as many replies as possible from sync socket
+            # while True:
+            #     try:
+            #         reply = self.sync_socket.recv(zmq.NOBLOCK)
+            #         reply = pickle.loads(reply)
+            #         self._set_reply(reply)
+            #     except zmq.Again:
+            #         break
             reply = await self.async_socket.recv()
             reply = pickle.loads(reply)
             self._set_reply(reply)
+
+    def stop(self):
+        """Stop the client."""
+        self.running = False
+        if self._listen_task is not None:
+            self._listen_task.cancel()
+        self.async_socket.close()
+        self.sync_socket.close()
+        self.async_ctx.term()
+        self.sync_ctx.term()

@@ -1,9 +1,9 @@
-import pytest
 import asyncio
 import multiprocessing as mp
 
 
 class TestZMQRPC:
+
     def sub_proc(self, shared_dict=None, condition=None):
         from lmdeploy.pytorch.engine.mp_engine.zmq_rpc import AsyncRPCServer
         server = AsyncRPCServer(shared_dict, condition)
@@ -37,8 +37,8 @@ class TestZMQRPC:
         client = AsyncRPCClient(port=port)
 
         loop = asyncio.get_event_loop()
-        task = loop.create_task(client.listen())
-        
+        _ = loop.create_task(client.listen())
+
         # Example usage
         result = client.call('async_method', 'test2')
         assert result == 'test2: async method'

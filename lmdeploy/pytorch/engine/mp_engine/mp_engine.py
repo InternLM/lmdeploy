@@ -17,7 +17,7 @@ class EngineInstancePool:
     def __init__(self, engine):
         from lmdeploy.pytorch.engine import Engine
         self.engine: Engine = engine
-        self.num_instance = self.engine.engine_config.max_batch_size
+        self.num_instance = self.engine.engine_config.max_batch_size + 32
         self.pool = None
 
     def create_instance_pool(self, num_instance: int):
@@ -143,7 +143,12 @@ class MPEngine:
         instance_pool = EngineInstancePool(engine)
 
         # register methods
-        server.register_method('close', engine.close)
+        def __close():
+            """Close the engine."""
+            engine.close()
+            server.stop()
+
+        server.register_method('close', __close)
         server.register_method('end_session', engine.end_session)
         server.register_method('get_engine_config', engine.get_engine_config)
         server.register_method('get_model_config', engine.get_model_config)
@@ -171,7 +176,9 @@ class MPEngine:
     def close(self) -> None:
         """Close mp engine."""
         self._collective_rpc('close')
-        self.proc.close()
+        self.proc.join(timeout=3)
+        self.proc.terminate()
+        self.rpc_client.stop()
 
     def start_loop(self) -> None:
         """Start mp engine loop."""
@@ -195,6 +202,8 @@ class MPEngine:
 
 class MPEngineInstance:
     """MP Engine Instance."""
+
+    _is_pytorch_engine = True
 
     def __init__(self, engine: MPEngine):
         self.engine = engine
