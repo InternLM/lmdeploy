@@ -66,8 +66,6 @@ struct GemmUniversalSm90_v5 {
     static constexpr int WG_TILE_M = TILE_M / WG_M;
     static constexpr int WG_TILE_N = TILE_N / WG_N;
 
-    static constexpr int kSchedStepSize = 2;
-
     static constexpr int MMA_ITER_M = WG_TILE_M / MMA_ATOM_M;
     static constexpr int MMA_ITER_N = WG_TILE_N / MMA_ATOM_N;
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
@@ -130,7 +128,8 @@ struct GemmUniversalSm90_v5 {
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
         __align__(128) CUtensorMap tma_desc_buf[5];  //
-        int pipe_count[2];
+        int                         pipe_count[2];
+        typename Scheduler::Storage sched;
     };
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
@@ -168,6 +167,7 @@ struct GemmUniversalSm90_v5 {
                 ProducerBar::init(&producer_bar[s], 1);
                 ConsumerBar::init(&consumer_bar[s], kClusterSize * (kMathGroupSize / WARP_SIZE));
             }
+            sched.init_dyanmic(storage.sched, kClusterSize * (kMathGroupSize / WARP_SIZE + 1));
             cutlass::arch::fence_view_async_shared();
             if constexpr (kClusterSize > 1) {
                 cutlass::arch::fence_barrier_init();
@@ -188,7 +188,10 @@ struct GemmUniversalSm90_v5 {
             static_assert(TILE_M % kMulticastA == 0);
             static_assert(TILE_N % kMulticastB == 0);
 
-            const int warp_id = cutlass::canonical_warp_idx_sync();
+            cutlass::arch::NamedBarrier producers_bar(WARP_SIZE * 2, 5);
+
+            const int  warp_id = cutlass::canonical_warp_idx_sync();
+            const bool cta_0   = cute::block_id_in_cluster().x == 0;
 
             if (warp_id % 4 == 0) {
 
@@ -205,89 +208,113 @@ struct GemmUniversalSm90_v5 {
                     init_tma_descs<3>({&tm_a, &tm_b, &tm_u}, storage.tma_desc_buf);
                 }
 
-                sched.grid_init();
-
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
 
-                while (sched.next()) {
-                    auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
+                auto sched_state = sched.init_consumer(storage.sched);
 
-                    if (!cluster_tile_p) {
-                        // OOB tile caused by swizzle pattern
-                        continue;
-                    }
+                typename Scheduler::Tile* tile;
 
-                    const auto tile_offset              = sched.tile_offset();
-                    const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
+                while (sched_state.acquire(tile)) {
 
-                    const CUtensorMap* Adesc = &tm_a;
-                    const CUtensorMap* Bdesc = &tm_b;
-                    const CUtensorMap* Udesc = &tm_u;
+                    // if (cute::elect_one_sync()) {
+                    //     printf("READ m %d n %d g %d v %s\n",
+                    //            tile->offset_m,
+                    //            tile->offset_n,
+                    //            tile->group_idx,
+                    //            tile->is_valid_cluster ? "true" : "false");
+                    // }
 
-                    if constexpr (is_grouped_gemm) {
-                        const int g = sched.group_idx_;
+                    if (tile->is_valid_cluster) {
 
-                        Array<void*, 3> global_addrs;
-                        global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * (int64_t)param_A.stride;
-                        global_addrs[1] = ((void**)param_B.ptr)[g];
+                        const CUtensorMap* Adesc = &tm_a;
+                        const CUtensorMap* Bdesc = &tm_b;
+                        const CUtensorMap* Udesc = &tm_u;
 
-                        const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
-                        const int end_u = round_up(param_U.offsets[g + 1], kAlignmentU);
-                        global_addrs[2] = (Tu*)param_U.ptr + beg_u;
+                        if constexpr (is_grouped_gemm) {
+                            const int g = tile->group_idx;
 
-                        Array<int, 3> dims;
-                        dims[0] = param_A.offsets[g + 1] - param_A.offsets[g];
-                        dims[1] = sched.gemm_shape().y;
-                        dims[2] = end_u - beg_u;
+                            const int m  = tile->m;
+                            const int m0 = tile->m0;
+                            const int m1 = m0 + m;
 
-                        auto descs = update_tma_descs(tensormap_buf, storage.tma_desc_buf, global_addrs, dims);
-                        Adesc      = &descs[0];
-                        Bdesc      = &descs[1];
-                        Udesc      = &descs[2];
+                            Array<void*, 3> global_addrs;
+                            global_addrs[0] = (Ta*)param_A.ptr + m0 * (int64_t)param_A.stride;
+                            global_addrs[1] = ((void**)param_B.ptr)[g];
 
-                        PRAGMA_UNROLL
-                        for (int i = 0; i < 3; ++i) {
-                            cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)&descs[i]);
+                            const int beg_u = m0 / kAlignmentU * kAlignmentU;
+                            const int end_u = round_up(m1, kAlignmentU);
+                            global_addrs[2] = (Tu*)param_U.ptr + beg_u;
+
+                            Array<int, 3> dims;
+                            dims[0] = m;
+                            dims[1] = sched.gemm_shape().y;
+                            dims[2] = end_u - beg_u;
+
+                            auto descs = update_tma_descs(tensormap_buf, storage.tma_desc_buf, global_addrs, dims);
+                            Adesc      = &descs[0];
+                            Bdesc      = &descs[1];
+                            Udesc      = &descs[2];
+
+                            PRAGMA_UNROLL
+                            for (int i = 0; i < 3; ++i) {
+                                cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)&descs[i]);
+                            }
+                        }
+
+                        if (cute::elect_one_sync()) {
+
+                            const int offset_k = 0;
+
+                            const uint16_t mask_A = cluster.mask_m();
+                            const uint16_t mask_B = cluster.mask_n();
+
+                            const int offset_m = tile->offset_m;
+                            const int offset_n = tile->offset_n;
+
+                            int k_iter = sched.k_iters_;
+
+                            GmemIteratorSm90<kMulticastA> gmem_A{
+                                Adesc, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
+                            GmemIteratorSm90<kMulticastB> gmem_B{
+                                Bdesc, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
+
+                            const int mc_offset_u = kMulticastU > 1 ? mc_offset_m : 0;
+                            // column-major
+                            GmemIteratorSm90<kMulticastU> gmem_U{
+                                Udesc, {offset_m + mc_offset_u, offset_k / 128}, {0, 1}};
+
+                            for (; k_iter > 0; --k_iter) {
+                                int pipe = write_state.index();
+                                ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
+                                ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
+                                gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
+                                gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
+                                gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_u, mask_A);
+                                ++write_state;
+                            }
                         }
                     }
 
-                    if (cute::elect_one_sync()) {
-
-                        // printf("READ %d %d %d %d %s\n",
-                        //        tile_offset.x,
-                        //        tile_offset.y,
-                        //        sched.cluster_idx_,
-                        //        sched.group_idx_,
-                        //        cluster_tile_p ? "true" : "false");
-
-                        const int offset_k = iter_k_beg * TILE_K;
-
-                        const uint16_t mask_A = cluster.mask_m();
-                        const uint16_t mask_B = cluster.mask_n();
-
-                        const int offset_m = tile_offset.x * TILE_M;
-                        const int offset_n = tile_offset.y * TILE_N;
-
-                        int k_iter = iter_k_end - iter_k_beg;
-
-                        GmemIteratorSm90<kMulticastA> gmem_A{Adesc, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
-                        GmemIteratorSm90<kMulticastB> gmem_B{Bdesc, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
-
-                        const int mc_offset_u = kMulticastU > 1 ? mc_offset_m : 0;
-                        // column-major
-                        GmemIteratorSm90<kMulticastU> gmem_U{Udesc, {offset_m + mc_offset_u, offset_k / 128}, {0, 1}};
-
-                        for (; k_iter > 0; --k_iter) {
-                            int pipe = write_state.index();
-                            ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
-                            ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
-                            gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
-                            gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
-                            gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_u, mask_A);
-                            ++write_state;
+                    if constexpr (Scheduler::is_dynamic) {
+                        if (cta_0) {
+                            producers_bar.arrive_unaligned();
                         }
+                    }
+
+                    sched_state.release();
+                }
+                sched_state.acquire(tile);
+                sched_state.release();
+            }
+            else if (warp_id % 4 == 1 && cta_0) {
+                auto sched_state = sched.init_producer(storage.sched);
+                while (sched_state.next()) {
+                    if constexpr (Scheduler::is_dynamic) {
+                        producers_bar.arrive_and_wait_unaligned();
                     }
                 }
+                // send extra null tile
+                sched_state.next();
             }
         }
         else {
@@ -300,8 +327,6 @@ struct GemmUniversalSm90_v5 {
                     init_tma_descs<1>({&tm_c}, storage.tma_desc_buf + 3 + math_group_idx);
                 }
             }
-
-            sched.grid_init(kSchedStepSize);
 
             auto& smem_A = storage.source.A;
             auto& smem_B = storage.source.B;
@@ -352,203 +377,162 @@ struct GemmUniversalSm90_v5 {
 
             cutlass::arch::NamedBarrier math_group_barrier(kMathGroupSize, 2 + math_group_idx);  // 2,3
 
-            // sched.next(math_group_idx);
+            cutlass::PipelineState<Stages> pipe_state{};
+
+            const int warp_id = cutlass::canonical_warp_idx_sync();
+            const int lane_id = cutlass::canonical_lane_idx();
+
+            auto consumer_arrive = [&] {
+                __syncwarp();
+                if constexpr (kClusterSize > 1) {
+                    ConsumerBar::arrive(&consumer_bar[pipe_state.index()], lane_id, lane_id < kClusterSize);
+                }
+                else {
+                    if (lane_id == 0) {
+                        ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
+                    }
+                }
+            };
+
+            auto sched_state = sched.init_consumer(storage.sched);
 
             if (math_group_idx == 1) {
-                sched.cluster_idx_ += (int)cute::cluster_grid_dims().x;
+                ++sched_state.pipe;
                 math_barrier_sync(1);
             }
 
-            while (sched.next(kSchedStepSize)) {
-                auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
+            typename Scheduler::Tile* tile;
 
-                const auto tile_offset = sched.tile_offset();
+            sched_state.acquire(tile);
+
+            while (tile->alive) {
 
                 // if (thread_idx == 0) {
-                //     printf("TILE %d %d %d %d %d %s\n",
-                //            sched.cluster_idx_,
+                //     printf("TILE %d %d %d %d %s\n",
+                //            //    sched.cluster_idx_,
                 //            math_group_idx,
-                //            tile_offset.x,
-                //            tile_offset.y,
-                //            sched.group_idx_,
-                //            cluster_tile_p ? "true" : "false");
+                //            tile->offset_m,
+                //            tile->offset_n,
+                //            tile->group_idx,
+                //            tile->is_valid_cluster ? "true" : "false");
                 // }
 
-                if (!cluster_tile_p) {
-                    // OOB tile caused by swizzle pattern
-                    math_barrier_sync(0);
-                    if (thread_idx == 0) {
-                        storage.pipe_count[math_group_idx] = storage.pipe_count[math_group_idx ^ 1];
-                    }
-                    math_barrier_sync(1);
-                    continue;
-                }
+                if (tile->is_valid_cta) {
 
-                MMA_Atom::CRegisters frag_C;
-                MMA_Atom::CRegisters accum_C[MMA_ITER_M][MMA_ITER_N]{};
+                    // const auto tile_offset = sched.tile_offset();
 
-                const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
+                    MMA_Atom::CRegisters frag_C;
+                    MMA_Atom::CRegisters accum_C[MMA_ITER_M][MMA_ITER_N]{};
 
-                const auto [M, N, K, L] = sched.gemm_shape();
+                    // const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
 
-                const int offset_m = tile_offset.x * TILE_M;
-                const int offset_n = tile_offset.y * TILE_N;
+                    const auto [_, N, K, L] = sched.gemm_shape();
 
-                int k_iter = iter_k_end - iter_k_beg;
+                    const int offset_m = tile->offset_m;
+                    const int offset_n = tile->offset_n;
 
-                const int warp_id = threadIdx.x / WARP_SIZE;
-                const int lane_id = threadIdx.x % WARP_SIZE;
+                    int k_iter = sched.k_iters_;
 
-                cutlass::PipelineState<Stages> pipe_state{};
-
-                auto consumer_arrive = [&] {
-                    __syncwarp();
-                    if constexpr (kClusterSize > 1) {
-                        ConsumerBar::arrive(&consumer_bar[pipe_state.index()], lane_id, lane_id < kClusterSize);
-                    }
-                    else {
-                        if (lane_id == 0) {
-                            ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
+                    if constexpr (is_grouped_gemm) {
+                        if (thread_idx / WARP_SIZE == 0) {
+                            auto addr = (Tc*)param_C.ptr + tile->m0 * (int64_t)param_C.stride;
+                            int  idx  = 3 + math_group_idx;
+                            update_tma_descs<1>(tensormap_buf + idx, storage.tma_desc_buf + idx, {addr}, {tile->m});
                         }
                     }
-                };
 
-                if constexpr (kClusterSize > 1) {
-                    if (!cta_tile_p) {  // other CTAs in the cluster are still alive
-                        math_barrier_sync(0);
-                        pipe_state.advance(storage.pipe_count[math_group_idx ^ 1]);
-                        for (; k_iter > 0; --k_iter) {
-                            ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
-                            consumer_arrive();
-                            ++pipe_state;
+                    uint32_t pred_V{};
+                    Fetch_V(pred_V,
+                            param_V,
+                            K,
+                            N,
+                            tile->offset_n,
+                            math_group_idx,
+                            wg_idx_n,
+                            tile->group_idx,
+                            storage,
+                            tile->is_valid_cta);
+
+                    float scale_V[2];
+                    int   iter_V{};
+                    auto  Load_V = [&] {
+                        scale_V[0] = storage.source.V[0][math_group_idx][iter_V];
+                        if (pred_V) {
+                            scale_V[1] = storage.source.V[1][math_group_idx][iter_V];
                         }
-                        // const int thread_idx = threadIdx.x % kMathGroupSize;
-                        if (thread_idx == 0) {
-                            storage.pipe_count[math_group_idx] = pipe_state.count();
+                        ++iter_V;
+                    };
+
+                    float     scale_U[MMA_ITER_M][2];
+                    const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
+                    int       align_U  = 0;
+                    if constexpr (is_grouped_gemm) {
+                        align_U = tile->m0 % kAlignmentU;
+                    }
+                    auto Load_U = [&] {
+                        for (int m = 0; m < MMA_ITER_M; ++m) {
+                            scale_U[m][0] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M];
+                            scale_U[m][1] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M + 8];
                         }
-                        math_barrier_sync(1);
-                        continue;
-                    }
-                }
+                    };
 
-                if constexpr (is_grouped_gemm) {
-                    if (thread_idx / WARP_SIZE == 0) {
-                        auto addr = (Tc*)param_C.ptr + param_C.offsets[sched.group_idx_] * (int64_t)param_C.stride;
-                        int  idx  = 3 + math_group_idx;
-                        update_tma_descs<1>(tensormap_buf + idx, storage.tma_desc_buf + idx, {addr}, {M});
-                    }
-                }
-
-                uint32_t pred_V{};
-                Fetch_V(pred_V,
-                        param_V,
-                        K,
-                        N,
-                        sched.tile_offset().y * TILE_N,
-                        math_group_idx,
-                        wg_idx_n,
-                        sched.group_idx_,
-                        storage,
-                        cta_tile_p);
-
-                float scale_V[2];
-                int   iter_V{};
-                auto  Load_V = [&] {
-                    scale_V[0] = storage.source.V[0][math_group_idx][iter_V];
-                    if (pred_V) {
-                        scale_V[1] = storage.source.V[1][math_group_idx][iter_V];
-                    }
-                    ++iter_V;
-                };
-
-                float     scale_U[MMA_ITER_M][2];
-                const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
-                int       align_U  = 0;
-                if constexpr (is_grouped_gemm) {
-                    align_U = param_U.offsets[sched.group_idx_] % kAlignmentU;
-                }
-                auto Load_U = [&] {
-                    for (int m = 0; m < MMA_ITER_M; ++m) {
-                        scale_U[m][0] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M];
-                        scale_U[m][1] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M + 8];
-                    }
-                };
-
-                float scales[2][2];
-                auto  scale_accum = [&](int n) {  // cta_n = mma_iter_n * wg_n * mma_atom_n
-                    int m        = 0;
-                    scales[0][0] = scale_U[m][0] * scale_V[0];
-                    scales[1][0] = scale_U[m][1] * scale_V[0];
-                    scales[0][1] = scale_U[m][0] * scale_V[1];
-                    scales[1][1] = scale_U[m][1] * scale_V[1];
-                    PRAGMA_UNROLL
-                    for (int c0 = 0; c0 < MMA_ATOM_N; c0 += OUTER_N) {
-                        bool pred = (pred_V & (1U << (c0 / OUTER_N)));
+                    float scales[2][2];
+                    auto  scale_accum = [&](int n) {  // cta_n = mma_iter_n * wg_n * mma_atom_n
+                        int m        = 0;
+                        scales[0][0] = scale_U[m][0] * scale_V[0];
+                        scales[1][0] = scale_U[m][1] * scale_V[0];
+                        scales[0][1] = scale_U[m][0] * scale_V[1];
+                        scales[1][1] = scale_U[m][1] * scale_V[1];
                         PRAGMA_UNROLL
-                        for (int cc = 0; cc < OUTER_N; cc += 8) {
-                            int c = c0 + cc;
-                            // clang-format off
-                            accum_C[m][n][c / 2 + 0] += (pred ? scales[0][1] : scales[0][0]) * frag_C[c / 2 + 0]; 
-                            accum_C[m][n][c / 2 + 1] += (pred ? scales[0][1] : scales[0][0]) * frag_C[c / 2 + 1]; 
-                            accum_C[m][n][c / 2 + 2] += (pred ? scales[1][1] : scales[1][0]) * frag_C[c / 2 + 2]; 
-                            accum_C[m][n][c / 2 + 3] += (pred ? scales[1][1] : scales[1][0]) * frag_C[c / 2 + 3];
-                            // clang-format on
+                        for (int c0 = 0; c0 < MMA_ATOM_N; c0 += OUTER_N) {
+                            bool pred = (pred_V & (1U << (c0 / OUTER_N)));
+                            PRAGMA_UNROLL
+                            for (int cc = 0; cc < OUTER_N; cc += 8) {
+                                int c = c0 + cc;
+                                // clang-format off
+                                accum_C[m][n][c / 2 + 0] += (pred ? scales[0][1] : scales[0][0]) * frag_C[c / 2 + 0]; 
+                                accum_C[m][n][c / 2 + 1] += (pred ? scales[0][1] : scales[0][0]) * frag_C[c / 2 + 1]; 
+                                accum_C[m][n][c / 2 + 2] += (pred ? scales[1][1] : scales[1][0]) * frag_C[c / 2 + 2]; 
+                                accum_C[m][n][c / 2 + 3] += (pred ? scales[1][1] : scales[1][0]) * frag_C[c / 2 + 3];
+                                // clang-format on
+                            }
                         }
-                    }
-                };
+                    };
 
-                auto gmma = [&](int n) {
-                    PRAGMA_UNROLL
-                    for (int k = 0; k < MMA_ITER_K; ++k) {
-                        wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C, k == 0);
-                        smem_iter_A += kStepKA;
-                        smem_iter_B += kStepKB;
-                    }
-                    smem_iter_A -= MMA_ITER_K * kStepKA;
-                    smem_iter_B -= MMA_ITER_K * kStepKB;
-                    smem_iter_B += kStepNB;
-                    if (n == MMA_ITER_N - 1) {
-                        smem_iter_B -= MMA_ITER_N * kStepNB;
-                    }
-                    cute::warpgroup_commit_batch();
-                };
+                    auto gmma = [&](int n) {
+                        PRAGMA_UNROLL
+                        for (int k = 0; k < MMA_ITER_K; ++k) {
+                            wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C, k == 0);
+                            smem_iter_A += kStepKA;
+                            smem_iter_B += kStepKB;
+                        }
+                        smem_iter_A -= MMA_ITER_K * kStepKA;
+                        smem_iter_B -= MMA_ITER_K * kStepKB;
+                        smem_iter_B += kStepNB;
+                        if (n == MMA_ITER_N - 1) {
+                            smem_iter_B -= MMA_ITER_N * kStepNB;
+                        }
+                        cute::warpgroup_commit_batch();
+                    };
 
-                static_assert(MMA_ITER_M == 1);
+                    static_assert(MMA_ITER_M == 1);
 
-                // __pipeline_wait_prior(0);
+                    // __pipeline_wait_prior(0);
 
-                math_barrier_sync(0);
+                    math_barrier_sync(0);
 
-                pipe_state.advance(storage.pipe_count[math_group_idx ^ 1]);
+                    pipe_state = {};
+                    pipe_state.advance(storage.pipe_count[math_group_idx ^ 1]);
 
-                // if (thread_idx == 0) {
-                //     printf("ACQUIRE %4d, %4d\n", math_group_idx, (int)pipe_state.count());
-                // }
+                    // if (thread_idx == 0) {
+                    //     printf("ACQUIRE %4d, %4d\n", math_group_idx, (int)pipe_state.count());
+                    // }
 
-                smem_iter_A.Reset(pipe_state.index());
-                smem_iter_B.Reset(pipe_state.index());
-                Load_V();
-                ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
-                Load_U();
-                cute::warpgroup_arrive();
-                gmma(0);
-                cute::warpgroup_wait<0>();
-                scale_accum(0);
-                cute::warpgroup_arrive();
-                gmma(1);
-                cute::warpgroup_wait<0>();
-                scale_accum(1);
-                consumer_arrive();
-                ++pipe_state;
-                --k_iter;
-
-                Load_V();
-                ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
-                Load_U();
-                smem_iter_A.Reset(pipe_state.index());
-                smem_iter_B.Reset(pipe_state.index());
-
-                for (; k_iter > 1; --k_iter) {
+                    smem_iter_A.Reset(pipe_state.index());
+                    smem_iter_B.Reset(pipe_state.index());
+                    Load_V();
+                    ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                    Load_U();
                     cute::warpgroup_arrive();
                     gmma(0);
                     cute::warpgroup_wait<0>();
@@ -559,101 +543,135 @@ struct GemmUniversalSm90_v5 {
                     scale_accum(1);
                     consumer_arrive();
                     ++pipe_state;
+                    --k_iter;
 
                     Load_V();
                     ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                     Load_U();
                     smem_iter_A.Reset(pipe_state.index());
                     smem_iter_B.Reset(pipe_state.index());
-                }
 
-                cute::warpgroup_arrive();
-                gmma(0);
-                cute::warpgroup_wait<0>();
-                scale_accum(0);
-                cute::warpgroup_arrive();
-                gmma(1);
-                cute::warpgroup_wait<0>();
-                consumer_arrive();
-                ++pipe_state;
+                    for (; k_iter > 1; --k_iter) {
+                        cute::warpgroup_arrive();
+                        gmma(0);
+                        cute::warpgroup_wait<0>();
+                        scale_accum(0);
+                        cute::warpgroup_arrive();
+                        gmma(1);
+                        cute::warpgroup_wait<0>();
+                        scale_accum(1);
+                        consumer_arrive();
+                        ++pipe_state;
 
-                if (thread_idx == 0) {
-                    storage.pipe_count[math_group_idx] = pipe_state.count();
-                    // printf("RELEASE %4d, %4d\n", math_group_idx, (int)pipe_state.count());
-                }
+                        Load_V();
+                        ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                        Load_U();
+                        smem_iter_A.Reset(pipe_state.index());
+                        smem_iter_B.Reset(pipe_state.index());
+                    }
 
-                math_barrier_sync(1);
+                    cute::warpgroup_arrive();
+                    gmma(0);
+                    cute::warpgroup_wait<0>();
+                    scale_accum(0);
+                    cute::warpgroup_arrive();
+                    gmma(1);
+                    cute::warpgroup_wait<0>();
+                    consumer_arrive();
+                    ++pipe_state;
 
-                scale_accum(1);
+                    if (thread_idx == 0) {
+                        storage.pipe_count[math_group_idx] = pipe_state.count();
+                        // printf("RELEASE %4d, %4d\n", math_group_idx, (int)pipe_state.count());
+                    }
 
-                // epilogue
-                PRAGMA_UNROLL
-                for (int m = 0; m < MMA_ITER_M; ++m) {
+                    math_barrier_sync(1);
+
+                    scale_accum(1);
+
+                    // epilogue
                     PRAGMA_UNROLL
-                    for (int n = 0; n < MMA_ITER_N; ++n) {
-
-                        constexpr int N       = LayoutC::C0;
-                        constexpr int SW_bits = log2(kSwizzleC / 16);
-
-                        static_assert(!SW_bits || MMA_ATOM_N % LayoutC::C0 == 0);
-
-                        const int m0 = m * MMA_ATOM_M + wg_idx_m * WG_TILE_M;
-                        const int n0 = n * MMA_ATOM_N + wg_idx_n * WG_TILE_N;
-
-                        // PRAGMA_UNROLL
-                        // for (int i = 0; i < MMA_ATOM_N; i += 16) {
-                        //     __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
-
-                        //     int mm = m0 + warp_id % 4 * 16 + (lane_id & 8) + lane_id % 8;
-                        //     int nn = n0 + i + (lane_id & 16) / 2;
-
-                        //     auto& uvec = (Array<uint32_t, 4>&)tvec;
-
-                        //     cute::SM90_U32x4_STSM_N::copy(
-                        //         uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)storage.C[mm * TILE_N +
-                        //         nn]);
-                        // }
-
+                    for (int m = 0; m < MMA_ITER_M; ++m) {
                         PRAGMA_UNROLL
-                        for (int i = 0; i < MMA_ATOM_N; i += 16) {
-                            __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
-                            // fill(tvec, Tc(255));
-                            int mm = m0 + warp_id % 4 * 16 + (lane_id & 8);
-                            int nn = n0 + i / N * N;
+                        for (int n = 0; n < MMA_ITER_N; ++n) {
 
-                            int addr = ((nn / N) * TILE_M * N) + (mm * N) + (nn % N);
+                            constexpr int N       = LayoutC::C0;
+                            constexpr int SW_bits = log2(kSwizzleC / 16);
 
-                            int s = lane_id % 8;
-                            int c = (lane_id & 16) / 2 + i % N;
+                            static_assert(!SW_bits || MMA_ATOM_N % LayoutC::C0 == 0);
 
-                            addr += Swizzle<SW_bits, 3, 3>::apply(s * N + c);
+                            const int m0 = m * MMA_ATOM_M + wg_idx_m * WG_TILE_M;
+                            const int n0 = n * MMA_ATOM_N + wg_idx_n * WG_TILE_N;
 
-                            auto& uvec = (Array<uint32_t, 4>&)tvec;
-                            cute::SM90_U32x4_STSM_N::copy(
-                                uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)storage.C[addr]);
+                            PRAGMA_UNROLL
+                            for (int i = 0; i < MMA_ATOM_N; i += 16) {
+                                __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
+                                // fill(tvec, Tc(255));
+                                int mm = m0 + warp_id % 4 * 16 + (lane_id & 8);
+                                int nn = n0 + i / N * N;
+
+                                int addr = ((nn / N) * TILE_M * N) + (mm * N) + (nn % N);
+
+                                int s = lane_id % 8;
+                                int c = (lane_id & 16) / 2 + i % N;
+
+                                addr += Swizzle<SW_bits, 3, 3>::apply(s * N + c);
+
+                                auto& uvec = (Array<uint32_t, 4>&)tvec;
+                                cute::SM90_U32x4_STSM_N::copy(
+                                    uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)storage.C[addr]);
+                            }
                         }
                     }
-                }
 
-                cute::tma_store_fence();  // visibility: smem -> async proxy
+                    cute::tma_store_fence();  // visibility: smem -> async proxy
 
-                math_group_barrier.sync();
+                    math_group_barrier.sync();
 
-                if (thread_idx < LayoutC::C1) {
-                    const void* Cdesc = &tm_c;
-                    const int   tma_n = thread_idx * LayoutC::C0;
-                    if constexpr (is_grouped_gemm) {
-                        Cdesc = &tensormap_buf[3 + math_group_idx + blockIdx.x * 5];
-                        cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
+                    if (thread_idx < LayoutC::C1) {
+                        const void* Cdesc = &tm_c;
+                        const int   tma_n = thread_idx * LayoutC::C0;
+                        if constexpr (is_grouped_gemm) {
+                            Cdesc = &tensormap_buf[3 + math_group_idx + blockIdx.x * 5];
+                            cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
+                        }
+                        cute::SM90_TMA_STORE::copy(
+                            Cdesc, &storage.C[thread_idx * TILE_M * LayoutC::C0], offset_n + tma_n, offset_m);
+                        cute::tma_store_arrive();
+                        cute::tma_store_wait<0>();
                     }
-                    cute::SM90_TMA_STORE::copy(
-                        Cdesc, &storage.C[thread_idx * TILE_M * LayoutC::C0], offset_n + tma_n, offset_m);
-                    cute::tma_store_arrive();
-                    cute::tma_store_wait<0>();
+
+                    // math_group_barrier.sync();
+
+                }  // valid cta tile
+                else {
+                    math_barrier_sync(0);
+
+                    pipe_state = {};
+                    pipe_state.advance(storage.pipe_count[math_group_idx ^ 1]);
+
+                    if (tile->is_valid_cluster) {
+                        // other CTAs in the cluster are still alive
+                        for (int k_iter = sched.k_iters_; k_iter > 0; --k_iter) {
+                            ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                            consumer_arrive();
+                            ++pipe_state;
+                        }
+                    }
+
+                    if (thread_idx == 0) {
+                        storage.pipe_count[math_group_idx] = pipe_state.count();
+                    }
+
+                    math_barrier_sync(1);
                 }
 
-                // math_group_barrier.sync();
+                sched_state.release(2);
+                sched_state.acquire(tile);
 
+                // if (thread_idx == 0) {
+                //     printf("pipe = %d\n", sched_state.pipe.index());
+                // }
             }  // scheduler loop
 
             // if (thread_idx == 0) {

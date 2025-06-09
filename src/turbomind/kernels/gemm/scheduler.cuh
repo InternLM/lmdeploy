@@ -14,8 +14,6 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/pipeline/sm90_pipeline.hpp"
 
-#include <cooperative_groups.h>
-
 namespace turbomind::gemm {
 
 TM_DEVICE void mbarrier_arrive_cluster(uint64_t* mbar, int cta_id, int pred)
@@ -55,11 +53,22 @@ TM_DEVICE void* map_to_cta(void* ptr, int cta_id)
     return ret;
 }
 
+TM_DEVICE void st_shared_cluster(uint32_t ptr, int value)
+{
+    asm volatile("st.shared::cluster.s32 [%0], %1;\n" ::"r"(ptr), "r"(value));
+}
+
+template<class T, class M>
+constexpr int member_offset(M T::* member)
+{
+    return reinterpret_cast<std::size_t>(&(reinterpret_cast<T*>(0)->*member));
+}
+
 template<Order order, class Cluster, int striped_m, bool striped_n, int tile_m, int tile_n, bool is_grouped_gemm>
 struct TileScheduler {
 
     static constexpr bool is_dynamic = true;
-    static constexpr int  Stages     = 4;
+    static constexpr int  Stages     = 5;
 
     static constexpr int2 tile_{tile_m, tile_n};
     static constexpr int2 cluster_tile_{tile_m * Cluster::M, tile_n* Cluster::N};
@@ -102,7 +111,7 @@ struct TileScheduler {
         int pad[1];
     };
 
-    // If `Tile` has power-of-2 size, generated code would be slower
+    // Slower if `Tile` has power-of-2 size
     static_assert((sizeof(Tile) & (sizeof(Tile) - 1)) != 0);
 
     struct Storage {
@@ -121,9 +130,9 @@ struct TileScheduler {
             return sched.acquire(*this, tile);
         }
 
-        TM_DEVICE void release()
+        TM_DEVICE void release(int step = 1)
         {
-            return sched.release(*this);
+            return sched.release(*this, step);
         }
     };
 
@@ -392,10 +401,11 @@ public:
                           cta_tiles,
                           cluster_tiles,
                           swizzle_tiles);
+                // tile->group_idx = state.group_idx;
                 if constexpr (is_grouped_gemm) {
                     tile->group_idx = state.group_idx;
-                    tile->m0        = group_m0;
-                    tile->m         = group_m;
+                    tile->m0 = group_m0;
+                    tile->m  = group_m;
                 }
             }
         }
@@ -435,7 +445,7 @@ public:
         return tile->alive;
     }
 
-    TM_DEVICE void release(ConsumerState& state)
+    TM_DEVICE void release(ConsumerState& state, int step)
     {
         auto& store = state.store;
         auto& pipe  = state.pipe;
@@ -451,7 +461,7 @@ public:
             cutlass::arch::ClusterBarrier::arrive(&store.consumer_bar[pipe.index()], 0, cutlass::elect_one_sync());
         }
 
-        ++pipe;
+        pipe.advance(step);
     }
 
     TM_DEVICE int4 gemm_shape() const
