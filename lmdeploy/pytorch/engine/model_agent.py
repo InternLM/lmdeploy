@@ -49,7 +49,7 @@ class AgentProfiler:
         self.prefix = envs.torch_profile_output_prefix
         self._task = None
         self._started = False
-        if self.dp > 1 and self.duration < 0:
+        if self.dp > 1 and self.duration < 0 and self.profiler is not None:
             logger.warning('Do not support duration<=0 for dp > 1.')
             self.profiler = None
 
@@ -469,9 +469,9 @@ class BaseModelAgent:
     async def _async_step_background(
         self,
         inputs: ModelInputs,
-        swap_in_map: Dict,
-        swap_out_map: Dict,
         loop_count: int,
+        swap_in_map: Dict = None,
+        swap_out_map: Dict = None,
         all_ids: torch.Tensor = None,
         guided_input_ids: torch.Tensor = None,
         sampling_inputs: SamplingInputs = None,
@@ -482,6 +482,11 @@ class BaseModelAgent:
         sync_long_context: bool = False,
     ):
         """Asyc forward task."""
+        if swap_in_map is None:
+            swap_in_map = dict()
+
+        if swap_out_map is None:
+            swap_out_map = dict()
 
         dist_ctx = get_dist_manager().current_context()
 
@@ -565,8 +570,6 @@ class BaseModelAgent:
         # skip dummy forward.
         if is_all_dummy:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
-            for idx in range(loop_count):
-                self._out_que.put_nowait(None)
             return
 
         for idx in range(loop_count):
@@ -584,7 +587,6 @@ class BaseModelAgent:
 
             # output empty for dummy inputs
             if is_dummy:
-                self._out_que.put_nowait(None)
                 continue
 
             # sampling and stopping
@@ -627,14 +629,25 @@ class BaseModelAgent:
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
         with self.all_context(), torch.cuda.stream(self.stream), torch.inference_mode():
+            dist_ctx = get_dist_manager().current_context()
+            dp = dist_ctx.dp
+
+            # for dp
+            if dp > 1:
+                input_maker = DPForwardInputsMaker(self)
+            else:
+                input_maker = DefaultForwardInputsMaker(self)
+
             while True:
-                forward_inputs = await self._in_que.get()
+                forward_inputs = await input_maker.get()
 
                 if forward_event is not None:
                     forward_event.clear()
                 await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
+
+                input_maker.step()
 
     async def _async_loop_inputs_preprocess(self):
         """Async loop inputs preprocess."""
@@ -884,6 +897,103 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         torch.cuda.empty_cache()
+
+
+class DefaultForwardInputsMaker:
+    """Default forward inputs maker."""
+
+    def __init__(self, model_agent: BaseModelAgent):
+        self._in_que = model_agent._in_que
+
+    async def get(self):
+        """get."""
+        return await self._in_que.get()
+
+    def step(self):
+        """step."""
+        # No-op for default maker
+        pass
+
+
+class DPForwardInputsMaker:
+    """Dp forward inputs maker."""
+
+    def __init__(self, model_agent: BaseModelAgent):
+        self.model_agent = model_agent
+        self.dist_ctx = model_agent.dist_ctx
+        self.model_config = model_agent.model_config
+        self.cache_config = model_agent.cache_config
+        self.misc_config = model_agent.misc_config
+        self.device = model_agent.device
+        self._in_que = model_agent._in_que
+
+        # maker metas
+        self._next_inputs = None
+        self._is_decoding = False
+        self._ready_event = torch.cuda.Event()
+
+    def _make_dummy_forward_inputs(self):
+        """Make dummy forward inputs."""
+        is_decoding = self._is_decoding
+        loop_count = self.misc_config.prefill_interval if is_decoding else 1
+        dist_config = self.dist_ctx.dist_config
+        batch_size = 2 if dist_config.enable_microbatch else 1
+        batch_size = min(self.cache_config.max_batches, batch_size)
+        model_inputs = ModelInputs.make_dummy(batch_size,
+                                              is_decoding,
+                                              device=self.device,
+                                              vocab_size=self.model_config.vocab_size)
+        forward_inputs = dict(
+            inputs=model_inputs,
+            loop_count=loop_count,
+            is_dummy=True,
+            sync_long_context=False,
+        )
+        return forward_inputs
+
+    def _update_is_decoding(self, forward_inputs):
+        """Update is decoding."""
+        model_inputs = forward_inputs['inputs']
+        assert model_inputs.is_decoding == self._is_decoding
+        if self.cache_config.role != EngineRole.Prefill:
+            self._is_decoding = not self._is_decoding
+
+    async def get(self):
+        """get."""
+        if self._next_inputs is not None:
+            forward_inputs = self._next_inputs
+            self._next_inputs = None
+            self._update_is_decoding(forward_inputs)
+            return forward_inputs
+
+        # wait until has inputs or prev forward finish
+        while self._in_que.qsize() == 0 and not self._ready_event.query():
+            await asyncio.sleep(0.001)
+
+        # try get inputs
+        need_dummy = True
+        try:
+            forward_inputs = await asyncio.wait_for(self._in_que.get(), timeout=0.02)
+            model_inputs = forward_inputs['inputs']
+            if model_inputs.is_decoding != self._is_decoding:
+                self._next_inputs = forward_inputs
+            else:
+                need_dummy = False
+        except asyncio.TimeoutError:
+            pass
+
+        # make dummy inputs
+        if need_dummy:
+            forward_inputs = self._make_dummy_forward_inputs()
+
+        self._update_is_decoding(forward_inputs)
+
+        return forward_inputs
+
+    def step(self):
+        """step."""
+        self._ready_event = torch.cuda.Event()
+        self._ready_event.record()
 
 
 def build_model_agent(model_path: str,

@@ -55,10 +55,13 @@ class SafetensorsLoader(BaseLoader):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
+            # there is no model.safetensors.index.json in the model_path,
+            # read tensor form the safetensor file and update the index
             for shard in self.shards:
+                filename = osp.basename(shard)
                 with safe_open(shard, 'pt') as f:
-                    index.update({k: shard for k in f.keys()})
-        # self.index maps weight names to their containing safetensors file paths
+                    index.update({k: filename for k in f.keys()})
+        # self.index maps weight names to their corresponding safetensors file name
         self.index = index
         # count layer-wise parameters
         for k in index.keys():
@@ -69,9 +72,9 @@ class SafetensorsLoader(BaseLoader):
     def items(self):
         params = defaultdict(dict)
         for shard in self.shards:
-            filename = osp.split(shard)[-1]
             with safe_open(shard, 'pt') as f:
                 misc = []
+                filename = osp.basename(shard)
                 for k in f.keys():
                     # Filtering logic:
                     # - Exclude weights not found in the mapping
