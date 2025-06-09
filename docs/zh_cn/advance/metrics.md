@@ -116,7 +116,7 @@ grafana:
 尝试向 LMDeploy 服务发送请求生成流量：
 
 ```
-python3 benchmark/profile_pipeline_api.py ShareGPT_V3_unfiltered_cleaned_split.json Qwen/Qwen2.5-7B-Instruct
+python3 benchmark/profile_restful_api.py --backend lmdeploy --num-prompts 5000 --dataset-path ShareGPT_V3_unfiltered_cleaned_split.json
 ```
 
 刷新后仪表盘应显示数据。

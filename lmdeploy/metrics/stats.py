@@ -21,11 +21,11 @@ class SchedulerStats:
 
     def __repr__(self):
         """Return a human-readable string representation."""
-        return (f'SchedulerStats(\n'
+        return ('SchedulerStats(\n'
                 f'  num_running_reqs={self.num_running_reqs},\n'
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
-                f')')
+                ')')
 
 
 @dataclass
@@ -71,14 +71,14 @@ class IterationStats:
 
     def __repr__(self):
         """Return a human-readable string representation."""
-        return (f'IterationStats(\n'
+        return ('IterationStats(\n'
                 f'  iteration_timestamp={self.iteration_timestamp:.6f},\n'
                 f'  num_generation_tokens={self.num_generation_tokens},\n'
                 f'  num_prompt_tokens={self.num_prompt_tokens},\n'
                 f'  finished_requests_count={len(self.finished_requests)},\n'
                 f'  time_to_first_tokens_iter={self.time_to_first_tokens_iter},\n'
                 f'  time_per_output_tokens_iter={self.time_per_output_tokens_iter},\n'
-                f')')
+                ')')
 
     def _time_since(self, start: float) -> float:
         """Calculate an interval relative to this iteration's timestamp."""

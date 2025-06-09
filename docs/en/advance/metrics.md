@@ -117,7 +117,7 @@ grafana:
 Try to send some requests to the LMDeploy server to create certain traffic
 
 ```
-python3 benchmark/profile_pipeline_api.py ShareGPT_V3_unfiltered_cleaned_split.json Qwen/Qwen2.5-7B-Instruct
+python3 benchmark/profile_restful_api.py --backend lmdeploy --num-prompts 5000 --dataset-path ShareGPT_V3_unfiltered_cleaned_split.json
 ```
 
 After refreshing, you should be able to see data on the dashboard.
