@@ -220,6 +220,9 @@ class TurbomindEngineConfig:
             "Dynamic SplitFuse"-like scheduling
         max_prefill_iters(int): the max number of forward pass during prefill
             stage
+        devices(List[int]): the used devices
+        empty_init (bool): Whether to load the model weights, you should set
+            it to True if you want to update weights after create the pipeline
     """
 
     dtype: str = 'auto'
@@ -246,6 +249,8 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    devices: Optional[List[int]] = None
+    empty_init: bool = False
     communicator: str = 'nccl'
 
     def __post_init__(self):

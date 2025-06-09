@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal
 
 import torch
 
+from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 
 
@@ -220,5 +221,14 @@ class ModelConfig:
 
 @dataclass
 class MiscConfig:
+    prefill_interval: int = 16
     custom_module_map: str = None
     empty_init: bool = False
+
+    @classmethod
+    def from_engine_config(cls, engine_config: PytorchEngineConfig):
+        """From engine config."""
+        misc_config = cls(custom_module_map=engine_config.custom_module_map,
+                          empty_init=engine_config.empty_init,
+                          prefill_interval=engine_config.prefill_interval)
+        return misc_config
