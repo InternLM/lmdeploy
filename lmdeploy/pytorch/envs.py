@@ -39,9 +39,6 @@ def env_to_int(
     return value
 
 
-# loader
-random_load_weight = env_to_bool('LMDEPLOY_RANDOM_LOAD_WEIGHT', False)
-
 # profile
 ray_nsys_enable = env_to_bool('LMDEPLOY_RAY_NSYS_ENABLE', False)
 ray_nsys_output_prefix = os.getenv('LMDEPLOY_RAY_NSYS_OUT_PREFIX', None)

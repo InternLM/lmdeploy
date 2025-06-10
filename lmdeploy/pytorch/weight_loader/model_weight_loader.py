@@ -9,7 +9,6 @@ from safetensors.torch import safe_open
 from tqdm.auto import tqdm
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME
 
-from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.utils import get_logger
 
@@ -154,8 +153,9 @@ class ModelWeightLoader:
         disable_tqdm = rank != 0
 
         paths = sorted(paths)
-        if _envs.random_load_weight:
-            np.random.shuffle(paths)
+        # If multiple instances are created simultaneously, randomly loading weights can
+        # accelerate the loading process on certain network storage.
+        np.random.shuffle(paths)
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
             weights_iterator = self._get_weights_iterator(path)
             model.load_weights(weights_iterator)
