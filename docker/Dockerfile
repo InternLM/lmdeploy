@@ -37,6 +37,9 @@ RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then \
     cd .. && rm -rf nccl ; \
     fi
 
+RUN if [ "$CUDA_VERSION_SHORT" = "cu121" ]; then \
+    pip install nvidia-nccl-cu12==2.25.1
+
 ENV LD_LIBRARY_PATH=/usr/local/nccl/lib:$LD_LIBRARY_PATH
 
 
