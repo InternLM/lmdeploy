@@ -151,6 +151,7 @@ class MPEngine:
     @staticmethod
     async def _mp_proc_async(server, engine):
         """Mp process function."""
+        engine.start_loop()
         instance_pool = EngineInstancePool(engine)
 
         server.register_method('end_session', engine.end_session)
