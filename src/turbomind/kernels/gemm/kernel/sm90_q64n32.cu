@@ -30,10 +30,14 @@ void Registry::sm90_s64n32_dynamic()
     Add(std::make_unique<KernelImplSm90<GemmUniversalSm90_v3<kColMajor, 1, 2, true>>>());
 }
 
+}  // namespace turbomind::gemm
+
 #else
+
+namespace turbomind::gemm {
 
 void Registry::sm90_s64n32_dynamic() {}
 
-#endif
-
 }  // namespace turbomind::gemm
+
+#endif
