@@ -19,14 +19,6 @@ RUN apt-get update -y && apt-get install -y software-properties-common wget vim 
 
 ENV PATH=/opt/py3/bin:$PATH
 
-# install openmpi
-RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz &&\
-    tar xf openmpi-4.1.5.tar.gz && cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi &&\
-    make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
-
-ENV PATH=$PATH:/usr/local/openmpi/bin
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-
 # install nccl manually for cuda11.8
 RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then \
     git clone --depth=1 --branch v2.22.3-1 https://github.com/NVIDIA/nccl.git &&\
