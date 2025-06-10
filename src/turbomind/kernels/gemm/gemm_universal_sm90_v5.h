@@ -120,7 +120,7 @@ struct GemmUniversalSm90_v5 {
         struct Source {
             __align__(1024) Array<Ta, Stages * TILE_M * TILE_K> A;
             __align__(1024) Array<Tb, Stages * TILE_N * TILE_K> B;
-            __align__(1024) Tu U[Stages][round_up<int>(kBoxU, 128 / sizeof(Tu))];
+            __align__(1024) Tu U[Stages][round_up<int>(kBoxU, 128)];
             __align__(1024) Tv V[2][2][MAX_K_BLOCKS];
         };
         Source source;
@@ -777,7 +777,7 @@ struct GemmUniversalSm90_v5 {
                 }
             }
             // PRAGMA_UNROLL
-            // for (int i = 0; i < MAX_K_BLOCKS; i += WARPGROUP_SIZE) {
+            // for (int i = 0; i < MAX_K_BLOCKS; i += kMathGroupSize) {
             //     int p = tid + i;
             //     CP_ASYNC<CacheOp::kAlways, 4, 0>::apply(cast_smem_ptr_to_uint(&dst[p]), &src[p], p < k && pred);
             // }

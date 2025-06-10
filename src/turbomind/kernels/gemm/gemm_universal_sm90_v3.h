@@ -121,7 +121,7 @@ struct GemmUniversalSm90_v3 {
         struct Source {
             __align__(1024) Array<Ta, Stages * TILE_M * TILE_K> A;
             __align__(1024) Array<Tb, Stages * TILE_N * TILE_K> B;
-            __align__(1024) Tu U[Stages][round_up<int>(kBoxU, 128 / sizeof(Tu))];  // 128 byte alignment
+            __align__(1024) Tu U[Stages][round_up<int>(kBoxU, 128)];  // at least 128 byte alignment
             __align__(1024) Tv V[2][MAX_K_BLOCKS];
         };
         Source source;

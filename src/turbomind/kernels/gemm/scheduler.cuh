@@ -129,9 +129,9 @@ struct TileScheduler {
     using Tile = std::conditional_t<is_grouped_gemm, Tile1, Tile0>;
 
     struct Storage {
+        Tile tile[Stages];
         __align__(8) uint64_t producer_bar[Stages];
         __align__(8) uint64_t consumer_bar[Stages];
-        Tile tile[Stages];
     };
 
     struct ConsumerState {
