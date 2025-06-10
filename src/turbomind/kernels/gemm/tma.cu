@@ -1,7 +1,7 @@
 
-#include "src/turbomind/kernels/gemm/tma.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/cuda_data_type.h"
+#include "src/turbomind/kernels/gemm/tma.h"
 
 namespace turbomind::gemm {
 
@@ -29,12 +29,12 @@ PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled()
     return ptr;
 }
 
-__attribute__((noinline)) CUtensorMap make_2d_tma_desc(void*              global_address,
-                                                       DataType           data_type,
-                                                       uint64_t           gmem_dims[2],
-                                                       uint64_t           stride_in_bytes,
-                                                       uint32_t           smem_dims[2],
-                                                       CUtensorMapSwizzle swizzle)
+CUtensorMap make_2d_tma_desc(void*              global_address,
+                             DataType           data_type,
+                             uint64_t           gmem_dims[2],
+                             uint64_t           stride_in_bytes,
+                             uint32_t           smem_dims[2],
+                             CUtensorMapSwizzle swizzle)
 {
     uint64_t global_stride[1] = {stride_in_bytes};
     uint32_t elem_strides[2]  = {1, 1};
