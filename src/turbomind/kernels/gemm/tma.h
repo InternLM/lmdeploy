@@ -8,7 +8,7 @@
 
 namespace turbomind::gemm {
 
-#if CUDA_VERSION >= 12000
+#if __CUDACC_VER_MAJOR__ >= 12
 
 CUtensorMap make_2d_tma_desc(void*              global_address,
                              DataType           data_type,

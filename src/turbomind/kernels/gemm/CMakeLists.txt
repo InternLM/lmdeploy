@@ -10,7 +10,7 @@ add_library(gemm2
         cast.cu
         unpack.cu
         context.cu
-        tma.cc
+        tma.cu
         tuner/cache_utils.cu
         tuner/measurer.cu
         tuner/sampler.cu

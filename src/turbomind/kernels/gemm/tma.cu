@@ -5,7 +5,7 @@
 
 namespace turbomind::gemm {
 
-#if CUDA_VERSION >= 12000
+#if __CUDACC_VER_MAJOR__ >= 12
 
 namespace {
 

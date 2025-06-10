@@ -58,7 +58,7 @@ constexpr DataType from_cuda_dtype(cudaDataType type) {
     }
 }
 
-#if CUDA_VERSION >= 12000
+#if __CUDACC_VER_MAJOR__ >= 12
 
 constexpr CUtensorMapDataType to_CUtensorMap_dtype(DataType type) {
     switch (type) {
