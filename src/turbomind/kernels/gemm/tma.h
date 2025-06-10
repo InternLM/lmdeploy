@@ -8,6 +8,8 @@
 
 namespace turbomind::gemm {
 
+#if CUDA_VERSION >= 12000
+
 CUtensorMap make_2d_tma_desc(void*              global_address,
                              DataType           data_type,
                              uint32_t           gmem_rows,
@@ -37,5 +39,7 @@ constexpr CUtensorMapSwizzle get_tma_swizzle(int bytes)
     }
     return {};
 }
+
+#endif
 
 }  // namespace turbomind::gemm
