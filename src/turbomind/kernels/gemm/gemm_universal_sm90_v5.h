@@ -442,16 +442,7 @@ struct GemmUniversalSm90_v5 {
                     }
 
                     uint32_t pred_V{};
-                    Fetch_V(pred_V,
-                            param_V,
-                            K,
-                            N,
-                            tile->offset_n,
-                            math_group_idx,
-                            wg_idx_n,
-                            tile->group_idx,
-                            storage,
-                            tile->is_valid_cta);
+                    Fetch_V(pred_V, param_V, K, N, tile, math_group_idx, wg_idx_n, storage);
 
                     float scale_V[2];
                     int   iter_V{};
@@ -765,19 +756,17 @@ struct GemmUniversalSm90_v5 {
         return gmem_ptr;
     }
 
-    __device__ void Fetch_V(uint32_t&          pred_V,
-                            const MatrixParam& param_V,
-                            int                K,
-                            int                N,
-                            int                offset_n,
-                            int                math_group_idx,
-                            int                wg_idx_n,
-                            int                group_idx,
-                            SharedStorage&     storage,
-                            bool               active)
+    __device__ void Fetch_V(uint32_t&                 pred_V,
+                            const MatrixParam&        param_V,
+                            int                       K,
+                            int                       N,
+                            typename Scheduler::Tile* tile,
+                            int                       math_group_idx,
+                            int                       wg_idx_n,
+                            SharedStorage&            storage)
     {
-        const int wg_offset_k = 0;
-        const int wg_offset_n = offset_n + wg_idx_n * WG_TILE_N;
+        const int offset_n = tile->offset_n;
+        const int offset_k = 0;
 
         auto Copy = [k = cdiv(K, 128)](Tv* dst, const Tv* src, bool pred) {
             const int tid = threadIdx.x % kMathGroupSize;
@@ -794,13 +783,13 @@ struct GemmUniversalSm90_v5 {
             // }
         };
 
-        const Tv* gmem_V{};
-        if (active) {
-            gmem_V = is_grouped_gemm ? ((Tv**)param_V.ptr)[group_idx] : (const Tv*)param_V.ptr;
-            gmem_V += (wg_offset_n / 128) * param_V.stride + (wg_offset_k / 128);
+        const Tv* gmem_V = (const Tv*)param_V.ptr;
+        if constexpr (is_grouped_gemm) {
+            gmem_V = ((Tv**)gmem_V)[tile->group_idx];
         }
+        gmem_V += (offset_n / 128) * param_V.stride + (offset_k / 128);
 
-        Copy(storage.source.V[0][math_group_idx], gmem_V, active);
+        Copy(storage.source.V[0][math_group_idx], gmem_V, true);
 
         pred_V = 0;
 
@@ -811,10 +800,10 @@ struct GemmUniversalSm90_v5 {
 
             constexpr uint32_t mask = (1UL << (WG_TILE_N / OUTER_N)) - 1;
 
-            int phase = 128 - wg_offset_n % 128;
+            int phase = 128 - offset_n % 128;
             pred_V    = (mask << (phase / OUTER_N)) & mask;
 
-            bool pred = active && pred_V && wg_offset_n / 128 + 1 < cdiv(N, 128);
+            bool pred = pred_V && offset_n / 128 + 1 < cdiv(N, 128);
             Copy(storage.source.V[1][math_group_idx], gmem_V + param_V.stride, pred);
 
             // if constexpr (WG_N > 1) {

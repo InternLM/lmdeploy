@@ -64,7 +64,14 @@ constexpr int member_offset(M T::* member)
     return reinterpret_cast<std::size_t>(&(reinterpret_cast<T*>(0)->*member));
 }
 
-template<Order order, class Cluster, int striped_m, bool striped_n, int tile_m, int tile_n, int Stages_, bool is_grouped_gemm>
+template<Order order,
+         class Cluster,
+         int  striped_m,
+         bool striped_n,
+         int  tile_m,
+         int  tile_n,
+         int  Stages_,
+         bool is_grouped_gemm>
 struct TileScheduler {
 
     static constexpr bool is_dynamic = is_grouped_gemm;
@@ -99,20 +106,27 @@ struct TileScheduler {
 
     using PipelineState = cutlass::PipelineState<Stages>;
 
-    struct Tile {
-        int alive;
-        int group_idx;
+    struct Tile0 {
         int is_valid_cta;
         int is_valid_cluster;
         int offset_m;
         int offset_n;
-        int m0;
-        int m;
-        int pad[1];
+        int alive;
     };
 
-    // Slower if `Tile` has power-of-2 size
-    static_assert((sizeof(Tile) & (sizeof(Tile) - 1)) != 0);
+    struct Tile1 {
+        int is_valid_cta;
+        int is_valid_cluster;
+        int offset_m;
+        int offset_n;
+        int alive;
+        int group_idx;
+        int m0;
+        int m1;
+        int m;
+    };
+
+    using Tile = std::conditional_t<is_grouped_gemm, Tile1, Tile0>;
 
     struct Storage {
         __align__(8) uint64_t producer_bar[Stages];
@@ -311,6 +325,7 @@ public:
                                int&  group_idx,
                                int&  group_beg,
                                int&  group_m0,
+                               int&  group_m1,
                                int&  group_m,
                                int2& tiled_shape,
                                int2& cluster_tiles,
@@ -330,7 +345,8 @@ public:
         group_idx = __shfl_sync((uint32_t)-1, group_idx, __ffs(mask) - 1);
 
         group_m0 = __ldg(&offsets_[group_idx]);
-        group_m  = __ldg(&offsets_[group_idx + 1]) - group_m0;
+        group_m1 = __ldg(&offsets_[group_idx + 1]);
+        group_m  = group_m1 - group_m0;
 
         group_beg = get_start_index(group_idx);
 
@@ -380,6 +396,7 @@ public:
         if (alive) {
             int  group_beg     = 0;
             int  group_m0      = 0;
+            int  group_m1      = 0;
             int  group_m       = 0;
             auto cta_tiles     = tiled_shape_;
             auto cluster_tiles = cluster_tiles_;
@@ -389,6 +406,7 @@ public:
                             state.group_idx,
                             group_beg,
                             group_m0,
+                            group_m1,
                             group_m,
                             cta_tiles,
                             cluster_tiles,
@@ -404,8 +422,9 @@ public:
                 // tile->group_idx = state.group_idx;
                 if constexpr (is_grouped_gemm) {
                     tile->group_idx = state.group_idx;
-                    tile->m0 = group_m0;
-                    tile->m  = group_m;
+                    tile->m0        = group_m0;
+                    tile->m1        = group_m1;
+                    tile->m         = group_m;
                 }
             }
         }
