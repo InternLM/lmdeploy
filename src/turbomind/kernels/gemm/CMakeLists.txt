@@ -45,10 +45,9 @@ target_compile_options(gemm2 PRIVATE
 set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
-# if (BUILD_TEST)
+if (BUILD_TEST)
         add_executable(gemm_test
                 test/gemm_test.cu
-                # test/test_utils.cu
                 test/quantization.cu
                 test/reference.cu)
         target_link_libraries(gemm_test PRIVATE gemm2 core cublas)
@@ -81,4 +80,4 @@ set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
                         test/reference.cu)
                 target_link_libraries(gemm_bench PRIVATE gemm2 core nvbench::nvbench cublas)
         endif ()
-# endif ()
+endif ()
