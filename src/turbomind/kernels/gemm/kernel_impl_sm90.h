@@ -145,17 +145,16 @@ public:
         auto func = gemm_kernel_sm90<Gemm>;
 
         if (smem_size_ > (48 << 10)) {
-            check_cuda_error(cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_));
+            cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);
         }
 
         if (1) {
-            check_cuda_error(cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16));
+            cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
         }
 
-        check_cuda_error(
-            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&desc_.max_active_ctas, func, Gemm::CTA_SIZE, smem_size_));
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&desc_.max_active_ctas, func, Gemm::CTA_SIZE, smem_size_);
 
-        check_cuda_error(cudaFuncGetAttributes(&desc_.attr, func));
+        cudaFuncGetAttributes(&desc_.attr, func);
 
         sm_count_ = getSMCount();
 
