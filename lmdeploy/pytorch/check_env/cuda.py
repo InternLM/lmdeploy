@@ -19,5 +19,4 @@ class CudaChecker(BaseChecker):
         if self.weight_quant == 'fp8':
             props = torch.cuda.get_device_properties(0)
             if props.major < 9:
-                self.log_and_exit(mod_name='CUDA',
-                                  message='weight_quant=fp8 requires sm>=9.0.')
+                self.log_and_exit(mod_name='CUDA', message='weight_quant=fp8 requires sm>=9.0.')
