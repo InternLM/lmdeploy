@@ -977,7 +977,7 @@ class DeepseekV2Model(nn.Module):
 
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size, _ = get_ep_world_rank()
-            assert ep_size > 1, 'ep_size > 1 is required when enable eplb.' 
+            assert ep_size > 1, 'ep_size > 1 is required when enable eplb.'
             eplb.init_global_eplb_metadata(
                 ep_size=ep_size,
                 num_routed_experts=config.n_routed_experts,
