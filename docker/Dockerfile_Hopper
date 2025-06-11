@@ -17,11 +17,9 @@ RUN dpkg -r libgdrapi gdrcopy && \
     cd .. && rm v2.4.4.tar.gz && rm -rf gdrcopy-2.4.4
 
 # DeepEP
-WORKDIR /tmp
 RUN git clone --depth=1 https://github.com/deepseek-ai/DeepEP.git
 
 # NVSHMEM
-WORKDIR /tmp
 RUN wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_src_3.2.5-1.txz && \
     tar xvf nvshmem_src_3.2.5-1.txz && \
     cd nvshmem_src && git apply /tmp/DeepEP/third-party/nvshmem.patch && \
@@ -39,7 +37,6 @@ RUN wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_sr
     cd .. && rm nvshmem_src_3.2.5-1.txz && rm -rf nvshmem_src
 
 # install DeepEP
-WORKDIR /tmp
 RUN cd DeepEP && NVSHMEM_DIR=${NVSHMEM_PREFIX} pip install -v . && \
     cd .. && rm -rf DeepEP
 
@@ -49,15 +46,13 @@ RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/FlashMLA.git 
     cd FlashMLA && python setup.py install && \
     cd .. && rm -rf FlashMLA
 
-# install DeepGEMM and cuda-bindings
-WORKDIR /opt
+# install DeepGEMM
 RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/DeepGEMM.git && \
     cd DeepGEMM && python setup.py install && \
     cd .. && rm -rf DeepGEMM
-RUN pip install cuda-python --no-cache-dir
 
-# install dlBLAS
-RUN pip install dlblas==0.0.2 --no-cache-dir
+# install cuda-bindings and dlBLAS
+RUN pip install cuda-python dlblas==0.0.2 --no-cache-dir
 
 # set workspace
 WORKDIR /opt/lmdeploy
