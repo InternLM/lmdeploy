@@ -10,9 +10,11 @@ import yaml
 def get_cmd(model_path, backend, engine_config, data_config):
     assert backend in ['turbomind', 'pytorch']
 
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+
     dataset_path = data_config.pop('dataset_path')
 
-    cmd = ['python3', 'benchmark/profile_throughput.py', dataset_path, model_path, '--backend', backend]
+    cmd = ['python3', f'{current_dir}/profile_throughput.py', dataset_path, model_path, '--backend', backend]
     for key, value in engine_config.items():
         # profile_throughput.py uses "--concurrency" to pass the "max_batch_size" value
         if key == 'max_batch_size':
