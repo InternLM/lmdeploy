@@ -318,6 +318,7 @@ class PytorchEngineConfig:
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
+        weight_quant (str): weight quantization policy, options: ['fp8'].
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -345,6 +346,7 @@ class PytorchEngineConfig:
     empty_init: bool = False
     enable_microbatch: bool = False
     enable_eplb: bool = False
+    weight_quant: str = None
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime

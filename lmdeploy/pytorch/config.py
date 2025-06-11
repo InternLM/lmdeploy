@@ -221,11 +221,15 @@ class MiscConfig:
     prefill_interval: int = 16
     custom_module_map: str = None
     empty_init: bool = False
+    weight_quant: str = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
         """From engine config."""
-        misc_config = cls(custom_module_map=engine_config.custom_module_map,
-                          empty_init=engine_config.empty_init,
-                          prefill_interval=engine_config.prefill_interval)
+        misc_config = cls(
+            custom_module_map=engine_config.custom_module_map,
+            empty_init=engine_config.empty_init,
+            prefill_interval=engine_config.prefill_interval,
+            weight_quant=engine_config.weight_quant,
+        )
         return misc_config
