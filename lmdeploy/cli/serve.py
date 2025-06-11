@@ -151,7 +151,6 @@ class SubCliServe:
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
-        ArgumentHelper.weight_quant(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -163,6 +162,7 @@ class SubCliServe:
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
+        model_format = ArgumentHelper.model_format(pt_group)
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
@@ -185,7 +185,7 @@ class SubCliServe:
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(max_prefill_token_num_act)
         tb_group._group_actions.append(quant_policy)
-        ArgumentHelper.model_format(tb_group)
+        tb_group._group_actions.append(model_format)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
@@ -276,7 +276,7 @@ class SubCliServe:
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
                                                  max_prefill_token_num=args.max_prefill_token_num,
-                                                 weight_quant=args.weight_quant)
+                                                 model_format=args.model_format)
         else:
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
@@ -335,7 +335,7 @@ class SubCliServe:
                                                  enable_eplb=args.enable_eplb,
                                                  role=EngineRole[args.role],
                                                  migration_backend=MigrationBackend[args.migration_backend],
-                                                 weight_quant=args.weight_quant)
+                                                 model_format=args.model_format)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,

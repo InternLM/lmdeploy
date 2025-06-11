@@ -792,7 +792,7 @@ class BaseModelAgent:
         logger.debug(msg_with_rank(rank, 'build model.'))
         patched_model = build_patched_model(self.model_config,
                                             device=device,
-                                            weight_quant=self.misc_config.weight_quant)
+                                            model_format=self.misc_config.model_format)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
             load_model_weights(patched_model, model_path, device=device)

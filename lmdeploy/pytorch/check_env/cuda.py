@@ -5,9 +5,9 @@ from .base import BaseChecker
 class CudaChecker(BaseChecker):
     """Check pytorch is available."""
 
-    def __init__(self, weight_quant: str = None, logger=None) -> None:
+    def __init__(self, model_format: str = None, logger=None) -> None:
         super().__init__(logger=logger)
-        self.weight_quant = weight_quant
+        self.model_format = model_format
 
     def check(self):
         """check."""
@@ -16,7 +16,7 @@ class CudaChecker(BaseChecker):
         if not torch.cuda.is_available():
             self.log_and_exit(mod_name='CUDA', message='cuda is not available.')
 
-        if self.weight_quant == 'fp8':
+        if self.model_format == 'fp8':
             props = torch.cuda.get_device_properties(0)
             if props.major < 9:
-                self.log_and_exit(mod_name='CUDA', message='weight_quant=fp8 requires sm>=9.0.')
+                self.log_and_exit(mod_name='CUDA', message='model_format=fp8 requires sm>=9.0.')

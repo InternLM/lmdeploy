@@ -221,7 +221,7 @@ class MiscConfig:
     prefill_interval: int = 16
     custom_module_map: str = None
     empty_init: bool = False
-    weight_quant: str = None
+    model_format: str = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -230,6 +230,6 @@ class MiscConfig:
             custom_module_map=engine_config.custom_module_map,
             empty_init=engine_config.empty_init,
             prefill_interval=engine_config.prefill_interval,
-            weight_quant=engine_config.weight_quant,
+            model_format=engine_config.model_format,
         )
         return misc_config

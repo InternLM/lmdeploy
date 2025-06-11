@@ -122,7 +122,7 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'awq', 'gptq'],
+                                   choices=['hf', 'awq', 'gptq', 'fp8'],
                                    help='The format of input model. `hf` means `hf_llama`, '
                                    '`awq` represents the quantized model by AWQ,'
                                    ' and `gptq` refers to the quantized model by GPTQ')
@@ -575,12 +575,3 @@ class ArgumentHelper:
                                    default='DLSlime',
                                    choices=['DLSlime'],
                                    help='kvcache migration management backend when PD disaggregation')
-
-    # Runtime weight quantizations
-    @staticmethod
-    def weight_quant(parser):
-        return parser.add_argument('--weight-quant',
-                                   type=str,
-                                   default=None,
-                                   choices=['fp8'],
-                                   help='Quantize weights at runtime.')

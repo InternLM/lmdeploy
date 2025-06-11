@@ -196,29 +196,29 @@ def build_model_from_hf_config(model_config: PretrainedConfig, dtype: torch.dtyp
     return model.eval()
 
 
-def _patch_quantization_config(model_config: PretrainedConfig, weight_quant: str):
+def _patch_quantization_config(model_config: PretrainedConfig, model_format: str):
     """Patch quantization config."""
-    if weight_quant is None:
+    if model_format is None:
         return
 
     if hasattr(model_config, 'quantization_config'):
         logger.warning('Can not perform weight quantization on quantized model.')
         return
 
-    if weight_quant == 'fp8':
+    if model_format == 'fp8':
         logger.debug('Patch quantization config for fp8.')
         quantization_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128])
     else:
-        raise RuntimeError(f'Unsupported weight quantization method: {weight_quant}')
+        raise RuntimeError(f'Unsupported weight quantization method: {model_format}')
     model_config.quantization_config = quantization_config
 
 
 @torch.inference_mode()
-def build_patched_model(config: ModelConfig, device: torch.device = None, weight_quant: str = None):
+def build_patched_model(config: ModelConfig, device: torch.device = None, model_format: str = None):
     """Build patched model."""
     import copy
     model_config = copy.deepcopy(config.hf_config)
-    _patch_quantization_config(model_config, weight_quant)
+    _patch_quantization_config(model_config, model_format)
     dtype = config.dtype
     return build_model_from_hf_config(model_config, dtype=dtype, device=device)
 
