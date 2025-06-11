@@ -1,6 +1,5 @@
 import os
 import subprocess
-import time
 from typing import Dict, List
 
 import fire
@@ -57,8 +56,8 @@ def benchmark(model_path, backend, engine_config, data_config):
             cmd = get_cmd(model_path, backend, engine_config, _data_config)
             print(f"Running command: {' '.join(cmd)}")
             subprocess.run(cmd, check=True)
-    finally:
-        time.sleep(10)
+    except Exception as e:
+        print(f'exception happened, {e}')
 
 
 def main(model_path=None, backend=None, config_path=None):
