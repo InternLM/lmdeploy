@@ -104,8 +104,8 @@ class BaseOutputModel(ABC):
             final_cfg.update(embedding_size=self.input_model_info['vocab_size'])
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.input_model.tokenizer_path, trust_remote_code=True)
-        sampling_vocab_size = min(len(tokenizer), final_cfg['vocab_size'])
-        final_cfg.update(sampling_vocab_size=sampling_vocab_size)
+        tokenizer_size = min(len(tokenizer), final_cfg['vocab_size'])
+        final_cfg.update(tokenizer_size=tokenizer_size)
 
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 

@@ -53,7 +53,7 @@ class ModelConfig:
     embedding_size: int = 0
     # for some models like qwen2.5, the vocab size of the model is larger than
     # the vocab size of the tokenizer.
-    sampling_vocab_size: int = None
+    tokenizer_size: int = None
     num_layer: int = None
     inter_size: List[int] = None
     norm_eps: float = None
