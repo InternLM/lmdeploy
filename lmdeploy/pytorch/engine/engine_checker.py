@@ -30,9 +30,12 @@ class EngineChecker(BaseChecker):
 
         if device_type == 'cuda':
             # triton
+            from ..check_env.cuda import CudaChecker
             from ..check_env.triton import TritonChecker
+            cuda_checker = CudaChecker(weight_quant=engine_config.weight_quant, logger=logger)
+            cuda_checker.register_required_checker(torch_checker)
             triton_checker = TritonChecker(logger=logger)
-            triton_checker.register_required_checker(torch_checker)
+            triton_checker.register_required_checker(cuda_checker)
             self.register_required_checker(triton_checker)
         else:
             # deeplink
