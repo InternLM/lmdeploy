@@ -31,7 +31,6 @@ try:
     use_dlblas = True
 except Exception:
     use_dlblas = False
-    logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
 
 # microbatch
@@ -971,20 +970,19 @@ class DeepseekV2Model(nn.Module):
                                          self.padding_idx,
                                          dtype=dtype,
                                          device=device)
-        if get_dist_manager().current_context().dist_config.enable_eplb:
-            if not use_dlblas:
-                raise ImportError('To enable eplb, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
-            ep_size, _ = get_ep_world_rank()
-            eplb.init_global_eplb_metadata(
-                ep_size=ep_size,
-                num_routed_experts=config.n_routed_experts,
-                num_hidden_layers=config.num_hidden_layers,
-            )
         self.layers = nn.ModuleList([
             DeepseekV2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            ep_size, _ = get_ep_world_rank()
+            assert ep_size > 1, 'ep_size > 1 is required when enable eplb.' 
+            eplb.init_global_eplb_metadata(
+                ep_size=ep_size,
+                num_routed_experts=config.n_routed_experts,
+                num_hidden_layers=config.num_hidden_layers,
+            )
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, quant_config=None, dtype=dtype, device=device)
 

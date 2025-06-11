@@ -603,7 +603,6 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            assert self.use_dlblas, 'Please install dlBLAS https://github.com/DeepLink-org/dlBLAS'
             phy2log = self.get_eplb_phy2log_metadata_by_layer(self.layer_idx)
             expert_per_rank = (self.num_experts + world_size - 1) // world_size
             first_expert = rank * expert_per_rank
