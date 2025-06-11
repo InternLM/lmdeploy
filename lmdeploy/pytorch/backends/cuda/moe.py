@@ -598,8 +598,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.build_deepep_moe = build_deepep_moe
             self.get_eplb_phy2log_metadata_by_layer = get_eplb_phy2log_metadata_by_layer
         except ImportError:
-            self.use_dlblas = False
-            logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
+            raise ImportError('To enable ep, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
