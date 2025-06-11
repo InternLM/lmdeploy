@@ -151,6 +151,7 @@ class SubCliServe:
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
+        ArgumentHelper.weight_quant(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -274,7 +275,8 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 weight_quant=args.weight_quant)
         else:
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
@@ -332,7 +334,8 @@ class SubCliServe:
                                                  enable_microbatch=args.enable_microbatch,
                                                  enable_eplb=args.enable_eplb,
                                                  role=EngineRole[args.role],
-                                                 migration_backend=MigrationBackend[args.migration_backend])
+                                                 migration_backend=MigrationBackend[args.migration_backend],
+                                                 weight_quant=args.weight_quant)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,

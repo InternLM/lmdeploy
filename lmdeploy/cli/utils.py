@@ -575,3 +575,12 @@ class ArgumentHelper:
                                    default='DLSlime',
                                    choices=['DLSlime'],
                                    help='kvcache migration management backend when PD disaggregation')
+
+    # Runtime weight quantizations
+    @staticmethod
+    def weight_quant(parser):
+        return parser.add_argument('--weight-quant',
+                                   type=str,
+                                   default=None,
+                                   choices=['fp8'],
+                                   help='Quantize weights at runtime.')
