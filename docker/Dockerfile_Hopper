@@ -2,8 +2,7 @@ ARG BASE_IMAGE=openmmlab/lmdeploy:latest-cu12
 ARG GDRCOPY_HOME=/usr/local/gdrcopy
 ARG NVSHMEM_PREFIX=/usr/local/nvshmem
 
-# build stage
-FROM ${BASE_IMAGE} AS builder_stage
+FROM ${BASE_IMAGE} AS final
 
 ARG CUDA_HOME=/usr/local/cuda
 ARG GDRCOPY_HOME
@@ -14,7 +13,8 @@ WORKDIR /tmp
 RUN dpkg -r libgdrapi gdrcopy && \
     wget https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v2.4.4.tar.gz && \
     tar -zxvf v2.4.4.tar.gz && cd gdrcopy-2.4.4 && \
-    make prefix=${GDRCOPY_HOME} install -j$(nproc)
+    make prefix=${GDRCOPY_HOME} install -j$(nproc) && \
+    cd .. && rm v2.4.4.tar.gz && rm -rf gdrcopy-2.4.4
 
 # DeepEP
 RUN git clone --depth=1 https://github.com/deepseek-ai/DeepEP.git
@@ -33,24 +33,15 @@ RUN wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_sr
     NVSHMEM_USE_GDRCOPY=1 \
     cmake -S . -B build/ -DCMAKE_INSTALL_PREFIX=${NVSHMEM_PREFIX} \
     -DMLX5_lib=/lib/x86_64-linux-gnu/libmlx5.so.1 && \
-    cmake --build build --target install --parallel $(nproc)
+    cmake --build build --target install --parallel $(nproc) && \
+    cd .. && rm nvshmem_src_3.2.5-1.txz && rm -rf nvshmem_src
 
 # install DeepEP
-RUN cd DeepEP && NVSHMEM_DIR=${NVSHMEM_PREFIX} pip install -v .
+RUN cd DeepEP && NVSHMEM_DIR=${NVSHMEM_PREFIX} pip install -v . && \
+    cd .. && rm -rf DeepEP
 
-# export stage
-FROM ${BASE_IMAGE} AS export_stage
-
-ARG GDRCOPY_HOME
-ARG NVSHMEM_PREFIX
-
-COPY --from=builder_stage ${GDRCOPY_HOME} ${GDRCOPY_HOME}
-COPY --from=builder_stage ${NVSHMEM_PREFIX} ${NVSHMEM_PREFIX}
-COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_ep/ /opt/py3/lib/python3.10/site-packages/deep_ep/
-COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_ep_cpp* /opt/py3/lib/python3.10/site-packages/
-
-WORKDIR /opt
 # install FlashMLA
+WORKDIR /opt
 RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/FlashMLA.git && \
     cd FlashMLA && python setup.py install && \
     cd .. && rm -rf FlashMLA
@@ -59,6 +50,9 @@ RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/FlashMLA.git 
 RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/DeepGEMM.git && \
     cd DeepGEMM && python setup.py install && \
     cd .. && rm -rf DeepGEMM
+
+# install cuda-bindings and dlBLAS
+RUN pip install cuda-python dlblas==0.0.2 --no-cache-dir
 
 # set workspace
 WORKDIR /opt/lmdeploy
