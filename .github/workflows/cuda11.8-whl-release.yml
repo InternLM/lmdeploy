@@ -13,7 +13,7 @@ jobs:
   linux-build:
     strategy:
       matrix:
-        pyver: [py38, py39, py310, py311, py312]
+        pyver: [py39, py310, py311, py312, py313]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -56,7 +56,7 @@ jobs:
   windows-build:
     strategy:
       matrix:
-        pyver: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        pyver: ['3.9', '3.10', '3.11', '3.12', '3.13']
     runs-on: windows-latest
     steps:
       - name: Checkout repository
