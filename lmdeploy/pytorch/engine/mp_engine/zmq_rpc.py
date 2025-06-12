@@ -160,14 +160,15 @@ class AsyncRPCServer:
         self.running = True
         poller = zmq.Poller()
         poller.register(self.socket, zmq.POLLIN)
-        event_loop = asyncio.get_event_loop()
 
         self.register_method('_asyncrpcserver_get_stream_output', self.get_stream_output)
         try:
             while self.running:
-                events = await event_loop.run_in_executor(None, poller.poll, 100)  # 100ms timeout
+                events = poller.poll(0)
                 if self.socket in dict(events):
                     await self.call_and_response()
+                else:
+                    await asyncio.sleep(0)
         except zmq.ZMQError:
             logger.exception('ZMQRPCServer error')
         except Exception:
