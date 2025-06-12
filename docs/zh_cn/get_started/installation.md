@@ -12,10 +12,10 @@ Ada Lovelace(sm89): 40 系列
 
 ## 使用 pip 安装（推荐）
 
-我们推荐在一个干净的conda环境下（python3.8 - 3.12），安装 lmdeploy：
+我们推荐在一个干净的conda环境下（python3.9 - 3.13），安装 lmdeploy：
 
 ```shell
-conda create -n lmdeploy python=3.8 -y
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```
