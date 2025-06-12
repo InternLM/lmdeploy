@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import csv
+import os
 import time
 from typing import List
 
@@ -138,23 +139,36 @@ class Profiler:
 
     def save_csv(self, csv_file: str, hyperparams):
         """Export legacy metrics to CSV."""
-        with open(csv_file, 'w') as csvfile:
+        file_exists = os.path.isfile(csv_file)
+        with open(csv_file, mode='a', newline='') as csvfile:
             writer = csv.writer(csvfile)
             keys, vals = zip(*hyperparams)
-            writer.writerow([
-                *keys,
-                'RPS',
-                'RPM',
-                'FTL(ave)(s)',
-                'throughput(out tok/s)',
-                'throughput(total tok/s)',
-            ])
-            ttft_mean = f'{self.ttft_mean:.3f}' if self.stream_output else '-'
+            if not file_exists:
+                writer.writerow([
+                    *keys,
+                    'completed',
+                    'total_input_tokens',
+                    'total_output_tokens',
+                    'duration',
+                    'request_throughput',
+                    'input_throughput',
+                    'output_throughput',
+                    'mean_e2e_latency_ms',
+                    'mean_ttft_ms',
+                    'mean_tpot_ms',
+                    'mean_itl_ms',
+                ])
             writer.writerow([
                 *vals,
+                self.success,
+                self.total_input,
+                self.total_output,
+                self.elapsed_time,
                 f'{self.rps:.3f}',
-                f'{(self.rps * 60):.3f}',
-                ttft_mean,
+                f'{(self.input_throughput):.3f}',
                 f'{self.output_throughput:.3f}',
-                f'{(self.input_throughput + self.output_throughput):.3f}',
+                f'{self.e2e_mean*1000:.3f}',
+                f'{self.ttft_mean*1000:.3f}' if self.stream_output else '-',
+                f'{self.tpot_mean*1000:.3f}',
+                f'{self.itls_mean*1000:.3f}' if self.stream_output else '-',
             ])

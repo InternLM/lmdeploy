@@ -319,6 +319,7 @@ class PytorchEngineConfig:
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
         enable_mp_engine (bool): run engine in multi-process mode.
+        model_format (str): weight quantization policy, options: ['fp8'].
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -347,6 +348,7 @@ class PytorchEngineConfig:
     enable_microbatch: bool = False
     enable_eplb: bool = False
     enable_mp_engine: bool = False
+    model_format: str = None
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
