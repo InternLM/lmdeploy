@@ -61,7 +61,7 @@ class QuantWeightOnly(Parameter):
 
 
 class WeightScaleInv(Parameter):
-    KEYS =  '.weight_scale_inv', '.weight'
+    KEYS = '.weight_scale_inv', '.weight'
 
     # TODO: flag any operations crossing the quant blocks as illegal
     def __call__(self, f, g, i):

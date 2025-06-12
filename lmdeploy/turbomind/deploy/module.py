@@ -100,7 +100,16 @@ class Ffn(Module):
         self.inter_size = model.model_config.inter_size
         self.group_size = max(1, model.model_config.group_size)
 
-    def _export(self, inter_size: int, fmt: str, idx: int, w123, kind: str, pack_fn, apply_gs=False, block_size=1, **kwargs):
+    def _export(self,
+                inter_size: int,
+                fmt: str,
+                idx: int,
+                w123,
+                kind: str,
+                pack_fn,
+                apply_gs=False,
+                block_size=1,
+                **kwargs):
         is_lora_a, is_lora_b = get_lora_flags(kind)
         w1, w2, w3 = map(transpose, w123)
 
