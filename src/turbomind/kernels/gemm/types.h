@@ -12,7 +12,8 @@
 
 namespace turbomind::gemm {
 
-enum class Order : int {
+enum class Order : int
+{
     kColMajor = 0,
     kRowMajor = 1,
 };
@@ -38,14 +39,16 @@ constexpr const char* to_string(Order order)
 
 using Pack = uint32_t;
 
-typedef enum MMA_Tag {
+typedef enum MMA_Tag
+{
     HMMA_16816 = 0x100,  // sm80+
     HMMA_1688  = 0x200,  // sm75
     HMMA_884   = 0x300,  // sm70
     HMMA_SIMT  = 0x400,  // sm75-
 } MMA_Tag;
 
-typedef enum Op_Tag {
+typedef enum Op_Tag
+{
     OPERAND_A = 0x010,
     OPERAND_B = 0x020,
     OPERAND_U = 0x030,
@@ -69,7 +72,8 @@ constexpr int get_pack_num(Pack pack)
     return pack & 0x00f;
 }
 
-enum class Striding : int {
+enum class Striding : int
+{
     kFlat,     // [1111,2222,3333]
     kRagged,   // [11,2222222,333]  [0 , 2      , 9  ]
     kIndexed,  // [xx xxxxxxx xxx], [01, 2345678, 9ab]
@@ -92,12 +96,14 @@ inline const char* to_string(Striding striding)
     }
 }
 
-enum class QuantType : int {
+enum class QuantType : int
+{
     kNone,
     kDefault,
 };
 
-enum class Epilogue : int {
+enum class Epilogue : int
+{
     kNone               = 0,
     kChannelCombination = 0x1,
     kGatedSilu          = 0x2,
@@ -108,7 +114,8 @@ struct QuantDesc {
     int       group_size;
 };
 
-enum class DispatchPolicy : int {
+enum class DispatchPolicy : int
+{
     kDefault = 0,
     kMeasure = 1,
     kReuse   = 2,

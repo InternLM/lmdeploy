@@ -13,7 +13,6 @@
 
 #include "src/turbomind/utils/memory_utils.h"
 
-
 namespace turbomind {
 
 void LlamaDenseWeight::emplace(
