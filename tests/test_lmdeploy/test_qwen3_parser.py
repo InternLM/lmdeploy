@@ -1,12 +1,17 @@
 import collections
 import json
-from typing import List, Tuple
+import time
+from typing import Generator, List, Tuple, Union
 
 import pytest
+import shortuuid
 
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
+from lmdeploy.serve.openai.api_server import VariableInterface
+from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponse, ChatCompletionResponseChoice,
+                                            ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
+                                            ChatMessage, DeltaMessage, DeltaToolCall, UsageInfo)
+from lmdeploy.serve.openai.reasoning_parser.qwen_qwq_reasoning_parser import QwenQwQReasoningParser
 from lmdeploy.serve.openai.tool_parser.qwen3_parser import Qwen3ToolParser
-from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser
 
 TestExpects = collections.namedtuple('TestExpects', 'func_name location')
 
@@ -167,26 +172,100 @@ EXPECTED_REASONING_CONTENT = ''.join((
 ))
 
 
-@pytest.mark.parametrize(('text_sequence', 'expects'), [
-    (DELTA_TEXT_SEQUENCE, [TestExpects('get_weather', '北京')]),
-    (DELTA_TEXT_SEQUENCE_MULTIPLE_CALLS, [TestExpects('get_weather', '北京'),
-                                          TestExpects('get_weather', '上海')]),
-])
-def test_parser_stream(text_sequence: List[str], expects: List[TestExpects]):
-    parser = Qwen3ToolParser(tokenizer=DummyTokenizer())
-    request = ChatCompletionRequest(model='qwen', messages=[])
-    content, reasoning_content, tool_calls = _stream_parse(parser, request, text_sequence)
-    assert len(tool_calls) == len(expects)
-    for parsed_call, expected_call in zip(tool_calls, expects):
-        assert parsed_call.function.name == expected_call.func_name
-        args = json.loads(parsed_call.function.arguments)
-        assert args['location'] == expected_call.location
-        assert content.strip() == EXPECTED_CONTENT
-        assert reasoning_content.strip() == EXPECTED_REASONING_CONTENT
+def _chat_completion_v1(
+        request: ChatCompletionRequest,
+        text_sequence: List[str]) -> Union[ChatCompletionResponse, Generator[ChatCompletionStreamResponse, None, None]]:
+    request_id = f'chat-{shortuuid.random()}'
+    created_time = int(time.time())
+    model_name = request.model
+    if request.stream:
+
+        def completion_stream_generator() -> Generator[ChatCompletionStreamResponse, None, None]:
+            previous_text = ''
+            current_text = ''
+            finish_reason = 'stop'
+            has_parser = VariableInterface.tool_parser is not None or VariableInterface.reasoning_parser is not None
+            for text in text_sequence:
+                logprobs, usage = None, None
+                delta_message = DeltaMessage(role='assistant', content=text)
+                if has_parser:
+                    current_text = current_text + text
+                if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+                    tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
+                        previous_text=previous_text,
+                        current_text=current_text,
+                        delta_text=delta_message.content,
+                        previous_token_ids=[],
+                        current_token_ids=[],
+                        delta_token_ids=[],
+                        request=request)
+                    if tool_delta is not None:
+                        delta_message.tool_calls = tool_delta.tool_calls
+                        delta_message.content = tool_delta.content or ''
+                if VariableInterface.reasoning_parser is not None:
+                    reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
+                        previous_text=previous_text,
+                        current_text=current_text,
+                        delta_text=delta_message.content,
+                        previous_token_ids=[],
+                        current_token_ids=[],
+                        delta_token_ids=[])
+                    if reasoning_delta is not None:
+                        delta_message.reasoning_content = reasoning_delta.reasoning_content
+                        delta_message.content = reasoning_delta.content or ''
+                if has_parser:
+                    previous_text = current_text
+                if delta_message.is_empty():
+                    continue
+
+                choice_data = ChatCompletionResponseStreamChoice(index=0,
+                                                                 delta=delta_message,
+                                                                 finish_reason=finish_reason,
+                                                                 logprobs=logprobs)
+                response = ChatCompletionStreamResponse(
+                    id=request_id,
+                    created=created_time,
+                    model=model_name,
+                    choices=[choice_data],
+                    usage=usage,
+                )
+                yield response
+
+        return completion_stream_generator()
+
+    # copied and simplified from api_server.py:chat_completions_v1
+    text = ''.join(text_sequence)
+    tool_calls = None
+    reasoning_content = None
+    finish_reason = 'stop'
+    if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+        tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
+        text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
+        if isinstance(tool_calls, List) and len(tool_calls):
+            if finish_reason == 'stop':
+                finish_reason = 'tool_calls'
+
+    if VariableInterface.reasoning_parser is not None:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
+
+    choices = []
+    choice_data = ChatCompletionResponseChoice(
+        index=0,
+        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls, reasoning_content=reasoning_content),
+        finish_reason=finish_reason,
+    )
+    choices.append(choice_data)
+
+    return ChatCompletionResponse(
+        id=request_id,
+        created=created_time,
+        model=model_name,
+        choices=choices,
+        usage=UsageInfo(),
+    )
 
 
-def _stream_parse(parser: ToolParser, request: ChatCompletionRequest,
-                  text_sequence: List[str]) -> Tuple[str, str, List[DeltaToolCall]]:
+def _stream_parse(request: ChatCompletionRequest, text_sequence: List[str]) -> Tuple[str, str, List[DeltaToolCall]]:
     # Call parser.extract_tool_calls_streaming with delta_text specified in `DELTA_TEXT_SEQUENCE`.
     # `current_text` and `previous_text` init values and update logic
     # can be found in lmdeploy/serve/openai/api_server.py:455-523.
@@ -194,26 +273,14 @@ def _stream_parse(parser: ToolParser, request: ChatCompletionRequest,
     reasoning_content = ''
     tool_calls = {}
 
-    previous_text = ''
-    current_text = ''
-    for delta_text in text_sequence:
-        current_text += delta_text
-        tool_delta = parser.extract_tool_calls_streaming(previous_text=previous_text,
-                                                         current_text=current_text,
-                                                         delta_text=delta_text,
-                                                         previous_token_ids=[],
-                                                         current_token_ids=[],
-                                                         delta_token_ids=[],
-                                                         request=request)
-        previous_text = current_text
-        if not tool_delta:
-            continue
-        if tool_delta.content:
-            content += tool_delta.content
-        if tool_delta.reasoning_content:
-            reasoning_content += tool_delta.reasoning_content
-        if tool_delta.tool_calls:
-            for c in tool_delta.tool_calls:
+    for stream_resp in _chat_completion_v1(request, text_sequence):
+        delta_message: DeltaMessage = stream_resp.choices[0].delta
+        if delta_message.content:
+            content += delta_message.content
+        if delta_message.reasoning_content:
+            reasoning_content += delta_message.reasoning_content
+        if delta_message.tool_calls:
+            for c in delta_message.tool_calls:
                 existing_call = tool_calls.get(c.id, None)
                 if not existing_call:
                     tool_calls[c.id] = c
@@ -232,22 +299,39 @@ def _stream_parse(parser: ToolParser, request: ChatCompletionRequest,
     (DELTA_TEXT_SEQUENCE_MULTIPLE_CALLS, [TestExpects('get_weather', '北京'),
                                           TestExpects('get_weather', '上海')]),
 ])
-def test_parser_nonstream(text_sequence: List[str], expects: List[TestExpects]):
-    parser = Qwen3ToolParser(tokenizer=DummyTokenizer())
-    request = ChatCompletionRequest(model='qwen', messages=[])
-    full_text = ''
-    for delta_text in text_sequence:
-        full_text += delta_text
-
-    extracted_info = parser.extract_tool_calls(full_text, request)
-    content = extracted_info.content
-    reasoning_content = extracted_info.reasoning_content
-    tool_calls = extracted_info.tool_calls
-
+def test_parser_stream(text_sequence: List[str], expects: List[TestExpects]):
+    tokenizer = DummyTokenizer()
+    VariableInterface.tool_parser = Qwen3ToolParser(tokenizer=tokenizer)
+    VariableInterface.reasoning_parser = QwenQwQReasoningParser(tokenizer=tokenizer)
+    request = ChatCompletionRequest(model='qwen', messages=[], stream=True)
+    content, reasoning_content, tool_calls = _stream_parse(request, text_sequence)
     assert len(tool_calls) == len(expects)
     for parsed_call, expected_call in zip(tool_calls, expects):
         assert parsed_call.function.name == expected_call.func_name
         args = json.loads(parsed_call.function.arguments)
         assert args['location'] == expected_call.location
-        assert content == EXPECTED_CONTENT
-        assert reasoning_content == EXPECTED_REASONING_CONTENT
+        assert content.strip() == EXPECTED_CONTENT
+        assert reasoning_content.strip() == EXPECTED_REASONING_CONTENT
+
+
+@pytest.mark.parametrize(('text_sequence', 'expects'), [
+    (DELTA_TEXT_SEQUENCE, [TestExpects('get_weather', '北京')]),
+    (DELTA_TEXT_SEQUENCE_MULTIPLE_CALLS, [TestExpects('get_weather', '北京'),
+                                          TestExpects('get_weather', '上海')]),
+])
+def test_parser_nonstream(text_sequence: List[str], expects: List[TestExpects]):
+    tokenizer = DummyTokenizer()
+    VariableInterface.tool_parser = Qwen3ToolParser(tokenizer=tokenizer)
+    VariableInterface.reasoning_parser = QwenQwQReasoningParser(tokenizer=tokenizer)
+    resp: ChatCompletionResponse = _chat_completion_v1(ChatCompletionRequest(model='qwen', messages=[], stream=False),
+                                                       text_sequence)
+
+    assert len(resp.choices) == 1
+    first_message = resp.choices[0].message
+    assert first_message.content is None
+    assert first_message.reasoning_content == EXPECTED_REASONING_CONTENT
+    assert len(first_message.tool_calls) == len(expects)
+    for parsed_call, expected_call in zip(first_message.tool_calls, expects):
+        assert parsed_call.function.name == expected_call.func_name
+        args = json.loads(parsed_call.function.arguments)
+        assert args['location'] == expected_call.location

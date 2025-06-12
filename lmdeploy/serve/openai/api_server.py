@@ -458,6 +458,7 @@ async def chat_completions_v1(raw_request: Request = None):
         previous_token_ids = []
         current_token_ids = []
         delta_token_ids = []
+        has_parser = VariableInterface.tool_parser is not None or VariableInterface.reasoning_parser is not None
         streaming_tools = False
         async for res in result_generator:
             logprobs, usage = None, None
@@ -472,16 +473,17 @@ async def chat_completions_v1(raw_request: Request = None):
                     total_tokens=total_tokens,
                 )
             delta_message = DeltaMessage(role='assistant', content=res.response)
-            if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
-                if res.finish_reason == 'stop' and streaming_tools is True:
-                    res.finish_reason = 'tool_calls'
+            if has_parser:
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 current_token_ids = current_token_ids + delta_token_ids
+            if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+                if res.finish_reason == 'stop' and streaming_tools is True:
+                    res.finish_reason = 'tool_calls'
                 tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
                     previous_text=previous_text,
                     current_text=current_text,
-                    delta_text=res.response,
+                    delta_text=delta_message.content,
                     previous_token_ids=previous_token_ids,
                     current_token_ids=current_token_ids,
                     delta_token_ids=delta_token_ids,
@@ -489,31 +491,27 @@ async def chat_completions_v1(raw_request: Request = None):
                 if tool_delta is not None:
                     delta_message.tool_calls = tool_delta.tool_calls
                     delta_message.content = tool_delta.content
-                    delta_message.reasoning_content = tool_delta.reasoning_content
                     if isinstance(tool_delta.tool_calls, List) and len(tool_delta.tool_calls):
                         streaming_tools = True
-                else:
-                    continue
-                previous_text = current_text
-                previous_token_ids = current_token_ids
             elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
                 logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
             if VariableInterface.reasoning_parser is not None:
-                current_text = current_text + res.response
-                delta_token_ids = res.token_ids if res.token_ids is not None else []
-                current_token_ids = current_token_ids + delta_token_ids
                 reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
                     previous_text=previous_text,
                     current_text=current_text,
-                    delta_text=res.response,
+                    delta_text=delta_message.content or '',
                     previous_token_ids=previous_token_ids,
                     current_token_ids=current_token_ids,
                     delta_token_ids=delta_token_ids)
                 if reasoning_delta is not None:
                     delta_message.reasoning_content = reasoning_delta.reasoning_content
                     delta_message.content = reasoning_delta.content
+            if has_parser:
                 previous_text = current_text
                 previous_token_ids = current_token_ids
+            if delta_message.is_empty():
+                # empty delta message should be ignored in the stream response
+                continue
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
@@ -559,8 +557,6 @@ async def chat_completions_v1(raw_request: Request = None):
             if isinstance(tool_calls, List) and len(tool_calls):
                 if final_res.finish_reason == 'stop':
                     final_res.finish_reason = 'tool_calls'
-            if tool_call_info.reasoning_content is not None:
-                reasoning_content = tool_call_info.reasoning_content
 
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')

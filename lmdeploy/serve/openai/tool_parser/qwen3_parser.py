@@ -42,7 +42,7 @@ class ParserState(object):
         self.args_sent = False
 
 
-@ToolParserManager.register_module(['qwen3'])
+@ToolParserManager.register_module(['qwen', 'qwen3'])
 class Qwen3ToolParser(ToolParser):
     """Parser for Qwen3 model's tool call format.
 
@@ -52,12 +52,9 @@ class Qwen3ToolParser(ToolParser):
 
     def __init__(self, tokenizer: object):
         super().__init__(tokenizer)
-        self.think_start_token = '<think>'
-        self.think_end_token = '</think>'
         self.tool_start_token = '<tool_call>'
         self.tool_end_token = '</tool_call>'
         self.tool_call_pat = re.compile(r'\n*<tool_call>(.*?)</tool_call>', re.DOTALL)
-        self.think_pat = re.compile(r'<think>\n*(.*?)\n*</think>', re.DOTALL)
 
     def get_argments(self, obj):
         """Extract arguments from tool call object, handling different formats.
@@ -71,48 +68,24 @@ class Qwen3ToolParser(ToolParser):
         return None
 
     def _split(self, parser_state: ParserState, parsing_content: str):
-        """Split content into tuple: (text_content, reasoning_content, tool_content, has_tool_end)
+        """Split content into tuple: (text_content, tool_content, has_tool_end)
 
         This method parses the model output and separates it into regular text,
-        reasoning content (inside <think> tags), and tool call content.
+        and tool call content.
         """
-        # reasoning content
-        if parser_state.parsing_reasoning:
-            if self.think_end_token in parsing_content:
-                parser_state.parsing_reasoning = False
-                end_pos = parsing_content.index(self.think_end_token)
-                parser_state.position += end_pos + len(self.think_end_token)
-                return '', parsing_content[:end_pos], '', False
-            parser_state.position += len(parsing_content)
-            return '', parsing_content, '', False
-        if self.think_start_token in parsing_content:
-            start_pos = parsing_content.index(self.think_start_token)
-            if self.think_end_token not in parsing_content:
-                # parse content: <think> ... (incomplete)
-                parser_state.parsing_reasoning = True
-                parser_state.position += len(parsing_content)
-                return parsing_content[:start_pos], parsing_content[start_pos + len(self.think_start_token):], '', False
-            # parse content: <think> ... </think>
-            end_pos = parsing_content.index(self.think_end_token)
-            parser_state.parsing_reasoning = False
-            parser_state.position += end_pos + len(self.think_end_token)
-            content = parsing_content[:start_pos]
-            reasoning_content = parsing_content[start_pos + len(self.think_start_token):end_pos]
-            return content, reasoning_content, '', False
-
         # tool call
         try:
             start_idx = parsing_content.index(self.tool_start_token)
         except ValueError:
             parser_state.position += len(parsing_content)
-            return parsing_content, '', '', False
+            return parsing_content, '', False
         try:
             end_idx = parsing_content.index(self.tool_end_token)
         except ValueError:
             parser_state.position += start_idx
-            return parsing_content[:start_idx], '', parsing_content[start_idx + len(self.tool_start_token):], False
+            return parsing_content[:start_idx], parsing_content[start_idx + len(self.tool_start_token):], False
         parser_state.position += len(parsing_content)
-        return parsing_content[:start_idx], '', parsing_content[start_idx + len(self.tool_start_token):end_idx], True
+        return parsing_content[:start_idx], parsing_content[start_idx + len(self.tool_start_token):end_idx], True
 
     def _parse_delta_tool_call(self, parser_state: ParserState, tool_content: str) -> Optional[DeltaToolCall]:
         """Parse tool content into a DeltaToolCall object.
@@ -200,16 +173,14 @@ class Qwen3ToolParser(ToolParser):
             parser_state = ParserState()
             setattr(request, '_tool_parser_state', parser_state)
 
-        # Split the new content into text, reasoning, and tool content
+        # Split the new content into text and tool content
         split_result = self._split(parser_state, current_text[parser_state.position:])
-        text_content, reasoning_content, tool_content, has_tool_end = split_result
+        text_content, tool_content, has_tool_end = split_result
         delta = DeltaMessage()
 
         # Add each type of content to the delta message if present
         if text_content:
             delta.content = text_content
-        if reasoning_content:
-            delta.reasoning_content = reasoning_content
         if tool_content:
             # Parse tool content into a DeltaToolCall object
             delta_tool_call = self._parse_delta_tool_call(parser_state, tool_content)
@@ -217,10 +188,7 @@ class Qwen3ToolParser(ToolParser):
                 delta.tool_calls = [delta_tool_call]
             if has_tool_end:
                 parser_state.reset_tool_call()
-
-        if delta.content or delta.reasoning_content or delta.tool_calls:
-            return delta
-        return
+        return delta
 
     def extract_tool_calls(
         self,
@@ -233,18 +201,6 @@ class Qwen3ToolParser(ToolParser):
         Unlike the streaming version, this processes the entire output at once.
         """
         text = model_output
-        reasoning_content = []
-
-        # Extract reasoning content (content inside <think> tags)
-        buf = []
-        scan_pos = 0
-        for match in self.think_pat.finditer(text):
-            buf.append(text[scan_pos:match.start()])  # Add text before the <think> tag
-            scan_pos = match.end()
-            reasoning_content.append(match.group(1))  # Extract content inside <think> tags
-        if scan_pos < len(text):
-            buf.append(text[scan_pos:])  # Add remaining text
-        text = ''.join(buf)  # Reconstruct text without <think> tags
 
         # Extract tool calls (content inside <tool_call> tags)
         buf = []
@@ -262,7 +218,6 @@ class Qwen3ToolParser(ToolParser):
 
         return ExtractedToolCallInformation(
             content=text,
-            reasoning_content=''.join(reasoning_content),
             tool_calls=tool_calls,
             tools_called=bool(tool_calls),
         )
