@@ -481,9 +481,9 @@ struct GemmUniversalSm90_v5 {
                             for (int cc = 0; cc < OUTER_N; cc += 8) {
                                 int c = c0 + cc;
                                 // clang-format off
-                                accum_C[m][n][c / 2 + 0] += (pred ? scales[0][1] : scales[0][0]) * frag_C[c / 2 + 0]; 
-                                accum_C[m][n][c / 2 + 1] += (pred ? scales[0][1] : scales[0][0]) * frag_C[c / 2 + 1]; 
-                                accum_C[m][n][c / 2 + 2] += (pred ? scales[1][1] : scales[1][0]) * frag_C[c / 2 + 2]; 
+                                accum_C[m][n][c / 2 + 0] += (pred ? scales[0][1] : scales[0][0]) * frag_C[c / 2 + 0];
+                                accum_C[m][n][c / 2 + 1] += (pred ? scales[0][1] : scales[0][0]) * frag_C[c / 2 + 1];
+                                accum_C[m][n][c / 2 + 2] += (pred ? scales[1][1] : scales[1][0]) * frag_C[c / 2 + 2];
                                 accum_C[m][n][c / 2 + 3] += (pred ? scales[1][1] : scales[1][0]) * frag_C[c / 2 + 3];
                                 // clang-format on
                             }

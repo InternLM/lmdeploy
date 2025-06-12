@@ -62,11 +62,11 @@ constexpr DataType from_cuda_dtype(cudaDataType type) {
 
 constexpr CUtensorMapDataType to_CUtensorMap_dtype(DataType type) {
     switch (type) {
-        case kFloat32: 
+        case kFloat32:
             return CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
-        case kFloat16: 
+        case kFloat16:
             return CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
-        case kBfloat16: 
+        case kBfloat16:
             return CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
         case kFloat8_e4m3:
         case kFloat8_e5m2:
