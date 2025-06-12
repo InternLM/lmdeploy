@@ -25,7 +25,7 @@ RUN bash ./install_cuda.sh ${BASE_CUDA_VERSION} && rm install_cuda.sh
 FROM base as conda
 ADD manywheel/scripts/install_conda.sh install_conda.sh
 RUN bash ./install_conda.sh && rm install_conda.sh
-RUN
+
 RUN /opt/conda/bin/conda create -n py38 python=3.8 -yq && \
     /opt/conda/envs/py38/bin/pip install pybind11 && \
     /opt/conda/bin/conda create -n py39 python=3.9 -yq && \
@@ -37,15 +37,9 @@ RUN /opt/conda/bin/conda create -n py38 python=3.8 -yq && \
     /opt/conda/bin/conda create -n py312 python=3.12 -yq && \
     /opt/conda/envs/py312/bin/pip install pybind11
 
-FROM base as mpi
-ADD manywheel/scripts/install_openmpi.sh install_openmpi.sh
-RUN bash ./install_openmpi.sh && rm install_openmpi.sh
-
 FROM base as cuda_final
 COPY --from=cuda            /usr/local/cuda-${BASE_CUDA_VERSION}  /usr/local/cuda-${BASE_CUDA_VERSION}
 RUN ln -sf /usr/local/cuda-${BASE_CUDA_VERSION} /usr/local/cuda
 ENV PATH=/usr/local/cuda/bin:$PATH
 COPY --from=conda           /opt/conda                            /opt/conda
 RUN /opt/conda/bin/conda init bash
-COPY --from=mpi             /usr/local/mpi                        /usr/local/mpi
-ENV PATH=/usr/local/mpi/bin:$PATH
