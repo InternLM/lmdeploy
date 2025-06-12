@@ -67,7 +67,7 @@ function install_121 {
 function install_124 {
     echo "Installing CUDA 12.4 and cuDNN 8.9 and NCCL 2.25.1"
     rm -rf /usr/local/cuda-12.4 /usr/local/cuda
-    # install CUDA 12.1.0 in the same container
+    # install CUDA 12.4.1 in the same container
     wget -q https://developer.download.nvidia.com/compute/cuda/12.4.1/local_installers/cuda_12.4.1_550.54.15_linux.run
     chmod +x cuda_12.4.1_550.54.15_linux.run
     ./cuda_12.4.1_550.54.15_linux.run --toolkit --silent
@@ -95,6 +95,37 @@ function install_124 {
     ldconfig
 }
 
+function install_128 {
+    echo "Installing CUDA 12.8 and cuDNN 8.9 and NCCL 2.25.1"
+    rm -rf /usr/local/cuda-12.8 /usr/local/cuda
+    # install CUDA 12.8.1 in the same container
+    wget -q https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda_12.8.1_570.124.06_linux.run
+    chmod +x cuda_12.8.1_570.124.06_linux.run
+    ./cuda_12.8.1_570.124.06_linux.run --toolkit --silent
+    rm -f cuda_12.8.1_570.124.06_linux.run
+    rm -f /usr/local/cuda && ln -s /usr/local/cuda-12.8 /usr/local/cuda
+
+    # cuDNN license: https://developer.nvidia.com/cudnn/license_agreement
+    mkdir tmp_cudnn && cd tmp_cudnn
+    wget -q https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz -O cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz
+    tar xf cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz
+    cp -a cudnn-linux-x86_64-8.9.2.26_cuda12-archive/include/* /usr/local/cuda/include/
+    cp -a cudnn-linux-x86_64-8.9.2.26_cuda12-archive/lib/* /usr/local/cuda/lib64/
+    cd ..
+    rm -rf tmp_cudnn
+    ldconfig
+
+    # NCCL license: https://docs.nvidia.com/deeplearning/nccl/#licenses
+    mkdir tmp_nccl && cd tmp_nccl
+    wget -q https://developer.download.nvidia.com/compute/redist/nccl/v2.25.1/nccl_2.25.1-1+cuda12.8_x86_64.txz
+    tar xf nccl_2.25.1-1+cuda12.8_x86_64.txz
+    cp -a nccl_2.25.1-1+cuda12.8_x86_64/include/* /usr/local/cuda/include/
+    cp -a nccl_2.25.1-1+cuda12.8_x86_64/lib/* /usr/local/cuda/lib64/
+    cd ..
+    rm -rf tmp_nccl
+    ldconfig
+}
+
 if test $# -eq 0
 then
     echo "doesn't provide cuda version"; exit 1;
@@ -109,6 +140,8 @@ do
     12.1) install_121
             ;;
     12.4) install_124
+            ;;
+    12.8) install_128
             ;;
 	*) echo "bad argument $1"; exit 1
 	   ;;
