@@ -11,7 +11,7 @@ from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
 
 @lru_cache
 def get_shifts(bits: int, device: torch.device):
-    """get awq shifts."""
+    """Get awq shifts."""
     shifts = torch.arange(0, 32, bits, device=device)
     shifts = shifts.view(2, 4).t().flatten()
     return shifts
@@ -48,7 +48,7 @@ def dequantize_gemm(qweight, qzeros, scales, bits, group_size):
 
 
 class DefaultLinearW4A16Impl(LinearW4A16Impl):
-    """w4a16 linear implementation."""
+    """W4a16 linear implementation."""
 
     def __init__(self, in_features: int, out_features: int, w_bit: int, group_size: int):
         self.in_features = in_features
@@ -82,7 +82,7 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
 
 
 class DefaultLinearW4A16Builder(LinearW4A16Builder):
-    """w4a16 linear implementation builder."""
+    """W4a16 linear implementation builder."""
 
     @staticmethod
     def build(in_features: int,

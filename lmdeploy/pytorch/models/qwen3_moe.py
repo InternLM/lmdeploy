@@ -6,14 +6,24 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.utils import get_logger
 
 from .utils.cudagraph import CudaGraphMixin
+
+logger = get_logger('lmdeploy')
+
+try:
+    from dlblas.layers.moe import eplb
+    use_dlblas = True
+except Exception:
+    use_dlblas = False
+    logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
 
 class Qwen3MoeAttention(nn.Module):
@@ -168,7 +178,7 @@ class Qwen3MoeMLP(nn.Module):
 
 
 class Qwen3MoeSparseMoeBlock(nn.Module):
-    """moe block."""
+    """Moe block."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -199,7 +209,13 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
         world_size, _ = get_tp_world_rank()
         _all_reduce = world_size > 1
-
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            dist_ctx = get_dist_manager().current_context()
+            self.eplb_dispatch_info = eplb.EPLBDispatchInfo.init_new(
+                ep_rank=dist_ctx.ep_rank,
+                layer_idx=layer_idx,
+            )
+            self.num_experts = eplb.get_global_eplb_metadata().num_physical_experts()
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -210,6 +226,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             device=device,
             quant_config=quantization_config,
             all_reduce=_all_reduce,
+            layer_idx=layer_idx,
         )
 
     def forward(self, hidden_states: torch.Tensor):
@@ -217,9 +234,9 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         router_logits = self.gate(hidden_states)
-
         topk_weights, topk_ids = self.softmax_topk(router_logits)
-
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            topk_ids = eplb.topk_ids_logical_to_physical(topk_ids, self.eplb_dispatch_info)
         out_states = self.experts(
             hidden_states,
             topk_weights,
@@ -231,7 +248,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
 
 class Qwen3MoeDecoderLayer(nn.Module):
-    """decoder layer."""
+    """Decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -307,6 +324,15 @@ class Qwen3MoeModel(nn.Module):
                                          dtype=dtype,
                                          device=device)
 
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            if not use_dlblas:
+                raise ImportError('To enable eplb, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
+            ep_size, _ = get_ep_world_rank()
+            eplb.init_global_eplb_metadata(
+                ep_size=ep_size,
+                num_routed_experts=config.num_experts,
+                num_hidden_layers=config.num_hidden_layers,
+            )
         # build all decode layers
         self.layers = nn.ModuleList([
             Qwen3MoeDecoderLayer(config, layer_idx, dtype=dtype, device=device)
@@ -368,7 +394,7 @@ class Qwen3MoeModel(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embed_tokens
 
 
@@ -413,7 +439,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -424,11 +450,11 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -437,7 +463,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -462,7 +488,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
-        """load weight experts."""
+        """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
                 continue
@@ -475,7 +501,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             load_weight(param, loaded_weight)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

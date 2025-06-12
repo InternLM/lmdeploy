@@ -11,13 +11,13 @@ logger = get_logger('lmdeploy')
 
 @VISION_MODELS.register_module()
 class GLM4VisionModel(VisonModel):
-    """glm-4v-9b vision model."""
+    """Glm-4v-9b vision model."""
 
     _arch = ['ChatGLMModel', 'ChatGLMForConditionalGeneration']
 
     @classmethod
     def match(cls, config: AutoConfig):
-        """check whether the config match the model."""
+        """Check whether the config match the model."""
         arch = config.architectures[0] if config.architectures else None
         if arch in cls._arch and hasattr(config, 'vision_config'):
             return True
@@ -45,7 +45,7 @@ class GLM4VisionModel(VisonModel):
             raise NotImplementedError('turbomind has not supported glm4v yet')
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refers to the spec of `super.preprocess()"""
+        """Refers to the spec of `super.preprocess()"""
         outputs = []
         for message in messages:
             if not isinstance(message['content'], List):
@@ -69,7 +69,7 @@ class GLM4VisionModel(VisonModel):
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:

@@ -3,11 +3,13 @@
 import json
 import os.path as osp
 
+import numpy as np
 import torch
 from safetensors.torch import safe_open
 from tqdm.auto import tqdm
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.utils import get_logger
 
@@ -15,7 +17,7 @@ logger = get_logger('lmdeploy')
 
 
 def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor, **kwargs):
-    """load weight."""
+    """Load weight."""
     if hasattr(param, 'weight_loader'):
         param.weight_loader(param, loaded_weight, **kwargs)
     else:
@@ -24,7 +26,7 @@ def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor, **kwargs
 
 
 def default_weight_loader(param: torch.nn.Parameter, loaded_weight: torch.Tensor):
-    """default weight loader."""
+    """Default weight loader."""
     if param.numel() == 1 and loaded_weight.numel() == 1:
         param.data.fill_(loaded_weight.item())
     else:
@@ -34,7 +36,7 @@ def default_weight_loader(param: torch.nn.Parameter, loaded_weight: torch.Tensor
 
 
 def _get_weight_type(model_path: str, use_safetensors: bool = None):
-    """get weight type."""
+    """Get weight type."""
     weight_type = None
     is_sharded = False
     if use_safetensors is not False and osp.isfile(osp.join(model_path, SAFE_WEIGHTS_NAME)):
@@ -58,7 +60,7 @@ def _get_weight_type(model_path: str, use_safetensors: bool = None):
 
 
 def _get_weight_map(model_path: str, weight_type: str):
-    """get weight index."""
+    """Get weight index."""
     if weight_type == 'safetensors':
         load_index = osp.join(model_path, SAFE_WEIGHTS_INDEX_NAME)
     elif weight_type == 'pytorch':
@@ -74,7 +76,7 @@ def _get_weight_map(model_path: str, weight_type: str):
 
 
 def _get_weight_path(model_path: str, weight_type: str):
-    """get weight path."""
+    """Get weight path."""
     if weight_type == 'safetensors':
         weight_name = SAFE_WEIGHTS_NAME
     elif weight_type == 'pytorch':
@@ -87,7 +89,7 @@ def _get_weight_path(model_path: str, weight_type: str):
 
 
 def _get_safetensors_weights_iterator(file: str, prefix: str):
-    """get safeternsors weights iterator."""
+    """Get safeternsors weights iterator."""
     with safe_open(file, framework='pt') as f:
         for name in f.keys():
             param = f.get_tensor(name)
@@ -97,7 +99,7 @@ def _get_safetensors_weights_iterator(file: str, prefix: str):
 
 
 def _get_pt_weights_iterator(file: str, prefix: str):
-    """get pt weights iterator."""
+    """Get pt weights iterator."""
     state = torch.load(file, weights_only=True, map_location='cpu')
     if prefix is None:
         yield from state.items()
@@ -109,7 +111,7 @@ def _get_pt_weights_iterator(file: str, prefix: str):
 
 
 class ModelWeightLoader:
-    """model weight loader for sharded weights."""
+    """Model weight loader for sharded weights."""
 
     def __init__(self, model_path: str, prefix: str = None):
         self.model_path = model_path
@@ -122,7 +124,7 @@ class ModelWeightLoader:
 
     @staticmethod
     def _get_shard_paths(model_path: str, is_sharded: bool, weight_type: str):
-        """get shard paths."""
+        """Get shard paths."""
         if is_sharded:
             weight_map = _get_weight_map(model_path, weight_type)
             paths = set(weight_map.values())
@@ -133,7 +135,7 @@ class ModelWeightLoader:
             return (path, )
 
     def _get_weights_iterator(self, path: str):
-        """get weights iterator."""
+        """Get weights iterator."""
         if self._weight_type == 'safetensors':
             weights_iterator = _get_safetensors_weights_iterator(path, self._prefix)
         else:
@@ -145,13 +147,15 @@ class ModelWeightLoader:
         model: torch.nn.Module,
         device: torch.device = None,
     ):
-        """load model weights implementation."""
+        """Load model weights implementation."""
         assert hasattr(model, 'load_weights')
         paths = self._shard_paths
         _, rank = get_world_rank()
         disable_tqdm = rank != 0
 
         paths = sorted(paths)
+        if _envs.random_load_weight:
+            np.random.shuffle(paths)
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
             weights_iterator = self._get_weights_iterator(path)
             model.load_weights(weights_iterator)

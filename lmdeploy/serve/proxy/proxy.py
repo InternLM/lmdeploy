@@ -165,6 +165,7 @@ class NodeManager:
             status.models = client.available_models
             self.nodes[node_url] = status
         except requests.exceptions.RequestException as e:  # noqa
+            logger.error(f'exception happened when adding node {node_url}, {e}')
             return self.handle_api_timeout(node_url)
         self.update_config_file()
 
@@ -181,7 +182,7 @@ class NodeManager:
                 self.pd_connection_pool.drop(*conn)
 
     def terminate_node(self, node_url: str):
-        """terminate a node."""
+        """Terminate a node."""
         success = True
         if node_url in self.nodes:
             self.nodes.pop(node_url)
@@ -193,15 +194,18 @@ class NodeManager:
                     logger.error(f'Failed to terminate node {node_url}, '
                                  f'error_code={response.status_code}, '
                                  f'error_msg={response.text}')
-            except:  # noqa
+            except Exception as e:  # noqa
+                logger.error(f'exception happened when terminating node {node_url}, {e}')
                 success = False
         else:
+            logger.error(f'terminating node {node_url} failed since it does not exist. '
+                         'May try /nodes/status to check the node list')
             success = False
         self.update_config_file()
         return success
 
     def terminate_all_nodes(self):
-        """terminate all nodes."""
+        """Terminate all nodes."""
         node_url_li = list(self.nodes.keys())
         all_success = True
         for node_url in node_url_li:
@@ -210,7 +214,7 @@ class NodeManager:
         return all_success
 
     def remove_stale_nodes_by_expiration(self):
-        """remove stale nodes."""
+        """Remove stale nodes."""
         to_be_deleted = []
         node_urls = list(self.nodes.keys())
         for node_url in node_urls:
@@ -479,7 +483,7 @@ def remove_node(node: Node):
 
 @app.post('/nodes/terminate', dependencies=[Depends(check_api_key)])
 def terminate_node(node: Node):
-    """terminate nodes."""
+    """Terminate nodes."""
     try:
         node_url = node.url
         success = node_manager.terminate_node(node_url)
@@ -493,7 +497,7 @@ def terminate_node(node: Node):
 
 @app.get('/nodes/terminate_all', dependencies=[Depends(check_api_key)])
 def terminate_node_all():
-    """terminate nodes."""
+    """Terminate nodes."""
     try:
         success = node_manager.terminate_all_nodes()
         if not success:
@@ -793,7 +797,7 @@ def proxy(server_name: str = '0.0.0.0',
           ssl: bool = False,
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
-          link_type: Literal['RoCE', 'IB'] = 'ROCE',
+          link_type: Literal['RoCE', 'IB'] = 'RoCE',
           migration_protocol: Literal['RDMA'] = 'RDMA',
           **kwargs):
     """To launch the proxy server.
@@ -833,10 +837,11 @@ def proxy(server_name: str = '0.0.0.0',
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
     logger.setLevel(log_level)
+    uvicorn_log_level = os.getenv('UVICORN_LOG_LEVEL', 'info').lower()
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
-                log_level='info',
+                log_level=uvicorn_log_level,
                 ssl_keyfile=ssl_keyfile,
                 ssl_certfile=ssl_certfile)
 

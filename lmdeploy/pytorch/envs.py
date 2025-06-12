@@ -10,7 +10,7 @@ def env_to_bool(
     true_values: Union[set, list] = {'true', '1', 'yes', 'on'},
     false_values: Union[set, list] = {'false', '0', 'no', 'off'},
 ):
-    """env to bool."""
+    """Env to bool."""
     value = os.getenv(env_var)
     if value is None:
         return default
@@ -28,7 +28,7 @@ def env_to_int(
     env_var: str,
     default: int = 0,
 ):
-    """env to int."""
+    """Env to int."""
     value = os.getenv(env_var)
     if value is None:
         return default
@@ -38,6 +38,9 @@ def env_to_int(
         value = default
     return value
 
+
+# loader
+random_load_weight = env_to_bool('LMDEPLOY_RANDOM_LOAD_WEIGHT', True)
 
 # profile
 ray_nsys_enable = env_to_bool('LMDEPLOY_RAY_NSYS_ENABLE', False)
@@ -63,3 +66,7 @@ torch_profile_output_prefix = os.getenv('LMDEPLOY_PROFILE_OUT_PREFIX', 'lmdeploy
 # ray timeline
 ray_timeline_enable = env_to_bool('LMDEPLOY_RAY_TIMELINE_ENABLE', False)
 ray_timeline_output_path = os.getenv('LMDEPLOY_RAY_TIMELINE_OUT_PATH', 'ray_timeline.json')
+
+# dist
+dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)
+dist_master_port = os.getenv('LMDEPLOY_DIST_MASTER_PORT', None)

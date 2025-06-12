@@ -139,7 +139,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
 
 
 def pack_model_repository(workspace_path: str):
-    """package the model repository.
+    """Package the model repository.
 
     Args:
         workspace_path: the path of workspace
@@ -256,7 +256,7 @@ def main(model_name: str,
          revision: str = None,
          download_dir: str = None,
          **kwargs):
-    """deploy llama family models via turbomind.
+    """Deploy llama family models via turbomind.
 
     Args:
         model_name (str): the served model name, which can be accessed by
