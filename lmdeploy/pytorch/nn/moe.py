@@ -485,7 +485,7 @@ class LinearWeightsBlockedF8(LinearWeights):
             self.weight._base_weight_loader(self.weight, quanted_weight, expert_id, shard_id)
             self.weight_scale_inv.weight_loader(self.weight_scale_inv, scaling, expert_id, shard_id)
         else:
-            return self.weight_loader(param, loaded_weight, expert_id, shard_id)
+            return self.weight._base_weight_loader(param, loaded_weight, expert_id, shard_id)
 
 
 class FusedMoEBlockedF8(nn.Module):
