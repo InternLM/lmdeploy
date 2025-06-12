@@ -10,6 +10,8 @@ from lmdeploy.model import MODELS, best_match_model
     ('Qwen/Qwen-7B-Chat', ['qwen']),
     ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
     ('Qwen/Qwen2.5-VL-7B-Instruct', ['qwen2d5-vl']),
+    ('Qwen/Qwen3-32B', ['qwen3']),
+    ('Qwen/Qwen3-235B-A22B', ['qwen3']),
     ('codellama/CodeLlama-7b-hf', ['codellama']),
     ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
     ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
