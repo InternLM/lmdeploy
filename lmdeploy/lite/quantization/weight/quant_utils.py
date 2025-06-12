@@ -27,7 +27,7 @@ def quant_blocked_fp8(weight: torch.Tensor, fp8_dtype: torch.dtype, block_size: 
     # get scaling
     finfo = torch.finfo(fp8_dtype)
     fmax = finfo.max
-    scaling = weight.abs().amax((-3, -1), keepdim=True) / fmax
+    scaling = weight.abs().amax((-3, -1), keepdim=True).clamp_min(1e-6) / fmax
 
     # get quantized weight
     quantized_weight = weight / scaling
