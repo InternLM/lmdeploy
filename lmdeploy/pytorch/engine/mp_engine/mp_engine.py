@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import pickle
+import signal
 from contextlib import asynccontextmanager
 
 import torch.multiprocessing as mp
@@ -9,6 +10,16 @@ from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
+
+
+def cancel_async_tasks(loop: asyncio.AbstractEventLoop):
+    """Cancel async tasks."""
+    tasks = asyncio.all_tasks(loop=loop)
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    loop.run_until_complete(loop.shutdown_asyncgens())
+    loop.close()
 
 
 class EngineInstancePool:
@@ -140,6 +151,13 @@ class MPEngine:
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+        def _signal_handler(signum, frame):
+            """Signal handler to stop the server."""
+            logger.info(f'Received signal {signum}, stopping server.')
+            exit(0)
+
+        signal.signal(signal.SIGTERM, _signal_handler)
         try:
             loop.run_until_complete(MPEngine._mp_proc_async(server, engine))
         except KeyboardInterrupt:
@@ -147,6 +165,7 @@ class MPEngine:
         finally:
             server.stop()
             engine.close()
+            cancel_async_tasks(loop)
 
     @staticmethod
     async def _mp_proc_async(server, engine):
@@ -185,7 +204,7 @@ class MPEngine:
         """Close mp engine."""
         logger.info('Closing mp engine.')
         self.rpc_client.stop()
-        self.proc.kill()
+        self.proc.terminate()
         self.proc.join(10)
 
     def start_loop(self) -> None:
