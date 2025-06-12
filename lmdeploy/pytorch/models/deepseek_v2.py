@@ -19,18 +19,9 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear,
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import is_dlblas_installed
 
 from .utils.cudagraph import CudaGraphMixin
-
-logger = get_logger('lmdeploy')
-
-try:
-    import dlblas
-    from dlblas.layers.moe import eplb
-    use_dlblas = True
-except Exception:
-    use_dlblas = False
 
 
 # microbatch
@@ -601,6 +592,7 @@ class MoEGate(nn.Module):
 
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
+        self.use_dlblas = is_dlblas_installed()
 
     def _compute_scores(self, logits: torch.Tensor):
         """Compute scores."""
@@ -635,7 +627,9 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
-        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize and use_dlblas):
+        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize
+              and self.use_dlblas):
+            import dlblas
             topk_weight, topk_idx = dlblas.moe_fused_gate(router_logits, self.e_score_correction_bias, self.n_group,
                                                           self.topk_group, self.top_k)
         elif self.topk_method == 'noaux_tc':
@@ -655,7 +649,7 @@ class MoEGate(nn.Module):
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
-        if self.renormalize and not use_dlblas:
+        if self.renormalize and not self.use_dlblas:
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
             if not topk_weight.is_contiguous():
@@ -665,6 +659,7 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight * self.routed_scaling_factor
 
         if self.eplb_dispatch_info is not None:
+            from dlblas.layers.moe import eplb
             topk_idx = eplb.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
 
         return topk_weight, topk_idx
@@ -692,6 +687,7 @@ class DeepseekV2MoE(nn.Module):
         world_size = dist_ctx.world_size
         moe_all_reduce = dp > 1 and dist_ctx.tp > 1
         if get_dist_manager().current_context().dist_config.enable_eplb:
+            from dlblas.layers.moe import eplb
             eplb_dispatch_info = eplb.EPLBDispatchInfo.init_new(
                 ep_rank=dist_ctx.ep_rank,
                 layer_idx=layer_idx,
@@ -970,19 +966,19 @@ class DeepseekV2Model(nn.Module):
                                          self.padding_idx,
                                          dtype=dtype,
                                          device=device)
-        self.layers = nn.ModuleList([
-            DeepseekV2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
-            for layer_idx in range(config.num_hidden_layers)
-        ])
-
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size, _ = get_ep_world_rank()
-            assert ep_size > 1, 'ep_size > 1 is required when enable eplb.'
+            from dlblas.layers.moe import eplb
             eplb.init_global_eplb_metadata(
                 ep_size=ep_size,
                 num_routed_experts=config.n_routed_experts,
                 num_hidden_layers=config.num_hidden_layers,
             )
+        self.layers = nn.ModuleList([
+            DeepseekV2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            for layer_idx in range(config.num_hidden_layers)
+        ])
+
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, quant_config=None, dtype=dtype, device=device)
 

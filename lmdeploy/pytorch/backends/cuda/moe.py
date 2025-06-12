@@ -591,19 +591,11 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
-        try:
-            from dlblas.layers.moe.ep_moe import build_deepep_moe
-            from dlblas.layers.moe.eplb import get_eplb_phy2log_metadata_by_layer
-            self.use_dlblas = True
-            self.build_deepep_moe = build_deepep_moe
-            self.get_eplb_phy2log_metadata_by_layer = get_eplb_phy2log_metadata_by_layer
-        except ImportError:
-            raise ImportError('To enable ep, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
-
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            phy2log = self.get_eplb_phy2log_metadata_by_layer(self.layer_idx)
+            from dlblas.layers.moe.eplb import get_eplb_phy2log_metadata_by_layer
+            phy2log = get_eplb_phy2log_metadata_by_layer(self.layer_idx)
             expert_per_rank = (self.num_experts + world_size - 1) // world_size
             first_expert = rank * expert_per_rank
             last_expert = min(first_expert + expert_per_rank, self.num_experts)
@@ -634,23 +626,17 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        if self.use_dlblas:
-            return self.build_deepep_moe(low_latency_mode,
-                                         self.ep_size,
-                                         self.ep_group,
-                                         self.num_experts,
-                                         self.hidden_dim,
-                                         self.block_size,
-                                         self.top_k,
-                                         self.out_dtype,
-                                         layer_idx=self.layer_idx,
-                                         chunk_size=16 * 1024)
-        elif low_latency_mode:
-            return FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
-                                      self.out_dtype)
-        else:
-            return FusedMoENormal(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
-                                  self.out_dtype)
+        from dlblas.layers.moe.ep_moe import build_deepep_moe
+        return build_deepep_moe(low_latency_mode,
+                                self.ep_size,
+                                self.ep_group,
+                                self.num_experts,
+                                self.hidden_dim,
+                                self.block_size,
+                                self.top_k,
+                                self.out_dtype,
+                                layer_idx=self.layer_idx,
+                                chunk_size=16 * 1024)
 
 
 class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
