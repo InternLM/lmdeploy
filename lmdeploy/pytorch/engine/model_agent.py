@@ -790,7 +790,9 @@ class BaseModelAgent:
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
-        patched_model = build_patched_model(self.model_config, device=device)
+        patched_model = build_patched_model(self.model_config,
+                                            device=device,
+                                            model_format=self.misc_config.model_format)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
             load_model_weights(patched_model, model_path, device=device)
