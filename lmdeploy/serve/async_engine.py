@@ -21,6 +21,7 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
+from lmdeploy.metrics.loggers import StatLoggerBase, setup_loggers
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
@@ -302,6 +303,9 @@ class AsyncEngine(LogitsMixin):
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
 
+        # build status loggers
+        self._build_stat_loggers()
+
     def close(self):
         self.internal_thread.close()
         self.free_insts = None
@@ -346,6 +350,19 @@ class AsyncEngine(LogitsMixin):
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
+    def _build_stat_loggers(self):
+        if not getattr(self.backend_config, 'enable_metrics', False):
+            return
+
+        # independent set for each DP rank, since monototic time differs for each process
+        # each set contains one cli logger and one prometheus logger
+        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(model_name=self.model_name,
+                                                                      max_model_len=self.session_len,
+                                                                      engine_num=self.backend_config.dp)
+
+        logger.info(f'dp: {self.backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
+        self.engine.stat_loggers = self.stat_loggers[self.backend_config.dp_rank]
+
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
                  gen_config: Optional[GenerationConfig] = None,
@@ -376,6 +393,11 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name=adapter_name,
                                 use_tqdm=use_tqdm,
                                 **kwargs)
+
+    async def do_log_stats(self, ) -> None:
+        for each_dp_engine_loggers in self.stat_loggers:
+            for stat_logger in each_dp_engine_loggers:
+                stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""

@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
+from lmdeploy.messages import EngineCoreEventType
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
@@ -50,6 +52,14 @@ class Scheduler:
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
         self.seq_manager = SequenceManager()
+
+    @property
+    def usage(self) -> float:
+        """Get the KV cache usage.
+
+        The KV cache usage (between 0.0 and 1.0).
+        """
+        return self.block_manager.get_usage()
 
     @property
     def waiting(self):
@@ -134,6 +144,9 @@ class Scheduler:
 
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
+
+        if self.scheduler_config.enable_metrics:
+            seq.record_event(EngineCoreEventType.QUEUED)
 
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
@@ -225,6 +238,9 @@ class Scheduler:
             # allocate session memory
             self.block_manager.allocate(seq)
             _to_running(seq)
+
+            if self.scheduler_config.enable_metrics:
+                seq.record_event(EngineCoreEventType.SCHEDULED, time.perf_counter())
 
         return running, swap_in_map, swap_out_map, copy_map
 
