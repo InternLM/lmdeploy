@@ -59,7 +59,7 @@ TM_DEVICE void st_shared_cluster(uint32_t ptr, int value)
 }
 
 template<class T, class M>
-constexpr int member_offset(M T::*member)
+constexpr int member_offset(M T::* member)
 {
     return reinterpret_cast<std::size_t>(&(reinterpret_cast<T*>(0)->*member));
 }
@@ -74,7 +74,7 @@ template<Order order,
          bool is_grouped_gemm>
 struct TileScheduler {
 
-    static constexpr bool is_dynamic = is_grouped_gemm;
+    static constexpr bool is_dynamic = 1;  // is_grouped_gemm;
     static constexpr int  Stages     = Stages_;
 
     static constexpr int2 tile_{tile_m, tile_n};
@@ -123,7 +123,6 @@ struct TileScheduler {
         int group_idx;
         int m0;
         int m1;
-        int m;
     };
 
     using Tile = std::conditional_t<is_grouped_gemm, Tile1, Tile0>;
@@ -424,7 +423,6 @@ public:
                     tile->group_idx = state.group_idx;
                     tile->m0        = group_m0;
                     tile->m1        = group_m1;
-                    tile->m         = group_m;
                 }
             }
         }
@@ -445,6 +443,16 @@ public:
         ++pipe;
 
         return alive;
+    }
+
+    TM_DEVICE void tail(ProducerState& state)
+    {
+        if constexpr (Cluster::size > 1) {
+            for (int i = 0; i < Stages; ++i) {
+                cutlass::arch::ClusterBarrier::wait(&state.store.consumer_bar[state.pipe.index()], state.pipe.phase());
+                ++state.pipe;
+            }
+        }
     }
 
     TM_DEVICE bool acquire(ConsumerState& state, Tile*& tile)
