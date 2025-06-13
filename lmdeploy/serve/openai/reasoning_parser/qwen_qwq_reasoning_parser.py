@@ -123,7 +123,10 @@ class QwenQwQReasoningParser(ReasoningParser):
 
             end_index = len(f'{self.think_start_token}{reasoning_content}{self.think_end_token}')
             final_output = model_output[end_index:]
-            reasoning_content = reasoning_content.removeprefix('\n').removesuffix('\n')
+            if reasoning_content.startswith('\n'):
+                reasoning_content = reasoning_content[1:]
+            if reasoning_content.endswith('\n'):
+                reasoning_content = reasoning_content[:-1]
 
             if len(final_output) == 0:
                 return reasoning_content, None
