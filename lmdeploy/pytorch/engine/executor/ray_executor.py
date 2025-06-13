@@ -190,6 +190,15 @@ def get_ascend_device_rank_mapping(master_addr):
     return rank_mapping, worker_ips, envs
 
 
+def _update_runtime_envs(runtime_env: Dict):
+    """Update runtime envs."""
+    new_envs = _envs.get_all_envs()
+    env_vars: Dict = runtime_env.get('env_vars', {})
+    env_vars.update(new_envs)
+    runtime_env['env_vars'] = env_vars
+    return runtime_env
+
+
 def _update_runtime_env_nsys(runtime_env: Dict):
     """Update runtime env for nsys."""
     nsight_env = {
@@ -558,6 +567,7 @@ class RayExecutor(ExecutorBase):
 
             if device_str == 'GPU':
                 runtime_env = dict()
+                runtime_env = _update_runtime_envs(runtime_env)
                 if _envs.ray_nsys_enable:
                     runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
