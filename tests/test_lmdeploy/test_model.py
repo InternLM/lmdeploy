@@ -970,3 +970,34 @@ def test_qwq(model_path_or_name):
     ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     lm_res = chat_template.messages2prompt(messages)
     assert ref == lm_res
+
+
+@pytest.mark.parametrize('enable_thinking', [True, False, None])
+def test_qwen3(enable_thinking):
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen3-30B-A3B', trust_remote_code=True)
+    chat_template = MODELS.get('qwen3')()
+
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    if enable_thinking is None:
+        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    else:
+        ref = tokenizer.apply_chat_template(messages,
+                                            tokenize=False,
+                                            add_generation_prompt=True,
+                                            enable_thinking=enable_thinking)
+    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
+    assert ref == lm_res
