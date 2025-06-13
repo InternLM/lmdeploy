@@ -81,7 +81,7 @@ _FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d' \
 def get_logger(name: Optional[str] = None,
                log_file: Optional[str] = None,
                log_level: int = logging.INFO,
-               file_mode: str = 'w',
+               file_mode: str = 'a',
                log_formatter: str = _FORMAT) -> Logger:
     """Initialize and get a logger by name.
 
@@ -95,7 +95,7 @@ def get_logger(name: Optional[str] = None,
             will be added to the logger.
         log_level (int): The logger level.
         file_mode (str): The file mode used in opening log file.
-            Defaults to 'w'.
+            Defaults to 'a'.
         log_formatter (str): The logger output format.
     Returns:
         logging.Logger: The expected logger.
