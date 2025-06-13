@@ -1143,7 +1143,7 @@ class Qwen3(Qwen2d5Chat):
 
     def messages2prompt(self, messages, sequence_start=True, tools=None, enable_thinking=None, **kwargs):
         if isinstance(messages, str):
-            prompt = self.get_prompt(messages, sequence_start)
+            return self.get_prompt(messages, sequence_start)
         prompt = super().messages2prompt(messages, sequence_start, tools, **kwargs)
 
         # enable_thinking parameter
