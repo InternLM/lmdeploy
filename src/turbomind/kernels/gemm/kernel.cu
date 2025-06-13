@@ -148,6 +148,7 @@ std::string Kernel::GetName() const
        << to_string(desc_.striding_c);
     ss << "_" << desc_.cta_tile.x << "x" << desc_.cta_tile.y << "x" << desc_.cta_tile.z  //
        << "_" << desc_.stages                                                            //
+       << "_" << desc_.cluster_shape.x << "x" << desc_.cluster_shape.y                   //
        << "_" << to_string(desc_.op_class)                                               //
        << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z;
     ss << (desc_.sched ? "_dynamic" : "");

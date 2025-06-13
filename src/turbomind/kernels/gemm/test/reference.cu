@@ -106,7 +106,7 @@ void Reference::gemm(const void* A, MatrixLayout Adesc, const void* B, MatrixLay
                                CUBLAS_COMPUTE_32F,
                                CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 
-    CHECK(status == CUBLAS_STATUS_SUCCESS);
+    TM_CHECK_EQ(status, CUBLAS_STATUS_SUCCESS);
 }
 
 }  // namespace turbomind::gemm

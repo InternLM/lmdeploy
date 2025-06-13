@@ -28,7 +28,7 @@ jobs:
   build:
     strategy:
       matrix:
-        cudaver: [11.8, 12.1]
+        cudaver: [11.8, 12.4]
     name: cuda-${{ matrix.cudaver }}
     runs-on: ubuntu-latest
     steps:
