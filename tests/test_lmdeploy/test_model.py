@@ -972,12 +972,14 @@ def test_qwq(model_path_or_name):
     assert ref == lm_res
 
 
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct'])
 @pytest.mark.parametrize('enable_thinking', [True, False, None])
-def test_qwen3(enable_thinking):
+def test_qwen3(model_path, enable_thinking):
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen3-30B-A3B', trust_remote_code=True)
-    chat_template = MODELS.get('qwen3')()
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    chat_template_name = best_match_model(model_path)
+    chat_template = MODELS.get(chat_template_name)()
 
     messages = [{
         'role': 'system',
