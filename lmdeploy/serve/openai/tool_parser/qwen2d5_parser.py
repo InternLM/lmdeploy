@@ -17,7 +17,7 @@ from .utils import extract_intermediate_diff
 logger = get_logger('lmdeploy')
 
 
-@ToolParserManager.register_module(['qwen'])
+@ToolParserManager.register_module(['qwen2d5'])
 class Qwen2d5ToolParser(ToolParser):
 
     def __init__(self, tokenizer: object):
