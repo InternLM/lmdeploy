@@ -37,9 +37,11 @@ class WarmupManager:
         """Warmup meta."""
         if len(self._warmup_calls) == 0:
             return
-
+        import random
         logger.info('Warming up ops.')
-        for key, func in self._warmup_calls.items():
+        funcs = list(self._warmup_calls.values())
+        random.shuffle(funcs)
+        for func in funcs:
             func(warmup_meta)
 
 

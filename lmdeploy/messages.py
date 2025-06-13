@@ -219,6 +219,9 @@ class TurbomindEngineConfig:
             "Dynamic SplitFuse"-like scheduling
         max_prefill_iters(int): the max number of forward pass during prefill
             stage
+        devices(List[int]): the used devices
+        empty_init (bool): Whether to load the model weights, you should set
+            it to True if you want to update weights after create the pipeline
     """
 
     dtype: str = 'auto'
@@ -245,6 +248,8 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    devices: Optional[List[int]] = None
+    empty_init: bool = False
     communicator: str = 'nccl'
 
     def __post_init__(self):
@@ -313,6 +318,7 @@ class PytorchEngineConfig:
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
+        model_format (str): weight quantization policy, options: ['fp8'].
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -340,6 +346,7 @@ class PytorchEngineConfig:
     empty_init: bool = False
     enable_microbatch: bool = False
     enable_eplb: bool = False
+    model_format: str = None
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime

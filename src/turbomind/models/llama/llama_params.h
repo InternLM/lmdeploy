@@ -27,6 +27,7 @@ struct ModelParam {
     size_t   layer_num;
     size_t   vocab_size;
     size_t   embedding_size;
+    size_t   tokenizer_size;
     float    norm_eps;
     int      quant_policy;
     bool     attn_bias;
@@ -95,6 +96,8 @@ struct EngineParam {
     int attn_tp_rank;
     int mlp_tp_size;
     int mlp_tp_rank;
+
+    std::vector<int> devices;
 };
 
 enum class LoraPolicy : int

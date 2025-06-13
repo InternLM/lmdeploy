@@ -106,14 +106,17 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
     return out, scales
 
 
-def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
+def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn, trans_scale: bool = False):
     """Quant fp8."""
     assert A.dim() == 2
     M, K = A.shape
     assert K % group_size == 0
     num_groups = K // group_size
     out = torch.empty_like(A, dtype=dtype)
-    scales = A.new_empty(M, num_groups, dtype=torch.float32)
+    if trans_scale:
+        scales = A.new_empty(num_groups, M, dtype=torch.float32).T
+    else:
+        scales = A.new_empty(M, num_groups, dtype=torch.float32)
     return _quant_fp8_launcher(A, group_size, out, scales)
 
 
@@ -129,6 +132,95 @@ def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_
     out = A.new_empty(aligned_M, K, dtype=dtype)
     scales = A.new_empty(num_groups, aligned_M, dtype=torch.float32).T
     return _quant_fp8_launcher(A, group_size, out, scales)
+
+
+@triton.autotune(configs=[
+    triton.Config({
+        'BLOCK_M': 128,
+        'BLOCK_N': 128,
+    }, num_stages=3, num_warps=8),
+    triton.Config({
+        'BLOCK_M': 128,
+        'BLOCK_N': 64,
+    }, num_stages=3, num_warps=4)
+],
+                 key=['N', 'K'])
+@triton.jit
+def _gemm_fp8_tma_kernel(
+    desc_a,
+    a_scale_ptr,
+    desc_b,
+    b_scale_ptr,
+    C,
+    M,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    group_ak: tl.constexpr,
+    group_bk: tl.constexpr,
+    group_bn: tl.constexpr,
+    stride_asm: tl.constexpr,
+    stride_ask,
+    stride_bsk: tl.constexpr,
+    stride_bsn: tl.constexpr,
+    stride_cm,
+    stride_cn: tl.constexpr,
+    dtype: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
+):
+    """Gemm fp8 kernel."""
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    num_pid_n = tl.cdiv(N, BLOCK_N)
+    num_pid_in_group = GROUP_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_M)
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+
+    offs_bsn = pid_n * BLOCK_N // group_bn
+    as_ptrs = a_scale_ptr + offs_am * stride_asm
+    bs_ptrs = b_scale_ptr + offs_bsn * stride_bsn
+
+    acc_scale = tl.load(as_ptrs) * tl.load(bs_ptrs)
+    acc_ratio = 1 / acc_scale
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+    off_k = 0
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        # load scales
+        k_start = (k + 1) * BLOCK_K
+        offs_ksa = k_start // group_ak
+        offs_ksb = k_start // group_bk
+        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=k_start < K, other=1.0)
+        b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
+
+        # load ab
+        a = tl._experimental_descriptor_load(desc_a, [off_m, off_k], [BLOCK_M, BLOCK_K], dtype)
+        b = tl._experimental_descriptor_load(desc_b, [off_n, off_k], [BLOCK_N, BLOCK_K], dtype).T
+
+        # mma
+        accumulator = tl.dot(a, b, acc=accumulator * acc_ratio[:, None])
+
+        # update scales and ratio
+        new_acc_scale = a_scale * b_scale
+        acc_ratio = acc_scale / new_acc_scale
+        acc_scale = new_acc_scale
+
+        off_k += BLOCK_K
+    c = accumulator * (acc_ratio * acc_scale)[:, None]
+
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(c_ptrs, c, mask=c_mask)
 
 
 @triton.autotune(configs=[
@@ -159,8 +251,8 @@ def _gemm_fp8_kernel(
     group_bn: tl.constexpr,
     stride_am,
     stride_ak: tl.constexpr,
-    stride_asm,
-    stride_ask: tl.constexpr,
+    stride_asm: tl.constexpr,
+    stride_ask,
     stride_bk: tl.constexpr,
     stride_bn: tl.constexpr,
     stride_bsk: tl.constexpr,
@@ -253,31 +345,101 @@ def blocked_gemm_fp8(A: Tensor,
 
     BLOCK_K = max(group_ak, group_bk)
 
-    _gemm_fp8_kernel[grid](
-        A,
-        A_scale,
-        B,
-        B_scale,
-        C,
-        M=M,
-        N=N,
-        K=K,
-        group_ak=group_ak,
-        group_bk=group_bk,
-        group_bn=group_bn,
-        stride_am=A.stride(0),
-        stride_ak=A.stride(1),
-        stride_asm=A_scale.stride(0),
-        stride_ask=A_scale.stride(1),
-        stride_bk=B.stride(0),
-        stride_bn=B.stride(1),
-        stride_bsk=B_scale.stride(0),
-        stride_bsn=B_scale.stride(1),
-        stride_cm=C.stride(0),
-        stride_cn=C.stride(1),
-        BLOCK_K=BLOCK_K,
-        GROUP_M=8,
-    )
+    from .utils import supports_tma
+
+    run_tma = supports_tma()
+    run_tma = run_tma and A.is_contiguous() and B.T.is_contiguous()
+
+    # run_tma = False
+    if run_tma:
+        from .utils import TmaAutoTuneHelper
+
+        desc_helper = TmaAutoTuneHelper()
+        desc_helper.init_tma_descriptor('desc_a')
+        desc_helper.init_tma_descriptor('desc_b')
+
+        desc_a = desc_helper.get_tma_descriptor_kernel_param('desc_a')
+        desc_b = desc_helper.get_tma_descriptor_kernel_param('desc_b')
+
+        def _grid_tma(META):
+            """Grid tma."""
+            BLOCK_M = META['BLOCK_M']
+            BLOCK_N = META['BLOCK_N']
+            desc_helper.fill_2d_tma_descriptor('desc_a',
+                                               A.data_ptr(),
+                                               dim1=M,
+                                               dim0=K,
+                                               block_dim1=BLOCK_M,
+                                               block_dim0=BLOCK_K,
+                                               element_size=A.element_size())
+            desc_helper.fill_2d_tma_descriptor('desc_b',
+                                               B.data_ptr(),
+                                               dim1=N,
+                                               dim0=K,
+                                               block_dim1=BLOCK_N,
+                                               block_dim0=BLOCK_K,
+                                               element_size=B.element_size())
+            return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
+
+        if A.dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz):
+            dtype = tl.float8e4nv
+        elif A.dtype in (torch.float8_e5m2, torch.float8_e5m2fnuz):
+            dtype = tl.float8e5
+        else:
+            raise RuntimeError(f'Not supported dtype: {A.dtype}')
+
+        _gemm_fp8_tma_kernel[_grid_tma](
+            desc_a,
+            A_scale,
+            desc_b,
+            B_scale,
+            C,
+            M=M,
+            N=N,
+            K=K,
+            group_ak=group_ak,
+            group_bk=group_bk,
+            group_bn=group_bn,
+            stride_asm=A_scale.stride(0),
+            stride_ask=A_scale.stride(1),
+            stride_bsk=B_scale.stride(0),
+            stride_bsn=B_scale.stride(1),
+            stride_cm=C.stride(0),
+            stride_cn=C.stride(1),
+            dtype=dtype,
+            # BLOCK_M=BLOCK_M,
+            # BLOCK_N=BLOCK_N,
+            BLOCK_K=BLOCK_K,
+            GROUP_M=8,
+            # num_warps=num_warps,
+            # num_stages=num_stages,
+        )
+    else:
+        _gemm_fp8_kernel[grid](
+            A,
+            A_scale,
+            B,
+            B_scale,
+            C,
+            M=M,
+            N=N,
+            K=K,
+            group_ak=group_ak,
+            group_bk=group_bk,
+            group_bn=group_bn,
+            stride_am=A.stride(0),
+            stride_ak=A.stride(1),
+            stride_asm=A_scale.stride(0),
+            stride_ask=A_scale.stride(1),
+            stride_bk=B.stride(0),
+            stride_bn=B.stride(1),
+            stride_bsk=B_scale.stride(0),
+            stride_bsn=B_scale.stride(1),
+            stride_cm=C.stride(0),
+            stride_cn=C.stride(1),
+            BLOCK_K=BLOCK_K,
+            GROUP_M=8,
+        )
 
     return C
 
@@ -285,7 +447,12 @@ def blocked_gemm_fp8(A: Tensor,
 @contextmanager
 def _log_jit_build(M: int, N: int, K: int):
     from deep_gemm.jit.runtime import RuntimeCache
-    origin_func = RuntimeCache.__getitem__
+
+    if hasattr(RuntimeCache, 'get'):
+        func_name = 'get'
+    else:
+        func_name = '__getitem__'
+    origin_func = getattr(RuntimeCache, func_name)
 
     def __patched_func(self, *args, **kwargs):
         ret = origin_func(self, *args, **kwargs)
@@ -293,9 +460,9 @@ def _log_jit_build(M: int, N: int, K: int):
             logger.warning(f'DeepGemm build <gemm_fp8_fp8_bf16_nt>: M={M}, N={N}, K={K}. Please waiting.')
         return ret
 
-    RuntimeCache.__getitem__ = __patched_func
+    setattr(RuntimeCache, func_name, __patched_func)
     yield
-    RuntimeCache.__getitem__ = origin_func
+    setattr(RuntimeCache, func_name, origin_func)
 
 
 def deep_gemm_fp8(A: Tensor,

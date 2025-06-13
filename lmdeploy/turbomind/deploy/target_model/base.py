@@ -102,6 +102,10 @@ class BaseOutputModel(ABC):
         final_cfg.update(self.input_model_info)
         if 'embedding_size' not in self.input_model_info.keys():
             final_cfg.update(embedding_size=self.input_model_info['vocab_size'])
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.input_model.tokenizer_path, trust_remote_code=True)
+        tokenizer_size = min(len(tokenizer), final_cfg['vocab_size'])
+        final_cfg.update(tokenizer_size=tokenizer_size)
 
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 
@@ -205,11 +209,12 @@ class BaseOutputModel(ABC):
             if self.model(i, reader):
                 pbar.update(1)
         pbar.close()
-        # manually clean up meta reader
-        if hasattr(self.input_model, 'meta_reader'):
-            self.input_model.meta_reader.clean_up(True)
-            del self.input_model.meta_reader
-            torch.cuda.empty_cache()
+
+    def export_iter(self):
+        self.export_config()
+        for i, reader in self.input_model.readers():
+            self.model(i, reader)
+            yield i
 
     @property
     def tm_config(self):

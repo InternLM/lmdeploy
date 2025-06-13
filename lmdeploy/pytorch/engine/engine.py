@@ -120,7 +120,7 @@ def _build_dist_config(engine_config: PytorchEngineConfig):
 
 def _build_misc_config(engine_config: PytorchEngineConfig):
     """Build misc config."""
-    misc_config = MiscConfig(custom_module_map=engine_config.custom_module_map, empty_init=engine_config.empty_init)
+    misc_config = MiscConfig.from_engine_config(engine_config)
     return misc_config
 
 
@@ -160,19 +160,6 @@ class RunableEventBase:
         raise NotImplementedError('Not implemented.')
 
 
-class RunableEventSync(RunableEventBase):
-    """Awaitable sync runable event."""
-
-    def __init__(self, scheduler: Scheduler):
-        self.scheduler = scheduler
-
-    async def wait(self):
-        """Wait event."""
-
-    def set(self):
-        """Set event."""
-
-
 class RunableEventAsnyc(RunableEventBase):
     """Awaitable async runable event."""
 
@@ -184,13 +171,6 @@ class RunableEventAsnyc(RunableEventBase):
         """Wait event."""
         await self.event.wait()
 
-    def set_single(self):
-        """Set single."""
-        if self.scheduler.has_unfinished():
-            self.event.set()
-        else:
-            self.event.clear()
-
     def set(self):
         """Set event."""
         if self.scheduler.has_unfinished():
@@ -199,12 +179,9 @@ class RunableEventAsnyc(RunableEventBase):
             self.event.clear()
 
 
-def build_runable_event(scheduler: Scheduler, sync: bool):
+def build_runable_event(scheduler: Scheduler):
     """Build runable event."""
-    if sync:
-        return RunableEventSync(scheduler)
-    else:
-        return RunableEventAsnyc(scheduler)
+    return RunableEventAsnyc(scheduler)
 
 
 class InputsMakerBase:
@@ -234,7 +211,28 @@ class InputsMakerAsync(InputsMakerBase):
         self.scheduler = self.engine.scheduler
         self.forward_inputs = None
 
-    def do_prefill(self):
+        self.dp = self.engine.dist_config.dp
+        self.role = self.engine.cache_config.role
+
+        self.next_is_prefill = True
+        if self.dp == 1:
+            self.do_prefill = self.do_prefill_default
+        else:
+            self.do_prefill = self.do_prefill_dp
+
+    def do_prefill_dp(self):
+        if self.role == EngineRole.Prefill:
+            return True
+
+        scheduler = self.scheduler
+
+        if self.next_is_prefill:
+            ret = scheduler.has_waiting()
+        else:
+            ret = not scheduler.has_running()
+        return ret
+
+    def do_prefill_default(self):
         # decoding if no waiting
         scheduler = self.scheduler
         if not scheduler.has_waiting():
@@ -262,6 +260,7 @@ class InputsMakerAsync(InputsMakerBase):
         if logger.level <= logging.DEBUG:
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
+        self.next_is_prefill = inputs.is_decoding
         await self.executor.forward_async(forward_inputs)
         self.forward_inputs = forward_inputs
         return forward_inputs, next_running
@@ -292,37 +291,9 @@ class InputsMakerAsync(InputsMakerBase):
             return None, None
 
 
-class InputsMakerSync(InputsMakerAsync):
-    """Inputs maker synchronize."""
-
-    def __init__(self, engine: 'Engine'):
-        super().__init__(engine)
-        self._is_prefill = True
-
-    def do_prefill(self):
-        if self.engine.engine_config.role in [EngineRole.Hybrid, EngineRole.Decode]:
-            ret = self._is_prefill
-            self._is_prefill = not self._is_prefill
-        elif self.engine.engine_config.role == EngineRole.Prefill:
-            ret = True
-        return ret
-
-    async def send_next_inputs(self):
-        prefill = self.do_prefill()
-        return await self._send_next_inputs_impl(prefill)
-
-    async def prefetch_next_inputs(self):
-        """prefetch."""
-        logger.info('Prefetching next forward inputs.')
-        return await self.send_next_inputs()
-
-
 def build_inputs_maker(engine: 'Engine'):
     """Build inputs makers."""
-    if engine.should_execute_dummy_batch:
-        return InputsMakerSync(engine)
-    else:
-        return InputsMakerAsync(engine)
+    return InputsMakerAsync(engine)
 
 
 class Engine:
@@ -370,7 +341,6 @@ class Engine:
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
         misc_config = _build_misc_config(engine_config)
-        self.should_execute_dummy_batch = dist_config.need_dummy_batch()
 
         # build model agent
         raw_tokenizer = None
@@ -873,33 +843,8 @@ class Engine:
             """Need logits."""
             return any(seq.return_logits for seq in seqs)
 
-        def __make_dummy_inputs():
-            """Make dummy inputs."""
-            logger.info(f'make dummy forward inputs: prefill={prefill}.')
-            num_loops = 1 if prefill else prefill_interval
-
-            batch_size = 2 if self.dist_config.enable_microbatch else 1
-            batch_size = min(self.cache_config.max_batches, batch_size)
-            return dict(
-                running=[],
-                inputs=ModelInputs.make_dummy(batch_size,
-                                              is_decoding=not prefill,
-                                              vocab_size=self.model_config.vocab_size),
-                swap_in_map=dict(),
-                swap_out_map=dict(),
-                loop_count=num_loops,
-                is_dummy=True,
-                sync_long_context=False,
-            )
-
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
-
-        if self.should_execute_dummy_batch:
-            if prefill and scheduler.num_waiting() == 0:
-                return __make_dummy_inputs()
-            if not prefill and scheduler.num_running() == 0:
-                return __make_dummy_inputs()
 
         scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
@@ -907,9 +852,7 @@ class Engine:
             return None
 
         # schedule decoding if no valid prefill reqs.
-        if prefill and len(
-                scheduler_output.running
-        ) == 0 and not self.should_execute_dummy_batch and self.engine_config.role != EngineRole.Prefill:
+        if prefill and len(scheduler_output.running) == 0 and self.engine_config.role != EngineRole.Prefill:
             prefill = False
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
@@ -917,9 +860,6 @@ class Engine:
         running = scheduler_output.running
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
-
-        if (self.should_execute_dummy_batch or self.engine_config.role == EngineRole.Prefill) and len(running) == 0:
-            return __make_dummy_inputs()
 
         assert len(running) > 0
 
@@ -1144,7 +1084,7 @@ class Engine:
 
             # preprocess task
             logger.info('Starting async task MainLoopPreprocessMessage.')
-            has_runable_event = build_runable_event(self.scheduler, self.should_execute_dummy_batch)
+            has_runable_event = build_runable_event(self.scheduler)
             loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
                 forward_event, has_runable_event),
                                                    name='MainLoopPreprocessMessage')

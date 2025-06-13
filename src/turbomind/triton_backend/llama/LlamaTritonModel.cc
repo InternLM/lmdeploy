@@ -159,6 +159,12 @@ void LlamaTritonModel::handleMissingParams()
                        (int)model_param_.vocab_size);
     }
 
+    if (model_param_.tokenizer_size == 0) {
+        model_param_.tokenizer_size = model_param_.vocab_size;
+        TM_LOG_WARNING("[LlamaTritonModel] `tokenizer_size` is not set, default to `vocab_size` (%d).",
+                       (int)model_param_.vocab_size);
+    }
+
     if (!attn_param_.max_position_embeddings) {
         attn_param_.max_position_embeddings = 2048;
         TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
@@ -224,10 +230,10 @@ LlamaTritonModel::~LlamaTritonModel()
 
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
-        check_cuda_error(cudaSetDevice(device_id));
+        CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
         engines_[device_id].reset();
         weights_[device_id].reset();
-        trim_default_mempool(device_id);
+        trim_default_mempool(engine_param_.devices[device_id]);
     }
 }
 
@@ -235,13 +241,7 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
                                    std::string                            model_dir,
                                    std::string                            config,
                                    std::function<std::shared_ptr<void>()> ffi_ctx_factory):
-    dtype_{dtype},
-    model_param_{},
-    attn_param_{},
-    moe_param_{},
-    lora_param_{},
-    engine_param_{},
-    weights_(getDeviceCount())
+    dtype_{dtype}, model_param_{}, attn_param_{}, moe_param_{}, lora_param_{}, engine_param_{}
 {
     FT_CHECK_WITH_INFO(!(config.empty() && model_dir.empty()), "invalid init options");
 
@@ -276,6 +276,7 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     model_param_.layer_num          = model_reader["num_layer"].as<int>();
     model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
     model_param_.embedding_size     = model_reader["embedding_size"].as<int>();
+    model_param_.tokenizer_size     = model_reader["tokenizer_size"].as<int>(0);
     model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
     model_param_.tune_layer_num     = model_reader["tune_layer_num"].as<int>(1);
     model_param_.mla.q_lora_rank    = model_reader["q_lora_rank"].as<int>();
@@ -323,6 +324,8 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     engine_param_.mlp_tp_size   = engine_reader["mlp_tp_size"].as<int>();
     engine_param_.mlp_tp_rank   = 0;
 
+    engine_param_.devices = engine_reader["devices"].as<std::vector<int>>();
+
     {
         auto tp                             = engine_param_.attn_tp_size;
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + tp - 1) / tp * tp;
@@ -359,8 +362,8 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
 
     gateway_ = std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory);
 
-    const auto device_count = getDeviceCount();
-    engines_.resize(device_count);
+    weights_.resize(engine_param_.devices.size());
+    engines_.resize(engine_param_.devices.size());
 
     const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
     if (weight_type_str == "fp16" || weight_type_str == "float16") {
@@ -413,8 +416,6 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
 
 std::unique_ptr<ModelRequest> LlamaTritonModel::createModelInstance(int device_id)
 {
-    check_cuda_error(cudaSetDevice(device_id));
-
     FT_CHECK(engines_[device_id] != nullptr);
 
     return std::make_unique<ModelRequest>(
@@ -423,7 +424,7 @@ std::unique_ptr<ModelRequest> LlamaTritonModel::createModelInstance(int device_i
 
 void LlamaTritonModel::createSharedWeights(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(device_id));
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
     weights_[rank] =
         std::make_shared<LlamaWeight>(dtype_, model_param_, engine_params_.at(rank), lora_param_, moe_param_);
     // model inited with model_dir
@@ -439,11 +440,11 @@ TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 
 void LlamaTritonModel::processWeights(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(device_id));
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
     FT_CHECK(weights_[device_id] != nullptr);
 
     cudaDeviceProp props{};
-    check_cuda_error(cudaGetDeviceProperties(&props, device_id));
+    check_cuda_error(cudaGetDeviceProperties(&props, engine_param_.devices[device_id]));
 
     weights_[device_id]->prepare(props);
     sync_check_cuda_error();
@@ -475,9 +476,9 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
 
 void LlamaTritonModel::createEngine(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(device_id));
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
 
-    auto ctx = std::make_unique<Context>(device_id);
+    auto ctx = std::make_unique<Context>(engine_param_.devices[device_id]);
 
     core::ContextGuard guard{ctx->core_stream, ctx->allocator, Allocator{kCPUpinned}};
 
@@ -509,7 +510,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
                                                        std::move(model),
                                                        std::move(ctx),
                                                        gateway_,
-                                                       device_id,
+                                                       engine_param_.devices[device_id],
                                                        dp_rank);
     }
     catch (const std::exception& e) {

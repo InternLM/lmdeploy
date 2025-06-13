@@ -837,10 +837,11 @@ def proxy(server_name: str = '0.0.0.0',
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
     logger.setLevel(log_level)
+    uvicorn_log_level = os.getenv('UVICORN_LOG_LEVEL', 'info').lower()
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
-                log_level='info',
+                log_level=uvicorn_log_level,
                 ssl_keyfile=ssl_keyfile,
                 ssl_certfile=ssl_certfile)
 
