@@ -42,7 +42,7 @@ public:
                        cudaStream_t        stream) const = 0;
 
     // true if this kernel can be used to compute the gemm
-    bool is_feasible(const GemmDesc& desc) const noexcept;
+    virtual bool is_feasible(const GemmDesc& desc) const noexcept;
 
     virtual int GetMaxSplits(const int4& shape, int64_t tiles, size_t bsize, size_t psize) const = 0;
 

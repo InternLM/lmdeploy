@@ -26,6 +26,17 @@ constexpr Order operator~(Order a)
     return a == kColMajor ? kRowMajor : kColMajor;
 }
 
+constexpr const char* to_string(Order order)
+{
+    switch (order) {
+        case kColMajor:
+            return "Col";
+        case kRowMajor:
+            return "Row";
+    }
+    return "";
+}
+
 using Pack = uint32_t;
 
 typedef enum MMA_Tag
@@ -153,6 +164,12 @@ struct MatrixLayout {
     int*     idxs;
 };
 
+inline std::ostream& operator<<(std::ostream& os, const MatrixLayout& x)
+{
+    os << x.type << " " << to_string(x.order) << " " << x.rows << " " << x.cols << " " << x.num << " " << x.ld;
+    return os;
+}
+
 inline int64_t byte_size(const MatrixLayout& m)
 {
     return byte_size(m.type, (int64_t)m.rows * m.cols);
@@ -174,6 +191,9 @@ struct Workspace {
     size_t barriers_size;
     void*  partials;
     size_t partials_size;
+    void*  tensormaps;
+    size_t tensormaps_size;
+    int*   flags;
 };
 
 }  // namespace turbomind::gemm

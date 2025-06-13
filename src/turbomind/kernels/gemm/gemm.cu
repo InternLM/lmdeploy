@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/dispatch_cache.h"
@@ -272,6 +273,8 @@ int Gemm::Run(const Operation&    operation,
 
     const auto desc = context.Init(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc);
 
+    TM_CHECK_NOTNULL(workspace.flags);
+
     if (!desc) {
         fprintf(stderr, "invalid argument.\n");
         return -1;
@@ -325,6 +328,40 @@ int Gemm::Run(const Operation&    operation,
         //           << " split_k=" << spec.splits                  //
         //           << " swizzle=" << spec.swizzle << std::endl;
         return launch(spec, stream);
+    }
+
+    const auto launch1 = [=](LaunchSpec spec, cudaStream_t st) {
+        auto _workspace = workspace;
+        return spec.kernel->Launch(operation,
+                                   alpha,
+                                   B,
+                                   transpose(Bdesc),
+                                   V,
+                                   transpose(Vdesc),
+                                   A,
+                                   transpose(Adesc),
+                                   U,
+                                   transpose(Udesc),
+                                   beta,
+                                   C,
+                                   transpose(Cdesc),
+                                   D,
+                                   transpose(Ddesc),
+                                   spec.swizzle,
+                                   spec.splits,
+                                   _workspace,
+                                   stream);
+    };
+
+    if (operation.dispatch & DispatchPolicy::kMeasure) {
+        impl_->Measure(context, transpose(*desc), workspace.barriers_size, workspace.partials_size, 1, launch1, stream);
+    }
+
+    spec = impl_->Dispatch(
+        context, operation.dispatch, transpose(*desc), workspace.barriers_size, workspace.partials_size);
+
+    if (spec.kernel) {
+        return launch1(spec, stream);
     }
 
     fprintf(stderr, "No feasible kernel found for the problem.\n");
