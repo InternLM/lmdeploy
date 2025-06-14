@@ -30,19 +30,16 @@ def flash_mla_fwd(
     Return:
         out: (batch_size, num_heads_q, head_dim_v).
     """
-    import flash_mla_cuda
-    if softmax_scale is None:
-        softmax_scale = q.shape[-1]**(-0.5)
-    out, softmax_lse = flash_mla_cuda.fwd_kvcache_mla(
+    import flash_mla
+    out, _ = flash_mla.flash_mla_with_kvcache(
         q,
         k_cache,
-        None,
-        head_dim_v,
-        cache_seqlens,
         block_table,
-        softmax_scale,
-        causal,
+        cache_seqlens,
+        head_dim_v,
         tile_scheduler_metadata,
         num_splits,
+        softmax_scale,
+        causal,
     )
     return out.squeeze(1)

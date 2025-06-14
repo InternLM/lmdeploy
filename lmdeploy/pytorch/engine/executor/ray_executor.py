@@ -204,6 +204,15 @@ def _update_runtime_env_nsys(runtime_env: Dict):
     return runtime_env
 
 
+def _update_runtime_env_lmdeploy(runtime_env: Dict[str, Any]):
+    """Update runtime env for lmdeploy package."""
+    if log_file := os.getenv('LMDEPLOY_LOG_FILE'):
+        env_vars = runtime_env.get('env_vars', {})
+        env_vars['LMDEPLOY_LOG_FILE'] = log_file
+        runtime_env['env_vars'] = env_vars
+    return runtime_env
+
+
 class RayWorkerWrapper(WorkerWrapperBase):
     """Worker wrapper."""
 
@@ -558,6 +567,7 @@ class RayExecutor(ExecutorBase):
 
             if device_str == 'GPU':
                 runtime_env = dict()
+                runtime_env = _update_runtime_env_lmdeploy(runtime_env)
                 if _envs.ray_nsys_enable:
                     runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(

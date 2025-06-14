@@ -18,7 +18,7 @@ class InternVLReader(LlamaReader):
     output_weight_key = 'language_model.lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('llm_config')
+        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
         super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
@@ -45,7 +45,8 @@ class InternVLModel(LlamaModel):
         super().__init__(model_path, tokenizer_path, **kwargs)
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        arch = config.llm_config.architectures[0]
+        llm_config = getattr(config, 'llm_config', None) or getattr(config, 'text_config', None)
+        arch = llm_config.architectures[0]
         _readers = dict(InternLM2ForCausalLM=InternVL2Reader,
                         LlamaForCausalLM=InternVLReader,
                         Qwen2ForCausalLM=InternVLReader)
@@ -55,7 +56,8 @@ class InternVLModel(LlamaModel):
         """Read model info."""
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
-            model_arg = json.load(f)['llm_config']
+            file_content = json.load(f)
+            model_arg = file_content.get('llm_config') or file_content.get('text_config')
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
             hidden_units = model_arg['hidden_size']

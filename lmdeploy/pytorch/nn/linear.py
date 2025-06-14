@@ -12,6 +12,7 @@ from lmdeploy.utils import get_logger
 
 from ..backends import OpType, get_backend
 from ..backends.lora import AdapterInfo
+from .quant_utils import quant_blocked_fp8
 from .utils import chunk_aligned, div_up, get_distribute_size
 
 logger = get_logger('lmdeploy')
@@ -243,7 +244,7 @@ class BlockedF8Linear(nn.Module):
         self.fp8_dtype = fp8_dtype
         weight, weight_scale_inv, bias = self.create_weights(in_features, out_features, bias, dtype, device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
-        weight.weight_loader = self.weight_loader
+        weight.weight_loader = self.weight_loader_with_quant
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         weight_scale_inv.weight_loader = self.weight_loader
         if bias is not None:
@@ -299,6 +300,16 @@ class BlockedF8Linear(nn.Module):
         else:
             return self._weight_loader_tp_rowwise(param, loaded_weight, rank, world_size)
 
+    def weight_loader_with_quant(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader with weight quant."""
+        if loaded_weight.dtype != param.dtype:
+            # quant loaded weight
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            self.weight_loader(self.weight, quanted_weight)
+            self.weight_loader(self.weight_scale_inv, scaling)
+        else:
+            return self.weight_loader(param, loaded_weight)
+
     def create_weights(self, in_features: int, out_features: int, bias: bool, dtype: torch.dtype, device: torch.device):
         """Create weights."""
         weight = torch.empty((out_features, in_features), dtype=self.fp8_dtype, device=device)
@@ -315,7 +326,7 @@ class BlockedF8Linear(nn.Module):
         """Update weights."""
         weight, weight_scale_inv, bias = self.impl.update_weights(self.weight, self.weight_scale_inv, self.bias)
         weight = torch.nn.Parameter(weight, requires_grad=False)
-        self.weight.weight_loader = self.weight_loader
+        self.weight.weight_loader = self.weight_loader_with_quant
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         self.weight_scale_inv.weight_loader = self.weight_loader
         if bias is not None:
@@ -392,7 +403,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
                          colwise=True,
                          is_tp=is_tp,
                          dp_gather=dp_gather)
-        self.weight.weight_loader = self.weight_loader
+        self.weight.weight_loader = self.weight_loader_with_quant
         self.weight._weight_type = 'qweight'
         self.weight_scale_inv.weight_loader = self.weight_loader
         self.weight_scale_inv._weight_type = 'scales'
@@ -431,6 +442,16 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         if not self.replicate[shard_idx]:
             loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
         param_w.copy_(loaded_weight)
+
+    def weight_loader_with_quant(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
+        """Weight loader with weight quant."""
+        if loaded_weight.dtype != param.dtype:
+            # quant loaded weight
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            self.weight_loader(self.weight, quanted_weight, shard_id)
+            self.weight_loader(self.weight_scale_inv, scaling, shard_id)
+        else:
+            return self.weight_loader(param, loaded_weight, shard_id)
 
     def weight_spliter(self, loaded_weight: torch.Tensor):
         """Weight spliter."""
@@ -510,6 +531,16 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
         loaded_weight = loaded_weight.narrow(dim=0, start=sec_start, length=sec_len)
         param_w = param.data.split(all_out_features, 0)[shard_idx]
         param_w.copy_(loaded_weight)
+
+    def weight_loader_with_quant(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
+        """Weight loader with weight quant."""
+        if loaded_weight.dtype != param.dtype:
+            # quant loaded weight
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            self.weight_loader(self.weight, quanted_weight, shard_id)
+            self.weight_loader(self.weight_scale_inv, scaling, shard_id)
+        else:
+            return self.weight_loader(param, loaded_weight, shard_id)
 
     def weight_spliter(self, loaded_weight: torch.Tensor, layout: str = 'default'):
         """Weight spliter."""

@@ -36,6 +36,8 @@ SUPPORTED_ARCHS = dict(
     InternLMXComposer2ForCausalLM='xcomposer2',
     # internvl
     InternVLChatModel='internvl',
+    # internvl3
+    InternVLForConditionalGeneration='internvl',
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl',
     DeepseekV2ForCausalLM='deepseek2',
@@ -110,7 +112,7 @@ def is_supported(model_path: str):
             elif arch == 'InternVLChatModel':
                 llm_arch = cfg.llm_config.architectures[0]
                 support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and _is_head_dim_supported(cfg.llm_config))
-            elif arch == 'LlavaForConditionalGeneration':
+            elif arch in ['LlavaForConditionalGeneration', 'InternVLForConditionalGeneration']:
                 llm_arch = cfg.text_config.architectures[0]
                 if llm_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
                     support_by_turbomind = _is_head_dim_supported(cfg.text_config)

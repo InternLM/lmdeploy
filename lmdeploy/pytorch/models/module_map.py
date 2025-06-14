@@ -149,6 +149,12 @@ MODULE_MAP.update({
 # internvl
 MODULE_MAP.update({'InternVLChatModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.InternVLChatModel'})
 
+# internvl3-hf
+MODULE_MAP.update({
+    'InternVLForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl3_hf.InternVLForConditionalGeneration'
+})
+
 # mono-internvl
 MODULE_MAP.update({
     'InternLM2VEForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_ve.InternLM2VEForCausalLM',

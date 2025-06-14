@@ -628,26 +628,27 @@ async def benchmark(
     else:
         raise ValueError(f'Unknown backend: {backend}')
 
-    print('Starting initial single prompt test run...')
-    start_warmup = time.perf_counter()
-    test_prompt, test_prompt_len, test_output_len = input_requests[0]
-    test_input = RequestFuncInput(
-        model=model_id,
-        prompt=test_prompt,
-        api_url=api_url,
-        prompt_len=test_prompt_len,
-        output_len=test_output_len,
-        extra_request_body=extra_request_body,
-    )
-    test_output = await request_func(request_func_input=test_input)
-    if not test_output.success:
-        raise ValueError('Initial test run failed - Please make sure benchmark arguments '
-                         f'are correctly specified. Error: {test_output.error}')
-    else:
-        print('Initial test run completed. Starting main benchmark run...')
-    end_warmup = time.perf_counter()
-    print(f'warmup time: {end_warmup - start_warmup:.2f}s')
-    time.sleep(1.5)
+    if not args.disable_warmup:
+        print('Starting initial single prompt test run...')
+        start_warmup = time.perf_counter()
+        test_prompt, test_prompt_len, test_output_len = input_requests[0]
+        test_input = RequestFuncInput(
+            model=model_id,
+            prompt=test_prompt,
+            api_url=api_url,
+            prompt_len=test_prompt_len,
+            output_len=test_output_len,
+            extra_request_body=extra_request_body,
+        )
+        test_output = await request_func(request_func_input=test_input)
+        if not test_output.success:
+            raise ValueError('Initial test run failed - Please make sure benchmark arguments '
+                             f'are correctly specified. Error: {test_output.error}')
+        else:
+            print('Initial test run completed. Starting main benchmark run...')
+        end_warmup = time.perf_counter()
+        print(f'warmup time: {end_warmup - start_warmup:.2f}s')
+        time.sleep(1.5)
 
     pbar = None if disable_tqdm else tqdm(total=len(input_requests))
 
@@ -1067,6 +1068,12 @@ if __name__ == '__main__':
         type=str,
         help='Append given JSON object to the request payload. You can use '
         'this to specify additional generate params like sampling params.',
+    )
+    parser.add_argument(
+        '--disable-warmup',
+        action='store_true',
+        default=None,
+        help='Disable a warmup request before the benchmark. ',
     )
     args = parser.parse_args()
     run_benchmark(args)
