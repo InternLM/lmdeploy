@@ -8,7 +8,7 @@ from typing import Dict
 
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, MigrationBackend, MigrationProtocol
+from lmdeploy.pytorch.disagg.config import MigrationBackend, MigrationProtocol, MooncakeEngineConfig
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
@@ -41,7 +41,7 @@ def get_rdma_nics():
                     device_name = line.split()[0].strip()
                     rdma_nics.append(device_name)
     except Exception as e:
-        print(f'Error executing ibv_devices command: {e}')
+        logger.error(f'Error executing ibv_devices command: {e}')
 
     return rdma_nics
 
@@ -78,8 +78,8 @@ class MooncakeMigrationManagement:
                               'to run LMDeploy with MooncakeBackend.') from e
 
         self.rank = init_request.rank
-        self.local_engine_config: DistServeEngineConfig = init_request.local_engine_config
-        self.remote_engine_config: DistServeEngineConfig = init_request.remote_engine_config
+        self.local_engine_config: MooncakeEngineConfig = init_request.local_engine_config
+        self.remote_engine_config: MooncakeEngineConfig = init_request.remote_engine_config
         self.local_engine_id = init_request.local_engine_id
         self.remote_engine_id = init_request.remote_engine_id
 
@@ -138,8 +138,8 @@ class MooncakeMigrationManagement:
             'offset': register_mr_request.offset
         }
 
-        print(f'Registered memory region with key {register_mr_request.remote_engine_id}, '
-              f'addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}')
+        logger.info(f'Registered memory region with key {register_mr_request.remote_engine_id}, '
+                    f'addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}')
 
     @property
     def endpoint_info(self) -> Dict:
@@ -155,9 +155,9 @@ class MooncakeMigrationManagement:
 
         endpoint_info = {'mr_info': mr_info, 'session_id': f'{self.hostname}:{self.port}'}
 
-        print(f'Generated endpoint info for remote engine {self.remote_engine_id}: '
-              f"session_id={endpoint_info['session_id']}, "
-              f'mr_count={len(mr_info)}')
+        logger.info(f'Generated endpoint info for remote engine {self.remote_engine_id}: '
+                    f"session_id={endpoint_info['session_id']}, "
+                    f'mr_count={len(mr_info)}')
 
         return endpoint_info
 
@@ -173,7 +173,7 @@ class MooncakeMigrationManagement:
             logger.debug(f"Remote buffer {remote_engine_id}: addr=0x{buffer_info['addr']:x}, "
                          f"length={buffer_info['length']}")
 
-        print(f'Connecting to remote engine {self.remote_engine_id} at {self.remote_url}')
+        logger.info(f'Connecting to remote engine {self.remote_engine_id} at {self.remote_url}')
 
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         """Migrate data to the remote engine."""
@@ -212,13 +212,13 @@ class MooncakeMigrationManagement:
             remote_buffer_info = self.remote_kv_table[self.local_engine_id]
             remote_addr = remote_buffer_info['addr'] + task.target_offset
 
-            print(f'Task {i}: Migrating {task.length} bytes')
-            print(f'  Local Engine: {self.local_engine_id}')
-            print(f'  Remote Engine: {assignment.remote_engine_id}')
-            print(f'  MR Key: {task.mr_key}')
-            print(f"  Local:  0x{local_buffer_info['addr']:x} + {task.source_offset} = 0x{local_addr:x}")
-            print(f"  Remote: 0x{remote_buffer_info['addr']:x} + {task.target_offset} = 0x{remote_addr:x}")
-            print(f'  Session: {self.remote_url}')
+            logger.debug(f'Task {i}: Migrating {task.length} bytes')
+            logger.debug(f'  Local Engine: {self.local_engine_id}')
+            logger.debug(f'  Remote Engine: {assignment.remote_engine_id}')
+            logger.debug(f'  MR Key: {task.mr_key}')
+            logger.debug(f"  Local:  0x{local_buffer_info['addr']:x} + {task.source_offset} = 0x{local_addr:x}")
+            logger.debug(f"  Remote: 0x{remote_buffer_info['addr']:x} + {task.target_offset} = 0x{remote_addr:x}")
+            logger.debug(f'  Session: {self.remote_url}')
 
             result = self.engine.transfer_sync_read(
                 self.remote_url,
