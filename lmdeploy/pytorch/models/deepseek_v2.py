@@ -19,7 +19,6 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear,
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
-from lmdeploy.utils import is_dlblas_installed
 
 from .utils.cudagraph import CudaGraphMixin
 
@@ -589,10 +588,8 @@ class MoEGate(nn.Module):
             self.e_score_correction_bias = nn.Parameter(
                 torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k)
-
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
-        self.use_dlblas = is_dlblas_installed()
 
     def _compute_scores(self, logits: torch.Tensor):
         """Compute scores."""
@@ -627,11 +624,6 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
-        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize
-              and self.use_dlblas):
-            import dlblas
-            topk_weight, topk_idx = dlblas.moe_fused_gate(router_logits, self.e_score_correction_bias, self.n_group,
-                                                          self.topk_group, self.top_k)
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
@@ -649,7 +641,7 @@ class MoEGate(nn.Module):
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
-        if self.renormalize and not self.use_dlblas:
+        if self.renormalize:
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
             if not topk_weight.is_contiguous():
