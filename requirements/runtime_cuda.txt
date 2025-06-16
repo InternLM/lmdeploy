@@ -19,6 +19,6 @@ shortuuid
 tiktoken
 torch<=2.6.0,>=2.0.0
 torchvision<=0.21.0,>=0.15.0
-transformers
+transformers<4.45.2
 triton<=3.2.0,>=3.0.0; sys_platform == "linux"
 uvicorn
