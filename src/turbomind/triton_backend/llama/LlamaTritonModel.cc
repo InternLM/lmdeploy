@@ -30,6 +30,7 @@
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_request.h"
@@ -380,6 +381,9 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     }
     else if (weight_type_str == "int4") {
         model_param_.weight_type = kUint4;
+    }
+    else if (weight_type_str == "fp8") {
+        model_param_.weight_type = kFloat8_e4m3;
     }
     else {
         std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";

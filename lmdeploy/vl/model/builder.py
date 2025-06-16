@@ -15,6 +15,7 @@ from .deepseek_vl2 import DeepSeek2VisionModel  # noqa F401
 from .gemma3_vl import Gemma3VisionModel  # noqa F401
 from .glm_4v import GLM4VisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
+from .internvl3_hf import InternVL3VisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
 from .llama4 import LLama4VisionModel  # noqa F401
 from .llava import LlavaVisionModel  # noqa F401
