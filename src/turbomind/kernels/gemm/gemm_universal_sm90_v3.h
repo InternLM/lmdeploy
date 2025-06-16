@@ -125,11 +125,11 @@ struct GemmUniversalSm90_v3 {
         struct Source {
             __align__(1024) Array<Ta, Stages * TILE_M * TILE_K> A;
             __align__(1024) Array<Tb, Stages * TILE_N * TILE_K> B;
-            // __align__(1024) Tu U[Stages][round_up<int>(kBoxU, 128)];  // at least 128 byte alignment
-            // __align__(1024) Tv V[Stages][2];
+            __align__(1024) Tu U[Stages][round_up<int>(kBoxU, 128)];  // at least 128 byte alignment
+            __align__(1024) Tv V[Stages][2];
         };
         Source source;
-        UV     uv[Stages];
+        // UV     uv[Stages];
         __align__(1024) Array<Tc, TILE_M * TILE_N> C;
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
@@ -204,9 +204,10 @@ struct GemmUniversalSm90_v3 {
                 const int mc_offset_m = cluster.cta_n() * (TILE_M / kMulticastA);
                 const int mc_offset_n = cluster.cta_m() * (TILE_N / kMulticastB);
 
-                auto smem_A = storage.source.A.data() + mc_offset_m * TILE_K;
-                auto smem_B = storage.source.B.data() + mc_offset_n * TILE_K;
-                // auto& smem_U = storage.source.U;
+                auto  smem_A = storage.source.A.data() + mc_offset_m * TILE_K;
+                auto  smem_B = storage.source.B.data() + mc_offset_n * TILE_K;
+                auto& smem_U = storage.source.U;
+                auto& smem_V = storage.source.V;
 
                 if constexpr (is_grouped_gemm) {
                     init_tma_descs<3>({&tm_a, &tm_b, &tm_u}, storage.tma_desc_buf);
@@ -297,8 +298,8 @@ struct GemmUniversalSm90_v3 {
                                 ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
                                 gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
                                 gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
-                                gmem_U.Step(&producer_bar[pipe], &storage.uv[pipe].U + mc_offset_u, mask_A);
-                                uint32_t uint_ptr_V = cast_smem_ptr_to_uint(&storage.uv[pipe].V);
+                                gmem_U.Step(&producer_bar[pipe], smem_U[pipe] + mc_offset_u, mask_A);
+                                uint32_t uint_ptr_V = cast_smem_ptr_to_uint(smem_V[pipe]);
                                 // CP_ASYNC<CacheOp::kAlways, 4, 0>::apply(uint_ptr_V, gmem_V0, true);
                                 // CP_ASYNC<CacheOp::kAlways, 4, 0>::apply(
                                 //     uint_ptr_V + sizeof(Tv), gmem_V0 + param_V.stride, pred_V);
@@ -357,6 +358,8 @@ struct GemmUniversalSm90_v3 {
 
             auto& smem_A = storage.source.A;
             auto& smem_B = storage.source.B;
+            auto& smem_U = storage.source.U;
+            auto& smem_V = storage.source.V;
 
             const int wg_idx_m = WG_M > 1 ? wg_idx % WG_M : 0;
             const int wg_idx_n = WG_N > 1 ? wg_idx / WG_M : 0;
@@ -374,42 +377,20 @@ struct GemmUniversalSm90_v3 {
 
             cutlass::arch::NamedBarrier barrier(WARPGROUP_SIZE, 2 + wg_idx);  // 0, 1
 
-            auto mma_barrier = [&](int phase) {
-                cutlass::arch::NamedBarrier bar(kMathGroupSize, wg_idx ^ phase);
-                if (phase == 0) {
-                    bar.arrive_and_wait_unaligned();
-                }
-                else {
-                    bar.arrive_unaligned();
-                }
-            };
-
-            int phase          = wg_idx;
-            int lane_predicate = cute::elect_one_sync();
-
-            auto mma_barrier_wait = [&] {
-                // cutlass::arch::ClusterBarrier::wait(&storage.mma_bar[wg_idx], phase);
-                // phase ^= 1;
-            };
-            auto mma_barrier_arrive = [&] {
-                // if (lane_predicate) {
-                //     cutlass::arch::ClusterBarrier::arrive(&storage.mma_bar[wg_idx ^ 1]);
-                // }
-            };
-
             cutlass::PipelineState<Stages> pipe_state{};
 
             const int warp_id = cutlass::canonical_warp_idx_sync();
             const int lane_id = cutlass::canonical_lane_idx();
 
             auto consumer_arrive = [&] {
+                auto bar = &consumer_bar[pipe_state.index()];
                 __syncwarp();
                 if constexpr (kClusterSize > 1) {
-                    ConsumerBar::arrive(&consumer_bar[pipe_state.index()], lane_id, lane_id < kClusterSize);
+                    ConsumerBar::arrive(bar, lane_id, lane_id < kClusterSize);
                 }
                 else {
                     if (lane_id == 0) {
-                        ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
+                        ConsumerBar::arrive(bar);
                     }
                 }
             };
@@ -437,22 +418,19 @@ struct GemmUniversalSm90_v3 {
 
                     float scale_V[2];
                     auto  Load_V = [&] {
-                        scale_V[0] = storage.uv[pipe_state.index()].V[0];
-                        scale_V[1] = storage.uv[pipe_state.index()].V[1];
+                        scale_V[0] = smem_V[pipe_state.index()][0];
+                        scale_V[1] = smem_V[pipe_state.index()][1];
                     };
 
-                    float     scale_U[MMA_ITER_M][2];
-                    const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
-                    int       align_U  = 0;
+                    float scale_U[MMA_ITER_M][2];
+                    int   offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
                     if constexpr (is_grouped_gemm) {
-                        align_U = tile->m0 % kAlignmentU;
+                        offset_U += tile->m0 % kAlignmentU;
                     }
                     auto Load_U = [&] {
                         for (int m = 0; m < MMA_ITER_M; ++m) {
-                            // scale_U[m][0] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M];
-                            // scale_U[m][1] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M + 8];
-                            scale_U[m][0] = storage.uv[pipe_state.index()].U[align_U + offset_U + m * MMA_ATOM_M];
-                            scale_U[m][1] = storage.uv[pipe_state.index()].U[align_U + offset_U + m * MMA_ATOM_M + 8];
+                            scale_U[m][0] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M];
+                            scale_U[m][1] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M + 8];
                         }
                     };
 
@@ -485,7 +463,6 @@ struct GemmUniversalSm90_v3 {
                     };
 
                     auto gmma = [&] {
-                        mma_barrier_wait();
                         cute::warpgroup_arrive();
                         PRAGMA_UNROLL
                         for (int k = 0; k < MMA_ITER_K; ++k) {
@@ -506,7 +483,6 @@ struct GemmUniversalSm90_v3 {
                         smem_iter_A -= MMA_ITER_K * kStepKA;
                         smem_iter_B -= MMA_ITER_K * kStepKB;
                         cute::warpgroup_commit_batch();
-                        mma_barrier_arrive();
                     };
 
                     static_assert(MMA_ITER_N == 1);
@@ -517,7 +493,7 @@ struct GemmUniversalSm90_v3 {
                         if (threadIdx.x % WARPGROUP_SIZE < LayoutC::C1) {
                             cute::tma_store_wait<0>();
                         }
-                        barrier.sync();
+                        // No need to sync here as the update is warp synchronized
                         if (warp_id % 4 == 0) {
                             int  m0 = tile->m0, m1 = tile->m1;
                             auto global_addr = (Tc*)param_C.ptr + m0 * (int64_t)param_C.stride;
@@ -525,6 +501,7 @@ struct GemmUniversalSm90_v3 {
                             update_tma_descs<1>(
                                 tensormap_buf + idx, storage.tma_desc_buf + idx, {global_addr}, {m1 - m0});
                         }
+                        barrier.sync();
                     }
 
                     ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
