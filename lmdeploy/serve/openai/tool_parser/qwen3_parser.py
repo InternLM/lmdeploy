@@ -4,10 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence, Union
 
-import partial_json_parser
 import shortuuid
-from partial_json_parser.core.exceptions import MalformedJSON, PartialJSON
-from partial_json_parser.core.options import Allow
 
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, DeltaFunctionCall, DeltaMessage, DeltaToolCall,
                                             ExtractedToolCallInformation, FunctionCall, ToolCall)
@@ -20,26 +17,16 @@ logger = get_logger('lmdeploy')
 
 @dataclass
 class ParserState(object):
-    """Maintains the state of parsing during tool call extraction.
-
-    Tracks position in text, tool call index, parsing flags, and what parts of the tool call have been sent to the
-    client.
-    """
+    """Maintains the state of parsing during tool call extraction."""
     position: int = 0  # Current position in the text being parsed
     current_index: int = -1  # Index of the current tool call
     parsing_reasoning: bool = False  # Whether currently parsing reasoning content
 
     id: str = ''  # ID of the current tool call
-    parse_arg_as_object: bool = False  # Whether to parse arguments as an object
-    name_sent: bool = False  # Whether the tool name has been sent
-    args_sent: bool = False  # Whether the tool arguments have been sent
 
     def reset_tool_call(self):
         """Called when `</tool_call>` finish tag occurred."""
         self.id = ''
-        self.parse_arg_as_object = False
-        self.name_sent = False
-        self.args_sent = False
 
 
 @ToolParserManager.register_module(['qwen', 'qwen3'])
@@ -82,76 +69,42 @@ class Qwen3ToolParser(ToolParser):
         try:
             end_idx = parsing_content.index(self.tool_end_token)
         except ValueError:
-            parser_state.position += start_idx
-            return parsing_content[:start_idx], parsing_content[start_idx + len(self.tool_start_token):], False
+            return parsing_content[:start_idx], '', False
         parser_state.position += len(parsing_content)
         return parsing_content[:start_idx], parsing_content[start_idx + len(self.tool_start_token):end_idx], True
 
     def _parse_delta_tool_call(self, parser_state: ParserState, tool_content: str) -> Optional[DeltaToolCall]:
         """Parse tool content into a DeltaToolCall object.
 
-        This method handles the incremental parsing of tool calls from partial JSON content.
+        This method handles parsing tool calls only when it's a valid tool
         """
-        # bit mask flags for partial JSON parsing. If the name hasn't been
-        # sent yet, don't allow sending an incomplete string since OpenAI only ever
-        # allows sending the entire tool/function name at once.
-        flags = Allow.ALL & ~Allow.STR & ~Allow.NUM & ~Allow.BOOL & ~Allow.NULL
-        if parser_state.parse_arg_as_object:
-            flags &= ~Allow.OBJ
-
+        parsable_arr = tool_content.strip()
         try:
-            parsable_arr = tool_content.strip()
-
-            # Tool calls are generated in an object format,
-            # Attempt to parse the JSON content incrementally.
-            # Parallel tool calls is not supported yet.
-            try:
-                tool_call_arr: Dict = partial_json_parser.loads(parsable_arr, flags)
-            except (MalformedJSON, PartialJSON):
-                logger.debug('not enough tokens to parse into JSON yet')
-                return
-
-            fcall = DeltaFunctionCall()
-            # Extract and set function name if not already sent
-            if not parser_state.name_sent:
-                func_name = tool_call_arr.get('name')
-                if func_name:
-                    fcall.name = func_name
-                    parser_state.name_sent = True
-            # Extract and set function arguments if not already sent
-            if not parser_state.args_sent:
-                args = self.get_argments(tool_call_arr)
-                if isinstance(args, dict) and not parser_state.parse_arg_as_object:
-                    # Reparse with new flags to handle object arguments properly
-                    parser_state.parse_arg_as_object = True
-                    flags &= ~Allow.OBJ
-                    try:
-                        tool_call_arr: Dict = partial_json_parser.loads(parsable_arr, flags)
-                        args = self.get_argments(tool_call_arr)
-                    except (MalformedJSON, PartialJSON):
-                        logger.debug('not enough tokens to parse into JSON yet')
-                        args = None
-                if args and isinstance(args, dict):
-                    fcall.arguments = json.dumps(args, ensure_ascii=False)
-                    parser_state.args_sent = True
-
-            # Return None if no new information to send
-            if not fcall.name and not fcall.arguments:
-                return
-            if not parser_state.id:
-                # A new tool call parsed, allocate a new id & index
-                parser_state.id = f'chatcmpl-tool-{shortuuid.random()}'
-                parser_state.current_index += 1
-            # Create and return the DeltaToolCall object
-            return DeltaToolCall(
-                id=parser_state.id,
-                index=parser_state.current_index,
-                function=fcall.model_dump(exclude_none=True),
-            )
-        except Exception:
-            logger.exception('Error trying to handle streaming tool call.')
-            logger.debug('Skipping chunk as a result of tool streaming extraction error')
+            tool_call_arr: Dict = json.loads(parsable_arr)
+        except json.JSONDecodeError:
+            logger.debug('cannot parse into JSON yet')
             return
+
+        fcall = DeltaFunctionCall()
+        func_name = tool_call_arr.get('name')
+        if func_name:
+            fcall.name = func_name
+        args = self.get_argments(tool_call_arr)
+        if args and isinstance(args, dict):
+            fcall.arguments = json.dumps(args, ensure_ascii=False)
+        # Return None if no new information to send
+        if not fcall.name and not fcall.arguments:
+            return
+        if not parser_state.id:
+            # A new tool call parsed, allocate a new id & index
+            parser_state.id = f'chatcmpl-tool-{shortuuid.random()}'
+            parser_state.current_index += 1
+        # Create and return the DeltaToolCall object
+        return DeltaToolCall(
+            id=parser_state.id,
+            index=parser_state.current_index,
+            function=fcall.model_dump(exclude_none=True),
+        )
 
     def extract_tool_calls_streaming(
         self,
