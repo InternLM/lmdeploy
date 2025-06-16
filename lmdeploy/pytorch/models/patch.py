@@ -219,7 +219,6 @@ def build_patched_model(config: ModelConfig, device: torch.device = None, model_
     model_config = config.hf_config
     llm_config = config.llm_config
     _patch_quantization_config(llm_config, model_format)
-    print(model_config)
     dtype = config.dtype
     return build_model_from_hf_config(model_config, dtype=dtype, device=device)
 
