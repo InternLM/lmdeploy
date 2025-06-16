@@ -230,7 +230,7 @@ def generate_benchmark_report(report_path: str):
                     grouped_df = merged_df.groupby(merged_df.columns[0])
                     if 'generation' not in backend_subfolder:
                         average_values = grouped_df.pipe((lambda group: {
-                            'mean': group.mean().round(decimals=3)
+                            'mean': group.mean(numeric_only=True).round(decimals=3)
                         }))['mean']
                         average_values.to_csv(average_csv_path, index=True)
                         avg_df = pd.read_csv(average_csv_path)
