@@ -965,7 +965,7 @@ class Qwen7BChat(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         model_path = model_path.lower()
-        if 'qwen' in model_path and not any(keyword in model_path for keyword in ('qwen2.5', 'qwq', 'qwen3')):
+        if 'qwen' in model_path and 'qwen2.5' not in model_path and 'qwq' not in model_path:
             return 'qwen'
         if 'minicpm-v-2_6' in model_path:
             return 'minicpmv-2d6'
