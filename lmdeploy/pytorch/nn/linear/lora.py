@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Iterable, List
+from typing import Any
 
 import torch
-import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
@@ -92,33 +91,3 @@ class LoRA(nn.Module):
                 loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank]
 
         param_r.copy_(loaded_weight.t())
-
-
-def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
-    """Reduce scatter."""
-    _, rank = get_tp_world_rank()
-    out = out.transpose(0, -2)
-    if not out.is_contiguous():
-        out = out.contiguous()
-    outs = out.split(tp_sizes, 0)
-    out = outs[rank]
-    dist.reduce_scatter(out, outs)
-    out = out.transpose(0, -2)
-    return out
-
-
-def forward_adapters(x: torch.Tensor,
-                     out: torch.Tensor,
-                     lora_adapters: Iterable[LoRA],
-                     all_reduce: bool = False,
-                     dp_scatter: bool = False,
-                     tp_sizes: List[int] = None):
-    """Apply adapters."""
-    for lora_adapter in lora_adapters:
-        out = lora_adapter(x, out)
-    if all_reduce:
-        if dp_scatter:
-            out = _reduce_scatter_input(out, tp_sizes)
-        else:
-            dist.all_reduce(out)
-    return out

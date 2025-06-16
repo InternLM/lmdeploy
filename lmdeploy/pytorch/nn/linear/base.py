@@ -5,6 +5,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from .utils import update_tp_args
@@ -19,6 +20,19 @@ def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
     dist.all_gather(new_x, x)
     x = torch.cat(new_x, dim=-2)
     return x
+
+
+def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
+    """Reduce scatter."""
+    _, rank = get_tp_world_rank()
+    out = out.transpose(0, -2)
+    if not out.is_contiguous():
+        out = out.contiguous()
+    outs = out.split(tp_sizes, 0)
+    out = outs[rank]
+    dist.reduce_scatter(out, outs)
+    out = out.transpose(0, -2)
+    return out
 
 
 class LinearBase(nn.Module):
@@ -58,14 +72,15 @@ class LinearBase(nn.Module):
 
     def _forward_lora(self, x, tp_sizes: List[int]):
         """Forward with LoRA."""
-        from .lora import forward_adapters
         out = self._forward_default(x, False, tp_sizes)
-        out = forward_adapters(x,
-                               out,
-                               self.lora_adapters.values(),
-                               all_reduce=self.all_reduce,
-                               dp_scatter=self.dp_scatter,
-                               tp_sizes=tp_sizes)
+
+        for lora_adapter in self.lora_adapters.values():
+            out = lora_adapter(x, out)
+        if self.all_reduce:
+            if self.dp_scatter:
+                out = _reduce_scatter_input(out, tp_sizes)
+            else:
+                dist.all_reduce(out)
         return out
 
     def forward(self, x):
