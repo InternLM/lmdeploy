@@ -78,6 +78,8 @@ class CudaGraphMixin:
         input_buffers['q_start_loc'] = input_buffers['qkv_lens'][0]
         input_buffers['q_seqlens'] = input_buffers['qkv_lens'][1]
         input_buffers['kv_seqlens'] = input_buffers['qkv_lens'][2]
+        input_buffers['cu_seqlens_q_fa3'] = torch.zeros(max_batches + 1, dtype=torch.int32, device=device)
+        input_buffers['cu_seqlens_k_fa3'] = torch.zeros(max_batches + 1, dtype=torch.int32, device=device)
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
         # create buffer for cross_attn_metadata here
         input_buffers['fill_seqlens'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
@@ -121,6 +123,12 @@ class CudaGraphMixin:
         attn_metadata.q_start_loc = input_buffers['q_start_loc'][:new_batch_size]
         attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
+        cu_seqlens_q_fa3 = torch.cumsum(input_buffers['q_seqlens'], dim=0, dtype=torch.int32)
+        cu_seqlens_k_fa3 = torch.cumsum(input_buffers['kv_seqlens'], dim=0, dtype=torch.int32)
+        input_buffers['cu_seqlens_q_fa3'][1:].copy_(cu_seqlens_q_fa3)
+        input_buffers['cu_seqlens_k_fa3'][1:].copy_(cu_seqlens_k_fa3)
+        attn_metadata.cu_seqlens_q_fa3 = input_buffers['cu_seqlens_q_fa3']
+        attn_metadata.cu_seqlens_k_fa3 = input_buffers['cu_seqlens_k_fa3']
         if getattr(self.config, 'use_flash_mla', False) is True:
             import flash_mla_cuda
             tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(

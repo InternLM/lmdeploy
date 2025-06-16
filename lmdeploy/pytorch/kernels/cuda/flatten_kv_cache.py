@@ -202,7 +202,8 @@ def flatten_kv_cache(k_caches: Tensor,
                      k_scales_zeros: Tensor = None,
                      v_scales_zeros: Tensor = None,
                      quant_policy: Literal[0, 4, 8] = 0,
-                     kv_layout: str = 'bshd'):
+                     kv_layout: str = 'bshd',
+                     flatten_kv_layout: str = 'bhsd'):
     """Recovery paged kv cache to normal kv cache."""
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
@@ -230,17 +231,40 @@ def flatten_kv_cache(k_caches: Tensor,
     BLOCK_DK = triton.next_power_of_2(k_head_dim)
     BLOCK_DV = triton.next_power_of_2(v_head_dim)
     BLOCK_BS = k_caches.size(s_dim)
-
-    k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
-
-    grid = (num_blocks, batch_size, num_heads)
-    if quant_policy == 0:
-        shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
-        if shared_kv:
+    shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
+    if flatten_kv_layout == 'bhsd':
+        k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
+        if quant_policy == 0 and shared_kv:
             v_states = k_states[..., :v_head_dim]
             v_head_dim = 0
         else:
             v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
+        stride_koh = k_states.stride(0)
+        stride_kos = k_states.stride(1)
+        stride_voh = v_states.stride(0)
+        stride_vos = v_states.stride(1)
+    elif flatten_kv_layout == 'bshd':
+        k_states = k_caches.new_empty(out_size, num_heads, k_head_dim, dtype=out_dtype)
+        if quant_policy == 0 and shared_kv:
+            v_states = k_states[..., :v_head_dim]
+            v_head_dim = 0
+        else:
+            v_states = v_caches.new_empty(out_size, num_heads, v_head_dim, dtype=out_dtype)
+        stride_koh = k_states.stride(1)
+        stride_kos = k_states.stride(0)
+        stride_voh = v_states.stride(1)
+        stride_vos = v_states.stride(0)
+    else:
+        raise RuntimeError('Unsupported layout.')
+
+    grid = (num_blocks, batch_size, num_heads)
+    if quant_policy == 0:
+        # shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
+        # if shared_kv:
+        #     v_states = k_states[..., :v_head_dim]
+        #     v_head_dim = 0
+        # else:
+        #     v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
         _flatten_kv_cache[grid](
             k_caches,
             v_caches,
@@ -257,11 +281,11 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vcs=v_caches.stride(s_dim),
             stride_vch=v_caches.stride(h_dim),
             stride_vcd=v_caches.stride(d_dim),
-            stride_koh=k_states.stride(0),
-            stride_kos=k_states.stride(1),
+            stride_koh=stride_koh,
+            stride_kos=stride_kos,
             stride_kod=k_states.stride(2),
-            stride_voh=v_states.stride(0),
-            stride_vos=v_states.stride(1),
+            stride_voh=stride_voh,
+            stride_vos=stride_vos,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
             OUT_SIZE=out_size,
@@ -272,7 +296,7 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DV=BLOCK_DV,
         )
     else:
-        v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
+        # v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
         _flatten_kv_cache_quant[grid](
             k_caches,
             v_caches,
@@ -299,11 +323,11 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vszs=v_scales_zeros.stride(s_dim),
             stride_vszh=v_scales_zeros.stride(h_dim),
             stride_vszd=v_scales_zeros.stride(d_dim),
-            stride_koh=k_states.stride(0),
-            stride_kos=k_states.stride(1),
+            stride_koh=stride_koh,
+            stride_kos=stride_kos,
             stride_kod=k_states.stride(2),
-            stride_voh=v_states.stride(0),
-            stride_vos=v_states.stride(1),
+            stride_voh=stride_voh,
+            stride_vos=stride_vos,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
             quant_policy=quant_policy,
