@@ -8,7 +8,6 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import GenerationConfig, LogitsProcessor
-from lmdeploy.metrics.stats import RequestStateStats
 from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -149,16 +148,6 @@ class MessageStatus(enum.Enum):
     MIGRATION_DONE = enum.auto()
 
 
-class RequestState:
-
-    def __init__(self, arrival_time: float, prompt_len: int, is_prefilling: Optional[bool] = True):
-        self.arrival_time = arrival_time
-        self.prompt_len = prompt_len
-        self.is_prefilling = is_prefilling
-
-        self.stats = RequestStateStats(arrival_time=arrival_time)
-
-
 _SEQ_COUNT = 0
 
 
@@ -271,7 +260,6 @@ class SchedulerSession:
         self.sequences[seq.seq_id] = seq
         if self.seq_manager is not None:
             self.seq_manager.add_sequence(seq)
-
         return seq
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
@@ -474,7 +462,7 @@ class SchedulerSequence:
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
 
-    # for Disaggregation
+    # For Disaggregation
     migration_request: Optional[MigrationRequest] = None
     resp_cache: bool = False
     preserve_cache: bool = False

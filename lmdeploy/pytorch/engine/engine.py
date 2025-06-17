@@ -79,8 +79,7 @@ def _build_scheduler_config(engine_config: PytorchEngineConfig):
     """Build scheduler config."""
     scheduler_config = SchedulerConfig(max_batches=engine_config.max_batch_size,
                                        max_session_len=engine_config.session_len,
-                                       prefill_interval=engine_config.prefill_interval,
-                                       enable_metrics=engine_config.enable_metrics)
+                                       prefill_interval=engine_config.prefill_interval)
     return scheduler_config
 
 
@@ -925,10 +924,8 @@ class Engine:
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
             __log_resps(step_outputs)
-
             for out in step_outputs:
                 __send_resp(out)
-
             set_pt_engine_scheduler_stats(self.scheduler)
 
         while True:
