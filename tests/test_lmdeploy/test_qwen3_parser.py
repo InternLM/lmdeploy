@@ -335,3 +335,28 @@ def test_parser_nonstream(text_sequence: List[str], expects: List[TestExpects]):
         assert parsed_call.function.name == expected_call.func_name
         args = json.loads(parsed_call.function.arguments)
         assert args['location'] == expected_call.location
+
+
+def test_no_think_nonstream():
+    text_sequence = [
+        '你好',
+        '呀',
+        '！',
+        '✨',
+        '',
+        ' 很',
+        '高兴',
+        '见到',
+        '你',
+        '！',
+    ]
+    tokenizer = DummyTokenizer()
+    VariableInterface.tool_parser = Qwen3ToolParser(tokenizer=tokenizer)
+    VariableInterface.reasoning_parser = QwenQwQReasoningParser(tokenizer=tokenizer)
+    resp: ChatCompletionResponse = _chat_completion_v1(ChatCompletionRequest(model='qwen', messages=[], stream=False),
+                                                       text_sequence)
+
+    assert len(resp.choices) == 1
+    first_message = resp.choices[0].message
+    assert first_message.content == '你好呀！✨ 很高兴见到你！'
+    assert first_message.reasoning_content is None

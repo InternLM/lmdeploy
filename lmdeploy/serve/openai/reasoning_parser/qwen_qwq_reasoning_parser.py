@@ -113,22 +113,22 @@ class QwenQwQReasoningParser(ReasoningParser):
         # Thus we assume the reasoning content is always at the start.
         # Ref https://huggingface.co/deepseek-ai/DeepSeek-R1/commit/8a58a132790c9935686eb97f042afa8013451c9f
         if self.think_end_token not in model_output:
-            return model_output, None
-        else:
-            # Add a start token if it's missing to keep compatibility.
-            if self.think_start_token not in model_output:
-                model_output = f'{self.think_start_token}{model_output}'
-            # Use a regex to find the reasoning content
-            reasoning_content = self.reasoning_regex.findall(model_output)[0]
+            # for qwen3 model, the reasoning content is wrapped by <think> </think> xml tags
+            return None, model_output
+        # Add a start token if it's missing to keep compatibility.
+        if self.think_start_token not in model_output:
+            model_output = f'{self.think_start_token}{model_output}'
+        # Use a regex to find the reasoning content
+        reasoning_content = self.reasoning_regex.findall(model_output)[0]
 
-            end_index = len(f'{self.think_start_token}{reasoning_content}{self.think_end_token}')
-            final_output = model_output[end_index:]
-            if reasoning_content.startswith('\n'):
-                reasoning_content = reasoning_content[1:]
-            if reasoning_content.endswith('\n'):
-                reasoning_content = reasoning_content[:-1]
+        end_index = len(f'{self.think_start_token}{reasoning_content}{self.think_end_token}')
+        final_output = model_output[end_index:]
+        if reasoning_content.startswith('\n'):
+            reasoning_content = reasoning_content[1:]
+        if reasoning_content.endswith('\n'):
+            reasoning_content = reasoning_content[:-1]
 
-            if len(final_output) == 0:
-                return reasoning_content, None
+        if len(final_output) == 0:
+            return reasoning_content, None
 
-            return reasoning_content, final_output
+        return reasoning_content, final_output
