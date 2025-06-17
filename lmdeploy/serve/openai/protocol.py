@@ -233,9 +233,6 @@ class DeltaMessage(BaseModel):
     reasoning_content: Optional[str] = None
     tool_calls: List[DeltaToolCall] = Field(default_factory=list)
 
-    def is_empty(self) -> bool:
-        return not self.content and not self.reasoning_content and not self.tool_calls
-
 
 class ChatCompletionResponseStreamChoice(BaseModel):
     """Chat completion response stream choice."""

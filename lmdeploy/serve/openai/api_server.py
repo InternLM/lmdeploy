@@ -509,9 +509,6 @@ async def chat_completions_v1(raw_request: Request = None):
             if has_parser:
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            if delta_message.is_empty():
-                # empty delta message should be ignored in the stream response
-                continue
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,

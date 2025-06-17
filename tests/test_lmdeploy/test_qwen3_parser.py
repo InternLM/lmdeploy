@@ -215,8 +215,6 @@ def _chat_completion_v1(
                         delta_message.content = reasoning_delta.content or ''
                 if has_parser:
                     previous_text = current_text
-                if delta_message.is_empty():
-                    continue
 
                 choice_data = ChatCompletionResponseStreamChoice(index=0,
                                                                  delta=delta_message,
