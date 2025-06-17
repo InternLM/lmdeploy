@@ -66,6 +66,10 @@ class LinearBase(nn.Module):
 
         self.lora_adapters = nn.ModuleDict()
 
+    def update_weights(self):
+        """Update weights."""
+        raise NotImplementedError('This method should be implemented in subclasses.')
+
     def _forward_default(self, x, all_reduce: bool, tp_sizes: List[int]):
         """Default forward implement."""
         raise NotImplementedError('This method should be implemented in subclasses.')
