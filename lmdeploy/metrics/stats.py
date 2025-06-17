@@ -3,28 +3,60 @@
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
     from lmdeploy.messages import EngineCoreEvent, ResponseType
-    from lmdeploy.pytorch.engine import InferOutput
+    from lmdeploy.metrics.metrics_processor import MetricsContext
 
 
 @dataclass
 class SchedulerStats:
     """Stats associated with the scheduler."""
 
+    # total / finished reqs in async engine
+    num_total_reqs: int = 0
+    num_finished_reqs: int = 0
+
+    # running / waiting reqs in PyTorch engine
     num_running_reqs: int = 0
     num_waiting_reqs: int = 0
 
+    # GPU cache usage in PyTorch engine
     gpu_cache_usage: float = 0.0
 
     def __repr__(self):
         """Return a human-readable string representation."""
         return ('SchedulerStats(\n'
+                f'  num_total_reqs={self.num_total_reqs},\n'
+                f'  num_finished_reqs={self.num_finished_reqs},\n'
                 f'  num_running_reqs={self.num_running_reqs},\n'
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
+                ')')
+
+
+class RequestState:
+    """State of a request."""
+
+    def __init__(self, arrival_time: float = 0.0, prompt_len: int = 0, is_prefilling: Optional[bool] = True):
+        self.arrival_time = arrival_time
+        self.prompt_len = prompt_len
+        self.is_prefilling = is_prefilling
+        self.stats = RequestStateStats(arrival_time=arrival_time)
+
+    def __repr__(self):
+        """Return a human-readable string representation."""
+        return (f'RequestState(\n'
+                f'  arrival_time={self.arrival_time:.6f},\n'
+                f'  prompt_len={self.prompt_len},\n'
+                f'  is_prefilling={self.is_prefilling},\n'
+                f'  stats.num_generation_tokens={self.stats.num_generation_tokens},\n'
+                f'  stats.arrival_time={self.stats.arrival_time:.6f},\n'
+                f'  stats.queued_ts={self.stats.queued_ts:.6f},\n'
+                f'  stats.scheduled_ts={self.stats.scheduled_ts:.6f},\n'
+                f'  tats.first_token_ts={self.stats.first_token_ts:.6f},\n'
+                f'  stats.last_token_ts={self.stats.last_token_ts:.6f},\n'
                 ')')
 
 
@@ -84,23 +116,17 @@ class IterationStats:
         """Calculate an interval relative to this iteration's timestamp."""
         return self.iteration_timestamp - start
 
-    def update_from_output(self, output: 'InferOutput', engine_core_timestamp: float, is_prefilling: bool,
-                           prompt_len: int, req_stats: RequestStateStats):
-        num_new_generation_tokens = 1
-
-        self.num_generation_tokens += num_new_generation_tokens
+    def update_from_output(self, engine_core_timestamp: float, engine_core_events: List['EngineCoreEvent'],
+                           is_prefilling: bool, req_stats: RequestStateStats):
         if is_prefilling:
-            assert num_new_generation_tokens > 0
-            self.num_prompt_tokens += prompt_len
-
             first_token_latency = self._time_since(req_stats.arrival_time)
             self.time_to_first_tokens_iter.append(first_token_latency)
 
-        req_stats.num_generation_tokens += num_new_generation_tokens
+        req_stats.num_generation_tokens = self.num_generation_tokens
 
         # Process request-level engine core events
-        if output.engine_core_events is not None:
-            self.update_from_events(output.engine_core_events, req_stats)
+        if engine_core_events is not None:
+            self.update_from_events(engine_core_events, req_stats)
 
         # Process the batch-level "new tokens" engine core event
         if is_prefilling:
@@ -155,3 +181,16 @@ class IterationStats:
                                  inference_time=inference_time,
                                  decode_time=decode_time)
         self.finished_requests.append(finished_req)
+
+    def update_from_ctx(self, ctx_type: str, ctx: 'MetricsContext'):
+        """Update the iteration stats from the metrics context."""
+        self.update_from_output(engine_core_timestamp=ctx.engine_core_timestamp,
+                                engine_core_events=ctx.engine_core_events,
+                                is_prefilling=ctx.req_state.is_prefilling,
+                                req_stats=ctx.req_state.stats)
+
+        if ctx_type == 'finished_ctx':
+            self.update_from_finished_request(
+                finish_reason='FINISHED',  # FIXME, how to pass in this value?
+                num_prompt_tokens=ctx.req_state.prompt_len,
+                req_stats=ctx.req_state.stats)

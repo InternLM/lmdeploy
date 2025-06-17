@@ -1,12 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 
-import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
-from lmdeploy.messages import EngineCoreEventType
+from lmdeploy.metrics.metrics_processor import set_pt_engine_core_event_queued, set_pt_engine_core_event_scheduled
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
@@ -145,8 +144,7 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
-        if self.scheduler_config.enable_metrics:
-            seq.record_event(EngineCoreEventType.QUEUED)
+        set_pt_engine_core_event_queued()
 
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
@@ -239,8 +237,7 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
-            if self.scheduler_config.enable_metrics:
-                seq.record_event(EngineCoreEventType.SCHEDULED, time.perf_counter())
+            set_pt_engine_core_event_scheduled()
 
         return running, swap_in_map, swap_out_map, copy_map
 

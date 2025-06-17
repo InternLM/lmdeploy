@@ -69,6 +69,8 @@ class LoggingStatLogger(StatLoggerBase):
                    f'DP{self.dp_rank}] '
                    f'Avg prompt throughput: {prompt_throughput:.1f} tokens/s, '
                    f'Avg generation throughput: {generation_throughput:.1f} tokens/s, '
+                   f'Finished: {scheduler_stats.num_finished_reqs} reqs, '
+                   f'Unfinished: {scheduler_stats.num_total_reqs-scheduler_stats.num_finished_reqs} reqs, '
                    f'Running: {scheduler_stats.num_running_reqs} reqs, '
                    f'Waiting: {scheduler_stats.num_waiting_reqs} reqs, '
                    f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%')
@@ -303,15 +305,3 @@ def build_1_2_5_buckets(max_value: int) -> List[int]:
     [1, 2, 5, 10, 20, 50, 100]
     """
     return build_buckets([1, 2, 5], max_value)
-
-
-def setup_loggers(model_name: str, max_model_len: int, engine_num: int):
-    """Setup loggers."""
-    stat_loggers: List[List[StatLoggerBase]] = []
-    for dp_rank in range(engine_num):
-        stat_loggers.append([
-            LoggingStatLogger(dp_rank=dp_rank),
-            PrometheusStatLogger(model_name=model_name, max_model_len=max_model_len, dp_rank=dp_rank)
-        ])
-
-    return stat_loggers

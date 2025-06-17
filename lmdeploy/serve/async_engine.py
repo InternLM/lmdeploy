@@ -3,6 +3,7 @@
 import asyncio
 import atexit
 import concurrent.futures
+import copy
 import dataclasses
 import os
 import random
@@ -21,7 +22,7 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
-from lmdeploy.metrics.loggers import StatLoggerBase, setup_loggers
+from lmdeploy.metrics.metrics_processor import async_engine_metrics_api as metrics_api
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
@@ -305,6 +306,7 @@ class AsyncEngine(LogitsMixin):
 
         # build status loggers
         self._build_stat_loggers()
+        self.metrics_queue = asyncio.Queue()
 
     def close(self):
         self.internal_thread.close()
@@ -352,16 +354,16 @@ class AsyncEngine(LogitsMixin):
 
     def _build_stat_loggers(self):
         if not getattr(self.backend_config, 'enable_metrics', False):
-            return
+            self.stat_loggers = []
+        else:
+            from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
+            dp_rank = self.backend_config.dp_rank if self.backend_config.dp else 0
 
-        # independent set for each DP rank, since monototic time differs for each process
-        # each set contains one cli logger and one prometheus logger
-        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(model_name=self.model_name,
-                                                                      max_model_len=self.session_len,
-                                                                      engine_num=self.backend_config.dp)
-
-        logger.info(f'dp: {self.backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
-        self.engine.stat_loggers = self.stat_loggers[self.backend_config.dp_rank]
+            logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
+            self.stat_loggers = [
+                LoggingStatLogger(dp_rank=dp_rank),
+                PrometheusStatLogger(model_name=self.model_name, max_model_len=self.session_len, dp_rank=dp_rank)
+            ]
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
@@ -395,9 +397,16 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def do_log_stats(self, ) -> None:
-        for each_dp_engine_loggers in self.stat_loggers:
-            for stat_logger in each_dp_engine_loggers:
-                stat_logger.log()
+        """Process collected context, then logging."""
+        while not self.metrics_queue.empty():
+            ctx_type, ctx = await self.metrics_queue.get()
+            metrics_api.update_global_iteration_stats(ctx_type, ctx)
+            for stat_logger in self.stat_loggers:
+                stat_logger.record(scheduler_stats=ctx.scheduler_stats, iteration_stats=ctx.iteration_stats)
+
+        # loop through CLI logger and Prometheus logger
+        for stat_logger in self.stat_loggers:
+            stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -754,7 +763,10 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
+                metrics_api.init_stats(prompt_len=input_len)
                 async for outputs in gen:
+                    metrics_api.set_request_prefilling(is_prefilling=(prev_len == 0))
+
                     # decode res
                     if is_error(outputs.status):
                         break
@@ -807,8 +819,16 @@ class AsyncEngine(LogitsMixin):
                         if hit_stop_token:
                             out.logits = out.logits[:-hit_stop_token]
 
+                    print(f'input_len={input_len}, new gen len={(output_len-prev_len)}')
+                    metrics_api.set_iteration_token_counts(is_prefilling=(prev_len == 0),
+                                                           num_prompt_tokens=input_len,
+                                                           num_generation_tokens=(output_len - prev_len))
+                    self.metrics_queue.put_nowait(('running_ctx', copy.deepcopy(metrics_api.get_context())))
                     yield out
                 # end of generator loop
+
+                metrics_api.increment_finished_requests()
+                self.metrics_queue.put_nowait('finished_ctx', copy.deepcopy(metrics_api.get_context()))
 
                 if not is_error(outputs.status):
                     finish_reason = 'length' \
@@ -820,7 +840,7 @@ class AsyncEngine(LogitsMixin):
                         response = ''
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
-                                f'{len(input_ids)}, outupt_tokens {gen_len}')
+                                f'{len(input_ids)}, output_tokens {gen_len}')
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),

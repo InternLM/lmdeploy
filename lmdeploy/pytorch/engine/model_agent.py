@@ -2,7 +2,6 @@
 import asyncio
 import base64
 import functools
-import time
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
 from typing import Any, Dict
@@ -11,6 +10,7 @@ import torch
 import torch.distributed as dist
 from torch.profiler import ProfilerActivity, profile, record_function
 
+from lmdeploy.metrics.metrics_processor import set_pt_engine_core_newtoken_timestamp
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger
@@ -777,7 +777,7 @@ class BaseModelAgent:
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
-            out['engine_core_timestamp'] = time.perf_counter()  # new token generation timestamp
+            set_pt_engine_core_newtoken_timestamp()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
         return out

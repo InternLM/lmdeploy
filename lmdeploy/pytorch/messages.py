@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType, GenerationConfig, LogitsProcessor
+from lmdeploy.messages import GenerationConfig, LogitsProcessor
 from lmdeploy.metrics.stats import RequestStateStats
 from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
@@ -272,14 +272,6 @@ class SchedulerSession:
         if self.seq_manager is not None:
             self.seq_manager.add_sequence(seq)
 
-        # initialize req_state
-        req_state = RequestState(
-            arrival_time=arrive_time,
-            prompt_len=len(token_ids),
-            is_prefilling=True,  # new sequence starts as prefilling
-        )
-        seq.req_state = req_state
-
         return seq
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
@@ -487,10 +479,6 @@ class SchedulerSequence:
     resp_cache: bool = False
     preserve_cache: bool = False
 
-    # for logging
-    req_state: Optional[RequestState] = None
-    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
-
     def __post_init__(self):
         """Post init."""
         self._num_history_ids: int = 0
@@ -661,11 +649,6 @@ class SchedulerSequence:
         self.random_offsets += 1
         self.arrive_time = time.perf_counter()
 
-        if self.req_state and self.req_state.stats:
-            # Transition from prefill to decode
-            if self.req_state.is_prefilling and self.num_new_tokens > 0:
-                self.req_state.is_prefilling = False
-
     def set_step(self, step: int):
         """Set step."""
         num_all_ids = self.num_all_ids
@@ -685,10 +668,3 @@ class SchedulerSequence:
         if self.history_multimodals is not None:
             self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
             self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
-
-    def record_event(
-        self,
-        event_type: EngineCoreEventType,
-        timestamp: Optional[float] = None,
-    ) -> None:
-        self.engine_core_events.append(EngineCoreEvent.new_event(event_type, timestamp))

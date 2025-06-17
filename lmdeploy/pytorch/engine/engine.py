@@ -3,21 +3,21 @@ import asyncio
 import copy
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 
-from lmdeploy.messages import EngineCoreEvent, PytorchEngineConfig, ResponseType
-from lmdeploy.metrics.stats import IterationStats, SchedulerStats
+from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.metrics.metrics_processor import set_pt_engine_scheduler_stats
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
-from ..messages import MessageStatus, RequestState, SchedulerSequence
+from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .engine_checker import EngineChecker
@@ -46,11 +46,6 @@ class InferOutput:
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
     cache_block_ids: List[int] = None
-
-    # for logging
-    req_state: RequestState = None
-    engine_core_timestamp: float = None
-    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
 
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
@@ -301,58 +296,6 @@ class InputsMakerAsync(InputsMakerBase):
 def build_inputs_maker(engine: 'Engine'):
     """Build inputs makers."""
     return InputsMakerAsync(engine)
-
-
-class StatusProcessor:
-
-    def __init__(self, engine: 'Engine'):
-        self.engine = engine
-        self.scheduler = engine.scheduler
-        self.enable_metrics: bool = engine.scheduler_config.enable_metrics
-        self.iteration_stats: IterationStats = None
-        self.scheduler_stats: SchedulerStats = None
-
-    def reset_stats(self):
-        """Reset previous status to avoid accumulcations in
-        self.engine.stat_loggers over multiple iterations."""
-        self.iteration_stats = None
-        self.scheduler_stats = None
-
-    def update_stats(self, out: InferOutput):
-        """Update status from inferoutput."""
-        if not self.enable_metrics or out.req_state is None:
-            return
-
-        if self.iteration_stats is None:
-            self.iteration_stats = IterationStats()
-
-        # update stats from output
-        self.iteration_stats.update_from_output(output=out,
-                                                engine_core_timestamp=out.engine_core_timestamp,
-                                                is_prefilling=out.req_state.is_prefilling,
-                                                prompt_len=out.req_state.prompt_len,
-                                                req_stats=out.req_state.stats)
-        # update stats if request is finished
-        if out.finish:
-            self.iteration_stats.update_from_finished_request(finish_reason=out.resp.type,
-                                                              num_prompt_tokens=out.req_state.prompt_len,
-                                                              req_stats=out.req_state.stats)
-
-    def record_stats(self):
-        """Log stats to all registered loggers."""
-        if not self.enable_metrics:
-            return
-
-        # actual running requests
-        num_running = self.scheduler.num_locked()
-        # waiting to be scheduled + scheduled but not yet started
-        num_waiting = self.scheduler.num_waiting() + self.scheduler.num_running()
-        self.scheduler_stats = SchedulerStats(num_running_reqs=num_running,
-                                              num_waiting_reqs=num_waiting,
-                                              gpu_cache_usage=self.scheduler.usage)
-
-        for stat_logger in self.engine.stat_loggers:
-            stat_logger.record(scheduler_stats=self.scheduler_stats, iteration_stats=self.iteration_stats)
 
 
 class Engine:
@@ -816,8 +759,8 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self, engine_core_timestamp: float, next_token_ids: torch.LongTensor, running: SeqList,
-                            logits: torch.Tensor, stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
+    def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
+                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
         """Make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
@@ -843,10 +786,7 @@ class Engine:
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
-                              cache_block_ids=cache_block_ids,
-                              req_state=msg.req_state,
-                              engine_core_timestamp=engine_core_timestamp,
-                              engine_core_events=msg.engine_core_events)
+                              cache_block_ids=cache_block_ids)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -966,7 +906,6 @@ class Engine:
 
     async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """Send responses."""
-        status_processer = StatusProcessor(self)
 
         def __log_resps(outputs: List[InferOutput]):
             """Log resps."""
@@ -987,11 +926,10 @@ class Engine:
             """Send response callback."""
             __log_resps(step_outputs)
 
-            status_processer.reset_stats()
             for out in step_outputs:
-                status_processer.update_stats(out)
                 __send_resp(out)
-            status_processer.record_stats()
+
+            set_pt_engine_scheduler_stats(self.scheduler)
 
         while True:
             num_outs = que.qsize()
