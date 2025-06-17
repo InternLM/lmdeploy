@@ -11,6 +11,7 @@ from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, ge
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from ..backends import OpType, get_backend
+from .quant_utils import quant_blocked_fp8
 from .utils import div_up
 
 
@@ -430,6 +431,8 @@ class LinearWeightsBlockedF8(LinearWeights):
                                        device=device)
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         self.register_parameter('weight_scale_inv', weight_scale_inv)
+        self.weight._base_weight_loader = self.weight.weight_loader
+        self.weight.weight_loader = self.weight_loader_with_quant
 
         if self.ep:
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_ep
@@ -472,6 +475,17 @@ class LinearWeightsBlockedF8(LinearWeights):
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
+
+    def weight_loader_with_quant(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
+                                 shard_id: str):
+        """Weight load with quant."""
+        if loaded_weight.dtype != param.dtype:
+            # quant loaded weight
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            self.weight._base_weight_loader(self.weight, quanted_weight, expert_id, shard_id)
+            self.weight_scale_inv.weight_loader(self.weight_scale_inv, scaling, expert_id, shard_id)
+        else:
+            return self.weight._base_weight_loader(param, loaded_weight, expert_id, shard_id)
 
 
 class FusedMoEBlockedF8(nn.Module):
