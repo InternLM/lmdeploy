@@ -102,7 +102,6 @@ pytorch_chat_model:
     - meta-llama/Llama-4-Scout-17B-16E-Instruct
     - meta-llama/Llama-3.2-1B-Instruct
     - meta-llama/Llama-3.2-3B-Instruct
-    - meta-llama/Llama-3.2-11B-Vision-Instruct
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - meta-llama/Meta-Llama-3-8B-Instruct
@@ -343,10 +342,8 @@ pytorch_quatization:
 
 longtext_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct
-    - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - internlm/internlm2_5-7b-chat-1m
-    - internlm/internlm2-chat-20b
     - internlm/internlm3-8b-instruct
 
 benchmark_model:
@@ -361,6 +358,5 @@ benchmark_model:
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen2.5-7B-Instruct
-    - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
     - deepseek-ai/DeepSeek-V2-Lite-Chat
