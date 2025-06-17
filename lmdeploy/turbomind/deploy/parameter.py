@@ -13,6 +13,15 @@ def to_half(x: torch.Tensor):
     return x.to(torch.half)
 
 
+def to_float(x: torch.Tensor):
+    return x.to(torch.float)
+
+
+def to_fp8(x: torch.Tensor):
+    assert x.dtype == torch.uint8
+    return x.view(dtype=torch.float8_e4m3fn)
+
+
 def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
     assert x.dtype == torch.uint8
     xs = x.view(*x.shape[:-1], -1, 8).split(1, dim=-1)
@@ -51,6 +60,15 @@ class QuantWeightOnly(Parameter):
         f(i, g('qzeros'), 'zeros', to_half, apply_gs=True)
 
 
+class WeightScaleInv(Parameter):
+    KEYS = '.weight_scale_inv', '.weight'
+
+    # TODO: flag any operations crossing the quant blocks as illegal
+    def __call__(self, f, g, i):
+        f(i, g('weight_scale_inv'), 'scales', to_float, block_size=128)
+        f(i, g('weight'), 'weight', identity)
+
+
 class Weight(Parameter):
     KEYS = '.weight',
 
@@ -79,6 +97,8 @@ def get_params(keys: List[str], bias=0):
         ps.append(PLora())
     if QuantWeightOnly.take(keys):
         ps.append(QuantWeightOnly())
+    if WeightScaleInv.take(keys):
+        ps.append(WeightScaleInv())
     if Weight.take(keys):
         ps.append(Weight())
     if bias and Bias.take(keys):

@@ -381,5 +381,5 @@ class GenerateResponse(BaseModel):
 
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
-    serialized_named_tensors: Union[str, List[str]]
+    serialized_named_tensors: Union[str, List[str], Dict]
     finished: bool = False

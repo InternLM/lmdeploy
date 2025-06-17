@@ -204,6 +204,15 @@ def _update_runtime_env_nsys(runtime_env: Dict):
     return runtime_env
 
 
+def _update_runtime_env_lmdeploy(runtime_env: Dict[str, Any]):
+    """Update runtime env for lmdeploy package."""
+    if log_file := os.getenv('LMDEPLOY_LOG_FILE'):
+        env_vars = runtime_env.get('env_vars', {})
+        env_vars['LMDEPLOY_LOG_FILE'] = log_file
+        runtime_env['env_vars'] = env_vars
+    return runtime_env
+
+
 class RayWorkerWrapper(WorkerWrapperBase):
     """Worker wrapper."""
 
@@ -558,6 +567,7 @@ class RayExecutor(ExecutorBase):
 
             if device_str == 'GPU':
                 runtime_env = dict()
+                runtime_env = _update_runtime_env_lmdeploy(runtime_env)
                 if _envs.ray_nsys_enable:
                     runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
@@ -581,13 +591,26 @@ class RayExecutor(ExecutorBase):
         driver_ip = _get_master_addr()
         if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
+
         elif device_str == 'ascend':
+            self._init_ascend_distributed_environment(driver_ip)
+        else:
+            raise ValueError(f'Unsupported device type: {device_str}')
+
+    def _init_ascend_distributed_environment(self, driver_ip):
+        """Init ascend distributed environment."""
+        rank_table_file = _envs.ascend_rank_table_file
+        if not rank_table_file:
+            # if rank table file is not set, treat as single node
+            self.workers = self._sort_workers(driver_ip, self.workers)
+            # simply set device by index, this is for single node, multiple devices
+            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
+        else:
+            # if rank table file is set, use it to get rank mapping, multiple nodes
             rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
             self.workers = self._sort_workers_by_ip(worker_ips, self.workers)
             ray.get([worker.set_device.remote(rank_mapping[idx]) for idx, worker in enumerate(self.workers)])
             ray.get([worker.set_env.remote(envs) for worker in self.workers])
-        else:
-            raise ValueError(f'Unsupported device type: {device_str}')
 
     """ PD Disaggregation API Begin """
 

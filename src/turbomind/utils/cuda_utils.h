@@ -31,6 +31,7 @@
 #include <cusparseLt.h>
 #endif
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/logger.h"
@@ -162,6 +163,8 @@ inline void myAssert(bool result, const char* const file, int const line, std::s
 
 int getSMVersion();
 
+int getSMCount();
+
 std::string getDeviceName();
 
 template<class T>
@@ -180,15 +183,15 @@ class CudaDeviceGuard {
 public:
     CudaDeviceGuard(int device)
     {
-        cudaGetDevice(&last_device_id_);
+        check_cuda_error(cudaGetDevice(&last_device_id_));
         if (device != last_device_id_) {
-            cudaSetDevice(device);
+            check_cuda_error(cudaSetDevice(device));
         }
     }
 
     ~CudaDeviceGuard()
     {
-        cudaSetDevice(last_device_id_);
+        TM_CHECK_EQ(cudaSetDevice(last_device_id_), cudaSuccess);
     }
 
 private:

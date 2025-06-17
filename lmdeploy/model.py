@@ -1143,60 +1143,10 @@ class Qwen3(Qwen2d5Chat):
 
     def messages2prompt(self, messages, sequence_start=True, tools=None, enable_thinking=None, **kwargs):
         if isinstance(messages, str):
-            prompt = self.get_prompt(messages, sequence_start)
+            return self.get_prompt(messages, sequence_start)
         prompt = super().messages2prompt(messages, sequence_start, tools, **kwargs)
 
-        # enable_thinking parameter
-        if enable_thinking is not None:
-            no_think = not enable_thinking
-        else:
-            no_think = False
-
-            system_content = ''
-            for msg in messages:
-                if msg.get('role') == 'system':
-                    content = msg.get('content', '')
-                    if isinstance(content, list):
-                        system_content = ' '.join(content)
-                    elif isinstance(content, str):
-                        system_content = content
-
-            user_content = ''
-            for msg in reversed(messages):
-                if msg.get('role') == 'user':
-                    content = msg.get('content', '')
-                    if isinstance(content, list):
-                        user_content = ' '.join(content)
-                    elif isinstance(content, str):
-                        user_content = content
-                    break
-
-            # check /no_think or /think in user_content
-            user_has_no_think = '/no_think' in user_content.lower()
-            user_has_think = '/think' in user_content.lower()
-
-            # check /no_think or /think in system_content
-            system_has_no_think = '/no_think' in system_content.lower()
-            system_has_think = '/think' in system_content.lower()
-
-            # default no_think = True
-            if user_has_no_think and not user_has_think:
-                no_think = True
-            elif not user_has_no_think and user_has_think:
-                no_think = False
-            elif user_has_no_think and user_has_think:
-                no_think = False
-            elif not user_has_no_think and not user_has_think:
-                if system_has_no_think and not system_has_think:
-                    no_think = True
-                elif not system_has_no_think and system_has_think:
-                    no_think = False
-                elif system_has_no_think and system_has_think:
-                    no_think = False
-                elif not system_has_no_think and not system_has_think:
-                    no_think = True
-
-        if no_think:
+        if enable_thinking is False:
             prompt += '<think>\n\n</think>\n\n'
 
         return prompt
