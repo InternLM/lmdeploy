@@ -46,7 +46,7 @@ struct GemmUniversalSm90_v5 {
 
     using Arch = Sm90;
 
-    using MMA_Atom = GMMA::MMA_64x64x32_F32E4M3E4M3_SS_TN<>;
+    using MMA_Atom = GMMA::MMA_64x96x32_F32E4M3E4M3_SS_TN<>;
 
     static constexpr typename cute::MMA_Traits<MMA_Atom>::Shape_MNK MMA_Shape{};
 
@@ -57,7 +57,7 @@ struct GemmUniversalSm90_v5 {
     static constexpr int WARPGORUPS = 4;
 
     static constexpr int TILE_M = 128;
-    static constexpr int TILE_N = 128;
+    static constexpr int TILE_N = 96;
     static constexpr int TILE_K = 128;
 
     static constexpr int WG_M = 2;
@@ -142,7 +142,8 @@ struct GemmUniversalSm90_v5 {
                                        SmemLayoutV2<WG_TILE_M, WG_TILE_N, -1, kSwizzleC / sizeof(Tc)>,
                                        SmemLayoutV2<WG_TILE_M, WG_TILE_N>>;
 
-    static constexpr int OUTER_N = std::gcd(MMA_ATOM_N, 128);
+    static constexpr int OUTER_N       = std::gcd(MMA_ATOM_N, 128);
+    static constexpr int MMA_SUBTILE_N = MMA_ATOM_N / OUTER_N;
 
     __device__ void operator()(const CUtensorMap& tm_a,
                                const CUtensorMap& tm_b,
@@ -390,10 +391,8 @@ struct GemmUniversalSm90_v5 {
             auto math_barrier_sync = [&](int phase, int alive = 1) {
                 constexpr int base       = (int)cutlass::arch::ReservedNamedBarriers::FirstUserBarrier;
                 const int     barrier_id = base + math_group_idx ^ phase;
-
-                constexpr int threads = WARPGORUPS * WARPGROUP_SIZE;
-                int           res     = 0;
-
+                constexpr int threads    = WARPGORUPS * WARPGROUP_SIZE;
+                int           res        = 0;
                 asm volatile("{\n"
                              "  .reg.pred p;\n"
                              "  setp.ne.b32 p, %3, 0;\n"
@@ -402,7 +401,6 @@ struct GemmUniversalSm90_v5 {
                              "}\n"
                              : "=r"(res)
                              : "r"(barrier_id), "r"(threads), "r"(alive));
-
                 return res;
             };
 
@@ -451,8 +449,7 @@ struct GemmUniversalSm90_v5 {
 
                     int k_iter = sched.k_iters_;
 
-                    bool pred_V[1];
-                    Fetch_V(pred_V, param_V, K, N, tile, math_group_idx, wg_idx_n, storage);
+                    auto pred_V = Fetch_V(param_V, K, N, tile, math_group_idx, wg_idx_n, storage);
 
                     float scale_V[2];
                     auto  Load_V = [&] {
@@ -536,9 +533,9 @@ struct GemmUniversalSm90_v5 {
                     gmma(0);
                     cute::warpgroup_wait<0>();
                     scale_accum(0);
-                    gmma(1);
-                    cute::warpgroup_wait<0>();
-                    scale_accum(1);
+                    // gmma(1);
+                    // cute::warpgroup_wait<0>();
+                    // scale_accum(1);
                     consumer_arrive();
                     ++pipe_state;
                     --k_iter;
@@ -553,9 +550,9 @@ struct GemmUniversalSm90_v5 {
                         gmma(0);
                         cute::warpgroup_wait<0>();
                         scale_accum(0);
-                        gmma(1);
-                        cute::warpgroup_wait<0>();
-                        scale_accum(1);
+                        // gmma(1);
+                        // cute::warpgroup_wait<0>();
+                        // scale_accum(1);
                         consumer_arrive();
                         ++pipe_state;
 
@@ -608,17 +605,18 @@ struct GemmUniversalSm90_v5 {
                     gmma(0);
                     cute::warpgroup_wait<0>();
                     scale_accum(0);
-                    epi(0);
+                    // gmma(1);
+                    // cute::warpgroup_wait<0>();
+                    // scale_accum(1);
+                    consumer_arrive();
 
-                    gmma(1);
                     if (math_leader_p) {
                         storage.pipe_count[math_group_idx] = pipe_state.count() + 1;
                     }
                     math_barrier_sync(1);
-                    cute::warpgroup_wait<0>();
-                    scale_accum(1);
-                    consumer_arrive();
-                    epi(1);
+
+                    epi(0);
+                    // epi(1);
 
                     cute::tma_store_fence();  // visibility: smem -> async proxy
 
@@ -742,8 +740,7 @@ struct GemmUniversalSm90_v5 {
         return gmem_ptr;
     }
 
-    __device__ void Fetch_V(bool                      pred_V[1],
-                            const MatrixParam&        param_V,
+    __device__ auto Fetch_V(const MatrixParam&        param_V,
                             int                       K,
                             int                       N,
                             typename Scheduler::Tile* tile,
@@ -752,19 +749,18 @@ struct GemmUniversalSm90_v5 {
                             SharedStorage&            storage)
     {
         const int offset_n = tile->offset_n;
-        const int offset_k = 0;
 
-        for (int i = 0; i < 1; ++i) {
-            pred_V[i] = false;
+        Array<bool, MMA_SUBTILE_N> pred_V{};
+
+        if constexpr (MMA_SUBTILE_N != 1) {
+            int offset = offset_n % 128;
+            PRAGMA_UNROLL
+            for (int i = 0; i < MMA_SUBTILE_N; ++i) {
+                pred_V[i] = (i * OUTER_N + offset) / 128;
+            }
         }
 
-        // if constexpr (OUTER_N != 128) {
-        if constexpr (128 % OUTER_N != 0) {
-
-            static_assert(MMA_ATOM_N <= 128 + OUTER_N, "MMA inst is crossing more than 2 scale blocks");
-        }
-
-        // __pipeline_commit();
+        return pred_V;
     }
 };
 
