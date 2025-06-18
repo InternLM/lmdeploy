@@ -534,9 +534,9 @@ class BaseModelAgent:
                     enable_microbatch = batch_size >= \
                         self.enable_microbatch_decode_batchsize_threshold
                 else:
-                    bs_enable = batch_size >= self.enable_microbatch_prefill_batchsize_threshold
-                    num_enable = tokens_num >= self.enable_microbatch_prefill_token_threshold
-                    enable_microbatch = bs_enable and num_enable
+                    enable_microbatch = batch_size >= \
+                        self.enable_microbatch_prefill_batchsize_threshold and \
+                        tokens_num >= self.enable_microbatch_prefill_token_threshold
                 dp_forward_meta.append(int(enable_microbatch))
             gathered_meta = DistGatherScalar(dp_forward_meta, dp, device='cuda')
 
