@@ -122,7 +122,7 @@ class IterationStats:
             first_token_latency = self._time_since(req_stats.arrival_time)
             self.time_to_first_tokens_iter.append(first_token_latency)
 
-        req_stats.num_generation_tokens = self.num_generation_tokens
+        req_stats.num_generation_tokens += self.num_generation_tokens
 
         # Process request-level engine core events
         if engine_core_events is not None:
@@ -182,15 +182,16 @@ class IterationStats:
                                  decode_time=decode_time)
         self.finished_requests.append(finished_req)
 
-    def update_from_ctx(self, ctx_type: str, ctx: 'MetricsContext'):
+    def update_from_ctx(self, reps_status: 'ResponseType', ctx: 'MetricsContext'):
         """Update the iteration stats from the metrics context."""
+        from lmdeploy.messages import ResponseType
+
         self.update_from_output(engine_core_timestamp=ctx.engine_core_timestamp,
                                 engine_core_events=ctx.engine_core_events,
                                 is_prefilling=ctx.req_state.is_prefilling,
                                 req_stats=ctx.req_state.stats)
 
-        if ctx_type == 'finished_ctx':
-            self.update_from_finished_request(
-                finish_reason='FINISHED',  # FIXME, how to pass in this value?
-                num_prompt_tokens=ctx.req_state.prompt_len,
-                req_stats=ctx.req_state.stats)
+        if reps_status == ResponseType.SUCCESS:
+            self.update_from_finished_request(finish_reason=reps_status,
+                                              num_prompt_tokens=ctx.req_state.prompt_len,
+                                              req_stats=ctx.req_state.stats)

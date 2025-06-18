@@ -241,7 +241,6 @@ class SchedulerSession:
         if sampling_param is None:
             sampling_param = SamplingParam()
 
-        arrive_time = time.perf_counter()
         seq = SchedulerSequence(
             seq_id=_new_msg_id(),
             session=self,
@@ -249,7 +248,7 @@ class SchedulerSession:
             num_new_tokens=0,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            arrive_time=arrive_time,
+            arrive_time=time.perf_counter(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,

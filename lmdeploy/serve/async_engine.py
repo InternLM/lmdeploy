@@ -396,13 +396,14 @@ class AsyncEngine(LogitsMixin):
                                 use_tqdm=use_tqdm,
                                 **kwargs)
 
-    async def do_log_stats(self, ) -> None:
+    async def do_log_stats(self):
         """Process collected context, then logging."""
         while not self.metrics_queue.empty():
-            ctx_type, ctx = await self.metrics_queue.get()
-            metrics_api.update_global_iteration_stats(ctx_type, ctx)
+            reps_status, ctx = await self.metrics_queue.get()
+            metrics_api.update_global_iteration_stats(reps_status, ctx)
             for stat_logger in self.stat_loggers:
-                stat_logger.record(scheduler_stats=ctx.scheduler_stats, iteration_stats=ctx.iteration_stats)
+                stat_logger.record(scheduler_stats=metrics_api.get_scheduler_stats(),
+                                   iteration_stats=ctx.iteration_stats)
 
         # loop through CLI logger and Prometheus logger
         for stat_logger in self.stat_loggers:
@@ -788,6 +789,10 @@ class AsyncEngine(LogitsMixin):
                     token_ids += outputs.token_ids[mask]
                     gen_len = len(token_ids) - input_len
 
+                    metrics_api.set_iteration_token_counts(is_prefilling=(prev_len == 0),
+                                                           num_prompt_tokens=input_len,
+                                                           num_generation_tokens=(output_len - prev_len))
+
                     prev_len = output_len
 
                     ids_offset = state.ids_offset
@@ -819,16 +824,10 @@ class AsyncEngine(LogitsMixin):
                         if hit_stop_token:
                             out.logits = out.logits[:-hit_stop_token]
 
-                    print(f'input_len={input_len}, new gen len={(output_len-prev_len)}')
-                    metrics_api.set_iteration_token_counts(is_prefilling=(prev_len == 0),
-                                                           num_prompt_tokens=input_len,
-                                                           num_generation_tokens=(output_len - prev_len))
-                    self.metrics_queue.put_nowait(('running_ctx', copy.deepcopy(metrics_api.get_context())))
+                    self.metrics_queue.put_nowait((outputs.status, copy.deepcopy(metrics_api.get_context())))
                     yield out
                 # end of generator loop
-
                 metrics_api.increment_finished_requests()
-                self.metrics_queue.put_nowait('finished_ctx', copy.deepcopy(metrics_api.get_context()))
 
                 if not is_error(outputs.status):
                     finish_reason = 'length' \

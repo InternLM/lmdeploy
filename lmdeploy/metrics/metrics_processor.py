@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, List
 from .stats import IterationStats, RequestState, SchedulerStats
 
 if TYPE_CHECKING:
-    from lmdeploy.messages import EngineCoreEvent
+    from lmdeploy.messages import EngineCoreEvent, ResponseType
     from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 
@@ -132,8 +132,10 @@ def set_async_engine_iteration_stats(is_prefilling: bool, num_prompt_tokens: int
     """Set iteration stats in async engine."""
     iteration_stats = get_current_iteration_stats()
     if is_prefilling:
-        iteration_stats.num_prompt_tokens += num_prompt_tokens
-    iteration_stats.num_generation_tokens += num_generation_tokens
+        iteration_stats.num_prompt_tokens = num_prompt_tokens
+    else:
+        iteration_stats.num_prompt_tokens = 0
+    iteration_stats.num_generation_tokens = num_generation_tokens
 
 
 def set_pt_engine_core_newtoken_timestamp():
@@ -159,12 +161,12 @@ def set_pt_engine_core_event_scheduled():
 
 
 # Metrics updaters
-def update_iteration_stats(ctx_type: str, ctx: MetricsContext):
+def update_iteration_stats(reps_status: 'ResponseType', ctx: MetricsContext):
     """Update iteration stats."""
     iteration_stats = get_current_iteration_stats()
 
     # perform computations with metrics ctx
-    iteration_stats.update_from_ctx(ctx_type, ctx)
+    iteration_stats.update_from_ctx(reps_status, ctx)
 
 
 # Async Engine interface for metrics processor
@@ -173,6 +175,9 @@ class AsyncEngineMetricsProcessorInterface:
 
     def get_context(self) -> MetricsContext:
         return get_current_metrics_context()
+
+    def get_scheduler_stats(self) -> SchedulerStats:
+        return get_current_scheduler_stats()
 
     def init_stats(self, prompt_len: int):
         """Initialize metrics for a new request."""
@@ -192,8 +197,8 @@ class AsyncEngineMetricsProcessorInterface:
                                    num_generation_tokens: int = 0):
         set_async_engine_iteration_stats(is_prefilling, num_prompt_tokens, num_generation_tokens)
 
-    def update_global_iteration_stats(self, ctx_type: str, ctx: MetricsContext):
-        update_iteration_stats(ctx_type, ctx)
+    def update_global_iteration_stats(self, reps_status: 'ResponseType', ctx: MetricsContext):
+        update_iteration_stats(reps_status, ctx)
 
 
 async_engine_metrics_api = AsyncEngineMetricsProcessorInterface()
