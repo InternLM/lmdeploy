@@ -36,7 +36,7 @@ class MetricsProcessor:
 
     @contextmanager
     def context(self, ctx: MetricsContext):
-        """Context context."""
+        """Context manager."""
         old_ctx = self.get_context()
         self.set_context(ctx)
         try:
@@ -49,7 +49,6 @@ _METRICS_PROCESSOR = None
 
 
 def get_metrics_processor():
-    """Get metrics processor."""
     global _METRICS_PROCESSOR
     if _METRICS_PROCESSOR is None:
         _METRICS_PROCESSOR = MetricsProcessor()
@@ -59,32 +58,26 @@ def get_metrics_processor():
 
 # Metrics getters
 def get_current_metrics_context():
-    """Get current metrics context."""
     return get_metrics_processor().get_context()
 
 
 def get_current_request_state():
-    """Get current request state."""
     return get_metrics_processor().get_context().req_state
 
 
 def get_current_scheduler_stats():
-    """Get current scheduler stats."""
     return get_metrics_processor().get_context().scheduler_stats
 
 
 def get_current_iteration_stats():
-    """Get current iteration stats."""
     return get_metrics_processor().get_context().iteration_stats
 
 
 def get_current_engine_core_timestamp():
-    """Get current engine core timestamp."""
     return get_metrics_processor().get_context().engine_core_timestamp
 
 
 def get_current_engine_core_events():
-    """Get current engine core events."""
     return get_metrics_processor().get_context().engine_core_events
 
 
@@ -128,13 +121,10 @@ def set_pt_engine_scheduler_stats(scheduler: 'Scheduler'):
     scheduler_stats.gpu_cache_usage = scheduler.usage
 
 
-def set_async_engine_iteration_stats(is_prefilling: bool, num_prompt_tokens: int = 0, num_generation_tokens: int = 0):
+def set_async_engine_iteration_stats(num_prompt_tokens: int = 0, num_generation_tokens: int = 0):
     """Set iteration stats in async engine."""
     iteration_stats = get_current_iteration_stats()
-    if is_prefilling:
-        iteration_stats.num_prompt_tokens = num_prompt_tokens
-    else:
-        iteration_stats.num_prompt_tokens = 0
+    iteration_stats.num_prompt_tokens = num_prompt_tokens
     iteration_stats.num_generation_tokens = num_generation_tokens
 
 
@@ -185,19 +175,21 @@ class AsyncEngineMetricsProcessorInterface:
         init_async_engine_iteration_stats()
         increment_async_engine_scheduler_stats_total_req()
 
-    def set_request_prefilling(self, is_prefilling: bool = True):
+    def set_stats(self, prev_len: int, input_len: int, output_len: int):
+        """Set metrics values for a request."""
+        is_prefilling = (prev_len == 0)
+        num_prompt_tokens = input_len if is_prefilling else 0
+        num_new_generation_tokens = output_len - prev_len
+
         set_async_engine_request_state(is_prefilling)
+        set_async_engine_iteration_stats(num_prompt_tokens=num_prompt_tokens,
+                                         num_generation_tokens=num_new_generation_tokens)
 
     def increment_finished_requests(self):
         increment_async_engine_scheduler_stats_finished_req()
 
-    def set_iteration_token_counts(self,
-                                   is_prefilling: bool,
-                                   num_prompt_tokens: int = 0,
-                                   num_generation_tokens: int = 0):
-        set_async_engine_iteration_stats(is_prefilling, num_prompt_tokens, num_generation_tokens)
-
     def update_global_iteration_stats(self, reps_status: 'ResponseType', ctx: MetricsContext):
+        """Update global iteration stats."""
         update_iteration_stats(reps_status, ctx)
 
 

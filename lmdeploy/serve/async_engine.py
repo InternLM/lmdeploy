@@ -766,8 +766,6 @@ class AsyncEngine(LogitsMixin):
                 hit_stop_token = 0
                 metrics_api.init_stats(prompt_len=input_len)
                 async for outputs in gen:
-                    metrics_api.set_request_prefilling(is_prefilling=(prev_len == 0))
-
                     # decode res
                     if is_error(outputs.status):
                         break
@@ -789,10 +787,7 @@ class AsyncEngine(LogitsMixin):
                     token_ids += outputs.token_ids[mask]
                     gen_len = len(token_ids) - input_len
 
-                    metrics_api.set_iteration_token_counts(is_prefilling=(prev_len == 0),
-                                                           num_prompt_tokens=input_len,
-                                                           num_generation_tokens=(output_len - prev_len))
-
+                    metrics_api.set_stats(prev_len, input_len, output_len)
                     prev_len = output_len
 
                     ids_offset = state.ids_offset
