@@ -21,7 +21,7 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
-from lmdeploy.metrics.metrics_processor import async_engine_metrics_api as metrics_api
+from lmdeploy.metrics.metrics_processor import async_engine_metrics_processor as metrics_processor
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
@@ -401,7 +401,7 @@ class AsyncEngine(LogitsMixin):
         """Process collected context, then logging."""
         while not (self.metrics_queue.empty() or self.metrics_queue is None):
             reps_status, ctx = await self.metrics_queue.get()
-            metrics_api.update_stats(self.stat_loggers, reps_status, ctx)
+            metrics_processor.update_stats(self.stat_loggers, reps_status, ctx)
 
         # loop through CLI logger and Prometheus logger
         for stat_logger in self.stat_loggers:
@@ -762,8 +762,8 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
-                metrics_api.increment_total_requests()
-                metrics_api.init_stats(prompt_len=input_len)
+                metrics_processor.increment_total_requests()
+                metrics_processor.init_stats(prompt_len=input_len)
                 async for outputs in gen:
                     # decode res
                     if is_error(outputs.status):
@@ -786,7 +786,7 @@ class AsyncEngine(LogitsMixin):
                     token_ids += outputs.token_ids[mask]
                     gen_len = len(token_ids) - input_len
 
-                    metrics_api.set_stats(prev_len, input_len, output_len)
+                    metrics_processor.set_stats(prev_len, input_len, output_len)
                     prev_len = output_len
 
                     ids_offset = state.ids_offset
@@ -818,10 +818,10 @@ class AsyncEngine(LogitsMixin):
                         if hit_stop_token:
                             out.logits = out.logits[:-hit_stop_token]
 
-                    metrics_api.save_stats(outputs.status, self.metrics_queue)
+                    metrics_processor.save_stats(outputs.status, self.metrics_queue)
                     yield out
                 # end of generator loop
-                metrics_api.increment_finished_requests()
+                metrics_processor.increment_finished_requests()
 
                 if not is_error(outputs.status):
                     finish_reason = 'length' \

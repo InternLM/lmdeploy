@@ -23,10 +23,10 @@ class MetricsContext:
     engine_core_events: List['EngineCoreEvent'] = field(default_factory=list)
 
 
-class MetricsProcessor:
+class MetricsManager:
 
     def __init__(self):
-        """Initialize metrics processor."""
+        """Initialize metrics manager."""
         self._current_ctx = MetricsContext()
 
     def set_context(self, ctx: MetricsContext):
@@ -48,40 +48,40 @@ class MetricsProcessor:
             self.set_context(old_ctx)
 
 
-_METRICS_PROCESSOR = None
+_METRICS_MANAGER = None
 
 
-def get_metrics_processor():
-    global _METRICS_PROCESSOR
-    if _METRICS_PROCESSOR is None:
-        _METRICS_PROCESSOR = MetricsProcessor()
+def get_metrics_manager():
+    global _METRICS_MANAGER
+    if _METRICS_MANAGER is None:
+        _METRICS_MANAGER = MetricsManager()
 
-    return _METRICS_PROCESSOR
+    return _METRICS_MANAGER
 
 
 # Metrics getters
 def get_current_metrics_context():
-    return get_metrics_processor().get_context()
+    return get_metrics_manager().get_context()
 
 
 def get_current_request_state():
-    return get_metrics_processor().get_context().req_state
+    return get_metrics_manager().get_context().req_state
 
 
 def get_current_scheduler_stats():
-    return get_metrics_processor().get_context().scheduler_stats
+    return get_metrics_manager().get_context().scheduler_stats
 
 
 def get_current_iteration_stats():
-    return get_metrics_processor().get_context().iteration_stats
+    return get_metrics_manager().get_context().iteration_stats
 
 
 def get_current_engine_core_timestamp():
-    return get_metrics_processor().get_context().engine_core_timestamp
+    return get_metrics_manager().get_context().engine_core_timestamp
 
 
 def get_current_engine_core_events():
-    return get_metrics_processor().get_context().engine_core_events
+    return get_metrics_manager().get_context().engine_core_events
 
 
 # Metrics setters
@@ -162,9 +162,9 @@ def update_iteration_stats(reps_status: 'ResponseType', ctx: MetricsContext):
     iteration_stats.update_from_ctx(reps_status, ctx)
 
 
-# Async Engine interface for metrics processor
-class AsyncEngineMetricsProcessorInterface:
-    """Provides simple interface to metrics functions used by async engine."""
+# Async Engine metrics processor
+class AsyncEngineMetricsProcessor:
+    """Async Engine metrics processor."""
 
     def increment_total_requests(self):
         increment_async_engine_scheduler_stats_total_req()
@@ -200,4 +200,4 @@ class AsyncEngineMetricsProcessorInterface:
             stat_logger.record(scheduler_stats=get_current_scheduler_stats(), iteration_stats=ctx.iteration_stats)
 
 
-async_engine_metrics_api = AsyncEngineMetricsProcessorInterface()
+async_engine_metrics_processor = AsyncEngineMetricsProcessor()
