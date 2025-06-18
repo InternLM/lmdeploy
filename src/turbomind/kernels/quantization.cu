@@ -28,7 +28,7 @@ __global__ void quant_symm_row(
             Ldg(vec, src + ti * src_ld + di);
             auto         absmax    = static_cast<Tscale>(find_absmax<threads>(vec));
             const Tscale scale     = absmax / qmax;
-            const Tscale inv_scale = qmax / absmax;
+            const Tscale inv_scale = qmax / fmaxf(absmax, 1e-8f);
             if (threadIdx.x % threads == 0) {
                 // column-major
                 scales[(di / group_size) * scales_ld + ti] = scale;
@@ -181,7 +181,7 @@ __global__ void quant_symm_block(Tout* out, Tscale* scales, const T* src, Tscale
     if (threadIdx.x == 0) {
         auto maxval                                 = static_cast<Tscale>(absmax);
         scales[blockIdx.x * gridDim.y + blockIdx.y] = maxval / qmax;
-        shared_inv_scale                            = qmax / maxval;
+        shared_inv_scale                            = qmax / fmaxf(absmax, 1e-8f);
     }
     __syncthreads();
     const Tscale inv_scale = shared_inv_scale;
