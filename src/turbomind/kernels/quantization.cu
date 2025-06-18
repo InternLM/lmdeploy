@@ -26,9 +26,9 @@ __global__ void quant_symm_row(
         for (int di = threadIdx.x * vec_size; di < dim; di += blockDim.x * vec_size) {
             Array<T, vec_size> vec;
             Ldg(vec, src + ti * src_ld + di);
-            auto         absmax    = static_cast<Tscale>(find_absmax<threads>(vec));
+            auto         absmax    = fmaxf(static_cast<Tscale>(find_absmax<threads>(vec)), 1e-8f);
             const Tscale scale     = absmax / qmax;
-            const Tscale inv_scale = qmax / fmaxf(absmax, 1e-8f);
+            const Tscale inv_scale = qmax / absmax;
             if (threadIdx.x % threads == 0) {
                 // column-major
                 scales[(di / group_size) * scales_ld + ti] = scale;
@@ -179,9 +179,9 @@ __global__ void quant_symm_block(Tout* out, Tscale* scales, const T* src, Tscale
 
     absmax = BlockReduce{temp_storage}.Reduce(absmax, [](auto a, auto b) { return __hmax(a, b); });
     if (threadIdx.x == 0) {
-        auto maxval                                 = static_cast<Tscale>(absmax);
+        auto maxval                                 = fmaxf(static_cast<Tscale>(absmax), 1e-8f);
         scales[blockIdx.x * gridDim.y + blockIdx.y] = maxval / qmax;
-        shared_inv_scale                            = qmax / fmaxf(absmax, 1e-8f);
+        shared_inv_scale                            = qmax / maxval;
     }
     __syncthreads();
     const Tscale inv_scale = shared_inv_scale;
