@@ -6,7 +6,7 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
 
@@ -15,7 +15,7 @@ from ..graph_runner import GraphRunner
 logger = get_logger('lmdeploy')
 
 
-def next_power_of_2(n: int):
+def next_power_of_2(n: int, enable_microbatch: bool = False):
     """Return the smallest power of 2 greater than or equal to n."""
     n -= 1
     n |= n >> 1
@@ -25,7 +25,7 @@ def next_power_of_2(n: int):
     n |= n >> 16
     n |= n >> 32
     n += 1
-    return n
+    return n, enable_microbatch
 
 
 def _false(*args, **kwargs):
@@ -150,11 +150,12 @@ class CUDAGraphRunner(GraphRunner):
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
         meta = self.get_meta()
+        enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
         if meta.padding_batch_size is None:
-            new_num_tokens = next_power_of_2(num_tokens)
+            new_num_tokens, enable_microbatch = next_power_of_2(num_tokens, enable_microbatch)
         else:
-            new_num_tokens = next_power_of_2(meta.padding_batch_size)
-        return (new_num_tokens, is_decoding)
+            new_num_tokens, enable_microbatch = next_power_of_2(meta.padding_batch_size, enable_microbatch)
+        return (new_num_tokens, is_decoding, enable_microbatch)
 
     def __call__(self, **kwargs):
         """call."""
@@ -214,6 +215,6 @@ class CUDAGraphRunner(GraphRunner):
         if is_decoding and dp_meta is not None:
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
-            tp_size = next_power_of_2(padding_batch_size)
+            tp_size, _ = next_power_of_2(padding_batch_size, inputs.enable_microbatch)
             dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
         return inputs
