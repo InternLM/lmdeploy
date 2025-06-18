@@ -144,6 +144,7 @@ class ModelConfig:
     dtype: torch.dtype = torch.float16
     vocab_size: int = 40000
     hf_config: Any = None
+    llm_config: Any = None
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
     use_flash_mla: bool = False

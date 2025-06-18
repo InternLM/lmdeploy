@@ -47,6 +47,8 @@ class AutoModelConfigBuilder(ABC):
         cfg = valid_builder.build(hf_config, model_path, **kwargs)
         if cfg.hf_config is None:
             cfg.hf_config = hf_config
+        if cfg.llm_config is None:
+            cfg.llm_config = hf_config
 
         return cfg
 
