@@ -21,8 +21,6 @@ def get_cuda_autotune_config():
 @triton.autotune(
     configs=get_cuda_autotune_config(),
     key=['N', 'K', 'M_NP2'],
-    warmup=10,
-    rep=25,
 )
 @triton.jit
 def fused_moe_blocked_f8_kernel(
@@ -124,7 +122,7 @@ def fused_moe_blocked_f8_kernel(
     offs_ksb = k_start // group_bk
     a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid and k_start < K, other=1.0)
     b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
-    acc_scale1 = a_scale * b_scale
+    acc_scale1 = tl.maximum(a_scale * b_scale, 1e-10)
     acc_ratio = acc_scale0 / acc_scale1
     acc_scale = acc_scale1
 
@@ -145,7 +143,7 @@ def fused_moe_blocked_f8_kernel(
         accumulator *= acc_ratio[:, None]
 
         # update scales and ratio
-        new_acc_scale = a_scale * b_scale
+        new_acc_scale = tl.maximum(a_scale * b_scale, 1e-10)
         acc_ratio = acc_scale / new_acc_scale
         acc_scale = new_acc_scale
 

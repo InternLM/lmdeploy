@@ -48,7 +48,7 @@ def _quant_fp8_kernel(
     for m_id in tl.range(m_id_start, M_out, m_id_stride, num_stages=NUM_STAGES):
 
         a = tl.load(a_ptrs, mask=m_id < M, other=0).to(tl.float32)
-        scale = tl.max(tl.abs(a)) * rfp8_max
+        scale = tl.maximum(tl.max(tl.abs(a)), 1e-10) * rfp8_max
         out = a / scale
 
         out = tl.clamp(out, fp8_min, fp8_max)
