@@ -3,7 +3,6 @@
 import asyncio
 import atexit
 import concurrent.futures
-import copy
 import dataclasses
 import os
 import random
@@ -304,9 +303,8 @@ class AsyncEngine(LogitsMixin):
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
 
-        # build status loggers
+        # init metrics related
         self._build_stat_loggers()
-        self.metrics_queue = asyncio.Queue()
 
     def close(self):
         self.internal_thread.close()
@@ -353,10 +351,13 @@ class AsyncEngine(LogitsMixin):
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
     def _build_stat_loggers(self):
-        if not getattr(self.backend_config, 'enable_metrics', False):
-            self.stat_loggers = []
-        else:
+        self.metrics_queue = None
+        self.stat_loggers = []
+
+        if getattr(self.backend_config, 'enable_metrics', False):
             from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
+            self.metrics_queue = asyncio.Queue()
+
             dp_rank = self.backend_config.dp_rank if self.backend_config.dp else 0
 
             logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
@@ -398,12 +399,9 @@ class AsyncEngine(LogitsMixin):
 
     async def do_log_stats(self):
         """Process collected context, then logging."""
-        while not self.metrics_queue.empty():
+        while not (self.metrics_queue.empty() or self.metrics_queue is None):
             reps_status, ctx = await self.metrics_queue.get()
-            metrics_api.update_global_iteration_stats(reps_status, ctx)
-            for stat_logger in self.stat_loggers:
-                stat_logger.record(scheduler_stats=metrics_api.get_scheduler_stats(),
-                                   iteration_stats=ctx.iteration_stats)
+            metrics_api.update_stats(self.stat_loggers, reps_status, ctx)
 
         # loop through CLI logger and Prometheus logger
         for stat_logger in self.stat_loggers:
@@ -764,6 +762,7 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
+                metrics_api.increment_total_requests()
                 metrics_api.init_stats(prompt_len=input_len)
                 async for outputs in gen:
                     # decode res
@@ -819,7 +818,7 @@ class AsyncEngine(LogitsMixin):
                         if hit_stop_token:
                             out.logits = out.logits[:-hit_stop_token]
 
-                    self.metrics_queue.put_nowait((outputs.status, copy.deepcopy(metrics_api.get_context())))
+                    metrics_api.save_stats(outputs.status, self.metrics_queue)
                     yield out
                 # end of generator loop
                 metrics_api.increment_finished_requests()

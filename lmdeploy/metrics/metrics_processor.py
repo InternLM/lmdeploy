@@ -1,9 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
+import copy
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List
 
+from .loggers import StatLoggerBase
 from .stats import IterationStats, RequestState, SchedulerStats
 
 if TYPE_CHECKING:
@@ -163,17 +166,16 @@ def update_iteration_stats(reps_status: 'ResponseType', ctx: MetricsContext):
 class AsyncEngineMetricsProcessorInterface:
     """Provides simple interface to metrics functions used by async engine."""
 
-    def get_context(self) -> MetricsContext:
-        return get_current_metrics_context()
+    def increment_total_requests(self):
+        increment_async_engine_scheduler_stats_total_req()
 
-    def get_scheduler_stats(self) -> SchedulerStats:
-        return get_current_scheduler_stats()
+    def increment_finished_requests(self):
+        increment_async_engine_scheduler_stats_finished_req()
 
     def init_stats(self, prompt_len: int):
         """Initialize metrics for a new request."""
         init_async_engine_request_state(prompt_len)
         init_async_engine_iteration_stats()
-        increment_async_engine_scheduler_stats_total_req()
 
     def set_stats(self, prev_len: int, input_len: int, output_len: int):
         """Set metrics values for a request."""
@@ -185,12 +187,17 @@ class AsyncEngineMetricsProcessorInterface:
         set_async_engine_iteration_stats(num_prompt_tokens=num_prompt_tokens,
                                          num_generation_tokens=num_new_generation_tokens)
 
-    def increment_finished_requests(self):
-        increment_async_engine_scheduler_stats_finished_req()
+    def save_stats(self, output_stats: 'ResponseType', metrics_queue: asyncio.Queue):
+        """Save metrics to the queue."""
+        if metrics_queue is None:
+            return
+        metrics_queue.put_nowait((output_stats, copy.deepcopy(get_current_metrics_context())))
 
-    def update_global_iteration_stats(self, reps_status: 'ResponseType', ctx: MetricsContext):
-        """Update global iteration stats."""
+    def update_stats(self, stat_loggers: List[StatLoggerBase], reps_status: 'ResponseType', ctx: MetricsContext):
+        """Compute, update metrics, record to loggers."""
         update_iteration_stats(reps_status, ctx)
+        for stat_logger in stat_loggers:
+            stat_logger.record(scheduler_stats=get_current_scheduler_stats(), iteration_stats=ctx.iteration_stats)
 
 
 async_engine_metrics_api = AsyncEngineMetricsProcessorInterface()
