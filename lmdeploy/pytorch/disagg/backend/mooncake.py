@@ -130,13 +130,14 @@ class MooncakeMigrationManagement:
         if result != 0:
             raise RuntimeError(f'Failed to register memory region: {result}')
 
-        self.local_kv_table[register_mr_request.remote_engine_id] = {
+        mr_key = str(register_mr_request.mr_key)
+        self.local_kv_table[mr_key] = {
             'addr': buffer_addr,
             'length': buffer_length,
             'offset': register_mr_request.offset
         }
 
-        logger.info(f'Registered memory region with key {register_mr_request.remote_engine_id}, '
+        logger.info(f'Registered memory region with mr_key {mr_key}, '
                     f'addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}')
 
     @property
@@ -144,8 +145,8 @@ class MooncakeMigrationManagement:
         """Get endpoint information for this connection."""
 
         mr_info = {}
-        for remote_engine_id, buffer_info in self.local_kv_table.items():
-            mr_info[remote_engine_id] = {
+        for mr_key, buffer_info in self.local_kv_table.items():
+            mr_info[mr_key] = {
                 'addr': buffer_info['addr'],
                 'length': buffer_info['length'],
                 'offset': buffer_info['offset']
@@ -167,8 +168,8 @@ class MooncakeMigrationManagement:
         self.remote_kv_table = remote_endpoint_info['mr_info']
 
         logger.info(f'Received remote buffer info: {len(self.remote_kv_table)} regions')
-        for remote_engine_id, buffer_info in self.remote_kv_table.items():
-            logger.debug(f"Remote buffer {remote_engine_id}: addr=0x{buffer_info['addr']:x}, "
+        for mr_key, buffer_info in self.remote_kv_table.items():
+            logger.debug(f"Remote buffer mr_key {mr_key}: addr=0x{buffer_info['addr']:x}, "
                          f"length={buffer_info['length']}")
 
         logger.info(f'Connecting to remote engine {self.remote_engine_id} at {self.remote_url}')
@@ -196,24 +197,26 @@ class MooncakeMigrationManagement:
             raise RuntimeError(f'No connection established to remote engine {self.remote_engine_id}')
 
         for i, task in enumerate(assignment.batch):
-            if assignment.remote_engine_id not in self.local_kv_table:
-                raise RuntimeError(f'Memory region with id {assignment.remote_engine_id} not registered')
+            mr_key = str(task.mr_key)
 
-            if self.local_engine_id not in self.remote_kv_table:
-                raise RuntimeError(f'Remote memory region with id {self.local_engine_id} not registered')
+            if mr_key not in self.local_kv_table:
+                raise RuntimeError(f'Memory region with mr_key {mr_key} not registered locally')
+
+            if mr_key not in self.remote_kv_table:
+                raise RuntimeError(f'Remote memory region with mr_key {mr_key} not registered')
 
             # Get local buffer information
-            local_buffer_info = self.local_kv_table[assignment.remote_engine_id]
+            local_buffer_info = self.local_kv_table[mr_key]
             local_addr = local_buffer_info['addr'] + task.source_offset
 
             # Get remote buffer information
-            remote_buffer_info = self.remote_kv_table[self.local_engine_id]
+            remote_buffer_info = self.remote_kv_table[mr_key]
             remote_addr = remote_buffer_info['addr'] + task.target_offset
 
             logger.debug(f'Task {i}: Migrating {task.length} bytes')
             logger.debug(f'  Local Engine: {self.local_engine_id}')
             logger.debug(f'  Remote Engine: {assignment.remote_engine_id}')
-            logger.debug(f'  MR Key: {task.mr_key}')
+            logger.debug(f'  MR Key: {mr_key}')
             logger.debug(f"  Local:  0x{local_buffer_info['addr']:x} + {task.source_offset} = 0x{local_addr:x}")
             logger.debug(f"  Remote: 0x{remote_buffer_info['addr']:x} + {task.target_offset} = 0x{remote_addr:x}")
             logger.debug(f'  Session: {self.remote_url}')
