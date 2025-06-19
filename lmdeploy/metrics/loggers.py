@@ -170,27 +170,6 @@ class PrometheusStatLogger(StatLoggerBase):
                 ],
                 labelnames=labelnames).labels(*labelvalues)
 
-        self.histogram_max_num_generation_tokens_request = \
-            prometheus_client.Histogram(
-                name='lmdeploy:request_max_num_generation_tokens',
-                documentation='Histogram of maximum number of requested generation tokens.',
-                buckets=build_1_2_5_buckets(max_model_len),
-                labelnames=labelnames).labels(*labelvalues)
-
-        self.histogram_n_request = \
-            prometheus_client.Histogram(
-                name='lmdeploy:request_params_n',
-                documentation='Histogram of the n request parameter.',
-                buckets=[1, 2, 5, 10, 20],
-                labelnames=labelnames).labels(*labelvalues)
-
-        self.histogram_max_tokens_request = \
-            prometheus_client.Histogram(
-                name='lmdeploy:request_params_max_tokens',
-                documentation='Histogram of the max_tokens request parameter.',
-                buckets=build_1_2_5_buckets(max_model_len),
-                labelnames=labelnames).labels(*labelvalues)
-
         #
         # Histogram of timing intervals
         #
