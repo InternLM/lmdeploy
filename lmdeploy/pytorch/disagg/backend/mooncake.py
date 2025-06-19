@@ -33,8 +33,6 @@ def get_rdma_nics():
             # Sample output:
             # device                 node GUID
             # ------              ----------------
-            # erdma_0             02163efffe3fc264
-            # erdma_1             02163efffe3fc317
             lines = result.stdout.strip().split('\n')
             for line in lines[2:]:  # Skip header lines
                 if line.strip():
