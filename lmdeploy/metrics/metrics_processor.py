@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
-import copy
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -10,7 +8,7 @@ from .loggers import StatLoggerBase
 from .stats import IterationStats, RequestState, SchedulerStats
 
 if TYPE_CHECKING:
-    from lmdeploy.messages import EngineCoreEvent, ResponseType
+    from lmdeploy.messages import EngineCoreEvent
     from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 
@@ -18,7 +16,6 @@ if TYPE_CHECKING:
 class MetricsContext:
     req_state: RequestState = RequestState()
     scheduler_stats: SchedulerStats = SchedulerStats()
-    iteration_stats: IterationStats = IterationStats()
     engine_core_timestamp: float = 0.0
     engine_core_events: List['EngineCoreEvent'] = field(default_factory=list)
 
@@ -72,10 +69,6 @@ def get_current_scheduler_stats():
     return get_metrics_manager().get_context().scheduler_stats
 
 
-def get_current_iteration_stats():
-    return get_metrics_manager().get_context().iteration_stats
-
-
 def get_current_engine_core_timestamp():
     return get_metrics_manager().get_context().engine_core_timestamp
 
@@ -93,12 +86,6 @@ def init_async_engine_request_state(prompt_len: int):
     req_state.prompt_len = prompt_len
     req_state.is_prefilling = True  # new request starts as prefill
     req_state.stats = RequestStateStats(arrival_time=req_state.arrival_time)
-
-
-def init_async_engine_iteration_stats():
-    """Initialize iteration stats in async engine."""
-    ctx = get_current_metrics_context()
-    ctx.iteration_stats = IterationStats()
 
 
 def set_async_engine_request_state(is_prefilling: bool = True):
@@ -119,16 +106,11 @@ def increment_async_engine_scheduler_stats_finished_req():
 def set_pt_engine_scheduler_stats(scheduler: 'Scheduler'):
     """Set scheduler stats in PyTorch engine."""
     scheduler_stats = get_current_scheduler_stats()
-    scheduler_stats.num_running_reqs = scheduler.num_running()
-    scheduler_stats.num_waiting_reqs = scheduler.num_waiting()
+    # actually running requests
+    scheduler_stats.num_running_reqs = scheduler.num_locked()
+    # waiting to be scheduled requests + scheduled but not yet started requests
+    scheduler_stats.num_waiting_reqs = scheduler.num_waiting() + scheduler.num_running()
     scheduler_stats.gpu_cache_usage = scheduler.usage
-
-
-def set_async_engine_iteration_stats(num_prompt_tokens: int = 0, num_generation_tokens: int = 0):
-    """Set iteration stats in async engine."""
-    iteration_stats = get_current_iteration_stats()
-    iteration_stats.num_prompt_tokens = num_prompt_tokens
-    iteration_stats.num_generation_tokens = num_generation_tokens
 
 
 def set_pt_engine_core_newtoken_timestamp():
@@ -153,15 +135,6 @@ def set_pt_engine_core_event_scheduled():
     engine_core_events.append(EngineCoreEvent.new_event(EngineCoreEventType.SCHEDULED))
 
 
-# Metrics updaters
-def update_iteration_stats(reps_status: 'ResponseType', ctx: MetricsContext):
-    """Update iteration stats."""
-    iteration_stats = get_current_iteration_stats()
-
-    # perform computations with metrics ctx
-    iteration_stats.update_from_ctx(reps_status, ctx)
-
-
 # Async Engine metrics processor
 class AsyncEngineMetricsProcessor:
     """Async Engine metrics processor."""
@@ -173,31 +146,24 @@ class AsyncEngineMetricsProcessor:
         increment_async_engine_scheduler_stats_finished_req()
 
     def init_stats(self, prompt_len: int):
-        """Initialize metrics for a new request."""
         init_async_engine_request_state(prompt_len)
-        init_async_engine_iteration_stats()
 
-    def set_stats(self, prev_len: int, input_len: int, output_len: int):
-        """Set metrics values for a request."""
+    def update_stats(self, prev_len: int, input_len: int, output_len: int, iteration_stats: IterationStats):
         is_prefilling = (prev_len == 0)
-        num_prompt_tokens = input_len if is_prefilling else 0
+        num_prompt_tokens = input_len
         num_new_generation_tokens = output_len - prev_len
 
         set_async_engine_request_state(is_prefilling)
-        set_async_engine_iteration_stats(num_prompt_tokens=num_prompt_tokens,
-                                         num_generation_tokens=num_new_generation_tokens)
+        iteration_stats.update_from_output(engine_core_timestamp=get_current_engine_core_timestamp(),
+                                           engine_core_events=get_current_engine_core_events(),
+                                           num_prompt_tokens=num_prompt_tokens,
+                                           num_new_generation_tokens=num_new_generation_tokens,
+                                           is_prefilling=is_prefilling,
+                                           req_stats=get_current_request_state().stats)
 
-    def save_stats(self, output_stats: 'ResponseType', metrics_queue: asyncio.Queue):
-        """Save metrics to the queue."""
-        if metrics_queue is None:
-            return
-        metrics_queue.put_nowait((output_stats, copy.deepcopy(get_current_metrics_context())))
-
-    def update_stats(self, stat_loggers: List[StatLoggerBase], reps_status: 'ResponseType', ctx: MetricsContext):
-        """Compute, update metrics, record to loggers."""
-        update_iteration_stats(reps_status, ctx)
+    def record_stats(self, stat_loggers: List[StatLoggerBase], iteration_stats: IterationStats):
         for stat_logger in stat_loggers:
-            stat_logger.record(scheduler_stats=get_current_scheduler_stats(), iteration_stats=ctx.iteration_stats)
+            stat_logger.record(scheduler_stats=get_current_scheduler_stats(), iteration_stats=iteration_stats)
 
 
 async_engine_metrics_processor = AsyncEngineMetricsProcessor()

@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
     from lmdeploy.messages import EngineCoreEvent, ResponseType
-    from lmdeploy.metrics.metrics_processor import MetricsContext
 
 
 @dataclass
@@ -47,7 +46,7 @@ class RequestState:
 
     def __repr__(self):
         """Return a human-readable string representation."""
-        return (f'RequestState(\n'
+        return ('RequestState(\n'
                 f'  arrival_time={self.arrival_time:.6f},\n'
                 f'  prompt_len={self.prompt_len},\n'
                 f'  is_prefilling={self.is_prefilling},\n'
@@ -117,12 +116,18 @@ class IterationStats:
         return self.iteration_timestamp - start
 
     def update_from_output(self, engine_core_timestamp: float, engine_core_events: List['EngineCoreEvent'],
-                           is_prefilling: bool, req_stats: RequestStateStats):
+                           num_prompt_tokens: int, num_new_generation_tokens: int, is_prefilling: bool,
+                           req_stats: RequestStateStats):
+
+        self.num_generation_tokens += num_new_generation_tokens
         if is_prefilling:
+            assert num_new_generation_tokens > 0
+            self.num_prompt_tokens += num_prompt_tokens
+
             first_token_latency = self._time_since(req_stats.arrival_time)
             self.time_to_first_tokens_iter.append(first_token_latency)
 
-        req_stats.num_generation_tokens += self.num_generation_tokens
+        req_stats.num_generation_tokens += num_new_generation_tokens
 
         # Process request-level engine core events
         if engine_core_events is not None:
@@ -182,16 +187,16 @@ class IterationStats:
                                  decode_time=decode_time)
         self.finished_requests.append(finished_req)
 
-    def update_from_ctx(self, reps_status: 'ResponseType', ctx: 'MetricsContext'):
-        """Update the iteration stats from the metrics context."""
-        from lmdeploy.messages import ResponseType
+    # def update_from_ctx(self, reps_status: 'ResponseType', ctx: 'MetricsContext'):
+    #     """Update the iteration stats from the metrics context."""
+    #     from lmdeploy.messages import ResponseType
 
-        self.update_from_output(engine_core_timestamp=ctx.engine_core_timestamp,
-                                engine_core_events=ctx.engine_core_events,
-                                is_prefilling=ctx.req_state.is_prefilling,
-                                req_stats=ctx.req_state.stats)
+    #     self.update_from_output(engine_core_timestamp=ctx.engine_core_timestamp,
+    #                             engine_core_events=ctx.engine_core_events,
+    #                             is_prefilling=ctx.req_state.is_prefilling,
+    #                             req_stats=ctx.req_state.stats)
 
-        if reps_status == ResponseType.SUCCESS:
-            self.update_from_finished_request(finish_reason=reps_status,
-                                              num_prompt_tokens=ctx.req_state.prompt_len,
-                                              req_stats=ctx.req_state.stats)
+    #     if reps_status == ResponseType.SUCCESS:
+    #         self.update_from_finished_request(finish_reason=reps_status,
+    #                                           num_prompt_tokens=ctx.req_state.prompt_len,
+    #                                           req_stats=ctx.req_state.stats)
