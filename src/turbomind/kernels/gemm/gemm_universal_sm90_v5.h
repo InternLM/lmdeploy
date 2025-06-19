@@ -253,6 +253,26 @@ struct GemmUniversalSm90_v5 {
         }
     }
 
+    template<class AccumC, class Func>
+    __device__ void for_each(AccumC& accum_C, Func&& func)
+    {
+        for (int i_m = 0; i_m < MMA_ITER_M; ++i_m) {
+            for (int i_n = 0; i_n < MMA_ITER_N; ++i_n) {
+                for (int p_m = 0; p_m < MMA_PIPE_M; ++p_m) {
+                    for (int p_n = 0; p_n < MMA_PIPE_N; ++p_n) {
+                        for (int b_m = 0; b_m < MMA_BATCH_M; ++b_m) {
+                            for (int b_n = 0; b_n < MMA_BATCH_N; ++b_n) {
+                                int m = ((i_m * MMA_PIPE_M) + p_m * MMA_BATCH_M) + b_m;
+                                int n = ((i_n * MMA_PIPE_N) + p_n * MMA_BATCH_N) + b_n;
+                                func(accum_C[i_m][i_n][p_m][p_n][b_m][b_n], m, n);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     __device__ void warpgroup_wait(int n)
     {
         if (n == 0) {
@@ -664,55 +684,45 @@ struct GemmUniversalSm90_v5 {
                         smem_iter_B.Reset(pipe_state.index());
                     }
 
-                    Tc*  smem_C = &storage.C[wg_idx_m * WG_TILE_M * TILE_N + wg_idx_n * WG_TILE_N];
-                    auto epi    = [&](int n) {
-                        // epilogue
-                        PRAGMA_UNROLL
-                        for (int m = 0; m < MMA_ITER_M; ++m) {
-                            // PRAGMA_UNROLL
-                            // for (int n = 0; n < MMA_ITER_N; ++n) {
-                            {
-                                constexpr int N       = LayoutC::C0;
-                                constexpr int SW_bits = log2(kSwizzleC / 16);
-
-                                static_assert(!SW_bits || MMA_ATOM_N % LayoutC::C0 == 0);
-
-                                const int m0 = m * MMA_ATOM_M;
-                                const int n0 = n * MMA_ATOM_N;
-
-                                PRAGMA_UNROLL
-                                for (int i = 0; i < MMA_ATOM_N; i += 16) {
-                                    __align__(16) Array<Tc, 8> tvec =
-                                        cast<Tc>(*(Array<float, 8>*)&accum_C[0][0][0][0][m][n][i / 2]);
-                                    // fill(tvec, Tc(255));
-                                    int mm = m0 + warp_id % 4 * 16 + (lane_id & 8);
-                                    int nn = n0 + i / N * N;
-
-                                    int addr = ((nn / N) * WG_TILE_M * N) + (mm * N) + (nn % N);
-
-                                    int s = lane_id % 8;
-                                    int c = (lane_id & 16) / 2 + i % N;
-
-                                    addr += Swizzle<SW_bits, 3, 3>::apply(s * N + c);
-
-                                    auto& uvec = (Array<uint32_t, 4>&)tvec;
-                                    cute::SM90_U32x4_STSM_N::copy(
-                                        uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)smem_C[addr]);
-                                }
-                            }
-                        }
-                    };
-
-                    gmma();
-                    consumer_arrive();
-
                     if (math_leader_p) {
                         storage.pipe_count[math_group_idx] = pipe_state.count() + 1;
                     }
                     math_barrier_sync(1);
 
-                    epi(0);
-                    // epi(1);
+                    gmma();
+                    consumer_arrive();
+
+                    Tc* smem_C = &storage.C[wg_idx_m * WG_TILE_M * TILE_N + wg_idx_n * WG_TILE_N];
+
+                    for_each(accum_C, [&](const auto& C, int m, int n) {
+                        constexpr int N       = LayoutC::C0;
+                        constexpr int SW_bits = log2(kSwizzleC / 16);
+
+                        static_assert(!SW_bits || MMA_ATOM_N % LayoutC::C0 == 0);
+                        static_assert(MMA_ATOM_N % 16 == 0);
+
+                        const int m0 = m * MMA_ATOM_M;
+                        const int n0 = n * MMA_ATOM_N;
+
+                        PRAGMA_UNROLL
+                        for (int i = 0; i < MMA_ATOM_N; i += 16) {
+                            __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&C[i / 2]);
+                            // fill(tvec, Tc(255));
+                            int mm = m0 + warp_id % 4 * 16 + (lane_id & 8);
+                            int nn = n0 + i / N * N;
+
+                            int addr = ((nn / N) * WG_TILE_M * N) + (mm * N) + (nn % N);
+
+                            int s = lane_id % 8;
+                            int c = (lane_id & 16) / 2 + i % N;
+
+                            addr += Swizzle<SW_bits, 3, 3>::apply(s * N + c);
+
+                            auto& uvec = (Array<uint32_t, 4>&)tvec;
+                            cute::SM90_U32x4_STSM_N::copy(
+                                uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)smem_C[addr]);
+                        }
+                    });
 
                     cute::tma_store_fence();  // visibility: smem -> async proxy
 
