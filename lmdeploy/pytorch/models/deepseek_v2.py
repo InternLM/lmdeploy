@@ -14,6 +14,7 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.eplb import EPLBDispatchInfo, EPLBManager
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
@@ -566,7 +567,11 @@ class DeepseekV2Attention(nn.Module):
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None, info: Any = None):
+    def __init__(self,
+                 config: Any,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 info: EPLBDispatchInfo = None):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -651,8 +656,7 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight * self.routed_scaling_factor
 
         if self.eplb_dispatch_info is not None:
-            from dlblas.layers.moe import eplb
-            topk_idx = eplb.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
+            topk_idx = EPLBManager.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
 
         return topk_weight, topk_idx
 
@@ -679,12 +683,11 @@ class DeepseekV2MoE(nn.Module):
         world_size = dist_ctx.world_size
         moe_all_reduce = dp > 1 and dist_ctx.tp > 1
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            from dlblas.layers.moe import eplb
-            eplb_dispatch_info = eplb.EPLBDispatchInfo.init_new(
+            eplb_dispatch_info = EPLBManager.get_dispatch_info(
                 ep_rank=dist_ctx.ep_rank,
                 layer_idx=layer_idx,
             )
-            self.num_experts = eplb.get_global_eplb_metadata().num_physical_experts()
+            self.num_experts = EPLBManager.num_physical_experts()
             self.gate = MoEGate(config, dtype=dtype, device=device, info=eplb_dispatch_info)
         else:
             self.gate = MoEGate(config, dtype=dtype, device=device, info=None)
@@ -959,13 +962,8 @@ class DeepseekV2Model(nn.Module):
                                          dtype=dtype,
                                          device=device)
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            ep_size, _ = get_ep_world_rank()
-            from dlblas.layers.moe import eplb
-            eplb.init_global_eplb_metadata(
-                ep_size=ep_size,
-                num_routed_experts=config.n_routed_experts,
-                num_hidden_layers=config.num_hidden_layers,
-            )
+            ep_size_, _ = get_ep_world_rank()
+            EPLBManager.init_global_eplb_metadata(ep_size_, config.n_routed_experts, config.num_hidden_layers)
         self.layers = nn.ModuleList([
             DeepseekV2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
