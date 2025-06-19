@@ -259,12 +259,6 @@ def flatten_kv_cache(k_caches: Tensor,
 
     grid = (num_blocks, batch_size, num_heads)
     if quant_policy == 0:
-        # shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
-        # if shared_kv:
-        #     v_states = k_states[..., :v_head_dim]
-        #     v_head_dim = 0
-        # else:
-        #     v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
         _flatten_kv_cache[grid](
             k_caches,
             v_caches,
@@ -296,7 +290,6 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DV=BLOCK_DV,
         )
     else:
-        # v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
         _flatten_kv_cache_quant[grid](
             k_caches,
             v_caches,
