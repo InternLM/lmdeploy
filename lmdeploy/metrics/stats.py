@@ -186,17 +186,3 @@ class IterationStats:
                                  inference_time=inference_time,
                                  decode_time=decode_time)
         self.finished_requests.append(finished_req)
-
-    # def update_from_ctx(self, reps_status: 'ResponseType', ctx: 'MetricsContext'):
-    #     """Update the iteration stats from the metrics context."""
-    #     from lmdeploy.messages import ResponseType
-
-    #     self.update_from_output(engine_core_timestamp=ctx.engine_core_timestamp,
-    #                             engine_core_events=ctx.engine_core_events,
-    #                             is_prefilling=ctx.req_state.is_prefilling,
-    #                             req_stats=ctx.req_state.stats)
-
-    #     if reps_status == ResponseType.SUCCESS:
-    #         self.update_from_finished_request(finish_reason=reps_status,
-    #                                           num_prompt_tokens=ctx.req_state.prompt_len,
-    #                                           req_stats=ctx.req_state.stats)
