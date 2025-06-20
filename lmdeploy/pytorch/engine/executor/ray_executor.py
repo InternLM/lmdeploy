@@ -206,10 +206,12 @@ def _update_runtime_env_nsys(runtime_env: Dict):
 
 def _update_runtime_env_lmdeploy(runtime_env: Dict[str, Any]):
     """Update runtime env for lmdeploy package."""
+    new_envs = _envs.get_all_envs()
+    env_vars: Dict = runtime_env.get('env_vars', {})
+    env_vars.update(new_envs)
     if log_file := os.getenv('LMDEPLOY_LOG_FILE'):
-        env_vars = runtime_env.get('env_vars', {})
         env_vars['LMDEPLOY_LOG_FILE'] = log_file
-        runtime_env['env_vars'] = env_vars
+    runtime_env['env_vars'] = env_vars
     return runtime_env
 
 
