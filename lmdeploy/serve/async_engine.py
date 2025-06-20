@@ -21,7 +21,7 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
-from lmdeploy.metrics.metrics_processor import async_engine_metrics_processor as metrics_processor
+from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
@@ -765,7 +765,7 @@ class AsyncEngine(LogitsMixin):
                         break
 
                     output_len = outputs.num_token
-                    metrics_processor.update_stats(prev_len, input_len, output_len, iteration_stats)
+                    metrics_processor.queue_update(prev_len, input_len, output_len, iteration_stats)
 
                     if hit_stop_token or prev_len == output_len:
                         continue
@@ -816,7 +816,7 @@ class AsyncEngine(LogitsMixin):
                     yield out
                 # end of generator loop
                 metrics_processor.increment_finished_requests()
-                metrics_processor.record_stats(self.stat_loggers, iteration_stats)
+                metrics_processor.queue_record(self.stat_loggers, iteration_stats)
 
                 if not is_error(outputs.status):
                     finish_reason = 'length' \

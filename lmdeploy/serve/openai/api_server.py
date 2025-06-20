@@ -22,6 +22,7 @@ from starlette.routing import Mount
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
@@ -1266,6 +1267,7 @@ def serve(model_path: str,
         task = None
         try:
             if getattr(backend_config, 'enable_metrics', False):
+                metrics_processor.start_metrics_handler(enable_metrics=True)
                 log_interval = 10.
 
                 async def _force_log():
@@ -1282,6 +1284,7 @@ def serve(model_path: str,
         finally:
             if task:
                 task.cancel()
+            await metrics_processor.stop_metrics_handler()
 
     if disable_fastapi_docs:
         app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
