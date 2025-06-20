@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.metrics.metrics_processor import set_pt_engine_scheduler_stats
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
@@ -925,6 +926,7 @@ class Engine:
             __log_resps(step_outputs)
             for out in step_outputs:
                 __send_resp(out)
+            set_pt_engine_scheduler_stats(self.scheduler)
 
         while True:
             num_outs = que.qsize()

@@ -248,7 +248,7 @@ class SchedulerSession:
             num_new_tokens=0,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            arrive_time=time.time(),
+            arrive_time=time.perf_counter(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
@@ -634,7 +634,7 @@ class SchedulerSequence:
             self._num_token_ids = len(token_ids)
         self.history_cache.append(token_ids)
         self.random_offsets += 1
-        self.arrive_time = time.time()
+        self.arrive_time = time.perf_counter()
 
     def set_step(self, step: int):
         """Set step."""
