@@ -70,3 +70,6 @@ ray_timeline_output_path = os.getenv('LMDEPLOY_RAY_TIMELINE_OUT_PATH', 'ray_time
 # dist
 dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)
 dist_master_port = os.getenv('LMDEPLOY_DIST_MASTER_PORT', None)
+
+# triton
+triton_custom_cache_mgr_enable = env_to_bool('LMDEPLOY_TRITON_CUSTOM_CACHE_MGR_ENABLE', False)
