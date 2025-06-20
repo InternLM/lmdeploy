@@ -342,7 +342,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        self.engine = Engine(model_path=model_path, tokenizer=self.tokenizer, engine_config=backend_config)
+        self.engine = Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
@@ -928,16 +928,15 @@ class AsyncEngine(LogitsMixin):
     """ DistServe Async Engine API Begin """
 
     def free_cache(self, session_id: int):
-        if session_id in self.engine.scheduler.sessions:
-            self.engine.scheduler.end_session(session_id)
+        if self.engine.end_session(session_id):
             logger.debug(f'successfully free session {session_id}')
         else:
             logger.warning(f'Invalid Free session {session_id}.')
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
-        return self.engine.executor.p2p_initialize(init_request)
+        return self.engine.p2p_initialize(init_request)
 
     def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
-        return self.engine.executor.p2p_connect(conn_request)
+        return self.engine.p2p_connect(conn_request)
 
     """ DistServe Async Engine API End """

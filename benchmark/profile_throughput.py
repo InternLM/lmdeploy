@@ -14,7 +14,6 @@ from transformers import PreTrainedTokenizerBase
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.profiler import Profiler, Session
-from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -142,7 +141,8 @@ class Engine:
             tm_model = TurboMind.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            tm_model = PytorchEngine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+
         self.tm_model = tm_model
         self.pbar = None
 
@@ -190,7 +190,7 @@ class Engine:
                 await generator.aclose()
 
             # for pytorch engine to restart a session
-            if isinstance(model_inst, EngineInstance):
+            if hasattr(model_inst, '_is_pytorch_engine'):
                 await model_inst.async_end(session_id)
 
             self.pbar.update(1)

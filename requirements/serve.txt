@@ -1,3 +1,4 @@
 gradio
 protobuf
+pyzmq
 tritonclient[grpc]
