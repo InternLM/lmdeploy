@@ -578,5 +578,5 @@ class ArgumentHelper:
         return parser.add_argument('--migration-backend',
                                    type=str,
                                    default='DLSlime',
-                                   choices=['DLSlime'],
+                                   choices=['DLSlime', 'Mooncake'],
                                    help='kvcache migration management backend when PD disaggregation')
