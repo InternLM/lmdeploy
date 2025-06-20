@@ -140,6 +140,9 @@ def set_pt_engine_core_newtoken_timestamp():
 
 def set_pt_engine_core_event_queued():
     """Set engine core event in PyTorch engine."""
+    if not is_metrics_enabled():
+        return
+
     from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType
 
     engine_core_events = get_current_engine_core_events()
@@ -148,6 +151,9 @@ def set_pt_engine_core_event_queued():
 
 def set_pt_engine_core_event_scheduled():
     """Set engine core event in PyTorch engine."""
+    if not is_metrics_enabled():
+        return
+
     from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType
 
     engine_core_events = get_current_engine_core_events()
@@ -155,30 +161,30 @@ def set_pt_engine_core_event_scheduled():
 
 
 # Metrics processor
-class MetricsProcessor:
+class MetricsProcessor():
     """Metrics processor."""
 
     def __init__(self):
         self.metrics_queue: asyncio.Queue = None
-        self.consumer_task: asyncio.Task = None
+        self.metrics_handler: asyncio.Task = None
 
     def start_metrics_handler(self, enable_metrics: bool):
         set_metrics_enabled_flag(enable_metrics)
 
-        if self.consumer_task is None:
+        if enable_metrics and self.metrics_handler is None:
             self.metrics_queue = asyncio.Queue()
-            self.consumer_task = asyncio.create_task(self._run_metrics_handler())
+            self.metrics_handler = asyncio.create_task(self._run_metrics_handler())
             logger.info('Metrics handler task started.')
 
     async def stop_metrics_handler(self):
-        if self.consumer_task is not None:
-            self.consumer_task.cancel()
+        if self.metrics_handler is not None:
+            self.metrics_handler.cancel()
             try:
-                await self.consumer_task
+                await self.metrics_handler
             except asyncio.CancelledError:
                 pass  # Expected cancellation
             finally:
-                self.consumer_task = None
+                self.metrics_handler = None
                 logger.info('Metrics handler task stopped.')
 
     async def _run_metrics_handler(self):
@@ -216,13 +222,13 @@ class MetricsProcessor:
     def increment_finished_requests(self):
         increment_async_engine_scheduler_stats_finished_req()
 
-    def init_stats(self, prompt_len: int):
-        init_async_engine_request_state(prompt_len)
-
     def _update_stats(self, prev_len: int, input_len: int, output_len: int, iteration_stats: IterationStats):
         is_prefilling = (prev_len == 0)
         num_prompt_tokens = input_len
         num_new_generation_tokens = output_len - prev_len
+
+        if is_prefilling:
+            init_async_engine_request_state(num_prompt_tokens)
 
         set_async_engine_request_state(is_prefilling)
         iteration_stats.update_from_output(engine_core_timestamp=get_current_engine_core_timestamp(),

@@ -757,7 +757,6 @@ class AsyncEngine(LogitsMixin):
                 prev_len = 0
                 hit_stop_token = 0
                 metrics_processor.increment_total_requests()
-                metrics_processor.init_stats(prompt_len=0)
                 iteration_stats = IterationStats()
                 async for outputs in gen:
                     # decode res
