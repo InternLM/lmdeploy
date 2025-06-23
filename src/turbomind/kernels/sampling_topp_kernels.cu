@@ -43,7 +43,7 @@ __global__ void topPSortInitialize(const int    vocab_size_padded,
 
     // According to https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceSegmentedRadixSort.html
     // `num_items` should match the largest element within the range `[d_end_offsets, d_end_offsets + num_segments)`
-    // We need to move `begin_offset` (instead `end_offset`) to make empty intervals
+    // We need to move `begin_offset` (instead of `end_offset`) to make empty intervals
     if (bid == 0) {
         for (int i = tid; i < batch_size; i += blockDim.x) {
             int beg = i * vocab_size_padded;
