@@ -83,7 +83,7 @@ class MPLockCacheManager(FileCacheManager):
             return False
         return filename in group
 
-    def get_group(self, filename: str) -> Dict[str, str] | None:
+    def get_group(self, filename: str) -> Dict[str, str]:
         out = super().get_group(filename)
         if self._group_is_ready(filename, out):
             return out
@@ -96,7 +96,7 @@ class MPLockCacheManager(FileCacheManager):
             self._release_lock(filename)
         return out
 
-    def get_file(self, filename) -> str | None:
+    def get_file(self, filename) -> str:
         out = super().get_file(filename)
         if out is not None:
             return out
