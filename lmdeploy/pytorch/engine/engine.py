@@ -372,6 +372,8 @@ class Engine:
         self.backend_config = backend_config
         self.dist_config = dist_config
         self.max_session_len = self._get_max_session_len()
+        self.engine_config.num_cpu_blocks = self.cache_config.num_cpu_blocks
+        self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
 
         self.req_manager = self._bind_request_manager()
 
@@ -406,6 +408,12 @@ class Engine:
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
         """
+        if engine_config is not None and engine_config.enable_mp_engine:
+            from .mp_engine.mp_engine import MPEngine
+            return MPEngine(model_path=pretrained_model_name_or_path,
+                            tokenizer=tokenizer,
+                            engine_config=engine_config,
+                            trust_remote_code=trust_remote_code)
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
@@ -1147,3 +1155,24 @@ class Engine:
             return True
         self.req_manager.create_loop_task()
         return True
+
+    def end_session(self, session_id: int):
+        """End session."""
+        if session_id in self.scheduler.sessions:
+            self.scheduler.end_session(session_id)
+            return True
+        return False
+
+    def p2p_initialize(self, conn_request):
+        """Init rdma link."""
+        return self.executor.p2p_initialize(conn_request)
+
+    def p2p_connect(self, conn_request):
+        """rdma_connect."""
+        return self.executor.p2p_connect(conn_request)
+
+    def get_model_config(self):
+        return self.model_config
+
+    def get_engine_config(self):
+        return self.engine_config
