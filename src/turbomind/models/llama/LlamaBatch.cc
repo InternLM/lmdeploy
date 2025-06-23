@@ -1617,7 +1617,7 @@ bool LlamaBatch::Forward(GenerationState& g)
         cudaStreamSynchronize(stream_);
         std::stringstream scurr;
         for (int k = 0; k < curr.size(); ++k) {
-            scurr << std::setw(6) << curr[k];
+            scurr << std::setw(10) << curr[k];
         }
         TM_LOG_INFO("[Forward] step = %d, [%s]", g.step - 1, scurr.str().c_str());
     }

@@ -35,22 +35,24 @@ __global__ void topPSortInitialize(const int    vocab_size_padded,
                                    const size_t batch_size,
                                    const int*   top_ks,
                                    int*         topp_id_val_buf,
-                                   int*         begin_offet_buf,
+                                   int*         begin_offset_buf,
                                    int*         end_offset_buf)
 {
     int tid = threadIdx.x;
     int bid = blockIdx.x;
 
+    // According to https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceSegmentedRadixSort.html
+    // `num_items` should match the largest element within the range `[d_end_offsets, d_end_offsets + num_segments)`
+    // We need to move `begin_offset` (instead `end_offset`) to make empty intervals
     if (bid == 0) {
         for (int i = tid; i < batch_size; i += blockDim.x) {
-            begin_offet_buf[i] = i * vocab_size_padded;
-            if (top_ks[i] > 0) {
-                // already sorted by topk
-                end_offset_buf[i] = begin_offet_buf[i];
+            int beg = i * vocab_size_padded;
+            int end = beg + vocab_size_padded;
+            if (top_ks[i] > 0) {  // already sorted by topk, make it an empty interval
+                beg = end;
             }
-            else {
-                end_offset_buf[i] = begin_offet_buf[i] + vocab_size;
-            }
+            begin_offset_buf[i] = beg;
+            end_offset_buf[i]   = end;
         }
     }
 
@@ -70,14 +72,14 @@ void invokeTopPSortInitialize(const int    vocab_size_padded,
                               const size_t batch_size,
                               const int*   top_ks,
                               int*         topp_id_val_buf,
-                              int*         begin_offet_buf,
+                              int*         begin_offset_buf,
                               int*         end_offset_buf,
                               cudaStream_t stream)
 {
     const size_t block_size = 512;
     const size_t grid_size  = (batch_size * vocab_size_padded + block_size - 1) / block_size;
     topPSortInitialize<<<grid_size, block_size, 0, stream>>>(
-        vocab_size_padded, vocab_size, batch_size, top_ks, topp_id_val_buf, begin_offet_buf, end_offset_buf);
+        vocab_size_padded, vocab_size, batch_size, top_ks, topp_id_val_buf, begin_offset_buf, end_offset_buf);
 }
 
 template<typename T>
@@ -198,8 +200,8 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const 
         }
 
         if (sum_prob >= p_threshold) {
-            end_offset_buf[batch_id] = begin_offset_buf[batch_id];
-            kept[batch_id]           = MAX_K;
+            begin_offset_buf[batch_id] = end_offset_buf[batch_id];
+            kept[batch_id]             = MAX_K;
 
 #pragma unroll
             for (int i = 0; i < MAX_K; ++i) {
@@ -230,7 +232,7 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                (T*)nullptr,
                                                                (int*)nullptr,
                                                                (int*)nullptr,
-                                                               params.batch_size * params.vocab_size,
+                                                               params.vocab_size_padded * params.batch_size,
                                                                params.batch_size,
                                                                (int*)nullptr,
                                                                (int*)nullptr,
@@ -275,7 +277,7 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                         (T*)params.sorted_logits,
                                                                         topp_id_val_buf,
                                                                         params.sorted_indices,
-                                                                        params.vocab_size * params.batch_size,
+                                                                        params.vocab_size_padded * params.batch_size,
                                                                         params.batch_size,
                                                                         begin_offset_buf,
                                                                         end_offset_buf,
