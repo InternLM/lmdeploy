@@ -330,7 +330,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
-                flatten_kv_layout='bshd' if use_fa3 else 'bhsd',
+                flatten_kv_layout='shd' if use_fa3 else 'hsd',
             )
             if use_fa3:
                 q_rope = query[:, :, self.v_head_size:]
@@ -484,7 +484,7 @@ class FA3Impl(TritonAttentionImpl):
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
-                flatten_kv_layout='bshd',
+                flatten_kv_layout='shd',
             )
             attn_output, _ = self.flash_attn_varlen_func_v3(
                 q=query,

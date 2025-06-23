@@ -203,7 +203,7 @@ def flatten_kv_cache(k_caches: Tensor,
                      v_scales_zeros: Tensor = None,
                      quant_policy: Literal[0, 4, 8] = 0,
                      kv_layout: str = 'bshd',
-                     flatten_kv_layout: str = 'bhsd'):
+                     flatten_kv_layout: str = 'hsd'):
     """Recovery paged kv cache to normal kv cache."""
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
@@ -232,7 +232,7 @@ def flatten_kv_cache(k_caches: Tensor,
     BLOCK_DV = triton.next_power_of_2(v_head_dim)
     BLOCK_BS = k_caches.size(s_dim)
     shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
-    if flatten_kv_layout == 'bhsd':
+    if flatten_kv_layout == 'hsd':
         k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
         if quant_policy == 0 and shared_kv:
             v_states = k_states[..., :v_head_dim]
@@ -243,7 +243,7 @@ def flatten_kv_cache(k_caches: Tensor,
         stride_kos = k_states.stride(1)
         stride_voh = v_states.stride(0)
         stride_vos = v_states.stride(1)
-    elif flatten_kv_layout == 'bshd':
+    elif flatten_kv_layout == 'shd':
         k_states = k_caches.new_empty(out_size, num_heads, k_head_dim, dtype=out_dtype)
         if quant_policy == 0 and shared_kv:
             v_states = k_states[..., :v_head_dim]
