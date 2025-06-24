@@ -871,6 +871,20 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
+@router.post('/classify')
+async def classify(raw_request: Request = None):
+    """Classify endpoint for reward models."""
+    json_request = await raw_request.json()
+
+    text_input = json_request.pop('text', None)
+    async_engine = VariableInterface.async_engine
+
+    input_ids = async_engine.tokenizer.encode(text_input, add_special_tokens=False)
+    score = await async_engine._async_get_reward_score(input_ids)
+
+    return dict(reward_score=score)
+
+
 @router.post('/update_weights', dependencies=[Depends(check_api_key)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
