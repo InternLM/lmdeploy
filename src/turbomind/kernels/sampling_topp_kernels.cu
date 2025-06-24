@@ -47,7 +47,7 @@ __global__ void topPSortInitialize(const int    vocab_size_padded,
     if (bid == 0) {
         for (int i = tid; i < batch_size; i += blockDim.x) {
             int beg = i * vocab_size_padded;
-            int end = beg + vocab_size_padded;
+            int end = i * vocab_size_padded + vocab_size;
             if (top_ks[i] > 0) {  // already sorted by topk, make it an empty interval
                 beg = end;
             }
@@ -222,7 +222,7 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
     topp_id_val_buf_size         = cdiv<size_t>(topp_id_val_buf_size, 256) * 256;
     begin_offset_buf_size        = cdiv<size_t>(begin_offset_buf_size, 256) * 256;
     end_offset_buf_size          = cdiv<size_t>(end_offset_buf_size, 256) * 256;
-
+    const int num_items          = params.vocab_size_padded * (params.batch_size - 1) + params.vocab_size;
     if (params.workspace == nullptr) {
         size_t cub_temp_storage_size;
         check_cuda_error(
@@ -232,7 +232,7 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                (T*)nullptr,
                                                                (int*)nullptr,
                                                                (int*)nullptr,
-                                                               params.vocab_size_padded * params.batch_size,
+                                                               num_items,
                                                                params.batch_size,
                                                                (int*)nullptr,
                                                                (int*)nullptr,
@@ -277,7 +277,7 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                         (T*)params.sorted_logits,
                                                                         topp_id_val_buf,
                                                                         params.sorted_indices,
-                                                                        params.vocab_size_padded * params.batch_size,
+                                                                        num_items,
                                                                         params.batch_size,
                                                                         begin_offset_buf,
                                                                         end_offset_buf,
