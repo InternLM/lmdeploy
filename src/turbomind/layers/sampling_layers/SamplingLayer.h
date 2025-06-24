@@ -51,10 +51,6 @@ private:
     Buffer_<float> top_p_buf_;
     Buffer_<float> min_p_buf_;
 
-    Buffer_<uint8_t> topk_ws_;
-    Buffer_<uint8_t> topp_ws_;
-
-    Buffer_<int> indices_;   // sorted indices
     Buffer_<int> kept_buf_;  // kept sample
 };
 
