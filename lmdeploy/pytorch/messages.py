@@ -8,7 +8,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import GenerationConfig, LogitsProcessor
-from lmdeploy.pytorch.disagg.request import MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 

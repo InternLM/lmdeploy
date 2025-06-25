@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.pytorch.disagg.config import MigrationBackend, MigrationProtocol
+from lmdeploy.pytorch.disagg.config import MigrationBackend
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo, MigrationProtocol
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.Mooncake.name)
@@ -18,7 +18,7 @@ class MooncakeBackend(MigrationBackendImpl):
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         return NotImplementedError
 
-    def p2p_connect(self, connect_request: DistServeConnectionRequest):
+    def p2p_connect(self, remote_engine_id:str, conn_req: DistServeKVTransferEndpointInfo):
         raise NotImplementedError
 
     def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):

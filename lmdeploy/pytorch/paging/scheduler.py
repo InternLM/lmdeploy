@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
@@ -173,6 +174,23 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
+        print({
+            'scheduling type': 'Migration',
+            'time': time.time(),
+            'max batches': self.scheduler_config.max_batches,
+            'total_waiting': self.num_waiting(),
+            'total_running': self.num_running(),
+            'total_locking': self.num_locked(),
+            'total_to_be_migrated': self.num_to_be_migrated(),
+            'total_migration_waiting': self.num_migration_waiting(),
+            'total_migration_running': self.num_migration_running(),
+            'total_migration_locked': self.num_migration_locked(),
+            'kv_usage': (
+                self.block_manager.get_num_free_gpu_blocks(),
+                self.block_manager.num_gpu_blocks,
+            ),
+        })
+
         return running_migration
 
     @logging_timer('SchedulePrefilling', logger)
@@ -226,6 +244,25 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
+        print({
+            'scheduling type': 'Prefill',
+            'time': time.time(),
+            'dp_rank': self.scheduler_config.dp_rank,
+            'role': self.cache_config.role,
+            'max batches': self.scheduler_config.max_batches,
+            'total_waiting': self.num_waiting(),
+            'total_running': self.num_running(),
+            'total_locking': self.num_locked(),
+            'total_to_be_migrated': self.num_to_be_migrated(),
+            'total_migration_waiting': self.num_migration_waiting(),
+            'total_migration_running': self.num_migration_running(),
+            'total_migration_locked': self.num_migration_locked(),
+            'kv_usage': (
+                self.block_manager.get_num_free_gpu_blocks(),
+                self.block_manager.num_gpu_blocks,
+            ),
+        })
+
         return running, swap_in_map, swap_out_map, copy_map
 
     @logging_timer('ScheduleDecoding', logger)
@@ -268,6 +305,25 @@ class Scheduler:
 
             self.block_manager.allocate(seq, prealloc_size)
             self.block_trie.allocate(seq)
+
+        print({
+            'scheduling type': 'Decode',
+            'time': time.time(),
+            'dp_rank': self.scheduler_config.dp_rank,
+            'role': self.cache_config.role,
+            'max batches': self.scheduler_config.max_batches,
+            'total_waiting': self.num_waiting(),
+            'total_running': self.num_running(),
+            'total_locking': self.num_locked(),
+            'total_to_be_migrated': self.num_to_be_migrated(),
+            'total_migration_waiting': self.num_migration_waiting(),
+            'total_migration_running': self.num_migration_running(),
+            'total_migration_locked': self.num_migration_locked(),
+            'kv_usage': (
+                self.block_manager.get_num_free_gpu_blocks(),
+                self.block_manager.num_gpu_blocks,
+            ),
+        })
 
         return self.running, swap_in_map, swap_out_map, copy_map
 
@@ -323,6 +379,24 @@ class Scheduler:
         for seq in seqs:
             self._remove_sequence(seq)
         self.sessions.pop(session_id)
+        print({
+            'scheduling type': 'free',
+            'time': time.time(),
+            'dp_rank': self.scheduler_config.dp_rank,
+            'role': self.cache_config.role,
+            'max batches': self.scheduler_config.max_batches,
+            'total_waiting': self.num_waiting(),
+            'total_running': self.num_running(),
+            'total_locking': self.num_locked(),
+            'total_to_be_migrated': self.num_to_be_migrated(),
+            'total_migration_waiting': self.num_migration_waiting(),
+            'total_migration_running': self.num_migration_running(),
+            'total_migration_locked': self.num_migration_locked(),
+            'kv_usage': (
+                self.block_manager.get_num_free_gpu_blocks(),
+                self.block_manager.num_gpu_blocks,
+            ),
+        })
 
     def has_unfinished(self):
         """Check if there are any unfinished message."""
@@ -333,6 +407,9 @@ class Scheduler:
 
     def has_waiting(self):
         return self.num_waiting() > 0
+
+    def has_to_be_migrated(self):
+        return self.num_to_be_migrated() > 0
 
     def has_migration_running(self):
         return self.num_running() > 0
@@ -354,6 +431,14 @@ class Scheduler:
     def num_waiting(self):
         """Num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING)
+
+    def num_to_be_migrated(self):
+        """Num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.TO_BE_MIGRATED)
+
+    def num_migration_locked(self):
+        """Num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_LOCKED)
 
     def num_migration_running(self):
         """Num migration running."""

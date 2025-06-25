@@ -584,6 +584,7 @@ class MoEGate(nn.Module):
         self.n_routed_experts = config.n_routed_experts
         self.routed_scaling_factor = config.routed_scaling_factor
         self.scoring_func = config.scoring_func
+        self.alpha = config.aux_loss_alpha
         self.seq_aux = config.seq_aux
         self.topk_method = config.topk_method
         self.n_group = config.n_group
@@ -601,6 +602,7 @@ class MoEGate(nn.Module):
         self.softmax_topk = SoftmaxTopK(self.top_k)
 
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
+        self.fake_eplb = True
         self.eplb_dispatch_info = info
 
     def _compute_scores(self, logits: torch.Tensor):
@@ -734,6 +736,14 @@ class DeepseekV2MoE(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
+
+        if True:
+            ranks = torch.distributed.get_world_size()
+            shape = topk_ids.shape
+            topk_ids = (torch.arange(0, topk_ids.numel(), dtype=torch.int32, device=topk_ids.device) %
+                        ranks) * self.num_experts / ranks
+            topk_ids = topk_ids.reshape(shape).to(dtype=torch.int64)
+
         out_states = self.experts(
             hidden_states,
             topk_weights,
@@ -907,6 +917,13 @@ class DeepseekV2DecoderLayer(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_idx = self.mlp.gate(hidden_states)
+
+        if True:
+            ranks = torch.distributed.get_world_size()
+            shape = topk_idx.shape
+            topk_idx = (torch.arange(0, topk_idx.numel(), dtype=torch.int32, device=topk_idx.device) %
+                        ranks) * self.mlp.num_experts / ranks
+            topk_idx = topk_idx.reshape(shape).to(dtype=torch.int64)
 
         topk_weights = self.mlp.experts.renormalize(topk_weights)
         topk_weights = topk_weights.to(torch.float32)

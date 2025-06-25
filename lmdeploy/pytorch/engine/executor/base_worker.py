@@ -5,8 +5,8 @@ from typing import Any, Dict, List
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
@@ -174,8 +174,8 @@ class WorkerWrapperBase:
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.model_agent.cache_engine.p2p_initialize(init_request)
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
-        return self.model_agent.cache_engine.p2p_connect(conn_request)
+    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
+        return self.model_agent.cache_engine.p2p_connect(remote_engine_id, conn_request)
 
     async def migrate(self, inputs: MigrationExecutionBatch):
         return await self.model_agent.cache_engine.migrate(inputs)

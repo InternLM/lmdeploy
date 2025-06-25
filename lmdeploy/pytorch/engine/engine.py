@@ -11,6 +11,7 @@ import torch
 
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
@@ -380,8 +381,13 @@ class Engine:
         self._start_loop()
         self._loop_main = None
 
-        # for migration loop management
+        # for PD Disaggregation
+        # For migrating prefill request to decode engine
         self.migration_event: asyncio.Event = None
+        # For backpressure prefill request when cache is full
+        self.perfill_watermark_event: asyncio.Event = None
+
+        self.engine_conn = EngineP2PConnection(self)
 
     @classmethod
     def from_pretrained(cls,
@@ -745,7 +751,7 @@ class Engine:
             msg.update_token_ids(update_token, model_meta=model_meta)
             msg.num_new_tokens += 1
             if stop:
-                msg.status = MessageStatus.STOPPED
+                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus
 
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
                                  model_metas: List[Dict[str, Any]]):
@@ -780,7 +786,7 @@ class Engine:
             if not is_run[idx]:
                 continue
             token_ids = msg.all_ids[-msg.num_new_tokens:]
-            finish = msg.status == MessageStatus.STOPPED
+            finish = msg.status == MessageStatus.STOPPED or msg.status == MessageStatus.TO_BE_MIGRATED
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
@@ -869,7 +875,8 @@ class Engine:
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
 
-        assert len(running) > 0
+        if len(running) == 0:
+            return None
 
         # create inputs
         inputs = self.create_model_inputs(running, prefill)
@@ -970,6 +977,7 @@ class Engine:
                     logger.info(f'migrating session: {msg.session_id} begin')
                     await self.executor.migrate(migration_inputs)
                     logger.info(f'migrating session: {msg.session_id} done')
+                    await self.engine_conn.zmq_send(remote_engine_id=migration_request.remote_engine_id, remote_session_id=migration_request.remote_session_id)
 
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
@@ -991,7 +999,7 @@ class Engine:
                 has_runable_event.set()
             else:
                 # release coroutine for decoding
-                await asyncio.sleep(0)
+                await asyncio.sleep(.5)
 
     @torch.inference_mode()
     async def _async_loop_main(
@@ -1014,6 +1022,10 @@ class Engine:
                 await has_runable_event.wait()
                 scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
+                if next_running == None:
+                    # self.perfill_watermark_event.wait()
+                    await asyncio.sleep(0.1)
+                    continue
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
@@ -1160,14 +1172,6 @@ class Engine:
             self.scheduler.end_session(session_id)
             return True
         return False
-
-    def p2p_initialize(self, conn_request):
-        """Init rdma link."""
-        return self.executor.p2p_initialize(conn_request)
-
-    def p2p_connect(self, conn_request):
-        """rdma_connect."""
-        return self.executor.p2p_connect(conn_request)
 
     def get_model_config(self):
         return self.model_config

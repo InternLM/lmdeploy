@@ -3,13 +3,19 @@ import asyncio
 import pickle
 import signal
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 import torch.multiprocessing as mp
 
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeConnectionRequest
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
+
+
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.engine import Engine
 
 
 def cancel_async_tasks(loop: asyncio.AbstractEventLoop):
@@ -168,7 +174,7 @@ class MPEngine:
             cancel_async_tasks(loop)
 
     @staticmethod
-    async def _mp_proc_async(server, engine):
+    async def _mp_proc_async(server, engine: "Engine"):
         """Mp process function."""
         engine.start_loop()
         instance_pool = EngineInstancePool(engine)
@@ -176,8 +182,8 @@ class MPEngine:
         server.register_method('end_session', engine.end_session)
         server.register_method('get_engine_config', engine.get_engine_config)
         server.register_method('get_model_config', engine.get_model_config)
-        server.register_method('p2p_initialize', engine.p2p_initialize)
-        server.register_method('p2p_connect', engine.p2p_connect)
+        server.register_method('p2p_initialize', engine.engine_conn.p2p_initialize)
+        server.register_method('p2p_connect', engine.engine_conn.p2p_connect)
         server.register_method('instance_async_end', instance_pool.async_end)
         server.register_method('instance_async_cancel', instance_pool.async_cancel)
         server.register_method('instance_async_stream_infer', instance_pool.async_stream_infer)
@@ -214,11 +220,11 @@ class MPEngine:
         """End session."""
         return self._collective_rpc('end_session', session_id)
 
-    def p2p_initialize(self, conn_request):
+    def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self._collective_rpc('p2p_initialize', conn_request)
 
-    def p2p_connect(self, conn_request):
+    def p2p_connect(self, conn_request: DistServeConnectionRequest):
         """rdma_connect."""
         return self._collective_rpc('p2p_connect', conn_request)
 
