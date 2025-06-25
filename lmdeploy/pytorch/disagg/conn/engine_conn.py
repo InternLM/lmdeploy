@@ -89,7 +89,7 @@ class EngineP2PConnection:
                     logger.error({
                         'scheduling type': 'free',
                         'time': time.time(),
-                        'dp_rank': self.engine.scheduler.scheduler_config.dp_rank,
+                        'dp_rank': self.engine.engine_config.dp_rank,
                         'role': self.engine.scheduler.cache_config.role,
                         'max batches': self.engine.scheduler.scheduler_config.max_batches,
                         'total_waiting': self.engine.scheduler.num_waiting(),

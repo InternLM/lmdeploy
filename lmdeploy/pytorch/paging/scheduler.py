@@ -247,7 +247,6 @@ class Scheduler:
         print({
             'scheduling type': 'Prefill',
             'time': time.time(),
-            'dp_rank': self.scheduler_config.dp_rank,
             'role': self.cache_config.role,
             'max batches': self.scheduler_config.max_batches,
             'total_waiting': self.num_waiting(),
@@ -309,7 +308,6 @@ class Scheduler:
         print({
             'scheduling type': 'Decode',
             'time': time.time(),
-            'dp_rank': self.scheduler_config.dp_rank,
             'role': self.cache_config.role,
             'max batches': self.scheduler_config.max_batches,
             'total_waiting': self.num_waiting(),
@@ -382,7 +380,6 @@ class Scheduler:
         print({
             'scheduling type': 'free',
             'time': time.time(),
-            'dp_rank': self.scheduler_config.dp_rank,
             'role': self.cache_config.role,
             'max batches': self.scheduler_config.max_batches,
             'total_waiting': self.num_waiting(),
