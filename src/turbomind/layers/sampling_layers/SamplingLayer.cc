@@ -147,10 +147,10 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs, const Tensor
         min_p_[i] = rs[i]->gen_cfg.min_p;
     }
 
-    max_topk_ = *std::max_element(top_k_.begin(), top_k_.end());
-    min_topk_ = *std::min_element(top_k_.begin(), top_k_.end());
-    min_topp_ = *std::min_element(top_p_.begin(), top_p_.end());
-    max_minp_ = *std::max_element(min_p_.begin(), min_p_.end());
+    max_topk_ = *std::max_element(top_k_.begin(), top_k_.begin() + bsz);
+    min_topk_ = *std::min_element(top_k_.begin(), top_k_.begin() + bsz);
+    min_topp_ = *std::min_element(top_p_.begin(), top_p_.begin() + bsz);
+    max_minp_ = *std::max_element(min_p_.begin(), min_p_.begin() + bsz);
 
     indices_ = Buffer_<int>(bsz * vocab_size_padded_, kDEVICE);
 
