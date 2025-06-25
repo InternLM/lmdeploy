@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
@@ -1163,6 +1164,35 @@ def mount_metrics(app: FastAPI, backend_config: Union[PytorchEngineConfig, Turbo
     app.routes.append(metrics_route)
 
 
+def create_lifespan_handler(backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig],
+                            async_engine: AsyncEngine):
+    """Factory function to create a lifespan handler."""
+
+    @asynccontextmanager
+    async def lifespan_handler(app: FastAPI):
+        task = None
+        try:
+            if getattr(backend_config, 'enable_metrics', False):
+                metrics_processor.start_metrics_handler(enable_metrics=True)
+                log_interval = 10.
+
+                async def _force_log():
+                    while True:
+                        await asyncio.sleep(log_interval)
+
+                        await async_engine.do_log_stats()
+
+                task = asyncio.create_task(_force_log())
+
+            yield
+        finally:
+            if task:
+                task.cancel()
+            await metrics_processor.stop_metrics_handler()
+
+    return lifespan_handler
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -1266,32 +1296,8 @@ def serve(model_path: str,
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)
 
-    # create lifespan coroutine
-    _running_tasks: set[asyncio.Task] = set()
-
-    async def lifespan(app: FastAPI):
-        async_engine = VariableInterface.async_engine
-        task = None
-        try:
-            if getattr(backend_config, 'enable_metrics', False):
-                metrics_processor.start_metrics_handler(enable_metrics=True)
-                log_interval = 10.
-
-                async def _force_log():
-                    while True:
-                        await asyncio.sleep(log_interval)
-
-                        await async_engine.do_log_stats()
-
-                task = asyncio.create_task(_force_log())
-                _running_tasks.add(task)
-                task.add_done_callback(_running_tasks.remove)
-
-            yield
-        finally:
-            if task:
-                task.cancel()
-            await metrics_processor.stop_metrics_handler()
+    # create FastAPI lifespan events
+    lifespan = create_lifespan_handler(backend_config, VariableInterface.async_engine)
 
     if disable_fastapi_docs:
         app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
