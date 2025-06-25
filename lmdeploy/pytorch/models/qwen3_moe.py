@@ -489,6 +489,10 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
         """Load weight experts."""
+        # load fused weights
+        if any([k in name for k in ['fused_w1w3', 'fused_w2']]):
+            return self._load_weight_fused_experts(name, loaded_weight, params_dict)
+
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
                 continue
@@ -499,6 +503,31 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         else:
             param = params_dict[name]
             load_weight(param, loaded_weight)
+
+    def _load_weight_fused_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter]):
+        """Load weight of fused expert weights."""
+        num_experts = self.config.num_experts
+        fused_gateup_name = 'fused_w1w3'
+        fused_down_name = 'fused_w2'
+        if fused_gateup_name in name:
+            chunk_size = loaded_weight.shape[0] // num_experts
+
+            for expert_id in range(num_experts):
+                param_name = name.replace(f'experts.{fused_gateup_name}', 'experts.gate_up')
+                param = params_dict[param_name]
+                w1 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id, length=chunk_size // 2)
+                w3 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id + chunk_size // 2, length=chunk_size // 2)
+                load_weight(param, w1, expert_id=expert_id, shard_id='gate')
+                load_weight(param, w3, expert_id=expert_id, shard_id='up')
+
+        elif fused_down_name in name:
+            chunk_size = loaded_weight.shape[0] // num_experts
+
+            for expert_id in range(num_experts):
+                param_name = name.replace(f'experts.{fused_down_name}', 'experts.down')
+                param = params_dict[param_name]
+                w2 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id, length=chunk_size)
+                load_weight(param, w2, expert_id=expert_id, shard_id='down')
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """Load weights."""
@@ -529,7 +558,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-
+            name = name.replace('.block_sparse_moe.', '.mlp.')
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
             else:
