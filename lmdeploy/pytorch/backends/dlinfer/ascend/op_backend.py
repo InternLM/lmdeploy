@@ -332,10 +332,6 @@ class AscendOpsBackend(DlinferOpsBackend):
         try:
             from torch_npu.contrib import transfer_to_npu  # noqa: F401
             if SocVersion.is_Ascend310P():
-                # Since we only need to convert weight for language parts,
-                # we need to import patch before building ModelAgent (loading weights).
-                import dlinfer.framework.lmdeploy_ext  # noqa: F401
-
                 # NOTE: Ascend310P has a bug with InternVL vision embedding using interpolate.
                 torch.npu.set_compile_mode(jit_compile=False)
         except ImportError:
