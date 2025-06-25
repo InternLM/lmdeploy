@@ -11,14 +11,14 @@ from ..op_backend import DlinferOpsBackend
 logger = get_logger('lmdeploy')
 
 
-class MacaOpsBackend(DlinferOpsBackend):
+class PpuOpsBackend(DlinferOpsBackend):
     """Maca layer backend."""
     total_slots = None
 
     @staticmethod
     def get_name() -> str:
         """Backend name."""
-        return 'maca'
+        return 'ppu'
 
     @staticmethod
     def get_k_block_shape(
@@ -29,6 +29,7 @@ class MacaOpsBackend(DlinferOpsBackend):
     ) -> Tuple[int, ...]:
         x = 8
         return (num_heads, head_size // x, block_size, x)
+        # return (block_size, num_heads, head_size)
 
     @staticmethod
     def get_v_block_shape(
@@ -37,7 +38,8 @@ class MacaOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        return (num_heads, block_size, head_size)
+        return (num_heads, head_size, block_size)
+        # return (block_size, num_heads, head_size)
 
     @classmethod
     def update_step_context(cls, step_context):
@@ -52,7 +54,7 @@ class MacaOpsBackend(DlinferOpsBackend):
             return cls.total_slots
 
         kv_start_indices, attention_mask = [], []
-        block_num, _, block_size, _ = step_context.kv_caches[0][1].shape
+        block_num, _, _, block_size = step_context.kv_caches[0][1].shape
         device = step_context.block_offsets.device
 
         is_unpaged_prefill = False

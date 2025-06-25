@@ -172,11 +172,13 @@ class CacheEngine:
         kv_cache_dtype = self.kv_cache_dtype
 
         key_cache = torch.empty(
+        # key_cache = torch.zeros(
             size=(num_layers, num_blocks, *key_block_shape),
             dtype=kv_cache_dtype,
             device=device,
         )
         value_cache = torch.empty(
+        # value_cache = torch.zeros(
             size=(num_layers, num_blocks, *value_block_shape),
             dtype=kv_cache_dtype,
             device=device,
@@ -187,11 +189,13 @@ class CacheEngine:
         if self.cache_config.quant_policy in (4, 8):
             dtype = self.model_config.dtype
             key_sz_cache = torch.empty(
+            # key_sz_cache = torch.zeros(
                 size=(num_layers, num_blocks, *key_block_shape[:-1], 2),
                 dtype=dtype,
                 device=device,
             )
             val_sz_cache = torch.empty(
+            # val_sz_cache = torch.zeros(
                 size=(num_layers, num_blocks, *value_block_shape[:-1], 2),
                 dtype=dtype,
                 device=device,
