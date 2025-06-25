@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from mmengine.config import read_base
+from opencompass.models import TurboMindModel
 
 with read_base():
     # choose a list of datasets
@@ -147,6 +148,29 @@ turbomind_internlm2_5_7b_4bits = deepcopy(*lmdeploy_internlm2_5_7b)
 turbomind_internlm2_5_7b_batch1 = deepcopy(*lmdeploy_internlm2_5_7b)
 turbomind_internlm2_5_7b_batch1_4bits = deepcopy(*lmdeploy_internlm2_5_7b)
 
+base_model = dict(
+    type=TurboMindModel,
+    engine_config=dict(session_len=7168, max_batch_size=128, tp=1),
+    gen_config=dict(top_k=1, temperature=1e-6, top_p=0.9, max_new_tokens=1024),
+    max_seq_len=7168,
+    max_out_len=1024,
+    batch_size=128,
+    run_cfg=dict(num_gpus=1),
+)
+
+turbomind_qwen3_8b_base = deepcopy(*base_model)
+pytorch_qwen3_8b_base = deepcopy(*base_model)
+turbomind_qwen3_8b_base_4bits = deepcopy(*base_model)
+turbomind_qwen3_8b_base_kvint8 = deepcopy(*base_model)
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_8b_base') or k.startswith('pytorch_qwen3_8b_base')
+]:
+    model['abbr'] = 'qwen3_8b_base_turbomind'
+    model['path'] = 'Qwen/Qwen3-8B-Base'
+    model['run_cfg']['num_gpus'] = 1
+    model['engine_config']['tp'] = 1
+
 for model in [v for k, v in locals().items() if k.endswith('_4bits')]:
     model['engine_config']['model_format'] = 'awq'
     model['abbr'] = model['abbr'] + '_4bits'
@@ -156,3 +180,7 @@ for model in [v for k, v in locals().items() if '_batch1' in k]:
     model['abbr'] = model['abbr'] + '_batch1'
     model['engine_config']['max_batch_size'] = 1
     model['batch_size'] = 1
+
+for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
+    model['abbr'] = model['abbr'].replace('turbomind', 'pytorch')
+    model['backend'] = 'pytorch'
