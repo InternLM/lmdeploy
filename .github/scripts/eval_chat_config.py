@@ -211,10 +211,10 @@ base_model = dict(type=TurboMindModelwithChatTemplate,
                   pred_postprocessor=dict(type=extract_non_reasoning_content),
                   run_cfg=dict(num_gpus=1))
 
-turbomind_qwen3_32b = deepcopy(*base_model)
-pytorch_qwen3_32b = deepcopy(*base_model)
-turbomind_qwen3_32b_4bits = deepcopy(*base_model)
-turbomind_qwen3_32b_kvint8 = deepcopy(*base_model)
+turbomind_qwen3_32b = deepcopy(base_model)
+pytorch_qwen3_32b = deepcopy(base_model)
+turbomind_qwen3_32b_4bits = deepcopy(base_model)
+turbomind_qwen3_32b_kvint8 = deepcopy(base_model)
 for model in [
         v for k, v in locals().items() if k.startswith('turbomind_qwen3_32b') or k.startswith('pytorch_qwen3_32b')
 ]:
@@ -223,10 +223,10 @@ for model in [
     model['run_cfg']['num_gpus'] = 2
     model['engine_config']['tp'] = 2
 
-turbomind_qwen3_30b_a3b = deepcopy(*base_model)
-pytorch_qwen3_30b_a3b = deepcopy(*base_model)
-turbomind_qwen3_30b_a3b_4bits = deepcopy(*base_model)
-turbomind_qwen3_30b_a3b_kvint8 = deepcopy(*base_model)
+turbomind_qwen3_30b_a3b = deepcopy(base_model)
+pytorch_qwen3_30b_a3b = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_4bits = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_kvint8 = deepcopy(base_model)
 for model in [
         v for k, v in locals().items()
         if k.startswith('turbomind_qwen3_30b_a3b') or k.startswith('pytorch_qwen3_30b_a3b')
@@ -236,10 +236,10 @@ for model in [
     model['run_cfg']['num_gpus'] = 2
     model['engine_config']['tp'] = 2
 
-turbomind_qwen3_235b_a22b = deepcopy(*base_model)
-pytorch_qwen3_235b_a22b = deepcopy(*base_model)
-turbomind_qwen3_235b_a22b_4bits = deepcopy(*base_model)
-turbomind_qwen3_235b_a22b_kvint8 = deepcopy(*base_model)
+turbomind_qwen3_235b_a22b = deepcopy(base_model)
+pytorch_qwen3_235b_a22b = deepcopy(base_model)
+turbomind_qwen3_235b_a22b_4bits = deepcopy(base_model)
+turbomind_qwen3_235b_a22b_kvint8 = deepcopy(base_model)
 for model in [
         v for k, v in locals().items()
         if k.startswith('turbomind_qwen3_235b_a22b') or k.startswith('pytorch_qwen3_235b_a22b')

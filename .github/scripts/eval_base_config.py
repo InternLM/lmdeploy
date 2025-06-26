@@ -158,10 +158,10 @@ base_model = dict(
     run_cfg=dict(num_gpus=1),
 )
 
-turbomind_qwen3_8b_base = deepcopy(*base_model)
-pytorch_qwen3_8b_base = deepcopy(*base_model)
-turbomind_qwen3_8b_base_4bits = deepcopy(*base_model)
-turbomind_qwen3_8b_base_kvint8 = deepcopy(*base_model)
+turbomind_qwen3_8b_base = deepcopy(base_model)
+pytorch_qwen3_8b_base = deepcopy(base_model)
+turbomind_qwen3_8b_base_4bits = deepcopy(base_model)
+turbomind_qwen3_8b_base_kvint8 = deepcopy(base_model)
 for model in [
         v for k, v in locals().items()
         if k.startswith('turbomind_qwen3_8b_base') or k.startswith('pytorch_qwen3_8b_base')
