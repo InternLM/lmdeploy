@@ -9,7 +9,6 @@ from typing import Any, Dict
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_utils import load_state_dict
 
 from lmdeploy.utils import get_logger
 
@@ -231,6 +230,7 @@ def add_adapters(model: torch.nn.Module,
     """Add adapters."""
     from peft import PeftConfig
     from peft.tuners.lora import LoraConfig
+    from transformers.modeling_utils import load_state_dict
 
     from lmdeploy.pytorch.adapter.adapter import find_all_target, get_ranks_and_scalings, load_lora_weights
     from lmdeploy.pytorch.nn.linear import LoRA
