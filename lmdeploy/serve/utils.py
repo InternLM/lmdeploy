@@ -30,7 +30,7 @@ class LogitsMixin:
         """
         supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
         if self.arch not in supported_reward_models:
-            raise ValueError(f'{self.arch} is not in reward mode list: {supported_reward_models}')
+            raise ValueError(f'{self.arch} is not in reward model list: {supported_reward_models}')
         assert isinstance(input_ids, List)
         assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
         # Make input_ids a list of token_id list
@@ -44,7 +44,7 @@ class LogitsMixin:
         """Async version of get_reward_score."""
         supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
         if self.arch not in supported_reward_models:
-            raise ValueError(f'{self.arch} is not in reward mode list: {supported_reward_models}')
+            raise ValueError(f'{self.arch} is not in reward model list: {supported_reward_models}')
         assert isinstance(input_ids, List)
         assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
         # Make input_ids a list of token_id list
