@@ -230,8 +230,6 @@ class MPEngine:
 class MPEngineInstance:
     """MP Engine Instance."""
 
-    _is_pytorch_engine = True
-
     def __init__(self, engine: MPEngine):
         self.engine = engine
 
