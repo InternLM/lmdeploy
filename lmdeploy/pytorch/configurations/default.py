@@ -37,5 +37,5 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
             sliding_window=sliding_window,
             head_dim=head_dim,
             vocab_size=hf_config.vocab_size,
-            hf_config=hf_config,
+            llm_config=hf_config,
         )
