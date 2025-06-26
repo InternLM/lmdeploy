@@ -14,24 +14,14 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.eplb import EPLBDispatchInfo, EPLBManager
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
-from lmdeploy.utils import get_logger
 
 from .utils.cudagraph import CudaGraphMixin
-
-logger = get_logger('lmdeploy')
-
-try:
-    import dlblas
-    from dlblas.layers.moe import eplb
-    use_dlblas = True
-except Exception:
-    use_dlblas = False
-    logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
 
 # microbatch
@@ -577,7 +567,11 @@ class DeepseekV2Attention(nn.Module):
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None, info: Any = None):
+    def __init__(self,
+                 config: Any,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 info: EPLBDispatchInfo = None):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -599,7 +593,6 @@ class MoEGate(nn.Module):
             self.e_score_correction_bias = nn.Parameter(
                 torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k)
-
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
 
@@ -636,9 +629,6 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
-        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize and use_dlblas):
-            topk_weight, topk_idx = dlblas.moe_fused_gate(router_logits, self.e_score_correction_bias, self.n_group,
-                                                          self.topk_group, self.top_k)
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
@@ -656,7 +646,7 @@ class MoEGate(nn.Module):
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
-        if self.renormalize and not use_dlblas:
+        if self.renormalize:
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
             if not topk_weight.is_contiguous():
@@ -666,7 +656,7 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight * self.routed_scaling_factor
 
         if self.eplb_dispatch_info is not None:
-            topk_idx = eplb.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
+            topk_idx = EPLBManager.topk_ids_logical_to_physical(topk_idx, self.eplb_dispatch_info)
 
         return topk_weight, topk_idx
 
@@ -693,11 +683,11 @@ class DeepseekV2MoE(nn.Module):
         world_size = dist_ctx.world_size
         moe_all_reduce = dp > 1 and dist_ctx.tp > 1
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            eplb_dispatch_info = eplb.EPLBDispatchInfo.init_new(
+            eplb_dispatch_info = EPLBManager.get_dispatch_info(
                 ep_rank=dist_ctx.ep_rank,
                 layer_idx=layer_idx,
             )
-            self.num_experts = eplb.get_global_eplb_metadata().num_physical_experts()
+            self.num_experts = EPLBManager.num_physical_experts()
             self.gate = MoEGate(config, dtype=dtype, device=device, info=eplb_dispatch_info)
         else:
             self.gate = MoEGate(config, dtype=dtype, device=device, info=None)
@@ -972,14 +962,8 @@ class DeepseekV2Model(nn.Module):
                                          dtype=dtype,
                                          device=device)
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            if not use_dlblas:
-                raise ImportError('To enable eplb, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
-            ep_size, _ = get_ep_world_rank()
-            eplb.init_global_eplb_metadata(
-                ep_size=ep_size,
-                num_routed_experts=config.n_routed_experts,
-                num_hidden_layers=config.num_hidden_layers,
-            )
+            ep_size_, _ = get_ep_world_rank()
+            EPLBManager.init_global_eplb_metadata(ep_size_, config.n_routed_experts, config.num_hidden_layers)
         self.layers = nn.ModuleList([
             DeepseekV2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)

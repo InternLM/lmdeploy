@@ -436,3 +436,12 @@ def serialize_state_dict(state_dict: dict) -> str:
     ForkingPickler(buf).dump(data)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode('utf-8')
+
+
+def is_dlblas_installed():
+    is_dlblas_installed = True
+    try:
+        import dlblas  # noqa: F401
+    except Exception:
+        is_dlblas_installed = False
+    return is_dlblas_installed
