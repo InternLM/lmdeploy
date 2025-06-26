@@ -24,8 +24,11 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
+#include "src/turbomind/core/core.h"
+
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
+
 #include "src/turbomind/utils/constant.h"
 
 namespace turbomind {
@@ -190,7 +193,7 @@ __global__ void topKSortStage2(const int* top_ks,
 #define CASE_K(K_MAX, BLOCK_SIZE_1, BLOCK_SIZE_2, BLOCKS_PER_BEAM)                                                     \
     topKSortStage1<T, BLOCK_SIZE_1, BLOCKS_PER_BEAM>                                                                   \
         <<<batch_size * BLOCKS_PER_BEAM, BLOCK_SIZE_1, 0, stream>>>((T*)params.logits,                                 \
-                                                                    topk_tmp_id_buf,                                   \
+                                                                    topk_tmp_ids_buf,                                  \
                                                                     topk_tmp_val_buf,                                  \
                                                                     max_top_k,                                         \
                                                                     params.top_ks,                                     \
@@ -199,7 +202,7 @@ __global__ void topKSortStage2(const int* top_ks,
     topKSortStage2<T, BLOCK_SIZE_2, BLOCKS_PER_BEAM>                                                                   \
         <<<batch_size, BLOCK_SIZE_2, K_MAX * sizeof(int) + K_MAX * sizeof(float), stream>>>(params.top_ks,             \
                                                                                             params.max_top_k,          \
-                                                                                            topk_tmp_id_buf,           \
+                                                                                            topk_tmp_ids_buf,          \
                                                                                             topk_tmp_val_buf,          \
                                                                                             params.vocab_size_padded,  \
                                                                                             (T*)params.sorted_logits,  \
@@ -215,17 +218,13 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     int       topk_tmp_ids_buf_size = batch_size * max_top_k * max_block_per_beam;  // type int
     int       topk_tmp_val_buf_size = batch_size * max_top_k * max_block_per_beam;  // type T
 
-    // prevent memory misaligned address
-    topk_tmp_ids_buf_size = (int)(ceil(topk_tmp_ids_buf_size / 4.)) * 4;
-    topk_tmp_val_buf_size = (int)(ceil(topk_tmp_val_buf_size / 4.)) * 4;
+    TM_CHECK(core::Context::stream().handle() == stream);
 
-    if (params.workspace == nullptr) {
-        params.workspace_size = sizeof(int) * topk_tmp_ids_buf_size + sizeof(T) * topk_tmp_val_buf_size;
-        return;
-    }
+    Buffer_<int> topk_tmp_ids(round_up(topk_tmp_ids_buf_size, 32), kDEVICE);
+    Buffer_<T>   topk_tmp_val(round_up(topk_tmp_val_buf_size, 32), kDEVICE);
 
-    int* topk_tmp_id_buf  = (int*)params.workspace;
-    T*   topk_tmp_val_buf = (T*)(topk_tmp_id_buf + topk_tmp_ids_buf_size);
+    auto topk_tmp_ids_buf = topk_tmp_ids.data();
+    auto topk_tmp_val_buf = topk_tmp_val.data();
 
     if (max_top_k <= 16) {
         CASE_K(16, 128, 128, 8);
