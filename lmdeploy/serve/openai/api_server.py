@@ -883,16 +883,16 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 
 @router.get('/distserve/engine_info')
 async def engine_info():
-    engine = VariableInterface.async_engine.engine
+    engine_config = VariableInterface.async_engine.backend_config
 
-    response = DistServeEngineConfig(tp_size=engine.engine_config.tp,
-                                     dp_size=engine.engine_config.dp,
+    response = DistServeEngineConfig(tp_size=engine_config.tp,
+                                     dp_size=engine_config.dp,
                                      pp_size=None,
-                                     ep_size=engine.engine_config.ep,
-                                     dp_rank=engine.engine_config.dp_rank,
-                                     block_size=engine.engine_config.block_size,
-                                     num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
-                                     num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks)
+                                     ep_size=engine_config.ep,
+                                     dp_rank=engine_config.dp_rank,
+                                     block_size=engine_config.block_size,
+                                     num_cpu_blocks=engine_config.num_cpu_blocks,
+                                     num_gpu_blocks=engine_config.num_gpu_blocks)
 
     return response.model_dump_json()
 
@@ -1080,7 +1080,7 @@ async def startup_event():
         return
     try:
         import requests
-        engine_config = VariableInterface.async_engine.engine.engine_config
+        engine_config = VariableInterface.async_engine.backend_config
         engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
         url = f'{VariableInterface.proxy_url}/nodes/add'
         data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
@@ -1091,6 +1091,13 @@ async def startup_event():
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
+
+
+@router.on_event('shutdown')
+async def shutdown_event():
+    async_engine = VariableInterface.async_engine
+    if async_engine is not None:
+        async_engine.close()
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -1254,6 +1261,8 @@ def serve(model_path: str,
 
     handle_torchrun()
     _, pipeline_class = get_task(model_path)
+    if isinstance(backend_config, PytorchEngineConfig):
+        backend_config.enable_mp_engine = True
     VariableInterface.async_engine = pipeline_class(model_path=model_path,
                                                     model_name=model_name,
                                                     backend=backend,

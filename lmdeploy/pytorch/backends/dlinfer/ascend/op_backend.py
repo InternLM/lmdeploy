@@ -12,6 +12,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from ..op_backend import DlinferOpsBackend
+from .utils import nd_to_nz_spec
 
 logger = get_logger('lmdeploy')
 
@@ -91,8 +92,6 @@ class AscendOpsBackend(DlinferOpsBackend):
     enable_graph = False
     half_negative_inf = torch.finfo(torch.float16).min
     total_slots = None
-    # compiled atb Transdataoperation to convert tensor from ACL_FORMAT_ND to ACL_FORMAT_FRACTAL_NZ format.
-    transdata_func = None
 
     @staticmethod
     def get_name() -> str:
@@ -224,7 +223,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                         diagonal=max_kv_seq_len - max_q_seq_len + 1,
                     )
                     # Convert to NZ format
-                    attention_mask.append(cls.get_transdata_func()(single_attention_mask, 2))
+                    attention_mask.append(nd_to_nz_spec(single_attention_mask))
             else:
                 raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
         else:
@@ -254,8 +253,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                     elif SocVersion.is_Ascend310P():
                         # Convert mask to NZ format.
                         attention_mask = [
-                            cls.get_transdata_func()(torch.cat(
-                                [mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1), 2)
+                            nd_to_nz_spec(torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]))
                         ]
                     else:
                         raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
@@ -313,18 +311,6 @@ class AscendOpsBackend(DlinferOpsBackend):
         ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
         AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
         return ascend_graph_runner
-
-    @staticmethod
-    def get_transdata_func():
-        """Get transdata function."""
-        if AscendOpsBackend.transdata_func is None:
-            import dlinfer
-            from dlinfer.ops import transdata
-            dlinfer.graph.config.enable_graph_mode = True
-            if torch.distributed.is_initialized():
-                torch._inductor.config.compile_threads = 1
-            AscendOpsBackend.transdata_func = torch.compile(transdata, fullgraph=True, dynamic=True, backend='atbgraph')
-        return AscendOpsBackend.transdata_func
 
     @staticmethod
     def init():
