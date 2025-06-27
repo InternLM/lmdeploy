@@ -585,6 +585,10 @@ class AsyncEngine(LogitsMixin):
         self.id2inst[session_id] = inst
         try:
             yield inst
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:
+            if self.backend == 'pytorch':
+                # manually end pytorch session
+                await inst.async_end(session_id)
         finally:
             self.id2inst.pop(session_id)
             inst._active.set()
@@ -599,6 +603,7 @@ class AsyncEngine(LogitsMixin):
             logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
             await inst.async_cancel(session_id)
+            raise e
         finally:
             await generator.aclose()
 
