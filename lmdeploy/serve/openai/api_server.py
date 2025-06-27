@@ -32,7 +32,8 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, TopLogprob, UpdateParamsRequest, UsageInfo)
+                                            ModelPermission, PoolingRequest, PoolingResponse, TopLogprob,
+                                            UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -871,18 +872,41 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
-@router.post('/classify')
-async def classify(raw_request: Request = None):
-    """Classify endpoint for reward models."""
-    json_request = await raw_request.json()
+@router.post('/pooling')
+async def pooling(request: PoolingRequest, raw_request: Request = None):
+    """Pooling prompts for reward model.
 
-    text_input = json_request.pop('text', None)
+    In vLLM documentation, https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#pooling-api_1,
+    the input format of Pooling API is the same as Embeddings API.
+
+    Go to https://platform.openai.com/docs/api-reference/embeddings/create
+    for the Embeddings API specification.
+
+    The request should be a JSON object with the following fields:
+    - model (str): model name. Available from /v1/models.
+    - input (str | List[int]): input text to be embed, encoded as a string or array of tokens
+    """
+
     async_engine = VariableInterface.async_engine
 
-    input_ids = async_engine.tokenizer.encode(text_input, add_special_tokens=False)
+    request_input = request.input
+    model_name = request.model or async_engine.model_name
+
+    if isinstance(request_input, str):
+        input_ids = async_engine.tokenizer.encode(request_input, add_special_tokens=False)
+    elif isinstance(request_input, List[int]):
+        input_ids = request_input
+    else:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must be a string or a list of integers.')
+
     score = await async_engine._async_get_reward_score(input_ids)
 
-    return dict(reward_score=score)
+    usage = UsageInfo(
+        prompt_tokens=len(input_ids),
+        completion_tokens=0,  # no completion tokens in pooling
+        total_tokens=len(input_ids))
+
+    return PoolingResponse(model=model_name, data=[{'index': 0, 'object': 'pooling', 'data': score}], usage=usage)
 
 
 @router.post('/update_weights', dependencies=[Depends(check_api_key)])
