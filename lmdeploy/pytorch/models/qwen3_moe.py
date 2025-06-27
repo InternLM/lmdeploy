@@ -23,6 +23,12 @@ class Qwen3MoeAttention(nn.Module):
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
+        if quantization_config is not None:
+            modules_to_not_convert = quantization_config.get('modules_to_not_convert', [])
+            if 'self_attn' in modules_to_not_convert:
+                # do not quant this module
+                quantization_config = None
+
         num_heads = config.num_attention_heads
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
@@ -135,6 +141,13 @@ class Qwen3MoeMLP(nn.Module):
                  all_reduce: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
+
+        if quantization_config is not None:
+            modules_to_not_convert = quantization_config.get('modules_to_not_convert', [])
+            if 'mlp' in modules_to_not_convert:
+                # do not quant this module
+                quantization_config = None
+
         if intermediate_size is None:
             intermediate_size = config.intermediate_size
         # gate up
@@ -177,8 +190,14 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        # TODO: zhouxinyu, determine modules_to_not_convert from config file
         quantization_config = getattr(config, 'quantization_config', None)
+        # do not quant this module
+        if quantization_config is not None:
+            modules_to_not_convert = quantization_config.get('modules_to_not_convert', [])
+            if 'block_sparse_moe' in modules_to_not_convert:
+                # do not quant this module
+                quantization_config = None
+
         self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
@@ -249,6 +268,11 @@ class Qwen3MoeDecoderLayer(nn.Module):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
+        if quantization_config is not None:
+            modules_to_not_convert = quantization_config.get('modules_to_not_convert', [])
+            if 'self_attn' in modules_to_not_convert:
+                # do not quant input_layernorm
+                quantization_config = None
 
         # build attention layer
         self.self_attn = Qwen3MoeAttention(config, dtype=dtype, device=device)
@@ -505,8 +529,13 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             for expert_id in range(num_experts):
                 param_name = name.replace(f'experts.{fused_gateup_name}', 'experts.gate_up')
                 param = params_dict[param_name]
-                w1 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id, length=chunk_size // 2)
-                w3 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id + chunk_size // 2, length=chunk_size // 2)
+                if 'weight_scale_inv' in name:
+                    w1, w3 = loaded_weight[expert_id].chunk(2)
+                else:
+                    w1 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id, length=chunk_size // 2)
+                    w3 = loaded_weight.narrow(dim=0,
+                                              start=chunk_size * expert_id + chunk_size // 2,
+                                              length=chunk_size // 2)
                 load_weight(param, w1, expert_id=expert_id, shard_id='gate')
                 load_weight(param, w3, expert_id=expert_id, shard_id='up')
 
@@ -516,7 +545,10 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             for expert_id in range(num_experts):
                 param_name = name.replace(f'experts.{fused_down_name}', 'experts.down')
                 param = params_dict[param_name]
-                w2 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id, length=chunk_size)
+                if 'weight_scale_inv' in name:
+                    w2 = loaded_weight[expert_id]
+                else:
+                    w2 = loaded_weight.narrow(dim=0, start=chunk_size * expert_id, length=chunk_size)
                 load_weight(param, w2, expert_id=expert_id, shard_id='down')
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
