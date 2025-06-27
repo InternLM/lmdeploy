@@ -207,8 +207,10 @@ class SequenceManager:
         seq_id = seq.seq_id
         old_status_map = self._status_seq_map[old_status]
         new_status_map = self._status_seq_map[new_status]
-        old_status_map.pop(seq_id)
-        new_status_map[seq_id] = seq
+        # may be remove by async_end
+        if seq_id in old_status_map:
+            old_status_map.pop(seq_id)
+            new_status_map[seq_id] = seq
 
 
 class SchedulerSession:
