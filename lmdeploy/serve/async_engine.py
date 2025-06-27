@@ -586,6 +586,7 @@ class AsyncEngine(LogitsMixin):
         try:
             yield inst
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:
+            logger.error(f'[model_inst] exception caught: {e}')
             if self.backend == 'pytorch':
                 # manually end pytorch session
                 await inst.async_end(session_id)

@@ -520,14 +520,14 @@ class Engine:
 
     def _on_add_message(self, reqs: List[Request], **kwargs):
         """On add message callback."""
-        valid_req = []
+        valid_reqs = []
         for req in reqs:
             req_data = req.data
             session_id = req_data['session_id']
             if self.scheduler and session_id not in self.scheduler.sessions:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
-            valid_req.append(req)
+            valid_reqs.append(req)
             if req_data.get('input_multimodals', None) is None:
                 continue
             elif self.input_processor is None:
@@ -546,8 +546,8 @@ class Engine:
             req_data['token_ids'] = input_ids
             req_data['input_multimodals'] = input_multimodals
 
-        if len(valid_req) > 0:
-            self._add_message(valid_req)
+        if len(valid_reqs) > 0:
+            self._add_message(valid_reqs)
 
     def _add_message(self, reqs: List[Request]):
 
