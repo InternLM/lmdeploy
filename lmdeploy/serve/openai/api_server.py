@@ -419,6 +419,8 @@ async def chat_completions_v1(raw_request: Request = None):
             ]
         else:
             tools = [item.function.model_dump() for item in request.tools]
+    # text completion for string input
+    do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
@@ -427,7 +429,7 @@ async def chat_completions_v1(raw_request: Request = None):
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
-        do_preprocess=not isinstance(request.messages, str),  # text completion for string input
+        do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         enable_thinking=request.enable_thinking,
     )

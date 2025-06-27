@@ -127,6 +127,7 @@ class ChatCompletionRequest(BaseModel):
     user: Optional[str] = None
     response_format: Optional[ResponseFormat] = Field(default=None, examples=[None])  # noqa
     # additional argument of lmdeploy
+    do_preprocess: Optional[bool] = True
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
