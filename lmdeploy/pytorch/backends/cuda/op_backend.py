@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 from typing import Tuple
 
 import torch
@@ -179,6 +180,8 @@ class CudaOpsBackend(DefaultOpsBackend):
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
+        from lmdeploy.pytorch import envs
+
         from .graph_runner import CUDAGraphRunner
         from .warmup_manager import WarmupMeta, get_warmup_manager
 
@@ -189,6 +192,10 @@ class CudaOpsBackend(DefaultOpsBackend):
             dtype=model_config.dtype,
         )
         get_warmup_manager().warmup(warmup_meta)
+
+        # add custom triton cache manager
+        if envs.triton_custom_cache_mgr_enable:
+            os.environ['TRITON_CACHE_MANAGER'] = 'lmdeploy.pytorch.kernels.cuda.triton_utils:MPLockCacheManager'
 
         # make graph runner.
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
