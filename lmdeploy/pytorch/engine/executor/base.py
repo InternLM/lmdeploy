@@ -31,7 +31,7 @@ class ExecutorBase:
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.dist_config = dist_config
-        self.misc_config = misc_config,
+        self.misc_config = misc_config
         self.tokenizer = tokenizer
         self.dp = dist_config.dp
         self.tp = dist_config.tp
@@ -179,7 +179,16 @@ class ExecutorBase:
         self.update_configs()
         logger.info('Building GraphRunner and warmup ops, please waiting.')
         self.build_graph_runner()
-        logger.info(f'Building CacheEngine with config: \n{self.cache_config}.')
-        self.build_cache_engine()
+        if not self.misc_config.empty_init:
+            logger.info(f'Building CacheEngine with config: \n{self.cache_config}.')
+            self.build_cache_engine()
+        else:
+            # When `empty_init==True`, the engine is initialized without loading model weights,
+            # designed specifically for RL rollout scenarios. In this case:
+            # 1. The trainer is responsible for transferring model weights to the engine later
+            # 2. To reduce memory peak during weight transfer, we defer kv cache initialization
+            #    until the weight update completes. 
+            # See `update_params()` in model_agent.py for implementation details.
+            pass
         logger.info('Warming up model.')
         self.warmup()
