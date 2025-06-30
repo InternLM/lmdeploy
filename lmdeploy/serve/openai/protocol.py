@@ -342,7 +342,7 @@ class PoolingRequest(BaseModel):
     https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/entrypoints/http_server.py#L383
     """
     model: Optional[str] = None
-    input: Union[list[int], list[list[int]], str, list[str]]
+    input: Union[List[int], List[List[int]], str, List[str]]
     encoding_format: Literal['float', 'base64'] = 'float'
     dimensions: Optional[int] = None
     user: Optional[str] = None

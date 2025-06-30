@@ -884,7 +884,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     The request should be a JSON object with the following fields:
     - model (str): model name. Available from /v1/models.
-    - input (list[int] | list[list[int]] | str | list[str]): input text to be embed
+    - input (List[int] | List[List[int]] | str | List[str]): input text to be embed
     """
 
     async_engine = VariableInterface.async_engine
