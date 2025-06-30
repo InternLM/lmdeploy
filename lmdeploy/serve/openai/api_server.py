@@ -884,7 +884,7 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     The request should be a JSON object with the following fields:
     - model (str): model name. Available from /v1/models.
-    - input (str | List[int]): input text to be embed, encoded as a string or array of tokens
+    - input (list[int] | list[list[int]] | str | list[str]): input text to be embed
     """
 
     async_engine = VariableInterface.async_engine
@@ -892,21 +892,37 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     request_input = request.input
     model_name = request.model or async_engine.model_name
 
+    # Normalize all inputs to be a batch (List[List[int]])
     if isinstance(request_input, str):
-        input_ids = async_engine.tokenizer.encode(request_input, add_special_tokens=False)
-    elif isinstance(request_input, List[int]):
-        input_ids = request_input
+        input_ids = [async_engine.tokenizer.encode(request_input, add_special_tokens=False)]
+    elif isinstance(request_input, List):
+        if not request_input:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list cannot be empty.')
+        if isinstance(request_input[0], str):  # List[str]
+            input_ids = [async_engine.tokenizer.encode(p, add_special_tokens=False) for p in request_input]
+        elif isinstance(request_input[0], int):  # List[int]
+            input_ids = [request_input]
+        elif isinstance(request_input[0], List):  # List[List[int]]
+            input_ids = request_input
+        else:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list contains an invalid type.')
     else:
-        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must be a string or a list of integers.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must be a string or a list.')
 
-    score = await async_engine._async_get_reward_score(input_ids)
+    batch_scores = await async_engine._async_get_reward_score(input_ids)
+    prompt_tokens = sum(len(ids) for ids in input_ids)
+    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
 
-    usage = UsageInfo(
-        prompt_tokens=len(input_ids),
-        completion_tokens=0,  # no completion tokens in pooling
-        total_tokens=len(input_ids))
+    data = []
+    for i, score in enumerate(batch_scores):
+        data.append({
+            'index': i,
+            'object': 'pooling',
+            'data': score,
+        })
 
-    return PoolingResponse(model=model_name, data=[{'index': 0, 'object': 'pooling', 'data': score}], usage=usage)
+    response = PoolingResponse(model=model_name, data=data, usage=usage)
+    return response.model_dump()
 
 
 @router.post('/update_weights', dependencies=[Depends(check_api_key)])
