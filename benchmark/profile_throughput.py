@@ -139,9 +139,11 @@ class Engine:
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
             tm_model = TurboMind.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
             tm_model = PytorchEngine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            self.backend = 'pytorch'
 
         self.tm_model = tm_model
         self.pbar = None
@@ -190,7 +192,7 @@ class Engine:
                 await generator.aclose()
 
             # for pytorch engine to restart a session
-            if hasattr(model_inst, '_is_pytorch_engine'):
+            if self.backend == 'pytorch':
                 await model_inst.async_end(session_id)
 
             self.pbar.update(1)
