@@ -78,9 +78,6 @@ class EngineInstance:
         engine (Engine): engine
     """
 
-    # dirty hack
-    _is_pytorch_engine = True
-
     def __init__(self, engine: Engine):
         self.engine = engine
         self.req_sender = engine.req_manager.build_sender()
