@@ -74,9 +74,7 @@ jobs:
           python3 -m pip install -e . &&\
           rm -rf build
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          cp -r /nvme/qa_test_models/offline_pkg/flash-attention\@7661781 flash-attention
-          cd flash-attention && python setup.py install && cd ..
-          # python3 -m pip install /root/packages/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/flash_attn-2.8.0.post2-cp310-cp310-linux_x86_64.whl
       - name: Check env
         run: |
           python3 -m pip list
