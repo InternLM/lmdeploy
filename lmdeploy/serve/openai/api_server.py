@@ -38,8 +38,8 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, PoolingRequest, PoolingResponse, TopLogprob,
-                                            UpdateParamsRequest, UsageInfo)
+                                            ModelPermission, PoolingRequest, PoolingResponse, SleepWakeupRequest,
+                                            TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -937,6 +937,24 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     VariableInterface.async_engine.engine.update_params(request)
     return JSONResponse(content=None)
+
+
+@router.post('/sleep', dependencies=[Depends(check_api_key)])
+async def sleep(request: SleepWakeupRequest, raw_request: Request = None):
+    if hasattr(VariableInterface.async_engine.engine, 'sleep'):
+        VariableInterface.async_engine.engine.sleep(request.tags)
+        return JSONResponse(content=None)
+    else:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Sleep is not supported by the current engine.')
+
+
+@router.post('/wakeup', dependencies=[Depends(check_api_key)])
+async def wakeup(request: SleepWakeupRequest, raw_request: Request = None):
+    if hasattr(VariableInterface.async_engine.engine, 'wakeup'):
+        VariableInterface.async_engine.engine.wakeup(request.tags)
+        return JSONResponse(content=None)
+    else:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Wakeup is not supported by the current engine.')
 
 
 """ PD Disaggregation API Begin """

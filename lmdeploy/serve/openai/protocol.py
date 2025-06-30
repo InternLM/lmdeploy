@@ -408,3 +408,8 @@ class UpdateParamsRequest(BaseModel):
     """Update weights request."""
     serialized_named_tensors: Union[str, List[str], Dict]
     finished: bool = False
+
+
+class SleepWakeupRequest(BaseModel):
+    """Sleep or wakeup request."""
+    tags: Optional[List[str]] = None

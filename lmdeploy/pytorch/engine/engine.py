@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -1158,6 +1158,14 @@ class Engine:
     def update_params(self, request: Any):
         """Update params."""
         self.executor.update_params(request)
+
+    def sleep(self, tags: Optional[List[str]] = None):
+        """Sleep."""
+        self.executor.sleep(tags)
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        self.executor.wakeup(tags)
 
     async def async_loop(self):
         try:
