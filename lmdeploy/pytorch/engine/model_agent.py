@@ -892,6 +892,11 @@ class BaseModelAgent:
                     mod.update_weights()
 
             torch.cuda.empty_cache()
+            if request.finished:
+                # After finishing the weight transferring from trainer to inference engine,
+                # the kv cache engine is built.
+                logger.info(f'Building CacheEngine with config: \n{self.cache_config}.')
+                self.build_cache_engine()
 
     def release(self):
         """release."""
