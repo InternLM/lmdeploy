@@ -20,6 +20,7 @@ class DistContext:
     tp_rank: int = 0
     dp_rank: int = 0
     ep_rank: int = 0
+    local_rank: int = 0
     world_cpu_group: dist.ProcessGroup = None
     tp_cpu_group: dist.ProcessGroup = None
     tp_gpu_group: dist.ProcessGroup = None
@@ -90,8 +91,20 @@ class DistContext:
         if dp > 1:
             dp_cpu_group = dist.new_group(ranks=range(dp), timeout=timeout, backend=cpu_backend)
 
+        # Determine the local_rank. By default, ray determines the visibility of cuda devices for each worker
+        # through the env "CUDA_VISIBLE_DEVICES"
+        import os, torch
+        device_id = os.getenv('CUDA_VISIBLE_DEVICES')
+        device_count = torch.cuda.device_count()
+        if tp > 1:
+            device_count = min(device_count, tp)
+        if dp > 1:
+            device_count = min(device_count, dp)
+        local_rank = int(device_id) if device_id else rank % device_count
+
         context = DistContext(
             rank=rank,
+            local_rank=local_rank,
             world_size=world_size,
             tp=tp,
             dp=dp,

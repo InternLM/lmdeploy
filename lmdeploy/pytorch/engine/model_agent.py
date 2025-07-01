@@ -274,6 +274,15 @@ class BaseModelAgent:
         self.cache_engine = None
         self.profiler: AgentProfiler = None
 
+        self.device_mesh = None
+        if dist_ctx.dp > 1:
+            devices = min(torch.cuda.device_count(), dist_ctx.dp)
+            groups = dist_ctx.world_size // devices
+            self.device_mesh = torch.distributed.init_device_mesh(
+                'cpu',
+                mesh_shape=(groups, devices),
+                mesh_dim_names=["group", "device"])
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -882,6 +891,28 @@ class BaseModelAgent:
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_rank]
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
+
+            if self.dist_ctx.dp > 1:
+                # get device_id from weight
+                print(f'---------------{[(type(func_args), len(func_args), func_args )for k, (func_name, func_args) in weights]}')
+                device_ids = [func_args[6] for k, (func_name, func_args) in weights]
+                assert all([x == device_ids[0] for x in device_ids])
+                # device_id = device_ids[0]
+
+                # gather weights from all local_rank
+                gathered_weights = [None] * self.device_mesh['device'].size()
+                dist.all_gather_object(gathered_weights, weights, group=self.device_mesh['device'].get_group())
+                # determine which one in `gathered_weights` should be consumed by the local_rank worker
+                for _weights in gathered_weights:
+                    device_ids = [func_args[6] for k, (func_name, func_args) in _weights]
+                    assert all([x == device_ids[0] for x in device_ids])
+                    if device_ids[0] == self.dist_ctx.local_rank:
+                        weights = _weights
+                        break
+                else:
+                    logger.warning('failed to find the param who has the same device_id as the local_rank. '
+                                f'param device_id {device_ids[0]}, local_rank {self.local_rank}')
+
             weights = [(k, _construct(v)) for k, v in weights]
             self.patched_model.get_model().load_weights(weights)
 
