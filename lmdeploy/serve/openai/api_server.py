@@ -32,7 +32,8 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, TopLogprob, UpdateParamsRequest, UsageInfo)
+                                            ModelPermission, PoolingRequest, PoolingResponse, TopLogprob,
+                                            UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -419,6 +420,8 @@ async def chat_completions_v1(raw_request: Request = None):
             ]
         else:
             tools = [item.function.model_dump() for item in request.tools]
+    # text completion for string input
+    do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
@@ -427,7 +430,7 @@ async def chat_completions_v1(raw_request: Request = None):
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
-        do_preprocess=not isinstance(request.messages, str),  # text completion for string input
+        do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         enable_thinking=request.enable_thinking,
     )
@@ -869,6 +872,59 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             encoded.append(ids)
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
+
+
+@router.post('/pooling')
+async def pooling(request: PoolingRequest, raw_request: Request = None):
+    """Pooling prompts for reward model.
+
+    In vLLM documentation, https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#pooling-api_1,
+    the input format of Pooling API is the same as Embeddings API.
+
+    Go to https://platform.openai.com/docs/api-reference/embeddings/create
+    for the Embeddings API specification.
+
+    The request should be a JSON object with the following fields:
+    - model (str): model name. Available from /v1/models.
+    - input (List[int] | List[List[int]] | str | List[str]): input text to be embed
+    """
+
+    async_engine = VariableInterface.async_engine
+
+    request_input = request.input
+    model_name = request.model or async_engine.model_name
+
+    # Normalize all inputs to be a batch (List[List[int]])
+    if isinstance(request_input, str):
+        input_ids = [async_engine.tokenizer.encode(request_input, add_special_tokens=False)]
+    elif isinstance(request_input, List):
+        if not request_input:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list cannot be empty.')
+        if isinstance(request_input[0], str):  # List[str]
+            input_ids = [async_engine.tokenizer.encode(p, add_special_tokens=False) for p in request_input]
+        elif isinstance(request_input[0], int):  # List[int]
+            input_ids = [request_input]
+        elif isinstance(request_input[0], List):  # List[List[int]]
+            input_ids = request_input
+        else:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list contains an invalid type.')
+    else:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must be a string or a list.')
+
+    batch_scores = await async_engine._async_get_reward_score(input_ids)
+    prompt_tokens = sum(len(ids) for ids in input_ids)
+    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+
+    data = []
+    for i, score in enumerate(batch_scores):
+        data.append({
+            'index': i,
+            'object': 'pooling',
+            'data': score,
+        })
+
+    response = PoolingResponse(model=model_name, data=data, usage=usage)
+    return response.model_dump()
 
 
 @router.post('/update_weights', dependencies=[Depends(check_api_key)])

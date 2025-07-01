@@ -164,7 +164,7 @@ class RequestManager:
         self.senders: Dict[int, RequestSender] = dict()
         self.callbacks: Dict[RequestType, Callable] = dict()
         self.request_priority: List[RequestType] = [
-            RequestType.STOP_ENGINE, RequestType.STOP_SESSION, RequestType.END_SESSION, RequestType.ADD_SESSION,
+            RequestType.STOP_ENGINE, RequestType.ADD_SESSION, RequestType.STOP_SESSION, RequestType.END_SESSION,
             RequestType.ADD_MESSAGE
         ]
         self.requests: asyncio.Queue = None
