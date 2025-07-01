@@ -883,7 +883,6 @@ class BaseModelAgent:
             func, args = item
             args = list(args)
             args[6] = torch.cuda.current_device()  # device id.
-            # clone() seems necessary otherwise the producer can not release the memory
             return func(*args).clone()
 
         with self.all_context():
@@ -893,25 +892,23 @@ class BaseModelAgent:
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
 
             if self.dist_ctx.dp > 1:
-                # get device_id from weight
-                print(f'---------------{[(type(func_args), len(func_args), func_args )for k, (func_name, func_args) in weights]}')
-                device_ids = [func_args[6] for k, (func_name, func_args) in weights]
-                assert all([x == device_ids[0] for x in device_ids])
-                # device_id = device_ids[0]
-
                 # gather weights from all local_rank
                 gathered_weights = [None] * self.device_mesh['device'].size()
                 dist.all_gather_object(gathered_weights, weights, group=self.device_mesh['device'].get_group())
                 # determine which one in `gathered_weights` should be consumed by the local_rank worker
+                weight_device_ids = []
                 for _weights in gathered_weights:
                     device_ids = [func_args[6] for k, (func_name, func_args) in _weights]
-                    assert all([x == device_ids[0] for x in device_ids])
+                    weight_device_ids.extend(device_ids)
+                    if not all(x == device_ids[0] for x in device_ids):
+                        logger.warning(f"Inconsistent device_id in weight tensors: {device_ids}")
+                        continue
                     if device_ids[0] == self.dist_ctx.local_rank:
                         weights = _weights
                         break
                 else:
-                    logger.warning('failed to find the param who has the same device_id as the local_rank. '
-                                f'param device_id {device_ids[0]}, local_rank {self.local_rank}')
+                    logger.warning(f'No matching weights found for local_rank {self.dist_ctx.local_rank}.'
+                                   f'All weight device_ids: {weight_device_ids}')
 
             weights = [(k, _construct(v)) for k, v in weights]
             self.patched_model.get_model().load_weights(weights)
