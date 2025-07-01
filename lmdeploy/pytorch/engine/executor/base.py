@@ -187,7 +187,7 @@ class ExecutorBase:
             # designed specifically for RL rollout scenarios. In this case:
             # 1. The trainer is responsible for transferring model weights to the engine later
             # 2. To reduce memory peak during weight transfer, we defer kv cache initialization
-            #    until the weight update completes. 
+            #    until the weight update completes.
             # See `update_params()` in model_agent.py for implementation details.
             pass
         logger.info('Warming up model.')

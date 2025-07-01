@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List
 
+import torch
 from torch import distributed as dist
 from torch.distributed import ReduceOp
 
@@ -93,7 +94,7 @@ class DistContext:
 
         # Determine the local_rank. By default, ray determines the visibility of cuda devices for each worker
         # through the env "CUDA_VISIBLE_DEVICES"
-        import os, torch
+        import os
         device_id = os.getenv('CUDA_VISIBLE_DEVICES')
         device_count = torch.cuda.device_count()
         if tp > 1:

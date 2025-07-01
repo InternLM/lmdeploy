@@ -278,10 +278,9 @@ class BaseModelAgent:
         if dist_ctx.dp > 1:
             devices = min(torch.cuda.device_count(), dist_ctx.dp)
             groups = dist_ctx.world_size // devices
-            self.device_mesh = torch.distributed.init_device_mesh(
-                'cpu',
-                mesh_shape=(groups, devices),
-                mesh_dim_names=["group", "device"])
+            self.device_mesh = torch.distributed.init_device_mesh('cpu',
+                                                                  mesh_shape=(groups, devices),
+                                                                  mesh_dim_names=['group', 'device'])
 
     @contextmanager
     def all_context(self):
@@ -902,7 +901,7 @@ class BaseModelAgent:
                     device_ids = [func_args[6] for k, (func_name, func_args) in _weights]
                     weight_device_ids.extend(device_ids)
                     if not all(x == device_ids[0] for x in device_ids):
-                        logger.warning(f"Inconsistent device_id in weight tensors: {device_ids}")
+                        logger.warning(f'Inconsistent device_id in weight tensors: {device_ids}')
                         continue
                     if device_ids[0] == self.dist_ctx.local_rank:
                         weights = _weights
