@@ -1,4 +1,4 @@
-name: evaluate
+name: evaluate_new
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_7b_chat_batch1_4bits, turbomind_internlm3_8b_instruct, pytorch_internlm3_8b_instruct, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_internlm2_chat_20b, pytorch_internlm2_chat_20b, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, turbomind_qwen2_5_7b_instruct, pytorch_qwen2_5_7b_instruct, turbomind_qwen2_5_32b_instruct, pytorch_qwen2_5_32b_instruct, turbomind_llama2_7b_chat, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it, pytorch_gemma_2_27b_it, turbomind_internlm2_chat_7b_4bits, turbomind_internlm2_chat_7b_kvint4, turbomind_internlm2_chat_7b_kvint8, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, turbomind_internlm2_5_7b_chat_kvint8, pytorch_internlm2_5_7b_chat_w8a8, turbomind_internlm3_8b_instruct_4bits, turbomind_internlm3_8b_instruct_kvint4, turbomind_internlm3_8b_instruct_kvint8, pytorch_internlm3_8b_instruct_w8a8, turbomind_internlm2_5_20b_chat_4bits, turbomind_internlm2_5_20b_chat_kvint4, turbomind_internlm2_5_20b_chat_kvint8, turbomind_llama3_8b_instruct_4bits, turbomind_llama3_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_4bits, turbomind_llama3_1_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_kvint8,turbomind_llama3_8b_instruct_kvint8, pytorch_llama3_1_8b_instruct_w8a8, turbomind_qwen2_7b_instruct_4bits, turbomind_qwen2_7b_instruct_kvint8, pytorch_qwen2_7b_instruct_w8a8, turbomind_qwen2_5_7b_instruct_4bits, turbomind_qwen2_5_7b_instruct_kvint8, pytorch_qwen2_5_7b_instruct_w8a8, turbomind_qwen2_5_32b_instruct_4bits, turbomind_qwen2_5_32b_instruct_kvint8, pytorch_qwen2_5_32b_instruct_w8a8,turbomind_llama2_7b_chat_4bits, turbomind_llama2_7b_chat_kvint4, turbomind_llama2_7b_chat_kvint8]'
+        default: '[turbomind_qwen3_32b, pytorch_qwen3_32b, turbomind_qwen3_30b_a3b, pytorch_qwen3_30b_a3b, turbomind_qwen3_30b_a3b_fp8, pytorch_qwen3_30b_a3b_fp8, turbomind_qwen3_235b_a22b, pytorch_qwen3_235b_a22b, turbomind_qwen3_235b_a22b_fp8, pytorch_qwen3_235b_a22b_fp8]'
       chat_datasets:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
@@ -27,7 +27,7 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [turbomind_internlm2_5_7b, turbomind_internlm2_5_7b_4bits, turbomind_internlm2_5_7b_batch1, turbomind_internlm2_5_7b_batch1_4bits, turbomind_qwen2_7b, turbomind_qwen2_5_7b, turbomind_qwen2_5_14b]'
         type: string
-        default: '[turbomind_internlm2_5_7b, turbomind_internlm2_5_7b_4bits, turbomind_qwen2_7b, turbomind_qwen2_5_7b, turbomind_qwen2_5_14b]'
+        default: '[turbomind_qwen3_8b_base, pytorch_qwen3_8b_base]'
       baes_datasets:
         required: true
         description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
@@ -98,17 +98,15 @@ jobs:
       matrix:
         evaluate_type: ['chat', 'base']
     container:
-      image: openmmlab/lmdeploy:latest
+      image: pjlab-shanghai-acr-registry.cn-shanghai.cr.aliyuncs.com/pjlab-eflops/llm:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/resources:/root/resources
-        - /nvme/github-actions/opencompass-data:/root/opencompass-data
-        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
-        - /nvme/qa_test_models:/root/models
-        - /mnt/187:/mnt/187
-        - /mnt/shared:/mnt/shared
+        - /nvme1:/nvme1
+        - /nvme2:/nvme2
+        - /nvme1/shared/github-actions/pip-cache:/root/.cache/pip
+        - /nvme1/shared/github-actions/opencompass-data:/root/opencompass-data
+        - /nvme1/shared/qa_test_models/evaluation-reports:/root/evaluation-reports
+        - /nvme2/huggingface_hub/hub:/root/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -159,9 +157,11 @@ jobs:
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data
-          python3 .github/scripts/action_tools.py create_model_links /root/models .
+          # python3 .github/scripts/action_tools.py create_model_links /root/models .
       - name: Evaluate chat models
         if: matrix.evaluate_type == 'chat'
+        env:
+          HF_HUB_CACHE: /root/models
         run: |
           echo ${{github.event.inputs.chat_models}}
           echo ${{github.event.inputs.chat_datasets}}
