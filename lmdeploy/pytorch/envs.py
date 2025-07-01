@@ -98,9 +98,6 @@ with set_envs():
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
 
-    # cuda backend
-    enable_cuda_torch_compile = env_to_bool('LMDEPLOY_ENABLE_CUDA_TORCH_COMPILE', False)
-
 
 def get_all_envs():
     """Get all environment variables."""

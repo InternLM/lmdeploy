@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Tuple
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
@@ -138,9 +137,10 @@ class CUDAGraphRunner(GraphRunner):
         if self.has_try_compile_model:
             return
 
-        if hasattr(self.model, 'compile_model') and envs.enable_cuda_torch_compile:
-            method = getattr(self.model, 'compile_model')
-            method()
+        # TODO: recovery it when torch.compile is stable (should be add a flag to enable it?)
+        # if hasattr(self.model, 'compile_model'):
+        #     method = getattr(self.model, 'compile_model')
+        #     method()
 
         self.has_try_compile_model = True
 
