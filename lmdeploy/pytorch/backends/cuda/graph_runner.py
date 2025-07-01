@@ -137,9 +137,10 @@ class CUDAGraphRunner(GraphRunner):
         if self.has_try_compile_model:
             return
 
-        if hasattr(self.model, 'compile_model'):
-            method = getattr(self.model, 'compile_model')
-            method()
+        # TODO: recovery it when torch.compile is stable (should be add a flag to enable it?)
+        # if hasattr(self.model, 'compile_model'):
+        #     method = getattr(self.model, 'compile_model')
+        #     method()
 
         self.has_try_compile_model = True
 
