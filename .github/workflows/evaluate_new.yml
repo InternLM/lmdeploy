@@ -98,7 +98,7 @@ jobs:
       matrix:
         evaluate_type: ['chat', 'base']
     container:
-      image: ${{ secrets.DOCKER_IMAGE }}
+      image:  pjlab-shanghai-acr-registry.cn-shanghai.cr.aliyuncs.com/pjlab-eflops/llm:lmdeploy-v0.8.0-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme1:/nvme1
