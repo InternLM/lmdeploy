@@ -883,6 +883,7 @@ class BaseModelAgent:
             func, args = item
             args = list(args)
             args[6] = torch.cuda.current_device()  # device id.
+            # clone() seems necessary otherwise the producer can not release the memory
             return func(*args).clone()
 
         with self.all_context():
