@@ -12,6 +12,7 @@ pillow
 protobuf
 pydantic>2.0.0
 pynvml
+pyzmq
 ray
 safetensors
 sentencepiece

@@ -129,7 +129,7 @@ def launch_server(num_nodes: int,
         server_urls.append(url)
         logger.info(f'create server with url={url}')
         logger.info(f'backend_config_dp={backend_config_dp} gpus={gpu_ids_per_dp}')
-        proc = mp.Process(target=_run_server, args=(gpu_ids_per_dp, model_path), kwargs=cur_server_kwargs, daemon=True)
+        proc = mp.Process(target=_run_server, args=(gpu_ids_per_dp, model_path), kwargs=cur_server_kwargs)
         proc.start()
         processes.append(proc)
 
