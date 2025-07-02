@@ -8,7 +8,11 @@ import torch
 from torch import distributed as dist
 from torch.distributed import ReduceOp
 
+from lmdeploy.utils import get_logger
+
 from .config import DistConfig
+
+logger = get_logger('lmdeploy')
 
 
 @dataclass
@@ -31,6 +35,7 @@ class DistContext:
     ep_gpu_group: dist.ProcessGroup = None
     ep_gpu_groups: List[dist.ProcessGroup] = None
     dist_config: DistConfig = None
+    device_mesh: dist.DeviceMesh = None
 
     @classmethod
     def build(cls, rank: int = 0, dist_config: DistConfig = None, ccl_backend: str = 'nccl'):
@@ -92,16 +97,23 @@ class DistContext:
         if dp > 1:
             dp_cpu_group = dist.new_group(ranks=range(dp), timeout=timeout, backend=cpu_backend)
 
-        # Determine the local_rank. By default, ray determines the visibility of cuda devices for each worker
-        # through the env "CUDA_VISIBLE_DEVICES"
+        # Determine the local_rank
         import os
-        device_id = os.getenv('CUDA_VISIBLE_DEVICES')
-        device_count = torch.cuda.device_count()
-        if tp > 1:
-            device_count = min(device_count, tp)
-        if dp > 1:
-            device_count = min(device_count, dp)
-        local_rank = int(device_id) if device_id else rank % device_count
+        devices = os.getenv('CUDA_VISIBLE_DEVICES')
+        local_rank = None
+        if devices is None:
+            logger.info('CUDA_VISIBLE_DEVICES is not set, leaving local_rank as undetermined')
+        else:
+            device_ids = [d for d in devices.split(',') if d.strip() != '']
+            if not device_ids:
+                logger.warning('CUDA_VISIBLE_DEVICES is empty, leaving local_rank as undetermined')
+            elif len(device_ids) == 1:
+                # By default, ray determines the visibility of cuda devices for each worker through
+                # the env "CUDA_VISIBLE_DEVICES".
+                local_rank = int(device_ids[0])
+                logger.info(f'local_rank {local_rank}, tp_rank {tp_rank}, dp_rank {dp_rank}')
+            else:
+                logger.warning(f'CUDA_VISIBLE_DEVICES {devices}, too much devices, leaving local_rank as undetermined')
 
         context = DistContext(
             rank=rank,
@@ -124,6 +136,25 @@ class DistContext:
             dist_config=dist_config,
         )
         return context
+
+    def init_device_mesh(self):
+        """Init device mesh in a node, which is used by ModelAgent to gather
+        weight from local ranks in a node.
+
+        Please refer to BaseModelAgent's update_params for detailed info
+        """
+        if self.device_mesh:
+            return self.device_mesh
+
+        if self.dp > 1:
+            devices = min(torch.cuda.device_count(), self.dp)
+        elif self.tp > 1:
+            devices = min(torch.cuda.device_count(), self.tp)
+        groups = self.world_size // devices
+        self.device_mesh = torch.distributed.init_device_mesh('cpu',
+                                                              mesh_shape=(groups, devices),
+                                                              mesh_dim_names=['group', 'device'])
+        return self.device_mesh
 
     def close(self):
         """Close groups."""

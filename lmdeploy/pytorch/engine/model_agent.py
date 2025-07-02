@@ -274,14 +274,6 @@ class BaseModelAgent:
         self.cache_engine = None
         self.profiler: AgentProfiler = None
 
-        self.device_mesh = None
-        if dist_ctx.dp > 1:
-            devices = min(torch.cuda.device_count(), dist_ctx.dp)
-            groups = dist_ctx.world_size // devices
-            self.device_mesh = torch.distributed.init_device_mesh('cpu',
-                                                                  mesh_shape=(groups, devices),
-                                                                  mesh_dim_names=['group', 'device'])
-
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -885,6 +877,27 @@ class BaseModelAgent:
             # clone() seems necessary otherwise the producer can not release the memory
             return func(*args).clone()
 
+        def get_local_rank_weight(weights):
+            device_mesh = self.dist_ctx.device_mesh or self.dist_ctx.init_device_mesh()
+            # gather weights from all local_rank
+            gathered_weights = [None] * device_mesh['device'].size()
+            dist.all_gather_object(gathered_weights, weights, group=device_mesh['device'].get_group())
+            # determine which one in `gathered_weights` should be consumed by the local_rank worker
+            weight_device_ids = []
+            for _weights in gathered_weights:
+                device_ids = [func_args[6] for k, (func_name, func_args) in _weights]
+                weight_device_ids.extend(device_ids)
+                if not all(x == device_ids[0] for x in device_ids):
+                    logger.warning(f'Inconsistent device_id in weight tensors: {device_ids}')
+                    continue
+                if device_ids[0] == self.dist_ctx.local_rank:
+                    weights = _weights
+                    break
+            else:
+                logger.warning(f'No matching weights found for local_rank {self.dist_ctx.local_rank}.'
+                               f'All weight device_ids: {weight_device_ids}')
+            return weights
+
         with self.all_context():
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
@@ -892,23 +905,7 @@ class BaseModelAgent:
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
 
             if self.dist_ctx.dp > 1:
-                # gather weights from all local_rank
-                gathered_weights = [None] * self.device_mesh['device'].size()
-                dist.all_gather_object(gathered_weights, weights, group=self.device_mesh['device'].get_group())
-                # determine which one in `gathered_weights` should be consumed by the local_rank worker
-                weight_device_ids = []
-                for _weights in gathered_weights:
-                    device_ids = [func_args[6] for k, (func_name, func_args) in _weights]
-                    weight_device_ids.extend(device_ids)
-                    if not all(x == device_ids[0] for x in device_ids):
-                        logger.warning(f'Inconsistent device_id in weight tensors: {device_ids}')
-                        continue
-                    if device_ids[0] == self.dist_ctx.local_rank:
-                        weights = _weights
-                        break
-                else:
-                    logger.warning(f'No matching weights found for local_rank {self.dist_ctx.local_rank}.'
-                                   f'All weight device_ids: {weight_device_ids}')
+                weights = get_local_rank_weight(weights)
 
             weights = [(k, _construct(v)) for k, v in weights]
             self.patched_model.get_model().load_weights(weights)
