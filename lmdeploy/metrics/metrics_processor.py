@@ -122,10 +122,10 @@ class MetricsProcessor():
             try:
                 # fetch
                 update_data = await self.metrics_queue.get()
-                input_len, output_len, prev_len, req_state, iteration_stats, outputs = update_data
+                input_len, prev_len, outputs, req_state, iteration_stats = update_data
 
                 # compute
-                self._update_stats(input_len, output_len, prev_len, req_state, iteration_stats, outputs)
+                self._update_stats(input_len, prev_len, outputs, req_state, iteration_stats)
 
                 # record
                 scheduler_stats = get_current_scheduler_stats()
@@ -150,8 +150,8 @@ class MetricsProcessor():
     def increment_finished_requests(self):
         increment_async_engine_scheduler_stats_finished_req()
 
-    def _update_stats(self, input_len: int, output_len: int, prev_len: int, req_state: RequestState,
-                      iteration_stats: IterationStats, outputs: 'EngineOutput'):
+    def _update_stats(self, input_len: int, prev_len: int, outputs: 'EngineOutput', req_state: RequestState,
+                      iteration_stats: IterationStats):
         from lmdeploy.messages import ResponseType
 
         status = outputs.status
@@ -169,7 +169,7 @@ class MetricsProcessor():
         iteration_stats.update_from_output(engine_core_timestamp=metrics_info.engine_core_timestamp,
                                            engine_core_events=metrics_info.engine_core_events,
                                            num_prompt_tokens=input_len,
-                                           num_new_generation_tokens=(output_len - prev_len),
+                                           num_new_generation_tokens=(outputs.num_token - prev_len),
                                            is_prefilling=(prev_len == 0),
                                            req_stats=req_state.stats)
 

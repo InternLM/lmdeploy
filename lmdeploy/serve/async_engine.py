@@ -768,8 +768,7 @@ class AsyncEngine(LogitsMixin):
                         break
 
                     output_len = outputs.num_token
-                    metrics_processor.queue_update(
-                        (input_len, output_len, prev_len, req_state, iteration_stats, outputs))
+                    metrics_processor.queue_update((input_len, prev_len, outputs, req_state, iteration_stats))
 
                     if hit_stop_token or prev_len == output_len:
                         continue
