@@ -896,12 +896,12 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
 
     # Normalize all inputs to be a batch (List[List[int]])
     if isinstance(request_input, str):
-        input_ids = [async_engine.tokenizer.encode(request_input, add_special_tokens=False)]
+        input_ids = [async_engine.tokenizer.encode(request_input)]
     elif isinstance(request_input, List):
         if not request_input:
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list cannot be empty.')
         if isinstance(request_input[0], str):  # List[str]
-            input_ids = [async_engine.tokenizer.encode(p, add_special_tokens=False) for p in request_input]
+            input_ids = [async_engine.tokenizer.encode(p) for p in request_input]
         elif isinstance(request_input[0], int):  # List[int]
             input_ids = [request_input]
         elif isinstance(request_input[0], List):  # List[List[int]]
