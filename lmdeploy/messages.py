@@ -457,6 +457,14 @@ class EngineCoreEvent():
 
 
 @dataclass
+class MetricsInfo:
+    """Metrics info from the inference engine."""
+    engine_core_timestamp: float = 0.0
+    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
+    scheduler_raw_info: dict = field(default_factory=dict)
+
+
+@dataclass
 class EngineOutput:
     """Engine output for turbomind/pytorch engine.
 
@@ -469,6 +477,7 @@ class EngineOutput:
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
+        metrics_info (MetricsInfo): metrics info from the inference engine.
     """
     status: ResponseType
     token_ids: List[int]
@@ -478,6 +487,7 @@ class EngineOutput:
     last_hidden_state: torch.Tensor = None
 
     cache_block_ids: Optional[List[int]] = None
+    metrics_info: Optional[MetricsInfo] = None
 
 
 @dataclass

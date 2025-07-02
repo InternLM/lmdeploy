@@ -38,11 +38,11 @@ class SchedulerStats:
 class RequestState:
     """State of a request."""
 
-    def __init__(self, arrival_time: float = 0.0, prompt_len: int = 0, is_prefilling: Optional[bool] = True):
-        self.arrival_time = arrival_time
+    def __init__(self, arrival_time: float = None, prompt_len: int = 0, is_prefilling: Optional[bool] = True):
+        self.arrival_time = time.perf_counter() if arrival_time is None else arrival_time
         self.prompt_len = prompt_len
         self.is_prefilling = is_prefilling
-        self.stats = RequestStateStats(arrival_time=arrival_time)
+        self.stats = RequestStateStats(arrival_time=self.arrival_time)
 
     def __repr__(self):
         """Return a human-readable string representation."""
@@ -74,6 +74,17 @@ class RequestStateStats:
     first_token_ts: float = 0.0
     last_token_ts: float = 0.0
 
+    def __repr__(self):
+        """Return a human-readable string representation."""
+        return ('RequestStateStats(\n'
+                f'  num_generation_tokens={self.num_generation_tokens},\n'
+                f'  arrival_time={self.arrival_time:.6f},\n'
+                f'  queued_ts={self.queued_ts:.6f},\n'
+                f'  scheduled_ts={self.scheduled_ts:.6f},\n'
+                f'  first_token_ts={self.first_token_ts:.6f},\n'
+                f'  last_token_ts={self.last_token_ts:.6f}\n'
+                ')')
+
 
 @dataclass
 class FinishedRequestStats:
@@ -87,6 +98,19 @@ class FinishedRequestStats:
     prefill_time: float = 0.0
     inference_time: float = 0.0
     decode_time: float = 0.0
+
+    def __repr__(self):
+        """Return a human-readable string representation."""
+        return ('FinishedRequestStats(\n'
+                f'  finish_reason={self.finish_reason},\n'
+                f'  e2e_latency={self.e2e_latency:.6f},\n'
+                f'  num_prompt_tokens={self.num_prompt_tokens},\n'
+                f'  num_generation_tokens={self.num_generation_tokens},\n'
+                f'  queued_time={self.queued_time:.6f},\n'
+                f'  prefill_time={self.prefill_time:.6f},\n'
+                f'  inference_time={self.inference_time:.6f},\n'
+                f'  decode_time={self.decode_time:.6f}\n'
+                ')')
 
 
 class IterationStats:
@@ -125,6 +149,7 @@ class IterationStats:
             self.num_prompt_tokens += num_prompt_tokens
 
             first_token_latency = self._time_since(req_stats.arrival_time)
+            assert first_token_latency > 0.0, f'TTFT cannot be negative: {first_token_latency:.6f}'
             self.time_to_first_tokens_iter.append(first_token_latency)
 
         req_stats.num_generation_tokens += num_new_generation_tokens
@@ -138,6 +163,7 @@ class IterationStats:
             req_stats.first_token_ts = engine_core_timestamp
         else:
             tpot = engine_core_timestamp - req_stats.last_token_ts
+            assert tpot > 0.0, f'TPOT cannot be negative: {tpot:.6f}'
             self.time_per_output_tokens_iter.append(tpot)
 
         req_stats.last_token_ts = engine_core_timestamp

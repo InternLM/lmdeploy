@@ -22,7 +22,7 @@ from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.metrics.metrics_processor import metrics_processor
-from lmdeploy.metrics.stats import IterationStats
+from lmdeploy.metrics.stats import IterationStats, RequestState
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
@@ -363,6 +363,9 @@ class AsyncEngine(LogitsMixin):
                 LoggingStatLogger(dp_rank=dp_rank),
                 PrometheusStatLogger(model_name=self.model_name, max_model_len=self.session_len, dp_rank=dp_rank)
             ]
+
+            # set stats loggers of metrics processor
+            metrics_processor.stat_loggers = self.stat_loggers
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
@@ -736,6 +739,7 @@ class AsyncEngine(LogitsMixin):
         if skip_stop_tokens and not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
+        metrics_processor.increment_total_requests()
         async with self.model_inst(session_id) as inst:
             token_ids = input_ids.copy()
             history_len = self.id2step[session_id]
@@ -756,15 +760,16 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
-                metrics_processor.increment_total_requests()
-                iteration_stats = IterationStats()
+                req_state = RequestState(prompt_len=input_len)  # per-requst state
                 async for outputs in gen:
+                    iteration_stats = IterationStats()  # per-iteration stats
                     # decode res
                     if is_error(outputs.status):
                         break
 
                     output_len = outputs.num_token
-                    metrics_processor.queue_update(prev_len, input_len, output_len, iteration_stats)
+                    metrics_processor.queue_update(
+                        (input_len, output_len, prev_len, req_state, iteration_stats, outputs))
 
                     if hit_stop_token or prev_len == output_len:
                         continue
@@ -815,7 +820,6 @@ class AsyncEngine(LogitsMixin):
                     yield out
                 # end of generator loop
                 metrics_processor.increment_finished_requests()
-                metrics_processor.queue_record(self.stat_loggers, iteration_stats)
 
                 if not is_error(outputs.status):
                     finish_reason = 'length' \

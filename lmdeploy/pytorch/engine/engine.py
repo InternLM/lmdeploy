@@ -9,8 +9,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, ResponseType
-from lmdeploy.metrics.metrics_processor import set_pt_engine_scheduler_stats
+from lmdeploy.messages import MetricsInfo, PytorchEngineConfig, ResponseType
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
@@ -46,6 +45,9 @@ class InferOutput:
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
     cache_block_ids: List[int] = None
+
+    # for logging
+    metrics_info: MetricsInfo = None
 
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
@@ -766,8 +768,8 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
-                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
+    def _make_infer_outputs(self, new_token_timestamp: float, next_token_ids: torch.LongTensor, running: SeqList,
+                            logits: torch.Tensor, stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
         """Make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
@@ -789,11 +791,13 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
+            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
-                              cache_block_ids=cache_block_ids)
+                              cache_block_ids=cache_block_ids,
+                              metrics_info=metrics_info)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -927,14 +931,16 @@ class Engine:
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
             self._response(out.resp,
                            resp_type,
-                           data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
+                           data=dict(token_ids=out.token_ids,
+                                     logits=out.logits,
+                                     cache_block_ids=out.cache_block_ids,
+                                     metrics_info=out.metrics_info))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
             __log_resps(step_outputs)
             for out in step_outputs:
                 __send_resp(out)
-            set_pt_engine_scheduler_stats(self.scheduler)
 
         while True:
             num_outs = que.qsize()

@@ -5,7 +5,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
-from lmdeploy.metrics.metrics_processor import set_pt_engine_core_event_queued, set_pt_engine_core_event_scheduled
+from lmdeploy.messages import EngineCoreEventType
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
@@ -51,14 +51,6 @@ class Scheduler:
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
         self.seq_manager = SequenceManager()
-
-    @property
-    def usage(self) -> float:
-        """Get the KV cache usage.
-
-        The KV cache usage (between 0.0 and 1.0).
-        """
-        return self.block_manager.get_usage()
 
     @property
     def waiting(self):
@@ -144,7 +136,7 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
-        set_pt_engine_core_event_queued()
+        seq.record_event(EngineCoreEventType.QUEUED)
 
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
@@ -237,7 +229,7 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
-            set_pt_engine_core_event_scheduled()
+            seq.record_event(EngineCoreEventType.SCHEDULED)
 
         return running, swap_in_map, swap_out_map, copy_map
 
@@ -411,3 +403,13 @@ class Scheduler:
         migration_done = self.migration_done
         for seq in migration_done:
             self._set_message_status(seq, MessageStatus.RUNNING)
+
+    def make_stats(self):
+        """Make stats."""
+        return {
+            'running': self.num_running(),
+            'waiting': self.num_waiting(),
+            'locked': self.num_locked(),
+            'free_gpu_blocks': self.block_manager.get_num_free_gpu_blocks(),
+            'total_gpu_blocks': self.block_manager.num_gpu_blocks
+        }

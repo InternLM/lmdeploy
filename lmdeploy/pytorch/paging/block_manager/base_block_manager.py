@@ -283,13 +283,6 @@ class BaseBlockManager:
         """Get number of free cpu blocks."""
         return self.allocator.get_phy_allocator('cpu').get_num_free_blocks()
 
-    def get_usage(self) -> float:
-        """Get the KV cache usage.
-
-        (between 0.0 and 1.0).
-        """
-        return 1.0 - (self.get_num_free_gpu_blocks() / self.num_gpu_blocks)
-
     def on_device(self, msg: SchedulerSequence, device: str):
         allocator = self.allocator
         logical_blocks = msg.logical_blocks
