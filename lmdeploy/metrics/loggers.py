@@ -104,6 +104,15 @@ class PrometheusStatLogger(StatLoggerBase):
         #
         # Scheduler state
         #
+        self.gauge_scheduler_finished = prometheus_client.Gauge(name='lmdeploy:num_requests_finished',
+                                                                documentation='Number of current finished requests.',
+                                                                labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_scheduler_unfinished = prometheus_client.Gauge(
+            name='lmdeploy:num_requests_unfinished',
+            documentation='Number of current unfinished requests.',
+            labelnames=labelnames).labels(*labelvalues)
+
         self.gauge_scheduler_running = prometheus_client.Gauge(
             name='lmdeploy:num_requests_running',
             documentation='Number of requests in model execution batches.',
@@ -232,9 +241,10 @@ class PrometheusStatLogger(StatLoggerBase):
     def record(self, scheduler_stats: SchedulerStats, iteration_stats: Optional[IterationStats]):
         """Log to prometheus."""
 
+        self.gauge_scheduler_finished.set(scheduler_stats.num_finished_reqs)
+        self.gauge_scheduler_unfinished.set(scheduler_stats.num_total_reqs - scheduler_stats.num_finished_reqs)
         self.gauge_scheduler_running.set(scheduler_stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(scheduler_stats.num_waiting_reqs)
-
         self.gauge_gpu_cache_usage.set(scheduler_stats.gpu_cache_usage)
 
         if iteration_stats is None:

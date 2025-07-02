@@ -569,13 +569,45 @@
           },
           "disableTextWrap": false,
           "editorMode": "builder",
+          "expr": "lmdeploy:num_requests_finished{model_name=\"$model_name\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "Num Finished",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "lmdeploy:num_requests_unfinished{model_name=\"$model_name\"}",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "Num Unfinished",
+          "range": true,
+          "refId": "B",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
           "expr": "lmdeploy:num_requests_running{model_name=\"$model_name\"}",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
           "legendFormat": "Num Running",
           "range": true,
-          "refId": "A",
+          "refId": "C",
           "useBackend": false
         },
         {
@@ -592,7 +624,7 @@
           "instant": false,
           "legendFormat": "Num Waiting",
           "range": true,
-          "refId": "C",
+          "refId": "D",
           "useBackend": false
         }
       ],
