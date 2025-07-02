@@ -878,7 +878,7 @@ class BaseModelAgent:
             return func(*args).clone()
 
         def get_local_rank_weight(weights):
-            device_mesh = self.dist_ctx.device_mesh or self.dist_ctx.init_device_mesh()
+            device_mesh = self.dist_ctx.device_mesh or self.dist_ctx.get_device_mesh()
             # gather weights from all local_rank
             gathered_weights = [None] * device_mesh['device'].size()
             dist.all_gather_object(gathered_weights, weights, group=device_mesh['device'].get_group())

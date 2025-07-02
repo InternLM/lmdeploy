@@ -137,7 +137,7 @@ class DistContext:
         )
         return context
 
-    def init_device_mesh(self):
+    def get_device_mesh(self):
         """Init device mesh in a node, which is used by ModelAgent to gather
         weight from local ranks in a node.
 
