@@ -51,6 +51,7 @@ Documentation
    :caption: Models
 
    supported_models/supported_models.md
+   supported_models/reward_models.md
 
 .. _llm_deployment:
 .. toctree::
@@ -64,7 +65,6 @@ Documentation
    llm/api_server_lora.md
    llm/gradio.md
    llm/proxy_server.md
-   llm/reward_models.md
 
 .. _vlm_deployment:
 .. toctree::
