@@ -51,6 +51,7 @@ LMDeploy 工具箱提供以下核心功能：
    :caption: 模型列表
 
    supported_models/supported_models.md
+   supported_models/reward_models.md
 
 .. _llm_部署:
 .. toctree::
