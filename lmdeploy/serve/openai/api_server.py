@@ -475,10 +475,12 @@ async def chat_completions_v1(raw_request: Request = None):
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
                 )
+            delta_token_ids = res.token_ids if res.token_ids is not None else []
             delta_message = DeltaMessage(role='assistant', content=res.response)
+            if request.return_token_ids:
+                delta_message.gen_tokens = delta_token_ids
             if has_parser:
                 current_text = current_text + res.response
-                delta_token_ids = res.token_ids if res.token_ids is not None else []
                 current_token_ids = current_token_ids + delta_token_ids
             if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
                 if res.finish_reason == 'stop' and streaming_tools is True:
@@ -574,9 +576,15 @@ async def chat_completions_v1(raw_request: Request = None):
 
     assert final_res is not None
     choices = []
+    chat_message = ChatMessage(role='assistant',
+                               content=text,
+                               tool_calls=tool_calls,
+                               reasoning_content=reasoning_content)
+    if request.return_token_ids:
+        chat_message.gen_tokens = final_token_ids
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls, reasoning_content=reasoning_content),
+        message=chat_message,
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
     )
@@ -716,9 +724,11 @@ async def completions_v1(raw_request: Request = None):
                                     text: str,
                                     finish_reason: Optional[str] = None,
                                     logprobs: Optional[LogProbs] = None,
+                                    gen_tokens: Optional[List[int]] = None,
                                     usage: Optional[UsageInfo] = None) -> str:
         choice_data = CompletionResponseStreamChoice(index=index,
                                                      text=text,
+                                                     gen_tokens=gen_tokens,
                                                      finish_reason=finish_reason,
                                                      logprobs=logprobs)
         response = CompletionStreamResponse(
@@ -754,8 +764,12 @@ async def completions_v1(raw_request: Request = None):
                         completion_tokens=final_res.generate_token_len,
                         total_tokens=total_tokens,
                     )
+                gen_tokens = None
+                if request.return_token_ids:
+                    gen_tokens = res.token_ids or []
                 response_json = create_stream_response_json(index=0,
                                                             text=res.response,
+                                                            gen_tokens=gen_tokens,
                                                             finish_reason=res.finish_reason,
                                                             logprobs=logprobs,
                                                             usage=usage)
@@ -805,12 +819,11 @@ async def completions_v1(raw_request: Request = None):
                 spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
 
         assert final_res is not None
-        choice_data = CompletionResponseChoice(
-            index=i,
-            text=text,
-            finish_reason=final_res.finish_reason,
-            logprobs=logprobs,
-        )
+        choice_data = CompletionResponseChoice(index=i,
+                                               text=text,
+                                               finish_reason=final_res.finish_reason,
+                                               logprobs=logprobs,
+                                               gen_tokens=final_token_ids if request.return_token_ids else None)
         choices[i] = choice_data
 
         if with_cache:
