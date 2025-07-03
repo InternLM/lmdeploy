@@ -804,7 +804,7 @@ class AsyncEngine(LogitsMixin):
                         response = ''
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
-                                f'{len(input_ids)}, outupt_tokens {gen_len}')
+                                f'{len(input_ids)}, output_tokens {gen_len}')
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),
