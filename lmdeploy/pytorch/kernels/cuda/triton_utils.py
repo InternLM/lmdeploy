@@ -1,54 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import os.path as osp
-from typing import Dict, Sequence, Union, overload
+from typing import Dict, Sequence, Union
 
-import torch
-from triton import JITFunction
 from triton.runtime.cache import FileCacheManager
 
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
-KERNEL_META = dict()
-
-
-def get_kernel_meta(tensor: torch.Tensor):
-    """Kernel meta."""
-    return KERNEL_META
-
-
 TypeHintType = Union[Dict[str, type], Sequence[type], None]
-
-
-@overload
-def wrap_jit_func(func: JITFunction):
-    ...
-
-
-@overload
-def wrap_jit_func(
-    *,
-    type_hint: TypeHintType = None,
-):
-    ...
-
-
-def wrap_jit_func(
-    func: JITFunction = None,
-    *,
-    type_hint: TypeHintType = None,
-):
-    """Wrap jit func."""
-
-    def decorator(func: JITFunction):
-        return func
-
-    if func is not None:
-        return decorator(func)
-    else:
-        return decorator
 
 
 class MPLockCacheManager(FileCacheManager):

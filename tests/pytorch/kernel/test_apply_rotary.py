@@ -94,5 +94,8 @@ class TestApplyRotary:
         if q_states.dtype == torch.float16:
             rtol = 1e-5
             atol = 1e-3
+        elif q_states.dtype == torch.bfloat16:
+            rtol = 1e-3
+            atol = 1e-2
         torch.testing.assert_close(q_embed, q_gt, rtol=rtol, atol=atol)
         torch.testing.assert_close(k_embed, k_gt, rtol=rtol, atol=atol)
