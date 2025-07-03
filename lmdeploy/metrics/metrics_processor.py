@@ -136,7 +136,7 @@ class MetricsProcessor():
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.info(f'Error in metrics handler: {e}')
+                logger.exception(f'Metrics handler background task failed: {e}')
 
     def queue_update(self, update_data: tuple):
         if not is_metrics_enabled() or self.metrics_queue is None:
