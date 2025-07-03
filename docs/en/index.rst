@@ -64,6 +64,7 @@ Documentation
    llm/api_server_lora.md
    llm/gradio.md
    llm/proxy_server.md
+   llm/reward_models.md
 
 .. _vlm_deployment:
 .. toctree::

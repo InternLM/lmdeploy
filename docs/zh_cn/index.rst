@@ -64,6 +64,7 @@ LMDeploy 工具箱提供以下核心功能：
    llm/api_server_lora.md
    llm/gradio.md
    llm/proxy_server.md
+   llm/reward_models.md
 
 .. _vlm_部署:
 .. toctree::
