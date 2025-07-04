@@ -239,7 +239,6 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
         Qwen3MoeSparseMoeBlock.recorder.record(topk_ids, self.layer_idx, self.num_experts)
-
         return out_states
 
 
