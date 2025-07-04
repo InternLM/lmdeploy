@@ -15,6 +15,7 @@ from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+from .utils.expert_distribution_recorder import ExpertsDistributionRecorder
 
 
 class Qwen3MoeAttention(nn.Module):
@@ -170,6 +171,7 @@ class Qwen3MoeMLP(nn.Module):
 
 class Qwen3MoeSparseMoeBlock(nn.Module):
     """Moe block."""
+    recorder = ExpertsDistributionRecorder()
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -235,6 +237,9 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         )
 
         out_states = out_states.reshape(batch_size, sequence_length, -1)
+
+        Qwen3MoeSparseMoeBlock.recorder.record(topk_ids, self.layer_idx, self.num_experts)
+
         return out_states
 
 
