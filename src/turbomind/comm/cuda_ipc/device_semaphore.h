@@ -35,6 +35,11 @@ struct DeviceSemaphore {
         *(uint64_t*)cvta_generic_to_global(data->expectedInboundSemaphoreId) = expected_inbound_semaphore_id;
     }
 
+    __device__ void Wait()
+    {
+        Wait(cuda::memory_order_acquire);
+    }
+
     __device__ void Wait(cuda::memory_order memory_order)
     {
         ++expected_inbound_semaphore_id;
@@ -50,6 +55,11 @@ struct DeviceSemaphore {
                 break;
             }
         }
+    }
+
+    __device__ void Signal()
+    {
+        Signal(cuda::memory_order_release);
     }
 
     __device__ void Signal(cuda::memory_order memory_order)

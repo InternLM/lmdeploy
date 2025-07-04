@@ -6,6 +6,8 @@
 
 #include <cuda.h>
 
+#include "src/turbomind/kernels/core/math.h"
+
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
@@ -177,15 +179,57 @@ void CudaIpcCommImpl::Initialize()
 
 void* CudaIpcCommImpl::Allocate(size_t size)
 {
+    auto granularity = alloc_granularity_;
+
+    CUdevice device{};
+    CUDRVCHECK(cuCtxGetDevice(&device));
+
+    int has_mc{};
+    CUDRVCHECK(cuDeviceGetAttribute(&has_mc, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, device));
+
+    CUmulticastObjectProp mc_prop{};
+    mc_prop.numDevices = alloc_access_descs_.size();
+    mc_prop.size       = size;
+
+    CUDRVCHECK(cuMulticastGetGranularity(&granularity, &mc_prop, CU_MULTICAST_GRANULARITY_RECOMMENDED));
+    size = mc_prop.size = round_up(mc_prop.size, granularity);
+
+    CUmemGenericAllocationHandle mc_handle{};
+
+    if (global_rank_ == 0) {
+        CUDRVCHECK(cuMulticastCreate(&mc_handle, &mc_prop));
+    }
+
+    comm::Broadcast(h_comm_, mc_handle, 0);
+
+    CUDRVCHECK(cuMulticastAddDevice(mc_handle, device));
+
+    // wait for all `cuMulticastAddDevice`
+    h_comm_->Sync();
+
     CUmemGenericAllocationHandle handle{};
-    size = (size + alloc_granularity_ - 1) / alloc_granularity_ * alloc_granularity_;
     CUDRVCHECK(cuMemCreate(&handle, size, &alloc_prop_, 0));
+
+    CUDRVCHECK(cuMulticastBindMem(mc_handle, 0, handle, 0, size, 0));
+
     CUdeviceptr dptr{};
-    CUDRVCHECK(cuMemAddressReserve(&dptr, size, 0, 0, 0));
+    CUDRVCHECK(cuMemAddressReserve(&dptr, size, granularity, 0, 0));
     CUDRVCHECK(cuMemMap(dptr, size, 0, handle, 0));
     CUDRVCHECK(cuMemSetAccess(dptr, size, alloc_access_descs_.data(), alloc_access_descs_.size()));
     void* ptr = reinterpret_cast<void*>(dptr);
-    allocations_.emplace(ptr, Allocation{handle, size});
+
+    CUdeviceptr mc_ptr{};
+
+    CUDRVCHECK(cuMemAddressReserve(&mc_ptr, size, granularity, 0, 0));
+    CUDRVCHECK(cuMemMap(mc_ptr, size, 0, mc_handle, 0));
+    CUDRVCHECK(cuMemSetAccess(mc_ptr, size, &alloc_access_descs_[global_rank_], 1));
+
+    Allocation a{};
+    a.handle = handle;
+    a.size   = size;
+    a.mc_ptr = reinterpret_cast<void*>(mc_ptr);
+
+    allocations_.emplace(ptr, a);
     return ptr;
 }
 

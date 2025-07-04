@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cuda.h>
 #include <unordered_map>
 
 #include "src/turbomind/comm/cuda_ipc/mscclpp.h"
@@ -126,6 +127,7 @@ private:
     struct Allocation {
         CUmemGenericAllocationHandle handle;
         size_t                       size;
+        void*                        mc_ptr;
     };
 
     CUmemAllocationProp          alloc_prop_{};
