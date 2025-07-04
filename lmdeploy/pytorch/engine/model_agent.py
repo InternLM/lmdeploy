@@ -4,7 +4,7 @@ import base64
 import functools
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -897,6 +897,31 @@ class BaseModelAgent:
                 # the kv cache engine is built.
                 logger.info(f'Building CacheEngine with config: \n{self.cache_config}.')
                 self.build_cache_engine()
+
+    @torch.inference_mode()
+    def sleep(self, tags: Optional[List[str]] = None):
+        """Sleep."""
+        if tags is None:
+            tags = ['weights', 'kv_cache']
+        if 'weights' in tags:
+            # TODO: find better way to avoid reset graph
+            self.reset_graph_runner()
+            self.patched_model.get_model().to('meta')
+            self.patched_model = None
+        if 'kv_cache' in tags:
+            self.cache_engine = None
+        torch.cuda.empty_cache()
+
+    @torch.inference_mode()
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        if tags is None:
+            tags = ['weights', 'kv_cache']
+        if 'weights' in tags:
+            self.build_model()
+            self.build_graph_runner()
+        if 'kv_cache' in tags:
+            self.build_cache_engine()
 
     def release(self):
         """release."""

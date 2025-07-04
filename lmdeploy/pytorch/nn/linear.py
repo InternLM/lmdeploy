@@ -326,12 +326,12 @@ class BlockedF8Linear(nn.Module):
         """Update weights."""
         weight, weight_scale_inv, bias = self.impl.update_weights(self.weight, self.weight_scale_inv, self.bias)
         weight = torch.nn.Parameter(weight, requires_grad=False)
-        self.weight.weight_loader = self.weight_loader_with_quant
+        weight.weight_loader = self.weight_loader_with_quant
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
-        self.weight_scale_inv.weight_loader = self.weight_loader
+        weight_scale_inv.weight_loader = self.weight_loader
         if bias is not None:
             bias = torch.nn.Parameter(bias, requires_grad=False)
-            self.bias.weight_loader = self.weight_loader
+            bias.weight_loader = self.weight_loader
         self.register_parameter('weight', weight)
         self.register_parameter('weight_scale_inv', weight_scale_inv)
         self.register_parameter('bias', bias)
@@ -1027,12 +1027,12 @@ class W8A8Linear(nn.Module):
         """Update weights."""
         weight, scale, bias = self.impl.update_weights(self.weight, self.scale, self.bias)
         weight = torch.nn.Parameter(weight, requires_grad=False)
-        self.weight.weight_loader = self.weight_loader
+        weight.weight_loader = self.weight_loader
         scale = torch.nn.Parameter(scale, requires_grad=False)
-        self.scale.weight_loader = self.weight_loader
+        scale.weight_loader = self.weight_loader
         if bias is not None:
             bias = torch.nn.Parameter(bias, requires_grad=False)
-            self.bias.weight_loader = self.weight_loader
+            bias.weight_loader = self.weight_loader
         self.register_parameter('weight', weight)
         self.register_parameter('scale', scale)
         self.register_parameter('bias', bias)
@@ -1293,10 +1293,10 @@ class BaseLinear(nn.Module):
         """Update weights."""
         weight, bias = self.impl.update_weights(self.weight, self.bias)
         weight = torch.nn.Parameter(weight, requires_grad=False)
-        self.weight.weight_loader = self.weight_loader
+        weight.weight_loader = self.weight_loader
         if bias is not None:
             bias = torch.nn.Parameter(bias, requires_grad=False)
-            self.bias.weight_loader = self.weight_loader
+            bias.weight_loader = self.weight_loader
         self.register_parameter('weight', weight)
         self.register_parameter('bias', bias)
 

@@ -441,7 +441,9 @@ class LinearWeightsBlockedF8(LinearWeights):
 
     def update_weight(self, weight: torch.Tensor, weight_scale_inv: torch.Tensor):
         """Update weight."""
+        _base_weight_loader = self.weight._base_weight_loader
         super().update_weight(weight=weight)
+        self.weight._base_weight_loader = _base_weight_loader
         weight_loader = self.weight_scale_inv.weight_loader
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         weight_scale_inv.weight_loader = weight_loader

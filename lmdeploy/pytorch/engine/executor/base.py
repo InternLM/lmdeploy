@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -68,6 +68,14 @@ class ExecutorBase:
 
     def warmup(self):
         """warmup."""
+        raise NotImplementedError('Not Implemented.')
+
+    def sleep(self, tags: Optional[List[str]] = None):
+        """Sleep."""
+        raise NotImplementedError('Not Implemented.')
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
         raise NotImplementedError('Not Implemented.')
 
     def update_params(self, request: Any):
