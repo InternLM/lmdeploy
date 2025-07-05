@@ -51,6 +51,7 @@ Documentation
    :caption: Models
 
    supported_models/supported_models.md
+   supported_models/reward_models.md
 
 .. _llm_deployment:
 .. toctree::
