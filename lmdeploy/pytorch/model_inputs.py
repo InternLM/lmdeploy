@@ -152,6 +152,7 @@ class ModelInputs:
     history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
+    enable_microbatch: bool = False
 
     def update(self, input_ids: torch.LongTensor):
         """Update input ids."""
@@ -420,6 +421,7 @@ class StepContext:
             cross_seqlens=cross_seqlens,
             cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,
+            enable_microbatch=inputs.enable_microbatch,
         )
 
         ret = get_backend().update_step_context(ret)
