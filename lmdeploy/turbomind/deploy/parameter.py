@@ -56,8 +56,8 @@ class QuantWeightOnly(Parameter):
 
     def __call__(self, f, g, i):
         f(i, g('qweight'), 'qweight', pack_u4_row)
-        f(i, g('scales'), 'scales', to_half, apply_gs=True)
-        f(i, g('qzeros'), 'zeros', to_half, apply_gs=True)
+        f(i, g('scales'), 'scales', to_half, apply_gs=['w2'])
+        f(i, g('qzeros'), 'zeros', to_half, apply_gs=['w2'])
 
 
 class WeightScaleInv(Parameter):
@@ -65,7 +65,7 @@ class WeightScaleInv(Parameter):
 
     # TODO: flag any operations crossing the quant blocks as illegal
     def __call__(self, f, g, i):
-        f(i, g('weight_scale_inv'), 'scales', to_float, block_size=128)
+        f(i, g('weight_scale_inv'), 'scales', to_float, apply_gs=['w1', 'w3', 'w2'])
         f(i, g('weight'), 'weight', identity)
 
 
