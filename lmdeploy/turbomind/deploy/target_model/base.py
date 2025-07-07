@@ -102,6 +102,10 @@ class BaseOutputModel(ABC):
         final_cfg.update(self.input_model_info)
         if 'embedding_size' not in self.input_model_info.keys():
             final_cfg.update(embedding_size=self.input_model_info['vocab_size'])
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.input_model.tokenizer_path, trust_remote_code=True)
+        tokenizer_size = min(len(tokenizer), final_cfg['vocab_size'])
+        final_cfg.update(tokenizer_size=tokenizer_size)
 
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 
@@ -142,17 +146,19 @@ class BaseOutputModel(ABC):
         elif len(self.tm_params) > 0:
             tm_params = self.tm_params
             weight_type = self.model_config.weight_type
-            assert weight_type in ['float16', 'bfloat16', 'int4']
+            assert weight_type in ['float16', 'bfloat16', 'int4', 'fp8']
 
             # currently, the tensor type should in
             # [torch.float, torch.half, torch.bfloat16, torch.int32]
             torch_tensor = param.cuda().contiguous()
-            assert torch_tensor.dtype in [torch.int32, torch.float, torch.half, torch.bfloat16]
+            assert torch_tensor.dtype in [torch.int32, torch.float, torch.half, torch.bfloat16, torch.uint8]
             if torch_tensor.dtype != torch.int32:
                 if weight_type in ['float16', 'int4']:
                     torch_tensor = torch_tensor.half()
                 elif weight_type == 'bfloat16':
                     torch_tensor = torch_tensor.bfloat16()
+                elif weight_type == 'fp8':
+                    pass
                 else:
                     torch_tensor = torch_tensor.half()
             for tm_tensor in tm_params[name]:

@@ -62,6 +62,7 @@ class SubCliServe:
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
+        model_format_act = ArgumentHelper.model_format(pt_group)
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
@@ -73,7 +74,8 @@ class SubCliServe:
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(max_prefill_token_num_act)
-        ArgumentHelper.model_format(tb_group)
+        tb_group._group_actions.append(model_format_act)
+
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
@@ -162,6 +164,7 @@ class SubCliServe:
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
+        model_format = ArgumentHelper.model_format(pt_group)
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
@@ -184,7 +187,7 @@ class SubCliServe:
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(max_prefill_token_num_act)
         tb_group._group_actions.append(quant_policy)
-        ArgumentHelper.model_format(tb_group)
+        tb_group._group_actions.append(model_format)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
@@ -274,7 +277,8 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 model_format=args.model_format)
         else:
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
@@ -287,8 +291,6 @@ class SubCliServe:
                                                    cache_block_seq_len=args.cache_block_seq_len,
                                                    enable_prefix_caching=args.enable_prefix_caching,
                                                    max_prefill_token_num=args.max_prefill_token_num,
-                                                   num_tokens_per_iter=args.num_tokens_per_iter,
-                                                   max_prefill_iters=args.max_prefill_iters,
                                                    communicator=args.communicator)
         chat_template_config = get_chat_template(args.chat_template)
         run(args.model_path_or_server,
@@ -332,7 +334,8 @@ class SubCliServe:
                                                  enable_microbatch=args.enable_microbatch,
                                                  enable_eplb=args.enable_eplb,
                                                  role=EngineRole[args.role],
-                                                 migration_backend=MigrationBackend[args.migration_backend])
+                                                 migration_backend=MigrationBackend[args.migration_backend],
+                                                 model_format=args.model_format)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,

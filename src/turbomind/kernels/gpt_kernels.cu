@@ -111,6 +111,9 @@ invokeTransposeAxis01(int* out, int* in, const int dim0, const int dim1, const i
 template void
 invokeTransposeAxis01(uint16_t* out, uint16_t* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
+template void
+invokeTransposeAxis01(uint8_t* out, uint8_t* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
+
 #ifdef ENABLE_BF16
 template void invokeTransposeAxis01(
     __nv_bfloat16* out, __nv_bfloat16* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);

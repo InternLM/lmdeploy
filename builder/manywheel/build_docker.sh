@@ -8,8 +8,6 @@ WITH_PUSH=${WITH_PUSH:-}
 
 TARGET=cuda_final
 DOCKER_TAG=cuda${GPU_ARCH_VERSION}
-DOCKER_BUILD_ARG="--build-arg BASE_CUDA_VERSION=${GPU_ARCH_VERSION} --build-arg DEVTOOLSET_VERSION=9"
-DOCKER_TAG=cuda${GPU_ARCH_VERSION}
 
 DOCKER_IMAGE=openmmlab/lmdeploy-builder:${DOCKER_TAG}
 if [[ -n ${MANY_LINUX_VERSION} ]]; then
@@ -22,7 +20,10 @@ fi
     set -x
     DOCKER_BUILDKIT=1 docker build \
         -t "${DOCKER_IMAGE}" \
-        ${DOCKER_BUILD_ARG} \
+        --build-arg BASE_CUDA_VERSION=${GPU_ARCH_VERSION} \
+        --build-arg DEVTOOLSET_VERSION=9 \
+        --build-arg HTTPS_PROXY=${HTTPS_PROXY} \
+        --build-arg HTTP_PROXY=${HTTP_PROXY} \
         --target "${TARGET}" \
         -f "${TOPDIR}/manywheel/Dockerfile${DOCKERFILE_SUFFIX}" \
         "${TOPDIR}"

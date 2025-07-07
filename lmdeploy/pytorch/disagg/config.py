@@ -127,6 +127,14 @@ class DistServeEngineConfig(BaseModel):
     num_gpu_blocks: int
 
 
+class MooncakeEngineConfig(DistServeEngineConfig):
+    """Mooncake Transfer Engine Config.
+
+    TODO: Support more specific config for Mooncake.
+    """
+    pass
+
+
 class DistServeConfig(BaseModel):
     """DistServe Config."""
 

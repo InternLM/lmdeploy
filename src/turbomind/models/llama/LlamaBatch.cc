@@ -1141,7 +1141,6 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     // ! Only rank-0 writes to output
     if (tp_rank_ == 0 && output_logprobs) {
         NvtxScope scope("logprobs");
-
         float*    sampled_logprobs_ptr = h_sampled_logprobs_.data();
         uint32_t* sampled_indexes_ptr  = h_sampled_indexes_.data();
         uint32_t* sampled_nums_ptr     = h_sampled_nums_.data();
@@ -1618,7 +1617,7 @@ bool LlamaBatch::Forward(GenerationState& g)
         cudaStreamSynchronize(stream_);
         std::stringstream scurr;
         for (int k = 0; k < curr.size(); ++k) {
-            scurr << std::setw(6) << curr[k];
+            scurr << std::setw(10) << curr[k];
         }
         TM_LOG_INFO("[Forward] step = %d, [%s]", g.step - 1, scurr.str().c_str());
     }

@@ -18,7 +18,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
 from .base_worker import WorkerWrapperBase
@@ -190,6 +190,39 @@ def get_ascend_device_rank_mapping(master_addr):
     return rank_mapping, worker_ips, envs
 
 
+def _update_env_cuda_alloc_conf(env_vars: Dict):
+    """Update runtime env for CUDA alloc conf."""
+    cuda_alloc_conf = os.getenv('PYTORCH_CUDA_ALLOC_CONF', None)
+    if cuda_alloc_conf is None:
+        return
+
+    # check and update conf, skip expandable_segments
+    cuda_alloc_conf = cuda_alloc_conf.split(',')
+    new_cuda_alloc_conf = []
+    for conf in cuda_alloc_conf:
+        if 'expandable_segments' in conf:
+            if 'True' in conf:
+                logger.warning('"expandable_segments:True" is not supported.')
+            continue
+        new_cuda_alloc_conf.append(conf)
+    if len(new_cuda_alloc_conf) == 0:
+        new_cuda_alloc_conf = ['expandable_segments:False']
+    cuda_alloc_conf = ','.join(new_cuda_alloc_conf)
+
+    # update env_vars
+    env_vars['PYTORCH_CUDA_ALLOC_CONF'] = cuda_alloc_conf
+
+
+def _update_runtime_envs(runtime_env: Dict):
+    """Update runtime envs."""
+    new_envs = _envs.get_all_envs()
+    env_vars: Dict = runtime_env.get('env_vars', {})
+    env_vars.update(new_envs)
+    _update_env_cuda_alloc_conf(env_vars)
+    runtime_env['env_vars'] = env_vars
+    return runtime_env
+
+
 def _update_runtime_env_nsys(runtime_env: Dict):
     """Update runtime env for nsys."""
     nsight_env = {
@@ -220,6 +253,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         log_level: int = 30,
     ):
         init_backend(device_type)
+        try_import_deeplink(device_type)
 
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
@@ -265,6 +299,9 @@ class RayWorkerWrapper(WorkerWrapperBase):
         """Pack output."""
         for k, v in output.items():
             if isinstance(v, torch.Tensor):
+                # fix numpy do not have BFloat16 type
+                if v.dtype is torch.bfloat16:
+                    v = v.to(torch.float16)
                 output[k] = v.numpy()
         return output
 
@@ -429,7 +466,7 @@ class RayExecutor(ExecutorBase):
         self.remote_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
         logger.info('Starting async task RayPrefetchOutput loop.')
-        self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
+        self._prefetch_task = event_loop.create_task(self._prefetch_outputs(), name='RayExecutorPrefetchOutput')
         self._prefetch_task.add_done_callback(self._prefetch_task_callback)
 
     def stop(self):
@@ -558,6 +595,7 @@ class RayExecutor(ExecutorBase):
 
             if device_str == 'GPU':
                 runtime_env = dict()
+                runtime_env = _update_runtime_envs(runtime_env)
                 if _envs.ray_nsys_enable:
                     runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(

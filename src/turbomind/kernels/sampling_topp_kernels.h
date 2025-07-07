@@ -52,8 +52,6 @@ struct BlockPrefixCallbackOp {
 };
 
 struct TopPSortParams {
-    void*  workspace;
-    size_t workspace_size;
     void*  logits;
     void*  sorted_logits;
     int*   sorted_indices;

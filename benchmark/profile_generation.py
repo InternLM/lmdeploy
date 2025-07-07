@@ -5,6 +5,7 @@ import csv
 import os
 import time
 from dataclasses import dataclass
+from itertools import count
 from typing import List, Union
 
 import numpy as np
@@ -20,11 +21,12 @@ from lmdeploy.utils import get_logger
 
 get_logger('lmdeploy').setLevel('WARNING')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
+global_session_id = count(0)
 
 
-async def infer(model, session_id: int, input_ids: List, gen_config: GenerationConfig, test_round: int,
+async def infer(model, worker_id: int, input_ids: List, gen_config: GenerationConfig, test_round: int,
                 que: asyncio.Queue):
-    if session_id == 1:
+    if worker_id == 1:
         pbar = tqdm(total=test_round)
     chatbot = model.create_instance()
     output_seqlen = gen_config.max_new_tokens
@@ -46,6 +48,7 @@ async def infer(model, session_id: int, input_ids: List, gen_config: GenerationC
         The time elapsing in this iteration `now-prev` is set to the latency of first token of
         the 5 tokens, i.e. `token_latency_stats[0]`, and `token_latency_stats[1:4]` is set 0`
         """   # noqa: E501
+        session_id = next(global_session_id)
         async for outputs in chatbot.async_stream_infer(session_id,
                                                         input_ids,
                                                         gen_config=gen_config,
@@ -61,14 +64,14 @@ async def infer(model, session_id: int, input_ids: List, gen_config: GenerationC
         # for pytorch engine to restart a session
         if hasattr(chatbot, 'end'):
             await chatbot.async_end(session_id)
-        if session_id == 1:
+        if worker_id == 1:
             pbar.update(1)
 
         assert output_seqlen <= n_token <= output_seqlen + 1, \
             f'Error. session_id({session_id}) request {output_seqlen} ' \
             f'tokens, but generate {n_token} tokens'
         stats.append(token_latency_stats[:output_seqlen])
-    await que.put((session_id, stats))
+    await que.put((worker_id, stats))
 
 
 def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int, gen_config: GenerationConfig,
@@ -78,9 +81,10 @@ def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int, gen
 
     print('start to warmup ...')
 
-    async def _infer(model, session_id):
+    async def _infer(model):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
+            session_id = next(global_session_id)
             async for _ in chatbot.async_stream_infer(session_id,
                                                       input_ids=input_ids,
                                                       sequence_start=True,
@@ -97,7 +101,7 @@ def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int, gen
     # start threads
     tasks = []
     for i in range(concurrency):
-        task = _infer(model, i + 1)
+        task = _infer(model)
         tasks.append(task)
 
     async def _gather_tasks(tasks):

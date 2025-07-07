@@ -14,9 +14,8 @@ logger = get_logger('lmdeploy')
 
 def _get_meta_flashmla(kv_seqlens, num_attention_heads):
     """Get meta for flashmla."""
-    import flash_mla_cuda
-    tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(kv_seqlens.to(torch.int32),
-                                                                          num_attention_heads, 1)
+    import flash_mla
+    tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(kv_seqlens.to(torch.int32), num_attention_heads, 1)
     return tile_scheduler_metadata, num_splits
 
 

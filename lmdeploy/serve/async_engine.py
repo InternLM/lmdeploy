@@ -342,7 +342,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        self.engine = Engine(model_path=model_path, tokenizer=self.tokenizer, engine_config=backend_config)
+        self.engine = Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
@@ -585,6 +585,11 @@ class AsyncEngine(LogitsMixin):
         self.id2inst[session_id] = inst
         try:
             yield inst
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:
+            logger.error(f'[model_inst] exception caught: {e}')
+            if self.backend == 'pytorch':
+                # manually end pytorch session
+                await inst.async_end(session_id)
         finally:
             self.id2inst.pop(session_id)
             inst._active.set()
@@ -599,6 +604,7 @@ class AsyncEngine(LogitsMixin):
             logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
             await inst.async_cancel(session_id)
+            raise e
         finally:
             await generator.aclose()
 
@@ -928,16 +934,15 @@ class AsyncEngine(LogitsMixin):
     """ DistServe Async Engine API Begin """
 
     def free_cache(self, session_id: int):
-        if session_id in self.engine.scheduler.sessions:
-            self.engine.scheduler.end_session(session_id)
+        if self.engine.end_session(session_id):
             logger.debug(f'successfully free session {session_id}')
         else:
             logger.warning(f'Invalid Free session {session_id}.')
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
-        return self.engine.executor.p2p_initialize(init_request)
+        return self.engine.p2p_initialize(init_request)
 
     def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
-        return self.engine.executor.p2p_connect(conn_request)
+        return self.engine.p2p_connect(conn_request)
 
     """ DistServe Async Engine API End """

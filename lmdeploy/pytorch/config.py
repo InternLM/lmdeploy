@@ -144,6 +144,7 @@ class ModelConfig:
     dtype: torch.dtype = torch.float16
     vocab_size: int = 40000
     hf_config: Any = None
+    llm_config: Any = None
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
     use_flash_mla: bool = False
@@ -221,11 +222,15 @@ class MiscConfig:
     prefill_interval: int = 16
     custom_module_map: str = None
     empty_init: bool = False
+    model_format: str = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
         """From engine config."""
-        misc_config = cls(custom_module_map=engine_config.custom_module_map,
-                          empty_init=engine_config.empty_init,
-                          prefill_interval=engine_config.prefill_interval)
+        misc_config = cls(
+            custom_module_map=engine_config.custom_module_map,
+            empty_init=engine_config.empty_init,
+            prefill_interval=engine_config.prefill_interval,
+            model_format=engine_config.model_format,
+        )
         return misc_config

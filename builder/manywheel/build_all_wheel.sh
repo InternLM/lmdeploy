@@ -4,7 +4,7 @@ set -eou pipefail
 
 TOPDIR=$(git rev-parse --show-toplevel)/builder
 
-CUDA_VER=${CUDA_VER:-11.8}
+CUDA_VER=${CUDA_VER:-12.4}
 
 PLAT_NAME=manylinux2014_x86_64
 for cuver in ${CUDA_VER}; do

@@ -122,7 +122,7 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'awq', 'gptq'],
+                                   choices=['hf', 'awq', 'gptq', 'fp8'],
                                    help='The format of input model. `hf` means `hf_llama`, '
                                    '`awq` represents the quantized model by AWQ,'
                                    ' and `gptq` refers to the quantized model by GPTQ')
@@ -573,5 +573,5 @@ class ArgumentHelper:
         return parser.add_argument('--migration-backend',
                                    type=str,
                                    default='DLSlime',
-                                   choices=['DLSlime'],
+                                   choices=['DLSlime', 'Mooncake'],
                                    help='kvcache migration management backend when PD disaggregation')

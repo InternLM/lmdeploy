@@ -371,6 +371,8 @@ class Engine:
         self.backend_config = backend_config
         self.dist_config = dist_config
         self.max_session_len = self._get_max_session_len()
+        self.engine_config.num_cpu_blocks = self.cache_config.num_cpu_blocks
+        self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
 
         self.req_manager = self._bind_request_manager()
 
@@ -405,6 +407,12 @@ class Engine:
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
         """
+        if engine_config is not None and engine_config.enable_mp_engine:
+            from .mp_engine.mp_engine import MPEngine
+            return MPEngine(model_path=pretrained_model_name_or_path,
+                            tokenizer=tokenizer,
+                            engine_config=engine_config,
+                            trust_remote_code=trust_remote_code)
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
@@ -486,10 +494,10 @@ class Engine:
                 self.scheduler.stop_session(session_id)
                 session = self.scheduler.sessions[session_id]
                 for seq in session.sequences.values():
-                    resp: Response = getattr(seq, 'resp', None)
-                    if resp is not None:
-                        resp.type = ResponseType.FINISH
-                        self.req_manager.response(resp)
+                    _resp: Response = getattr(seq, 'resp', None)
+                    if _resp is not None:
+                        _resp.type = ResponseType.FINISH
+                        self.req_manager.response(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -501,9 +509,9 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                msg = list(self.scheduler.sessions[session_id].sequences.values())[0]
-                if msg.preserve_cache:
-                    self.scheduler._set_message_status(msg, MessageStatus.TO_BE_MIGRATED)
+                msgs = list(self.scheduler.sessions[session_id].sequences.values())
+                if len(msgs) > 0 and msgs[0].preserve_cache:
+                    self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
                 else:
                     self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -512,8 +520,14 @@ class Engine:
 
     def _on_add_message(self, reqs: List[Request], **kwargs):
         """On add message callback."""
+        valid_reqs = []
         for req in reqs:
             req_data = req.data
+            session_id = req_data['session_id']
+            if self.scheduler and session_id not in self.scheduler.sessions:
+                self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
+                continue
+            valid_reqs.append(req)
             if req_data.get('input_multimodals', None) is None:
                 continue
             elif self.input_processor is None:
@@ -532,8 +546,8 @@ class Engine:
             req_data['token_ids'] = input_ids
             req_data['input_multimodals'] = input_multimodals
 
-        if len(reqs) > 0:
-            self._add_message(reqs)
+        if len(valid_reqs) > 0:
+            self._add_message(valid_reqs)
 
     def _add_message(self, reqs: List[Request]):
 
@@ -1118,7 +1132,7 @@ class Engine:
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
         except Exception as e:
-            logger.error(f'exception happened: {e}')
+            logger.error(f'exception happened: {type(e)} {e}')
         finally:
             self._loop_finally()
 
@@ -1145,3 +1159,24 @@ class Engine:
             return True
         self.req_manager.create_loop_task()
         return True
+
+    def end_session(self, session_id: int):
+        """End session."""
+        if session_id in self.scheduler.sessions:
+            self.scheduler.end_session(session_id)
+            return True
+        return False
+
+    def p2p_initialize(self, conn_request):
+        """Init rdma link."""
+        return self.executor.p2p_initialize(conn_request)
+
+    def p2p_connect(self, conn_request):
+        """rdma_connect."""
+        return self.executor.p2p_connect(conn_request)
+
+    def get_model_config(self):
+        return self.model_config
+
+    def get_engine_config(self):
+        return self.engine_config
