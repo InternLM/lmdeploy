@@ -4,6 +4,7 @@ import base64
 import functools
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
+from os import getenv
 from typing import Any, Dict
 
 import torch
@@ -274,6 +275,15 @@ class BaseModelAgent:
         self.cache_engine = None
         self.profiler: AgentProfiler = None
 
+        # microbatch
+        self.enable_microbatch = self.dist_ctx.dist_config.enable_microbatch
+        self.enable_microbatch_prefill_batchsize_threshold = \
+            int(getenv('ENABLE_MICROBATCH_PREFILL_BATCHSIZE_THRESHOLD', 2))
+        self.enable_microbatch_prefill_token_threshold = \
+            int(getenv('ENABLE_MICROBATCH_PREFILL_TOKEN_THRESHOLD', 2))
+        self.enable_microbatch_decode_batchsize_threshold = \
+            int(getenv('ENABLE_MICROBATCH_DECODE_BATCHSIZE_THRESHOLD', 2))
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -517,6 +527,17 @@ class BaseModelAgent:
             # gather dp forward metadata
             batch_size = inputs.seq_length.numel()
             dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
+            # check enable_microbatch
+            if self.enable_microbatch:
+                tokens_num = inputs.input_ids.numel()
+                if is_decoding:
+                    enable_microbatch = batch_size >= \
+                        self.enable_microbatch_decode_batchsize_threshold
+                else:
+                    enable_microbatch = batch_size >= \
+                        self.enable_microbatch_prefill_batchsize_threshold and \
+                        tokens_num >= self.enable_microbatch_prefill_token_threshold
+                dp_forward_meta.append(int(enable_microbatch))
             gathered_meta = DistGatherScalar(dp_forward_meta, dp, device='cuda')
 
             yield
@@ -542,6 +563,10 @@ class BaseModelAgent:
                 all_sync_flags = gathered_meta[:, 3].bool()
                 sync_long_context = all_sync_flags.any()
                 logger.debug(f'sync_long_context={sync_long_context}')
+
+            # update if enable_microbatch
+            if self.enable_microbatch and gathered_meta[:, 4].all():
+                inputs.enable_microbatch = True
 
             # update dp meta
             inputs.build_dp_meta()

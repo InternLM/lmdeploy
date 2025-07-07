@@ -6,7 +6,7 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
 
@@ -151,11 +151,12 @@ class CUDAGraphRunner(GraphRunner):
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
         meta = self.get_meta()
+        enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
         if meta.padding_batch_size is None:
             new_num_tokens = next_power_of_2(num_tokens)
         else:
             new_num_tokens = next_power_of_2(meta.padding_batch_size)
-        return (new_num_tokens, is_decoding)
+        return (new_num_tokens, is_decoding, enable_microbatch)
 
     def __call__(self, **kwargs):
         """call."""
