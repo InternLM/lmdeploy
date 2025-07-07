@@ -56,6 +56,10 @@ int CudaIpcCommImpl::Split(int color, int key, int group)
     g.d2d_semaphore_data = buffer;
     g.d2d_semaphores     = init_semaphores(buffers, index);
 
+    for (auto& a : allocation_) {
+        register_for_group(a, a.uc_ptrs, index);
+    }
+
     return index;
 };
 
@@ -72,11 +76,9 @@ CudaIpcCommImpl::CudaIpcCommImpl(HostComm h_comm):
     check_cuda_error(cudaGetDevice(&ordinals_[rank]));
     comm::AllGather(h_comm_, ordinals_.data(), 1);
 
-    // Prepare allocation properties & granularity
-    alloc_prop_.type          = CU_MEM_ALLOCATION_TYPE_PINNED;
-    alloc_prop_.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    alloc_prop_.location.id   = ordinals_[rank];
-    CUDRVCHECK(cuMemGetAllocationGranularity(&alloc_granularity_, &alloc_prop_, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
+    CUDRVCHECK(cuDeviceGetAttribute(&multicast_capability_, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, ordinals_[rank]));
+
+    multicast_capability_ = comm::AllReduce(h_comm_, multicast_capability_, RedOp::kMin);
 
     // Prepare access descriptors
     alloc_access_descs_.resize(n_ranks);
@@ -125,12 +127,12 @@ CudaIpcCommImpl::~CudaIpcCommImpl()
         Free(groups_[i].d2d_semaphore_data);
     }
 
-    for (const auto& [ptr, _] : registered_memories_) {
-        TM_LOG_WARNING("[COMM][%d] Buffer %p is not deregistered", global_rank_, ptr);
-    }
+    // for (const auto& [ptr, _] : registered_memories_) {
+    //     TM_LOG_WARNING("[COMM][%d] Buffer %p is not deregistered", global_rank_, ptr);
+    // }
 
-    for (const auto& [ptr, alloc] : allocations_) {
-        TM_LOG_WARNING("[COMM][%d] Allocation (%p, %lu) is not freed", global_rank_, ptr, alloc.size);
+    for (const auto& a : allocation_) {
+        TM_LOG_WARNING("[COMM][%d] Allocation (%p, %lu) is not freed", global_rank_, a.uc_beg, a.size);
     }
 
     for (auto i = (int)groups_.size() - 1; i >= 0; --i) {
@@ -140,108 +142,57 @@ CudaIpcCommImpl::~CudaIpcCommImpl()
     cudaStreamSynchronize(0);
 }
 
-void CudaIpcCommImpl::Initialize()
-{
-#if 0
-    const int flags_size = 3 * sizeof(uint64_t) * kChannelsPerConn * (n_ranks_ - 1);
-    uint64_t* flags      = (uint64_t*)Allocate(flags_size);
-    check_cuda_error(cudaMemsetAsync(flags, 0, flags_size));
-    device_semaphore_data_ = flags;
-
-    auto all_flags = comm::AllGather(h_comm_, flags);
-
-    const int peers = n_ranks_ - 1;
-
-    std::vector<mscclpp::SmDevice2DeviceSemaphoreDeviceHandle> device_semaphores;
-    for (int c = 0; c < kChannelsPerConn; ++c) {
-        for (int r = 0; r < n_ranks_; ++r) {
-            if (r != rank_) {
-                const int p     = r < rank_ ? r : r - 1;
-                const int inv_p = Rank{rank_, peers}.inverse_peer(p);
-                //
-                mscclpp::SmDevice2DeviceSemaphoreDeviceHandle handle{};
-                handle.inboundSemaphoreId         = flags + c * peers + p;                                  // local
-                handle.outboundSemaphoreId        = handle.inboundSemaphoreId + kChannelsPerConn * peers;   // local
-                handle.expectedInboundSemaphoreId = handle.outboundSemaphoreId + kChannelsPerConn * peers;  // local
-                handle.remoteInboundSemaphoreId   = all_flags[r] + c * peers + inv_p;                       // near
-                device_semaphores.push_back(handle);
-            }
-        }
-    }
-    check_cuda_error(cudaMallocAsync(
-        &device_semaphores_, sizeof(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle) * device_semaphores.size(), 0));
-    check_cuda_error(cudaMemcpyAsync(device_semaphores_,
-                                     device_semaphores.data(),
-                                     sizeof(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle) * device_semaphores.size(),
-                                     cudaMemcpyHostToDevice));
-#endif
-}
-
 void* CudaIpcCommImpl::Allocate(size_t size)
 {
-    auto granularity = alloc_granularity_;
+    size_t              granularity{};
+    CUmemAllocationProp prop{};
 
-    CUdevice device{};
-    CUDRVCHECK(cuCtxGetDevice(&device));
+    prop.type          = CU_MEM_ALLOCATION_TYPE_PINNED;
+    prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+    prop.location.id   = ordinals_[global_rank_];
 
-    int has_mc{};
-    CUDRVCHECK(cuDeviceGetAttribute(&has_mc, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, device));
-
-    CUmulticastObjectProp mc_prop{};
-    mc_prop.numDevices = alloc_access_descs_.size();
-    mc_prop.size       = size;
-
-    CUDRVCHECK(cuMulticastGetGranularity(&granularity, &mc_prop, CU_MULTICAST_GRANULARITY_RECOMMENDED));
-    size = mc_prop.size = round_up(mc_prop.size, granularity);
-
-    CUmemGenericAllocationHandle mc_handle{};
-
-    if (global_rank_ == 0) {
-        CUDRVCHECK(cuMulticastCreate(&mc_handle, &mc_prop));
+    if (multicast_capability_) {
+        CUmulticastObjectProp prop{};
+        prop.numDevices = alloc_access_descs_.size();
+        prop.size       = size;
+        CUDRVCHECK(cuMulticastGetGranularity(&granularity, &prop, CU_MULTICAST_GRANULARITY_RECOMMENDED));
+    }
+    else {
+        CUDRVCHECK(cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
     }
 
-    comm::Broadcast(h_comm_, mc_handle, 0);
-
-    CUDRVCHECK(cuMulticastAddDevice(mc_handle, device));
-
-    // wait for all `cuMulticastAddDevice`
-    h_comm_->Sync();
+    size = round_up(size, granularity);
 
     CUmemGenericAllocationHandle handle{};
-    CUDRVCHECK(cuMemCreate(&handle, size, &alloc_prop_, 0));
+    CUDRVCHECK(cuMemCreate(&handle, size, &prop, 0));
 
-    CUDRVCHECK(cuMulticastBindMem(mc_handle, 0, handle, 0, size, 0));
-
-    CUdeviceptr dptr{};
-    CUDRVCHECK(cuMemAddressReserve(&dptr, size, granularity, 0, 0));
-    CUDRVCHECK(cuMemMap(dptr, size, 0, handle, 0));
-    CUDRVCHECK(cuMemSetAccess(dptr, size, alloc_access_descs_.data(), alloc_access_descs_.size()));
-    void* ptr = reinterpret_cast<void*>(dptr);
-
-    CUdeviceptr mc_ptr{};
-
-    CUDRVCHECK(cuMemAddressReserve(&mc_ptr, size, granularity, 0, 0));
-    CUDRVCHECK(cuMemMap(mc_ptr, size, 0, mc_handle, 0));
-    CUDRVCHECK(cuMemSetAccess(mc_ptr, size, &alloc_access_descs_[global_rank_], 1));
+    CUdeviceptr ptr{};
+    CUDRVCHECK(cuMemAddressReserve(&ptr, size, granularity, 0, 0));
+    CUDRVCHECK(cuMemMap(ptr, size, 0, handle, 0));
+    CUDRVCHECK(cuMemSetAccess(ptr, size, alloc_access_descs_.data(), alloc_access_descs_.size()));
 
     Allocation a{};
-    a.handle = handle;
-    a.size   = size;
-    a.mc_ptr = reinterpret_cast<void*>(mc_ptr);
+    a.handle    = handle;
+    a.size      = size;
+    a.uc_beg    = reinterpret_cast<void*>(ptr);
+    a.uc_end    = (char*)a.uc_beg + size;
+    a.alignment = granularity;
+    a.uc_ptrs   = comm::AllGather(h_comm_, a.uc_beg);
 
-    allocations_.emplace(ptr, a);
-    return ptr;
+    allocation_.emplace(a);
+
+    return a.uc_beg;
 }
 
 void CudaIpcCommImpl::Free(void* ptr)
 {
-    if (auto it = allocations_.find(ptr); it != allocations_.end()) {
-        auto allocation = it->second;
-        auto dptr       = reinterpret_cast<CUdeviceptr>(ptr);
-        CUDRVCHECK(cuMemUnmap(dptr, allocation.size));
-        CUDRVCHECK(cuMemRelease(allocation.handle));
-        CUDRVCHECK(cuMemAddressFree(dptr, allocation.size));
-        allocations_.erase(it);
+    if (auto it = allocation_.find(ptr); it != allocation_.end()) {
+        auto& a    = *it;
+        auto  dptr = reinterpret_cast<CUdeviceptr>(ptr);
+        CUDRVCHECK(cuMemUnmap(dptr, a.size));
+        CUDRVCHECK(cuMemRelease(a.handle));
+        CUDRVCHECK(cuMemAddressFree(dptr, a.size));
+        allocation_.erase(it);
     }
     else {
         TM_LOG_WARNING("[TM][COMM][%d] Freeing %p which is not allocated by this module", global_rank_, ptr);
@@ -250,20 +201,83 @@ void CudaIpcCommImpl::Free(void* ptr)
 
 void CudaIpcCommImpl::Register(void* ptr, size_t size)
 {
-    if (!registered_memories_.count(ptr)) {
-        auto buffers = comm::AllGather(h_comm_, std::make_pair(ptr, size));
-        buffers.erase(buffers.begin() + global_rank_);
-        registered_memories_.emplace(ptr, std::move(buffers));
-    }
-    else {
+    // register for all groups
+    auto& symm = groups_[0].symmetric;
+
+    if (symm.find(ptr) != symm.end()) {
         TM_LOG_WARNING("[TM][COMM][%d] Duplicated registration on (%p, %lu)", global_rank_, ptr, size);
+        return;
     }
+
+    auto alloc = allocation_.find(ptr);
+    TM_CHECK(alloc != allocation_.end());
+
+    for (int i = 0; i < (int)groups_.size(); ++i) {
+        register_for_group(*alloc, alloc->uc_ptrs, i);
+    }
+}
+
+void CudaIpcCommImpl::register_for_group(const Allocation& alloc, const std::vector<void*>& ucps, int group)
+{
+    auto size = alloc.size;
+
+    auto& g = groups_.at(group);
+
+    Symmetric s{};
+    s.size   = size;
+    s.uc_beg = alloc.uc_beg;
+    s.uc_end = alloc.uc_end;
+
+    for (auto r : g.l2g) {
+        if (r != global_rank_) {
+            s.uc_ptrs.push_back(ucps[r]);
+        }
+    }
+
+    if (multicast_capability_) {
+        CUmulticastObjectProp prop{};
+        prop.numDevices = n_ranks(group);
+        prop.size       = size;
+
+        if (rank(group) == 0) {
+            CUDRVCHECK(cuMulticastCreate(&s.mc_handle, &prop));
+        }
+
+        auto handles = comm::AllGather(h_comm_, s.mc_handle);
+        s.mc_handle  = handles.at(g.l2g[0]);
+
+        CUDRVCHECK(cuMulticastAddDevice(s.mc_handle, ordinals_[global_rank_]));
+
+        // wait for all `cuMulticastAddDevice`
+        h_comm_->Sync();
+
+        CUDRVCHECK(cuMulticastBindMem(s.mc_handle, 0, alloc.handle, 0, size, 0));
+
+        static_assert(sizeof(CUdeviceptr) == sizeof(void*));
+
+        CUdeviceptr mc_ptr{};
+
+        CUDRVCHECK(cuMemAddressReserve(&mc_ptr, size, alloc.alignment, 0, 0));
+        CUDRVCHECK(cuMemMap(mc_ptr, size, 0, s.mc_handle, 0));
+        CUDRVCHECK(cuMemSetAccess(mc_ptr, size, &alloc_access_descs_[global_rank_], 1));
+
+        s.mc_ptr = reinterpret_cast<void*>(mc_ptr);
+    }
+
+    g.symmetric.insert(std::move(s));
 }
 
 void CudaIpcCommImpl::Deregister(void* ptr)
 {
-    if (int erased = registered_memories_.erase(ptr); erased == 0) {
-        TM_LOG_WARNING("[TM][COMM][%d] Deregistering non-registered address %p", global_rank_, ptr);
+    // TODO: release multicast object
+    for (size_t i = 0; i < groups_.size(); ++i) {
+        auto& s = groups_[i].symmetric;
+        if (auto it = s.find(ptr); it != s.end()) {
+            s.erase(it);
+        }
+        else {
+            TM_LOG_WARNING("[TM][COMM][%d] Deregistering non-registered address %p", global_rank_, ptr);
+        }
     }
 }
 
@@ -319,32 +333,29 @@ mscclpp::D2DSemaphoreHandle* CudaIpcCommImpl::init_semaphores(const std::vector<
     return d_semaphores;
 }
 
-Array<void*, kMaxNearPeers> CudaIpcCommImpl::get_symmetric_impl(void* ptr, int group)
+auto CudaIpcCommImpl::get_symmetric_impl(void* ptr, int group) -> SymmetricPtr<void>
 {
-    auto& memories = registered_memories_.at(ptr);
-    FT_CHECK(memories.size() <= kMaxNearPeers);
-    std::vector<void*> tmp(memories.size());
-    for (size_t i = 0; i < memories.size(); ++i) {
-        tmp[i] = memories[i].first;
+    auto& g = groups_.at(group);
+
+    auto symm = g.symmetric.find(ptr);
+    TM_CHECK(symm != g.symmetric.end());
+
+    auto offset = (char*)ptr - (char*)symm->uc_beg;
+
+    SymmetricPtr<void> p{};
+    for (size_t i = 0; i < symm->uc_ptrs.size(); ++i) {
+        p.uc[i] = (char*)symm->uc_ptrs[i] + offset;
     }
-    // Put current rank back
-    tmp.insert(tmp.begin() + global_rank_, ptr);
-    Array<void*, kMaxNearPeers> ret{};
-    // Indexed copy by l2g map
-    int p = 0;
-    for (const auto& r : groups_.at(group).l2g) {
-        if (r != global_rank_) {  // Skip current rank
-            ret[p++] = tmp[r];
-        }
+    if (symm->mc_ptr) {
+        p.mc = (char*)symm->mc_ptr + offset;
     }
-    return ret;
+
+    return p;
 }
 
 DeviceComm CreateCudaIpcCommunicator(int n_ranks, int rank, HostComm h_comm)
 {
     auto comm = std::make_unique<CudaIpcCommImpl>(h_comm);
-
-    comm->Initialize();
 
     return DeviceComm{std::move(comm)};
 }

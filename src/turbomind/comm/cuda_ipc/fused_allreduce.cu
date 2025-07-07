@@ -570,8 +570,8 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                 (const T*)bias,
                 (const T*)weights,
                 (T*)scratch_buff_,
-                get_symmetric((T*)hidden, group),
-                get_symmetric((T*)scratch_buff_, group),
+                get_symmetric((T*)hidden, group).uc,
+                get_symmetric((T*)scratch_buff_, group).uc,
                 semaphores,
                 rank,
                 n_ranks - 1,
@@ -590,7 +590,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                                                        (T*)residual,
                                                                                        (const T*)bias,
                                                                                        (const T*)weights,
-                                                                                       get_symmetric((T*)hidden, group),
+                                                                                       get_symmetric((T*)hidden, group).uc,
                                                                                        semaphores,
                                                                                        rank,
                                                                                        n_ranks - 1,
@@ -605,25 +605,18 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                                                        std::false_type{});
         }
         else {
-            void* mc_ptr{};
-            for (auto& [p, a] : allocations_) {
-                if ((char*)p <= (char*)hidden && (char*)hidden < (char*)p + a.size) {
-                    auto offset = (char*)hidden - (char*)p;
-                    mc_ptr      = (char*)a.mc_ptr + offset;
-                }
-            }
-            FT_CHECK(mc_ptr);
+            auto symm_ptr = get_symmetric((T*)hidden, group);
 
             constexpr int block_dim = 1024;
-            const int     max_ctas  = 3;
+            const int     max_ctas  = 4;
             const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
 
-            AllreduceResidualBiasRMSnorm_NVLS<<<blocks, block_dim, 0, stream>>>((T*)mc_ptr,
+            AllreduceResidualBiasRMSnorm_NVLS<<<blocks, block_dim, 0, stream>>>(symm_ptr.mc,
                                                                                 (T*)hidden,
                                                                                 (T*)residual,
                                                                                 (const T*)bias,
                                                                                 (const T*)weights,
-                                                                                get_symmetric((T*)hidden, group),
+                                                                                symm_ptr.uc,
                                                                                 semaphores,
                                                                                 rank,
                                                                                 n_ranks - 1,

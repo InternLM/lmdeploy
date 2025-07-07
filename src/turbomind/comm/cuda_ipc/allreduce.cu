@@ -377,7 +377,7 @@ void CudaIpcCommImpl::AllReduceSum(
             constexpr int threads       = 1024;
             const int     blocks        = (n_ranks - 1) * ctas_per_peer;
             auto          incoming      = (LLPacket*)packet_buff_;
-            auto          outgoing      = get_symmetric(incoming, group);
+            auto          outgoing      = get_symmetric(incoming, group).uc;
             AllreduceKernel_LL<<<blocks, threads, 0, stream>>>((T*)data,  //
                                                                (T*)data,
                                                                incoming,
@@ -397,8 +397,8 @@ void CudaIpcCommImpl::AllReduceSum(
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
                 Allreduce_Simple_Push_v2<<<blocks, threads, 0, stream>>>((T*)data,
                                                                          (T*)scratch_buff_,
-                                                                         get_symmetric((T*)data, group),
-                                                                         get_symmetric((T*)scratch_buff_, group),
+                                                                         get_symmetric((T*)data, group).uc,
+                                                                         get_symmetric((T*)scratch_buff_, group).uc,
                                                                          semaphores,
                                                                          rank,
                                                                          n_ranks - 1,
@@ -411,7 +411,7 @@ void CudaIpcCommImpl::AllReduceSum(
                 constexpr int threads = 1024;
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
                 Allreduce_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)data,
-                                                                      get_symmetric((T*)data, group),
+                                                                      get_symmetric((T*)data, group).uc,
                                                                       semaphores,
                                                                       rank,
                                                                       n_ranks - 1,

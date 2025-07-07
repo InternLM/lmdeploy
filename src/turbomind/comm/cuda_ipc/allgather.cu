@@ -60,7 +60,7 @@ void CudaIpcCommImpl::AllGather(
 
     auto invoke = [&](auto t) {
         using T              = decltype(t);
-        const auto   near    = get_symmetric((T*)recvbuff, group);
+        const auto   near    = get_symmetric((T*)recvbuff, group).uc;
         const size_t slice   = bytesize / sizeof(T);
         const int    threads = 1024;
         const int    blocks  = std::min<int>(32, (slice + threads - 1) / threads);
@@ -243,25 +243,6 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
     const size_t byte_pitch  = byte_size(type, pitch);
     const size_t byte_stride = byte_size(type, stride);
 
-    void*  base{};
-    size_t offset{};
-    for (auto& [p, m] : registered_memories_) {
-        if ((char*)p <= (char*)recvbuff && (char*)recvbuff < (char*)p + m.front().second) {
-            base   = p;
-            offset = (char*)recvbuff - (char*)p;
-        }
-    }
-    FT_CHECK(base);
-
-    void* mc_ptr{};
-    for (auto& [p, a] : allocations_) {
-        if ((char*)p <= (char*)recvbuff && (char*)recvbuff < (char*)p + a.size) {
-            auto offset = (char*)recvbuff - (char*)p;
-            mc_ptr      = (char*)a.mc_ptr + offset;
-        }
-    }
-    FT_CHECK(mc_ptr);
-
     const int peers = this->n_ranks(group) - 1;
     const int rank  = this->rank(group);
 
@@ -269,13 +250,8 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
 
 #if 1
     auto invoke = [&](auto t) {
-        using T   = decltype(t);
-        auto near = get_symmetric((T*)base, group);
-        for (auto& p : near) {
-            if (p) {
-                p += offset / sizeof(T);
-            }
-        }
+        using T = decltype(t);
+
         const int threads     = 1024;
         int       log2_groups = 0;
         while ((threads * sizeof(T) >> log2_groups) > byte_width * 2) {
@@ -296,10 +272,13 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
         //                                                            constant<10>{},
         //                                                            std::false_type{});
 
+        auto symm_ptr = get_symmetric((T*)recvbuff, group);
+
         const int blocks = std::min<int>(1, (height + groups - 1) >> log2_groups);
+
         Allgather2D_Simple_NVLS<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
-                                                                   (T*)mc_ptr,
-                                                                   near,
+                                                                   symm_ptr.mc,
+                                                                   symm_ptr.uc,
                                                                    semaphores,
                                                                    rank,
                                                                    peers,
