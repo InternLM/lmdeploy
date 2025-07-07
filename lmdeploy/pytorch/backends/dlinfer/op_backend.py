@@ -58,6 +58,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RotaryEmbedding:
             from .rotary_embedding import DlinferRotaryEmbeddingBuilder
             return DlinferRotaryEmbeddingBuilder
+        elif layer_type == OpType.LoRA:
+            from .lora import DlinferLoRABuilder
+            return DlinferLoRABuilder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
