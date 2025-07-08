@@ -12,7 +12,7 @@ LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视�
 
 - 已启用指标系统的 LMDeploy 服务正在运行
 
-## 使用说明
+## 使用说明 (DP = 1)
 
 1. **启动已启用指标的 LMDeploy 服务**
 
@@ -51,6 +51,60 @@ docker compose up
 6. **查看仪表盘**
 
 预配置的 LMDeploy 仪表盘将自动加载。
+
+## 使用说明 (DP > 1)
+
+1. **启动已启用指标的 LMDeploy 服务**
+
+以模型 `Qwen/Qwen2.5-7B-Instruct` 为例，使用 `DP=2，TP=2` 启动服务：
+
+```bash
+# Proxy server
+lmdeploy serve proxy --server-port 8000 --routing-strategy 'min_expected_latency' --serving-strategy Hybrid --log-level INFO
+
+# API server
+LMDEPLOY_DP_MASTER_ADDR=127.0.0.1 \
+LMDEPLOY_DP_MASTER_PORT=29555 \
+lmdeploy serve api_server \
+    Qwen/Qwen2.5-7B-Instruct \
+    --backend pytorch \
+    --tp 2 \
+    --dp 2 \
+    --proxy-url http://0.0.0.0:8000 \
+    --nnodes 1 \
+    --node-rank 0 \
+    --enable-metrics
+```
+
+你应该能在代理服务器列表中看到多个 API 服务实例。详细信息可以在 `lmdeploy/serve/proxy/proxy_config.json` 中找到。
+
+例如，你可能会看到如下 API 服务地址：
+
+```
+http://$host_ip:$api_server_port1
+
+http://$host_ip:$api_server_port2
+```
+
+2. **修改 Prometheus 配置**
+
+当 DP > 1 时，LMDeploy 会为每个 DP Rank 启动一个 API 服务。如果你想监控其中某个 API 服务，例如：`http://$host_ip:$api_server_port1`，请修改配置文件 `lmdeploy/monitoring/prometheus.yaml` 如下所示。
+
+> 注意：这里应使用实际主机的 IP 地址而非 127.0.0.1，因为当 DP > 1 时，LMDeploy 是通过实际主机 IP 启动 API 服务的。
+
+```
+global:
+  scrape_interval: 5s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: lmdeploy
+    static_configs:
+      - targets:
+          - '$host_ip:$api_server_port1' # <= Modify this
+```
+
+3. **进入监控目录并执行上述相同步骤**
 
 ## 故障排除
 

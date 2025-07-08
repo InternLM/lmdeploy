@@ -12,7 +12,7 @@ This section describes how to set up the monitoring stack (Prometheus + Grafana)
 
 - LMDeploy server running with metrics system enabled
 
-## Usage
+## Usage (DP = 1)
 
 1. **Start your LMDeploy server with metrics enabled**
 
@@ -52,6 +52,60 @@ This command will start Prometheus and Grafana in the background.
 6. **View the Dashboard**
 
 The LMDeploy dashboard is pre-configured and should be available automatically.
+
+## Usage (DP > 1)
+
+1. **Start your LMDeploy server with metrics enabled**
+
+As an example, we use the model `Qwen/Qwen2.5-7B-Instruct` with `DP=2, TP=2`. Start the service as follows:
+
+```bash
+# Proxy server
+lmdeploy serve proxy --server-port 8000 --routing-strategy 'min_expected_latency' --serving-strategy Hybrid --log-level INFO
+
+# API server
+LMDEPLOY_DP_MASTER_ADDR=127.0.0.1 \
+LMDEPLOY_DP_MASTER_PORT=29555 \
+lmdeploy serve api_server \
+    Qwen/Qwen2.5-7B-Instruct \
+    --backend pytorch \
+    --tp 2 \
+    --dp 2 \
+    --proxy-url http://0.0.0.0:8000 \
+    --nnodes 1 \
+    --node-rank 0 \
+    --enable-metrics
+```
+
+You should be able to see multiple API servers added to the proxy server list. Details can be found in `lmdeploy/serve/proxy/proxy_config.json`.
+
+For example, you may have the following API servers:
+
+```
+http://$host_ip:$api_server_port1
+
+http://$host_ip:$api_server_port2
+```
+
+2. **Modify the Prometheus configuration**
+
+When `DP > 1`, LMDeploy will launch one API server for each DP rank. If you want to monitor a specific API server, e.g. `http://$host_ip:$api_server_port1`, modify the configuration file `lmdeploy/monitoring/prometheus.yaml` as follows.
+
+> Note that you should use the actual host machine IP instead of `127.0.0.1` here, since LMDeploy starts the API server using the actual host IP when `DP > 1`
+
+```
+global:
+  scrape_interval: 5s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: lmdeploy
+    static_configs:
+      - targets:
+          - '$host_ip:$api_server_port1' # <= Modify this
+```
+
+3. **Navigate to the monitoring folder and perform the same steps as described above**
 
 ## Troubleshooting
 
@@ -112,7 +166,9 @@ grafana:
   - "3090:3000"  # <= Host:Container port mapping
 ```
 
-- **No data on the dashboard**
+2. **No data on the dashboard**
+
+- Create traffic
 
 Try to send some requests to the LMDeploy server to create certain traffic
 
