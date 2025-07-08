@@ -97,6 +97,9 @@ jobs:
       fail-fast: false
       matrix:
         evaluate_type: ['chat', 'base']
+    env:
+        HF_HUB_CACHE: /root/models
+        HF_HUB_OFFLINE: 1
     container:
       image: pjlab-shanghai-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/pjlab-eflops/llm:lmdeploy-v0.7.2-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -141,7 +144,6 @@ jobs:
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          cp -r /nvme1/shared/qa_test_models/offline_pkg/lmdeploy/opencompass .
           python3 -m pip install /nvme1/shared/qa_test_models/offline_pkg/lmdeploy/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
       - name: Install opencompass
@@ -160,8 +162,6 @@ jobs:
           # python3 .github/scripts/action_tools.py create_model_links /root/models .
       - name: Evaluate chat models
         if: matrix.evaluate_type == 'chat'
-        env:
-          HF_HUB_CACHE: /root/models
         run: |
           echo ${{github.event.inputs.chat_models}}
           echo ${{github.event.inputs.chat_datasets}}
