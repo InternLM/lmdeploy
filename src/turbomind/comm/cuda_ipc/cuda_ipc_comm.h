@@ -142,7 +142,7 @@ private:
         }
         friend bool operator<(const Symmetric& a, void* b)
         {
-            return (char*)a.uc_end < (char*)b;
+            return (char*)a.uc_end <= (char*)b;
         }
         friend bool operator<(void* a, const Symmetric& b)
         {
@@ -168,7 +168,7 @@ private:
         }
         friend bool operator<(const Allocation& a, void* b)
         {
-            return (char*)a.uc_end < (char*)b;
+            return (char*)a.uc_end <= (char*)b;
         }
         friend bool operator<(void* a, const Allocation& b)
         {

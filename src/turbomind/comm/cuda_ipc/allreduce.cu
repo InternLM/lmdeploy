@@ -5,6 +5,7 @@
 
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
 #include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
+#include "src/turbomind/comm/cuda_ipc/multimem.cuh"
 
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -355,6 +356,49 @@ __global__ void Allreduce_Simple_Push_v2(T*                           buf,
     }
 }
 
+template<class T, int vec_size, class Relaxed>
+__global__ void Allreduce_NVLS(T*                           mc_buf,
+                               mscclpp::D2DSemaphoreHandle* semaphores,
+                               int                          rank,
+                               int                          peers,
+                               int                          slice,
+                               int                          count,
+                               constant<vec_size>,
+                               Relaxed relaxed)
+{
+    const int block_num  = gridDim.x;
+    const int thread_num = blockDim.x * block_num;
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    DeviceSemaphore sem;
+
+    if (threadIdx.x < peers) {
+        sem.Load(&semaphores[blockIdx.x * peers + threadIdx.x]);
+        sem.SignalAndWait(relaxed);
+    }
+
+    __syncthreads();
+
+    using Vec = Array<T, vec_size>;
+
+    using namespace ops;
+
+    const int first = rank * slice;
+    const int last  = min(count, first + slice);
+
+    for (int idx = first + thread_idx; idx < last; idx += thread_num) {
+        Vec vsum = multimem_ld_reduce_sum((const Vec*)(mc_buf + idx * vec_size));
+        multimem_st(mc_buf + idx * vec_size, vsum);
+    }
+
+    __syncthreads();
+
+    if (threadIdx.x < peers) {
+        sem.SignalAndWait(true);
+        sem.Save(&semaphores[blockIdx.x * peers + threadIdx.x]);
+    }
+}
+
 void CudaIpcCommImpl::AllReduceSum(
     const void* sendbuff, void* recvbuff, size_t count, DataType type, int group, cudaStream_t stream)
 {
@@ -370,7 +414,7 @@ void CudaIpcCommImpl::AllReduceSum(
     auto invoke = [&](auto t) {
         using T               = decltype(t);
         const size_t bytesize = sizeof(T) * count;
-        if (bytesize <= 1 << 20) {
+        if (0 && bytesize <= 1 << 20) {
             constexpr int vec_size      = sizeof(uint2) / sizeof(T);
             const int     slice         = (count / vec_size + n_ranks - 1) / n_ranks;
             constexpr int ctas_per_peer = 4;
@@ -392,7 +436,7 @@ void CudaIpcCommImpl::AllReduceSum(
         else {
             constexpr int vec_size = sizeof(uint4) / sizeof(T);
             const int     slice    = (count / vec_size + n_ranks - 1) / n_ranks;
-            if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
+            if (0 && bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
                 constexpr int threads = 1024;
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
                 Allreduce_Simple_Push_v2<<<blocks, threads, 0, stream>>>((T*)data,
@@ -419,6 +463,16 @@ void CudaIpcCommImpl::AllReduceSum(
                                                                       count / vec_size,
                                                                       constant<vec_size>{},
                                                                       std::false_type{});
+
+                // const int blocks = std::min(4, (slice + threads - 1) / threads);
+                // Allreduce_NVLS<<<blocks, threads, 0, stream>>>(get_symmetric((T*)data, group).mc,
+                //                                                semaphores,
+                //                                                rank,
+                //                                                n_ranks - 1,
+                //                                                slice,
+                //                                                count / vec_size,
+                //                                                constant<vec_size>{},
+                //                                                std::false_type{});
             }
         }
     };

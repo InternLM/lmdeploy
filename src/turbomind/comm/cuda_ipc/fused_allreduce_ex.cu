@@ -5,6 +5,8 @@
 #include "src/turbomind/comm/cuda_ipc/group_sum.h"
 
 #include "src/turbomind/comm/cuda_ipc/mscclpp.h"
+#include "src/turbomind/comm/cuda_ipc/multimem.cuh"
+
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
@@ -180,6 +182,115 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull_V(T*                   
     }
 }
 
+template<class T, int vec_size, int block_dim, int groups, class Relaxed>
+__global__ void AllreduceResidualBiasRMSnormV_NVLS(T*       rs_mc_buf,
+                                                   T*       ag_mc_buf,
+                                                   T*       res,
+                                                   const T* bias,
+                                                   const T* weights,
+                                                   //    D2DSemaphoreHandle*   rs_sem,
+                                                   //    D2DSemaphoreHandle*   ag_sem,
+                                                   D2DSemaphoreHandle* semaphores,
+                                                   int                 g_rank,
+                                                   int                 g_peers,
+                                                   //    Array<int, kMaxRanks> offsets,
+                                                   //    Array<int, kMaxRanks> firsts,
+                                                   //    Array<int, kMaxRanks> lasts,
+                                                   int   first,
+                                                   int   last,
+                                                   int   offset,
+                                                   int   vdim,
+                                                   float inv_dim,
+                                                   float eps,
+                                                   constant<vec_size>,
+                                                   constant<block_dim>,
+                                                   constant<groups>,
+                                                   Relaxed relaxed)
+{
+    DeviceSemaphore sem;
+
+    if (threadIdx.x < g_peers) {
+        sem.Load(&semaphores[blockIdx.x * g_peers + threadIdx.x]);
+        sem.SignalAndWait(relaxed);
+    }
+
+    __syncthreads();
+
+    using Vec = Array<T, vec_size>;
+
+    using namespace ops;
+
+    static_assert(block_dim % groups == 0);
+    constexpr int threads = block_dim / groups;
+
+    static_assert(threads % WARP_SIZE == 0);
+    constexpr int warps = threads / WARP_SIZE;
+
+    const int xi = threadIdx.x / threads;
+    const int di = threadIdx.x % threads;
+
+    using Vec = Array<T, vec_size>;
+
+    Vec b_vec{};
+    if (bias && di < vdim) {
+        Ldg(b_vec, bias + di * vec_size);
+    }
+
+    Vec w_vec;
+    if (di < vdim) {
+        Ldg(w_vec, weights + di * vec_size);
+    }
+
+    const int bi = blockIdx.x * groups + xi;
+    const int bn = gridDim.x * groups;
+
+    auto syncgroup = [&] {  //
+        asm volatile("bar.sync %0, %1;" : : "r"(15 - xi), "r"(threads) : "memory");
+    };
+
+    for (int ti = first + bi; ti < last; ti += bn) {
+        const int idx = ((offset + ti) * vdim + di) * vec_size;
+        float     sum{};
+        Vec       vec;
+        if (di < vdim) {
+            Vec acc = multimem_ld_reduce_sum((const Vec*)(rs_mc_buf + idx));
+            Load(vec, res + (ti * vdim + di) * vec_size);
+            vec = vec + acc;
+            if (bias) {
+                vec = vec + b_vec;
+            }
+            Store(res + (ti * vdim + di) * vec_size, vec);
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                sum += (float)vec[i] * (float)vec[i];
+            }
+        }
+        sum = detail::GroupSum(sum, warps, syncgroup);
+        __shared__ float shared_sum[groups];
+        if (di == 0) {
+            shared_sum[xi] = rsqrtf(sum * inv_dim + eps);
+        }
+        syncgroup();
+        sum = shared_sum[xi];
+        if (di < vdim) {
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                vec[i] = static_cast<T>(((float)vec[i] * sum)) * w_vec[i];
+            }
+            multimem_st(ag_mc_buf + idx, vec);
+        }
+    }
+
+    __syncthreads();
+
+    if (threadIdx.x < g_peers) {
+        // this and the `__syncthreads` above are used to block later kernels from modifying shared `buf` before all
+        // ranks done copying from it
+        sem.SignalAndWait(true);
+        sem.Save(&semaphores[blockIdx.x * g_peers + threadIdx.x]);
+    }
+}
+
 void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                      void*        residual,
                                                      const void*  bias,
@@ -229,32 +340,53 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
     auto invoke = [&](auto t, auto groups) {
         using T                = decltype(t);
         constexpr int vec_size = sizeof(uint4) / sizeof(T);
-        AllreduceResidualBiasRMSnorm_Simple_Pull_V<<<48, 1024, 0, stream>>>((T*)hidden,
-                                                                            (T*)residual,
-                                                                            (const T*)bias,
-                                                                            (const T*)weights,
-                                                                            get_symmetric((T*)hidden, group0).uc,
-                                                                            get_symmetric((T*)hidden, group1).uc,
-                                                                            g0.d2d_semaphores,
-                                                                            g1.d2d_semaphores,
-                                                                            groups_.at(0).d2d_semaphores,
-                                                                            rank(group0),
-                                                                            rank(group1),
-                                                                            tp0 - 1,
-                                                                            tp1 - 1,
-                                                                            rank(0),
-                                                                            n_ranks(0) - 1,
-                                                                            offsets,
-                                                                            firsts,
-                                                                            lasts,
-                                                                            ag_g_ranks,
-                                                                            dim / vec_size,
-                                                                            1.f / dim,
-                                                                            eps,
-                                                                            constant<vec_size>{},
-                                                                            constant<1024>{},
-                                                                            constant<1>{},
-                                                                            std::true_type{});
+        // AllreduceResidualBiasRMSnorm_Simple_Pull_V<<<48, 1024, 0, stream>>>((T*)hidden,
+        //                                                                     (T*)residual,
+        //                                                                     (const T*)bias,
+        //                                                                     (const T*)weights,
+        //                                                                     get_symmetric((T*)hidden, group0).uc,
+        //                                                                     get_symmetric((T*)hidden, group1).uc,
+        //                                                                     g0.d2d_semaphores,
+        //                                                                     g1.d2d_semaphores,
+        //                                                                     groups_.at(0).d2d_semaphores,
+        //                                                                     rank(group0),
+        //                                                                     rank(group1),
+        //                                                                     tp0 - 1,
+        //                                                                     tp1 - 1,
+        //                                                                     rank(0),
+        //                                                                     n_ranks(0) - 1,
+        //                                                                     offsets,
+        //                                                                     firsts,
+        //                                                                     lasts,
+        //                                                                     ag_g_ranks,
+        //                                                                     dim / vec_size,
+        //                                                                     1.f / dim,
+        //                                                                     eps,
+        //                                                                     constant<vec_size>{},
+        //                                                                     constant<1024>{},
+        //                                                                     constant<1>{},
+        //                                                                     std::true_type{});
+
+        int g_rank = rank(0);
+        AllreduceResidualBiasRMSnormV_NVLS<<<40, 1024, 0, stream>>>(get_symmetric((T*)hidden, group0).mc,
+                                                                    get_symmetric((T*)hidden, group1).mc,
+                                                                    (T*)residual,
+                                                                    (const T*)bias,
+                                                                    (const T*)weights,
+                                                                    groups_.at(0).d2d_semaphores,
+                                                                    rank(0),
+                                                                    n_ranks(0) - 1,
+                                                                    firsts[g_rank],
+                                                                    lasts[g_rank],
+                                                                    offsets[g_rank],
+                                                                    dim / vec_size,
+                                                                    1.f / dim,
+                                                                    eps,
+                                                                    constant<vec_size>{},
+                                                                    constant<1024>{},
+                                                                    constant<1>{},
+                                                                    std::true_type{});
+
         return true;
     };
 
