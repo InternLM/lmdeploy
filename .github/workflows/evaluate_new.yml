@@ -135,18 +135,18 @@ jobs:
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
+          cp -r /nvme1/shared/qa_test_models/offline_pkg/lmdeploy/opencompass .
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
+          cp -r /nvme1/shared/qa_test_models/offline_pkg/lmdeploy/opencompass .
           python3 -m pip install /nvme1/shared/qa_test_models/offline_pkg/lmdeploy/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
       - name: Install opencompass
         run: |
-          git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
           cd opencompass
-          git checkout ${{ github.event.inputs.oc_repo_ref}}
           # cp /nvme1/shared/qa_test_models/offline_pkg/requirements-oc.txt requirements/runtime.txt
           python3 -m pip install -e .[full] -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
