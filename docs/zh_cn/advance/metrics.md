@@ -101,7 +101,7 @@ scrape_configs:
   - job_name: lmdeploy
     static_configs:
       - targets:
-          - '$host_ip:$api_server_port1' # <= Modify this
+          - '$host_ip:$api_server_port1' # <= 修改此处
 ```
 
 3. **进入监控目录并执行上述相同步骤**
