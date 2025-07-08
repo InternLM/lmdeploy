@@ -171,6 +171,7 @@ class SubCliServe:
         ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
+        ArgumentHelper.hf_overrides(pt_group)
         # multi-node serving args
         ArgumentHelper.node_rank(parser)
         ArgumentHelper.num_nodes(parser)
@@ -317,25 +318,28 @@ class SubCliServe:
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             adapters = get_lora_adapters(args.adapters)
-            backend_config = PytorchEngineConfig(dtype=args.dtype,
-                                                 tp=args.tp,
-                                                 dp=args.dp,
-                                                 ep=args.ep,
-                                                 max_batch_size=max_batch_size,
-                                                 cache_max_entry_count=args.cache_max_entry_count,
-                                                 block_size=args.cache_block_seq_len,
-                                                 session_len=args.session_len,
-                                                 adapters=adapters,
-                                                 enable_prefix_caching=args.enable_prefix_caching,
-                                                 device_type=args.device,
-                                                 quant_policy=args.quant_policy,
-                                                 eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num,
-                                                 enable_microbatch=args.enable_microbatch,
-                                                 enable_eplb=args.enable_eplb,
-                                                 role=EngineRole[args.role],
-                                                 migration_backend=MigrationBackend[args.migration_backend],
-                                                 model_format=args.model_format)
+            backend_config = PytorchEngineConfig(
+                dtype=args.dtype,
+                tp=args.tp,
+                dp=args.dp,
+                ep=args.ep,
+                max_batch_size=max_batch_size,
+                cache_max_entry_count=args.cache_max_entry_count,
+                block_size=args.cache_block_seq_len,
+                session_len=args.session_len,
+                adapters=adapters,
+                enable_prefix_caching=args.enable_prefix_caching,
+                device_type=args.device,
+                quant_policy=args.quant_policy,
+                eager_mode=args.eager_mode,
+                max_prefill_token_num=args.max_prefill_token_num,
+                enable_microbatch=args.enable_microbatch,
+                enable_eplb=args.enable_eplb,
+                role=EngineRole[args.role],
+                migration_backend=MigrationBackend[args.migration_backend],
+                model_format=args.model_format,
+                hf_overrides=args.hf_overrides,
+            )
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,

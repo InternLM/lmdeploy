@@ -83,6 +83,10 @@ def build_executor(model_path: str,
             'empty_init requires distributed_executor_backend="ray", ',
             f'get distributed_executor_backend="{distributed_executor_backend}"')
 
+    if misc_config.hf_overrides is not None:
+        logger.warning(f'Overriding HF config with {misc_config.hf_overrides}')
+        model_config.hf_config.update(misc_config.hf_overrides)
+
     if distributed_executor_backend is not None:
         logger.info(f'Build <{distributed_executor_backend}> executor.')
     if distributed_executor_backend == 'uni':

@@ -223,14 +223,14 @@ class MiscConfig:
     custom_module_map: str = None
     empty_init: bool = False
     model_format: str = None
+    hf_overrides: Dict[str, Any] = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
         """From engine config."""
-        misc_config = cls(
-            custom_module_map=engine_config.custom_module_map,
-            empty_init=engine_config.empty_init,
-            prefill_interval=engine_config.prefill_interval,
-            model_format=engine_config.model_format,
-        )
+        misc_config = cls(custom_module_map=engine_config.custom_module_map,
+                          empty_init=engine_config.empty_init,
+                          prefill_interval=engine_config.prefill_interval,
+                          model_format=engine_config.model_format,
+                          hf_overrides=engine_config.hf_overrides)
         return misc_config

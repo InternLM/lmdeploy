@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -320,6 +320,8 @@ class PytorchEngineConfig:
             Default to `MigrationBackend.DLSlime`.
         enable_mp_engine (bool): run engine in multi-process mode.
         model_format (str): weight quantization policy, options: ['fp8'].
+        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+            It can be used to override the default config of the model,
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -349,6 +351,7 @@ class PytorchEngineConfig:
     enable_eplb: bool = False
     enable_mp_engine: bool = False
     model_format: str = None
+    hf_overrides: Optional[Dict[str, Any]] = None
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
