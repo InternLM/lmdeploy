@@ -399,7 +399,6 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def do_log_stats(self):
-        """Process collected context, then logging."""
         # loop through CLI logger and Prometheus logger
         for stat_logger in self.stat_loggers:
             stat_logger.log()
