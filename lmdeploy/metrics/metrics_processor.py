@@ -160,7 +160,9 @@ class MetricsProcessor():
 
         # update scheduler stats
         scheduler_stats = get_current_scheduler_stats()
+        # actual running requests
         scheduler_stats.num_running_reqs = scheduler_raw_info['locked']
+        # waiting to be scheduled + scheduled to running but haven't started yet
         scheduler_stats.num_waiting_reqs = scheduler_raw_info['waiting'] + scheduler_raw_info['running']
         scheduler_stats.gpu_cache_usage = 1.0 - (scheduler_raw_info['free_gpu_blocks'] /
                                                  scheduler_raw_info['total_gpu_blocks'])
