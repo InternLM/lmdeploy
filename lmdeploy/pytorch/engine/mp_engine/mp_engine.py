@@ -3,19 +3,14 @@ import asyncio
 import pickle
 import signal
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
 
 import torch.multiprocessing as mp
 
-from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeConnectionRequest
 from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
-
-
-if TYPE_CHECKING:
-    from lmdeploy.pytorch.engine import Engine
 
 
 def cancel_async_tasks(loop: asyncio.AbstractEventLoop):

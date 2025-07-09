@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, Dict, List
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
-from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest, DistServeKVTransferEndpointInfo
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger

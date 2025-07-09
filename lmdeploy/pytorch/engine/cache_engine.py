@@ -331,15 +331,13 @@ class CacheEngine:
                                                              offset=t.storage_offset(),
                                                              length=t.numel() * t.itemsize)
             self.migration_backend_impl.register_memory_region(register_mr_request)
-        return DistServeKVTransferEndpointInfo(
-                protocol=migration_init_request.protocol,
-                endpoint_info=json.dumps(self.migration_backend_impl.endpoint_info(
-                    migration_init_request.remote_engine_id,
-                    migration_init_request.protocol)
-                )
-            )
+        return DistServeKVTransferEndpointInfo(protocol=migration_init_request.protocol,
+                                               endpoint_info=json.dumps(
+                                                   self.migration_backend_impl.endpoint_info(
+                                                       migration_init_request.remote_engine_id,
+                                                       migration_init_request.protocol)))
 
-    def p2p_connect(self, remote_engine_id:str, migration_conn_request: List[DistServeKVTransferEndpointInfo]):
+    def p2p_connect(self, remote_engine_id: str, migration_conn_request: List[DistServeKVTransferEndpointInfo]):
         self.migration_backend_impl.p2p_connect(remote_engine_id, migration_conn_request[self.tp_rank])
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):

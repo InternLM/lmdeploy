@@ -1,19 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.logger import get_logger
 
-logger = get_logger("lmdeploy")
+logger = get_logger('lmdeploy')
 
 try:
-    logger.debug("Registering DLSlime Backend")
+    logger.debug('Registering DLSlime Backend')
     from .dlslime import DLSlimeBackend
 except ImportError:
-    logger.warning("Disable DLSlime Backend")
+    logger.warning('Disable DLSlime Backend')
 
 try:
-    logger.debug("Registering Mooncake Backend")
+    logger.debug('Registering Mooncake Backend')
     from .mooncake import MooncakeBackend
 except ImportError:
-    logger.warning("Disable Mooncake Backend")
+    logger.warning('Disable Mooncake Backend')
 
-
-__all__ = ["DLSlimeBackend", "MooncakeBackend"]
+__all__ = ['DLSlimeBackend', 'MooncakeBackend']

@@ -3,8 +3,8 @@ from typing import List, Optional, Tuple
 
 from pydantic import BaseModel
 
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 from lmdeploy.pytorch.disagg.config import DistServeNVLinkConfig, DistServeRDMAConfig, DistServeTCPConfig
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
 
 
 class MigrationExecutionBatch(BaseModel):

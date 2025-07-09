@@ -144,7 +144,7 @@ class Session:
         for user, assistant in self.history:
             if isinstance(user, list):
                 user = str(user)
-            res += f"USER:\n{user}\nASSISTANT:\n{assistant}\n"
+            res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
         return res
 
     def __enter__(self):
@@ -191,7 +191,7 @@ class _EventLoopThread:
         try:
             loop.run_forever()
         except BaseException as e:
-            logger.error(f"[internal_thread] {type(e).__name__} {e}")
+            logger.error(f'[internal_thread] {type(e).__name__} {e}')
         finally:
             try:
                 self._cancel_all_tasks()
@@ -272,8 +272,8 @@ class AsyncEngine(LogitsMixin):
         max_log_len: int = None,
         **kwargs,
     ) -> None:
-        logger.info(f"input backend={backend}, backend_config={backend_config}")
-        logger.info(f"input chat_template_config={chat_template_config}")
+        logger.info(f'input backend={backend}, backend_config={backend_config}')
+        logger.info(f'input chat_template_config={chat_template_config}')
 
         self.model_name, chat_template_name = get_names_from_model(model_path, model_name)
         if chat_template_config is None:
@@ -282,7 +282,7 @@ class AsyncEngine(LogitsMixin):
             chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
 
-        logger.info(f"updated chat_template_onfig={chat_template_config}")
+        logger.info(f'updated chat_template_onfig={chat_template_config}')
 
         self.tokenizer = Tokenizer(model_path)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
@@ -294,9 +294,9 @@ class AsyncEngine(LogitsMixin):
         elif backend == 'pytorch':
             self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
         else:
-            raise ValueError(f"unsupported backend {backend}")
+            raise ValueError(f'unsupported backend {backend}')
 
-        logger.info(f"updated backend_config={self.backend_config}")
+        logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
         self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
@@ -422,7 +422,7 @@ class AsyncEngine(LogitsMixin):
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
-        logger.info(f"stop session {session_id}")
+        logger.info(f'stop session {session_id}')
         generator = self.id2inst.get(session_id)
         if generator:
             await generator.async_cancel(session_id)
@@ -430,7 +430,7 @@ class AsyncEngine(LogitsMixin):
 
     async def end_session(self, session_id: int):
         """For ending a session that is not running."""
-        logger.info(f"end session {session_id}")
+        logger.info(f'end session {session_id}')
         inst = self.id2inst.get(session_id)
         if inst:
             await inst._active.wait()
@@ -440,7 +440,7 @@ class AsyncEngine(LogitsMixin):
             await inst.async_end(session_id)
             self.id2step[session_id] = 0
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f"[end_session] exception caught: {e}")
+            logger.error(f'[end_session] exception caught: {e}')
         finally:
             self._get_free_insts().put_nowait(inst)
 
@@ -633,7 +633,7 @@ class AsyncEngine(LogitsMixin):
         prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools, enable_thinking=enable_thinking)
         if prompt is None:
             raise ValueError(
-                f"You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input."  # noqa
+                f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
             )
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         return {'prompt': prompt, 'input_ids': input_ids}
@@ -718,7 +718,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.stop_token_ids = self.stop_words
         gen_config.update_from_hf_gen_cfg(self.hf_gen_cfg, self.tokenizer.eos_token_id)
         if not gen_config.do_sample:
-            logger.warning(f"GenerationConfig: {gen_config}")
+            logger.warning(f'GenerationConfig: {gen_config}')
             logger.warning('Since v0.6.0, lmdeploy add `do_sample` in '
                            'GenerationConfig. It defaults to False, meaning greedy '
                            'decoding. Please set `do_sample=True` if sampling '
@@ -733,7 +733,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
             logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
-                         f"Fallback to 1")
+                         f'Fallback to 1')
             gen_config.n = 1
         if messages:
             prompt = messages
@@ -755,12 +755,12 @@ class AsyncEngine(LogitsMixin):
                 gen_config=gen_config,
                 adapter_name=adapter_name,
             )
-            logger.info(f"session={session_id}, "
-                        f"history_tokens={self.id2step[session_id]}, "
-                        f"input_tokens={len(input_ids)}, "
-                        f"max_new_tokens={gen_config.max_new_tokens}, "
-                        f"seq_start={sequence_start}, seq_end={sequence_end}, "
-                        f"step={step}, prep={do_preprocess}")
+            logger.info(f'session={session_id}, '
+                        f'history_tokens={self.id2step[session_id]}, '
+                        f'input_tokens={len(input_ids)}, '
+                        f'max_new_tokens={gen_config.max_new_tokens}, '
+                        f'seq_start={sequence_start}, seq_end={sequence_end}, '
+                        f'step={step}, prep={do_preprocess}')
         else:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
@@ -770,9 +770,9 @@ class AsyncEngine(LogitsMixin):
             gen_config.max_new_tokens = max(128, self.session_len - self.id2step[session_id] - len(input_ids))
         elif (self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len):
             gen_config.max_new_tokens = max(self.session_len - self.id2step[session_id] - len(input_ids), 128)
-            logger.error(f"Truncate max_new_tokens to {gen_config.max_new_tokens}")
+            logger.error(f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
         if (self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len):
-            logger.error(f"run out of tokens. session={session_id}.")
+            logger.error(f'run out of tokens. session={session_id}.')
             yield GenOut('', self.id2step[session_id], len(input_ids), 0, 'length')
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
@@ -878,7 +878,7 @@ class AsyncEngine(LogitsMixin):
                     if not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
-                    logger.info(f"session {session_id} finished, reason "
+                    logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, output_tokens {gen_len}')
                     yield GenOut(response,
@@ -889,7 +889,7 @@ class AsyncEngine(LogitsMixin):
                                  token_ids=[],
                                  cache_block_ids=outputs.cache_block_ids)
                 else:
-                    logger.error(f"session {session_id} finished, "
+                    logger.error(f'session {session_id} finished, '
                                  'reason "error"')
                     yield GenOut(
                         response='internal error happened',
@@ -1023,7 +1023,7 @@ class AsyncEngine(LogitsMixin):
         if self.engine.end_session(session_id):
             logger.debug(f'successfully free session {session_id}')
         else:
-            logger.warning(f"Invalid Free session {session_id}.")
+            logger.warning(f'Invalid Free session {session_id}.')
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine.p2p_initialize(init_request)

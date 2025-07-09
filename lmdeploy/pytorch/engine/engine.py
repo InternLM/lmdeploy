@@ -991,7 +991,8 @@ class Engine:
                     logger.info(f'migrating session: {msg.session_id} begin')
                     await self.executor.migrate(migration_inputs)
                     logger.info(f'migrating session: {msg.session_id} done')
-                    await self.engine_conn.zmq_send(remote_engine_id=migration_request.remote_engine_id, remote_session_id=migration_request.remote_session_id)
+                    await self.engine_conn.zmq_send(remote_engine_id=migration_request.remote_engine_id,
+                                                    remote_session_id=migration_request.remote_session_id)
 
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
@@ -1036,7 +1037,7 @@ class Engine:
                 await has_runable_event.wait()
                 scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
-                if next_running == None:
+                if next_running is None:
                     # self.perfill_watermark_event.wait()
                     await asyncio.sleep(0.1)
                     continue

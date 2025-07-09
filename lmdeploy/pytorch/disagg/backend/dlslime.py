@@ -11,7 +11,8 @@ from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, MigrationBackend
-from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, MigrationProtocol, DistServeKVTransferEndpointInfo
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeInitRequest, DistServeKVTransferEndpointInfo,
+                                                   MigrationProtocol)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
 
 logger = get_logger('lmdeploy')
@@ -104,7 +105,7 @@ class DLSlimeBackend(MigrationBackendImpl):
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         return self.links[remote_engine_id].endpoint[protocol].endpoint_info
 
-    def p2p_connect(self, remote_engine_id:str, conn_req: DistServeKVTransferEndpointInfo):
+    def p2p_connect(self, remote_engine_id: str, conn_req: DistServeKVTransferEndpointInfo):
         self.links[remote_engine_id].connect(conn_req)
 
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):

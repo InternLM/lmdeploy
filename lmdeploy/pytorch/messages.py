@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType, GenerationConfig, LogitsProcessor
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 

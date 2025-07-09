@@ -108,4 +108,3 @@ class DistServeEngineConfig(BaseModel):
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
-

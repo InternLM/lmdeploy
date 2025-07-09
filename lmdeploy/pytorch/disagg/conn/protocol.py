@@ -4,84 +4,14 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
-from lmdeploy.pytorch.disagg.config import (
-    DistServeEngineConfig,
-    DistServeNVLinkConfig,
-    DistServeRDMAConfig,
-    DistServeTCPConfig,
-)
-
-
-"""
-This File introduces all the interface (*Request* and *Response*) of PD disaggregation protocol.
-
-Figure blow illustrate the flow of connection establish of Prefill and Decode Engine.
-
-    Prefill Engine                                           Proxy                                        Decode Engine
-           |                                                   |                                                |
-           |----------------------------------------------------------------------------------------------------|
-           |                                                                                                    |
-           |    Proxy sends Init Request                                                                        |
-           |                                                                                                    |
-           |--------------------------------------------------------------------------------------------------- |
-           | <<<=================================== DistServeInitRequest ===================================>>> |
-           |--------------------------------------------------------------------------------------------------- |
-           |                                                                                                    |
-           |    Engines initialize RDMA/NVLink endpoint for KVCache Migration, and setup control plane via ZMQ  |
-           |      socket in scheduler.                                                                          |
-           |                                                                                                    |
-           |--------------------------------------------------------------------------------------------------- |
-           | ===================================>>> DistServeInitResponse <<<================================== |
-           |----------------------------------------------------------------------------------------------------|
-           |                                                                                                    |
-           |    Proxy requests connection info                                                                  |
-           |                                                                                                    |
-           |----------------------------------------------------------------------------------------------------|
-           | <<<================================ DistServeConnectionRequest ================================>>> |
-           |----------------------------------------------------------------------------------------------------|
-           |                                                                                                    |
-           |    Engine modify endpoint status from initialized status to ready to send/recv status              |
-           |                                                                                                    |
-           |----------------------------------------------------------------------------------------------------|
-           | ===============================>>> DistServeConnectionResponse <<<================================ | 
-           |                                                   |                                                |
-           |                                                   |                                                |
-    Prefill Engine                                           Proxy                                        Decode Engine
-
-
-
-The figure blow illustrate life span of the served request in DistServe.
-Prefill --------------- WAITING -- RUNNING -- TO_BE_MIGRATE ---------------------------------- Prefill Session End
-                           /                  \\                                          /              |
-                          /                    \\                                        /               |
-                         /                      \\                                      /                |
-               v1/chat/completions            first_token_id                           /                 |
-                (Preserve Cache)                 \\                                   /                  |
-                        /                         \\                                 /                   |
-                       /                           \\                               v                    |
-                      /                             \\                        p2p_migrate                | 
-                     /                               \\                   (REMOTE_MEMORY_COPY)           |
-Proxy   -------------                                ---                         /                       |
-                                                      \\                        /                        |
-                                                       \\                      /                     free_cache
-                                                        \\                    /                     (ZMQ_Socket)
-                                                v1/chat/completion           /                           |
-                                                (+MigrationRequest          /                            |
-                                                         \\                /                             |
-                                                          \\              /                              |
-                                                           \\            /                               |
-                                                            \\          v                                |            v-^
-Decode  ---------------------------------------- MIGRATION_WAITING -- MIGRATION_RUNNING  --------- MIGRATION_DONE  -- | | RUNNING -- Decode Session_end 
-                                                                                                                      v-^
-
-"""
+from lmdeploy.pytorch.disagg.config import (DistServeEngineConfig, DistServeNVLinkConfig, DistServeRDMAConfig,
+                                            DistServeTCPConfig)
 
 
 class MigrationProtocol(enum.Enum):
     """Migration Transport Protocol.
 
     Attributes:
-        TCP: TCP for General Purpose Transport Protocol.
         RDMA: IB or RoCEv1/v2.
         NVLINK: High device-to-device link.
 
@@ -131,7 +61,7 @@ class DistServeInitResponse(BaseModel):
     engine_endpoint_info: DistServeEngineEndpointInfo
     # the KVCache Transfer initialization feedback
     # To ensure generality (where endpoint_info can be initialization information
-    # for different media such as RDMA, NVLink, etc.), we use a string (str) to 
+    # for different media such as RDMA, NVLink, etc.), we use a string (str) to
     # store this information.
     kvtransfer_endpoint_info: List[DistServeKVTransferEndpointInfo]
 
@@ -159,4 +89,3 @@ class MigrationRequest(BaseModel):
 class DistServeCacheFreeRequest(BaseModel):
     remote_engine_id: str
     remote_session_id: int
-
