@@ -22,7 +22,7 @@ on:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
         type: string
-        default: '[*mmlu_datasets, *gsm8k_datasets, *ifeval_datasets]'
+        default: '[d for d in mmlu_pro_datasets if "math" in d["abbr"]] +[*gsm8k_datasets]'
       base_models:
         required: true
         description: 'Tested TurboMind models list. eg. [turbomind_internlm2_5_7b, turbomind_internlm2_5_7b_4bits, turbomind_internlm2_5_7b_batch1, turbomind_internlm2_5_7b_batch1_4bits, turbomind_qwen2_7b, turbomind_qwen2_5_7b, turbomind_qwen2_5_14b]'
@@ -57,7 +57,7 @@ jobs:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py312]
+        pyver: [py310]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -101,8 +101,8 @@ jobs:
         HF_HUB_CACHE: /root/models
         HF_HUB_OFFLINE: 1
     container:
-      image: pjlab-shanghai-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/pjlab-eflops/llm:lmdeploy-v0.7.2-cu12
-      options: "--gpus=0,1,2,3,4,5 --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      image: pjlab-shanghai-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/pjlab-eflops/llm:lmdeploy-v0.9.1-fortest
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme1:/nvme1
         - /nvme2:/nvme2
@@ -129,7 +129,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py312
+          name: my-artifact-${{ github.run_id }}-py310
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
@@ -149,8 +149,7 @@ jobs:
       - name: Install opencompass
         run: |
           cd opencompass
-          # cp /nvme1/shared/qa_test_models/offline_pkg/requirements-oc.txt requirements/runtime.txt
-          python3 -m pip install -e .[full] -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+          python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
