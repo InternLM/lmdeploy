@@ -42,7 +42,6 @@ class MigrationBackend(enum.Enum):
 
     DLSlime = enum.auto()
     Mooncake = enum.auto()
-    InfiniStore = enum.auto()
 
 
 class RDMALinkType(enum.Enum):
@@ -108,3 +107,11 @@ class DistServeEngineConfig(BaseModel):
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+
+
+class MooncakeEngineConfig(DistServeEngineConfig):
+    """Mooncake Transfer Engine Config.
+
+    TODO: Support more specific config for Mooncake.
+    """
+    pass

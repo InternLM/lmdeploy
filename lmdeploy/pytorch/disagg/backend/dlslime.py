@@ -92,6 +92,7 @@ class DLSlimeMigrationManagement:
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)
 class DLSlimeBackend(MigrationBackendImpl):
+    """DLSlime Transfer Engine."""
 
     def __init__(self):
         self.links: Dict[int, DLSlimeMigrationManagement] = {}
