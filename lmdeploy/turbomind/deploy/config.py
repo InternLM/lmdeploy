@@ -8,6 +8,9 @@ from typing import List
 from pydantic.dataclasses import dataclass
 
 from lmdeploy.messages import TurbomindEngineConfig
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 def config_from_dict(cls, env):
@@ -149,6 +152,22 @@ class TurbomindModelConfig:
                 setattr(self.model_config, key, value)
             if hasattr(self.attention_config, key):
                 setattr(self.attention_config, key, value)
+
+        # update from hf_overrides
+        if hasattr(config, 'hf_overrides') and config.hf_overrides:
+            hf_overrides = config.hf_overrides
+
+            if hf_overrides.get('rope_scaling'):
+                override_param = hf_overrides.get('rope_scaling')
+                if self.attention_config.rope_param is None:
+                    self.attention_config.rope_param = RopeParam(type='', base=0, dim=0)
+
+                self.attention_config.rope_param.__dict__.update(
+                    type=override_param.get('rope_type'),
+                    factor=override_param.get('factor'),
+                    max_position_embeddings=override_param.get('original_max_position_embeddings'))
+
+            logger.warning(f'Overriding HF config with {hf_overrides}')
 
         # use dynamic ntk
         if config.rope_scaling_factor:

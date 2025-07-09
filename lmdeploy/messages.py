@@ -222,6 +222,8 @@ class TurbomindEngineConfig:
         devices(List[int]): the used devices
         empty_init (bool): Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
+        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+            It can be used to override the default config of the model,
     """
 
     dtype: str = 'auto'
@@ -251,6 +253,7 @@ class TurbomindEngineConfig:
     devices: Optional[List[int]] = None
     empty_init: bool = False
     communicator: str = 'nccl'
+    hf_overrides: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         """Check input validation."""
