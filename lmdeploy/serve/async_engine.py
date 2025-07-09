@@ -724,17 +724,11 @@ class AsyncEngine(LogitsMixin):
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
         if gen_config.max_new_tokens is None:
-            # for interactive endpoint, will try maximum possible token num
-            gen_config.max_new_tokens = max(128, self.session_len - self.id2step[session_id] - len(input_ids))
-        elif self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len:
-            gen_config.max_new_tokens = max(self.session_len - self.id2step[session_id] - len(input_ids), 128)
-            logger.error(f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
-        if self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len:
-            logger.error(f'run out of tokens. session={session_id}.')
-            yield GenOut('', self.id2step[session_id], len(input_ids), 0, 'length')
-            if sequence_end is True and sequence_start is False:
-                await self.end_session(session_id)
-            return
+            gen_config.max_new_tokens = max(0, self.session_len - len(input_ids))
+            if gen_config.max_new_tokens == 0:
+                logger.error(f'invalid input input_ids length {len(input_ids)}, session_len {self.session_len}')
+                yield GenOut('', self.id2step[session_id], len(input_ids), 0, 'length')
+                return
 
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
