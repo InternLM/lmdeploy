@@ -6,6 +6,7 @@ LMDeploy supports  reward models, which are detailed in the table below:
 | :--------------: | :-----------: | :------------------------: |
 | Qwen2.5-Math-RM  |      72B      |          PyTorch           |
 | InternLM2-Reward | 1.8B, 7B, 20B |          PyTorch           |
+|      POLAR       |   1.8B, 7B    |          PyTorch           |
 
 ## Offline Inference
 
