@@ -12,6 +12,8 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
 
+#include "src/turbomind/comm/cuda_ipc/semaphore.h"
+
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 
@@ -108,6 +110,13 @@ CudaIpcCommImpl::CudaIpcCommImpl(HostComm h_comm):
     scratch_buff_ = Allocate(kScratchBuffSize);
     check_cuda_error(cudaMemsetAsync(scratch_buff_, 0, kScratchBuffSize));
 
+    /// TODO: release
+    semaphore_.Allocate(global_n_ranks_, global_rank_, [this](size_t size) {
+        auto ptr = (uint64_t*)Allocate(size);
+        Register(ptr, size);
+        return get_symmetric_v2(ptr, 0);
+    });
+
     check_cuda_error(cudaStreamSynchronize(0));
 
     Register(packet_buff_, kPacketBuffSize);
@@ -126,6 +135,11 @@ CudaIpcCommImpl::~CudaIpcCommImpl()
     for (auto i = (int)groups_.size() - 1; i >= 0; --i) {
         Free(groups_[i].d2d_semaphore_data);
     }
+
+    semaphore_.Free([this](void* ptr) {
+        Deregister(ptr);
+        Free(ptr);
+    });
 
     // for (const auto& [ptr, _] : registered_memories_) {
     //     TM_LOG_WARNING("[COMM][%d] Buffer %p is not deregistered", global_rank_, ptr);
@@ -177,7 +191,8 @@ void* CudaIpcCommImpl::Allocate(size_t size)
     a.uc_beg    = reinterpret_cast<void*>(ptr);
     a.uc_end    = (char*)a.uc_beg + size;
     a.alignment = granularity;
-    a.uc_ptrs   = comm::AllGather(h_comm_, a.uc_beg);
+
+    a.uc_ptrs = comm::AllGather(h_comm_, a.uc_beg);
 
     allocation_.emplace(a);
 
@@ -202,7 +217,7 @@ void CudaIpcCommImpl::Free(void* ptr)
 void CudaIpcCommImpl::Register(void* ptr, size_t size)
 {
     // register for all groups
-    auto& symm = groups_[0].symmetric;
+    auto& symm = groups_.at(0).symmetric;
 
     if (symm.find(ptr) != symm.end()) {
         TM_LOG_WARNING("[TM][COMM][%d] Duplicated registration on (%p, %lu)", global_rank_, ptr, size);
@@ -212,7 +227,7 @@ void CudaIpcCommImpl::Register(void* ptr, size_t size)
     auto alloc = allocation_.find(ptr);
     TM_CHECK(alloc != allocation_.end());
 
-    for (int i = 0; i < (int)groups_.size(); ++i) {
+    for (size_t i = 0; i < groups_.size(); ++i) {
         register_for_group(*alloc, alloc->uc_ptrs, i);
     }
 }
@@ -229,9 +244,7 @@ void CudaIpcCommImpl::register_for_group(const Allocation& alloc, const std::vec
     s.uc_end = alloc.uc_end;
 
     for (auto r : g.l2g) {
-        if (r != global_rank_) {
-            s.uc_ptrs.push_back(ucps[r]);
-        }
+        s.uc_ptrs.push_back(ucps[r]);
     }
 
     if (multicast_capability_) {
@@ -291,7 +304,7 @@ int CudaIpcCommImpl::Query(QueryAttr attr) const noexcept
 
 uint64_t* CudaIpcCommImpl::create_semaphore_buffer()
 {
-    const int flags_size = 3 * sizeof(uint64_t) * kChannelsPerConn * (global_n_ranks_ - 1);
+    const int flags_size = 3 * sizeof(uint64_t) * kMaxChannels * (global_n_ranks_ - 1);
     uint64_t* flags      = (uint64_t*)Allocate(flags_size);
     check_cuda_error(cudaMemsetAsync(flags, 0, flags_size));
     return flags;
@@ -305,17 +318,17 @@ mscclpp::D2DSemaphoreHandle* CudaIpcCommImpl::init_semaphores(const std::vector<
     const int peers = n_ranks - 1;
 
     std::vector<mscclpp::D2DSemaphoreHandle> h_semaphores;
-    for (int c = 0; c < kChannelsPerConn; ++c) {
+    for (int c = 0; c < kMaxChannels; ++c) {
         for (int r = 0; r < n_ranks; ++r) {
             if (r != rank) {
                 const int p     = r < rank ? r : r - 1;
                 const int inv_p = Rank{rank, peers}.inverse_peer(p);
                 //
                 mscclpp::D2DSemaphoreHandle handle{};
-                handle.inboundSemaphoreId         = buffers[rank] + c * peers + p;                          // local
-                handle.outboundSemaphoreId        = handle.inboundSemaphoreId + kChannelsPerConn * peers;   // local
-                handle.expectedInboundSemaphoreId = handle.outboundSemaphoreId + kChannelsPerConn * peers;  // local
-                handle.remoteInboundSemaphoreId   = buffers[r] + c * peers + inv_p;                         // near
+                handle.inboundSemaphoreId         = buffers[rank] + c * peers + p;                      // local
+                handle.outboundSemaphoreId        = handle.inboundSemaphoreId + kMaxChannels * peers;   // local
+                handle.expectedInboundSemaphoreId = handle.outboundSemaphoreId + kMaxChannels * peers;  // local
+                handle.remoteInboundSemaphoreId   = buffers[r] + c * peers + inv_p;                     // near
                 h_semaphores.push_back(handle);
             }
         }
@@ -342,10 +355,41 @@ auto CudaIpcCommImpl::get_symmetric_impl(void* ptr, int group) -> SymmetricPtr<v
 
     auto offset = (char*)ptr - (char*)symm->uc_beg;
 
+    const int rank = this->rank(group);
+
     SymmetricPtr<void> p{};
+
+    TM_CHECK_LE(symm->uc_ptrs.size(), p.uc.size() + 1);
+
+    for (size_t i = 0, j = 0; i < symm->uc_ptrs.size(); ++i) {
+        if (i != rank) {
+            p.uc[j++] = (char*)symm->uc_ptrs[i] + offset;
+        }
+    }
+    if (symm->mc_ptr) {
+        p.mc = (char*)symm->mc_ptr + offset;
+    }
+
+    return p;
+}
+
+auto CudaIpcCommImpl::get_symmetric_v2_impl(void* ptr, int group) -> SymmetricPtr_V2<void>
+{
+    auto& g = groups_.at(group);
+
+    auto symm = g.symmetric.find(ptr);
+    TM_CHECK(symm != g.symmetric.end());
+
+    auto offset = (char*)ptr - (char*)symm->uc_beg;
+
+    SymmetricPtr_V2<void> p{};
+
+    TM_CHECK_LE(symm->uc_ptrs.size(), p.uc.size());
+
     for (size_t i = 0; i < symm->uc_ptrs.size(); ++i) {
         p.uc[i] = (char*)symm->uc_ptrs[i] + offset;
     }
+
     if (symm->mc_ptr) {
         p.mc = (char*)symm->mc_ptr + offset;
     }

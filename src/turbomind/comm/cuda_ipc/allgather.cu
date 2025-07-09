@@ -3,6 +3,7 @@
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
 #include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 #include "src/turbomind/comm/cuda_ipc/multimem.cuh"
+#include "src/turbomind/comm/cuda_ipc/semaphore.cuh"
 
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -142,22 +143,18 @@ __global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_Pull(T*           
 }
 
 template<class T, int log2_block_dim, class Relaxed>
-__global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_NVLS(
-    // T*                           local,
-
-    T*                           uc_buf,
-    T*                           mc_buf,
-    Array<T*, kMaxNearPeers>     near,
-    mscclpp::D2DSemaphoreHandle* semaphores,
-    int                          rank,
-    int                          peers,
-    int64_t                      pitch,
-    int64_t                      stride,
-    int                          width,
-    int                          height,
-    int                          log2_groups,
-    constant<log2_block_dim>,
-    Relaxed relaxed)
+__global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_NVLS(T*                           uc_buf,
+                                                                   T*                           mc_buf,
+                                                                   mscclpp::D2DSemaphoreHandle* semaphores,
+                                                                   int                          rank,
+                                                                   int                          peers,
+                                                                   int64_t                      pitch,
+                                                                   int64_t                      stride,
+                                                                   int                          width,
+                                                                   int                          height,
+                                                                   int                          log2_groups,
+                                                                   constant<log2_block_dim>,
+                                                                   Relaxed relaxed)
 {
     const int       sem_id = blockIdx.x * peers + threadIdx.x;
     DeviceSemaphore sem;
@@ -177,33 +174,11 @@ __global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_NVLS(
 
     __syncthreads();
 
-    if (blockIdx.x % 2 == 0 || 1) {
-        const int64_t offset = stride * rank;
-        for (int y = bi; y < height; y += bn) {
-            for (int x = di; x < width; x += threads) {
-                const int64_t idx = offset + y * pitch + x;
-                multimem_st(mc_buf + idx, uc_buf[idx]);
-            }
-        }
-    }
-    else {
-        Rank          r{rank, peers};
-        const int64_t offset = stride * rank;
-        for (int i = 0; i < peers; ++i) {
-            const int p = r.get_next_peer(i);
-            // const int     p_rank = r.get_peer_rank(p);
-            T* ch = cvta_generic_to_global(near[p]);
-            for (int x = di; x < width; x += threads) {
-                for (int y = bi; y < height; y += bn) {
-                    ch[offset + y * pitch + x] = uc_buf[offset + y * pitch + x];
-                }
-            }
-            // const int64_t offset = stride * p_rank;
-            // for (int x = di; x < width; x += threads) {
-            //     for (int y = bi; y < height; y += bn) {
-            //         uc_buf[offset + y * pitch + x] = ch[offset + y * pitch + x];
-            //     }
-            // }
+    const int64_t offset = stride * rank;
+    for (int y = bi; y < height; y += bn) {
+        for (int x = di; x < width; x += threads) {
+            const int64_t idx = offset + y * pitch + x;
+            multimem_st(mc_buf + idx, uc_buf[idx]);
         }
     }
 
@@ -214,6 +189,52 @@ __global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_NVLS(
         sem.Save(&semaphores[sem_id]);
     }
 }
+
+// template<class T, int log2_block_dim, class Relaxed>
+// __global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_NVLS_V2(T*                          uc_buf,
+//                                                                       T*                          mc_buf,
+//                                                                       SystemSemaphoreDeviceHandle semaphores,
+//                                                                       int                         rank,
+//                                                                       int                         ranks,
+//                                                                       int64_t                     pitch,
+//                                                                       int64_t                     stride,
+//                                                                       int                         width,
+//                                                                       int                         height,
+//                                                                       int                         log2_groups,
+//                                                                       constant<log2_block_dim>,
+//                                                                       Relaxed relaxed)
+// {
+//     // SystemSemaphore sem(semaphores, ranks, rank, blockIdx.x, threadIdx.x);
+
+//     // sem.Signal(relaxed);
+//     // sem.Wait(relaxed);
+
+//     const int log2_threads = log2_block_dim - log2_groups;
+//     const int threads      = 1 << log2_threads;
+//     const int groups       = 1 << log2_groups;
+
+//     const int gi = threadIdx.x >> log2_threads;
+//     const int di = (threadIdx.x & (threads - 1));
+//     const int bi = blockIdx.x * groups + gi;
+//     const int bn = gridDim.x * groups;
+
+//     __syncthreads();
+
+//     const int64_t offset = stride * rank;
+//     for (int y = bi; y < height; y += bn) {
+//         for (int x = di; x < width; x += threads) {
+//             const int64_t idx = offset + y * pitch + x;
+//             multimem_st(mc_buf + idx, uc_buf[idx]);
+//         }
+//     }
+
+//     __syncthreads();
+
+//     // sem.Signal(relaxed);
+//     // sem.Wait(relaxed);
+
+//     // sem.Update(semaphores, blockIdx.x);
+// }
 
 __global__ void Barrier(mscclpp::D2DSemaphoreHandle* semaphores, int peers)
 {
@@ -276,9 +297,8 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
 
         const int blocks = std::min<int>(1, (height + groups - 1) >> log2_groups);
 
-        Allgather2D_Simple_NVLS<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
+        Allgather2D_Simple_NVLS<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,
                                                                    symm_ptr.mc,
-                                                                   symm_ptr.uc,
                                                                    semaphores,
                                                                    rank,
                                                                    peers,
@@ -289,6 +309,21 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
                                                                    log2_groups,
                                                                    constant<10>{},
                                                                    std::false_type{});
+
+        // SystemSemaphoreDeviceHandle sem{get_symmetric_v2(semaphore_.value, group), semaphore_.count};
+
+        // Allgather2D_Simple_NVLS_V2<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,
+        //                                                               symm_ptr.mc,
+        //                                                               sem,
+        //                                                               rank,
+        //                                                               this->n_ranks(group),
+        //                                                               byte_pitch / sizeof(T),
+        //                                                               byte_stride / sizeof(T),
+        //                                                               byte_width / sizeof(T),
+        //                                                               height,
+        //                                                               log2_groups,
+        //                                                               constant<10>{},
+        //                                                               std::false_type{});
     };
 
     if (byte_width % sizeof(uint4) == 0) {

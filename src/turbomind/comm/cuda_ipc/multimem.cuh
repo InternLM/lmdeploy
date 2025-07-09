@@ -16,6 +16,7 @@ inline __device__ Array<half, 8> multimem_ld_reduce_sum(const Array<half, 8>* mc
         Array<half, 8>     x;
         Array<uint32_t, 4> u;
     };
+    // LDGMC.E.ADD.F16x8.RN.STRONG.SYS
     asm volatile("multimem.ld_reduce.weak.global.add.v4.f16x2 {%0,%1,%2,%3}, [%4];"
                  : "=r"(u[0]), "=r"(u[1]), "=r"(u[2]), "=r"(u[3])
                  : "l"(mc_ptr)
@@ -35,6 +36,7 @@ inline __device__ void multimem_st(half* mc_ptr, const Array<half, 8>& vec)
         Array<uint32_t, 4> u;
     };
     x = vec;
+    // just STG.E.128
     asm volatile("multimem.st.weak.global.v4.f16x2 [%0], {%1,%2,%3,%4};" ::"l"(mc_ptr),
                  "r"(u[0]),
                  "r"(u[1]),

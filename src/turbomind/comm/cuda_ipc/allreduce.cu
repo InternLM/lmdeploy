@@ -6,7 +6,9 @@
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
 #include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 #include "src/turbomind/comm/cuda_ipc/multimem.cuh"
+#include "src/turbomind/comm/cuda_ipc/semaphore.cuh"
 
+#include "src/turbomind/comm/cuda_ipc/semaphore.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/meta.h"
@@ -394,9 +396,41 @@ __global__ void Allreduce_NVLS(T*                           mc_buf,
     __syncthreads();
 
     if (threadIdx.x < peers) {
-        sem.SignalAndWait(true);
+        sem.SignalAndWait(false);
         sem.Save(&semaphores[blockIdx.x * peers + threadIdx.x]);
     }
+}
+
+template<class T, int vec_size, class Relaxed>
+__global__ void Allreduce_NVLS_V2(
+    T* mc_buf, SystemSemaphoreInfo* semaphores, int ranks, int first, int last, constant<vec_size>, Relaxed relaxed)
+{
+    const int block_num  = gridDim.x;
+    const int thread_num = blockDim.x * block_num;
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
+
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
+
+    __syncthreads();
+
+    using Vec = Array<T, vec_size>;
+
+    using namespace ops;
+
+    for (int idx = first + thread_idx; idx < last; idx += thread_num) {
+        Vec vsum = multimem_ld_reduce_sum((const Vec*)(mc_buf + idx * vec_size));
+        multimem_st(mc_buf + idx * vec_size, vsum);
+    }
+
+    __syncthreads();
+
+    sem.Signal(true);
+    sem.Wait(true);
+
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
 }
 
 void CudaIpcCommImpl::AllReduceSum(
@@ -422,16 +456,16 @@ void CudaIpcCommImpl::AllReduceSum(
             const int     blocks        = (n_ranks - 1) * ctas_per_peer;
             auto          incoming      = (LLPacket*)packet_buff_;
             auto          outgoing      = get_symmetric(incoming, group).uc;
-            AllreduceKernel_LL<<<blocks, threads, 0, stream>>>((T*)data,  //
-                                                               (T*)data,
-                                                               incoming,
-                                                               outgoing,
-                                                               rank,
-                                                               n_ranks - 1,
-                                                               slice,
-                                                               count / vec_size,
-                                                               flag_++,
-                                                               constant<ctas_per_peer>{});
+            // AllreduceKernel_LL<<<blocks, threads, 0, stream>>>((T*)data,  //
+            //                                                    (T*)data,
+            //                                                    incoming,
+            //                                                    outgoing,
+            //                                                    rank,
+            //                                                    n_ranks - 1,
+            //                                                    slice,
+            //                                                    count / vec_size,
+            //                                                    flag_++,
+            //                                                    constant<ctas_per_peer>{});
         }
         else {
             constexpr int vec_size = sizeof(uint4) / sizeof(T);
@@ -439,32 +473,32 @@ void CudaIpcCommImpl::AllReduceSum(
             if (0 && bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
                 constexpr int threads = 1024;
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
-                Allreduce_Simple_Push_v2<<<blocks, threads, 0, stream>>>((T*)data,
-                                                                         (T*)scratch_buff_,
-                                                                         get_symmetric((T*)data, group).uc,
-                                                                         get_symmetric((T*)scratch_buff_, group).uc,
-                                                                         semaphores,
-                                                                         rank,
-                                                                         n_ranks - 1,
-                                                                         slice,
-                                                                         count / vec_size,
-                                                                         constant<vec_size>{},
-                                                                         std::false_type{});
+                // Allreduce_Simple_Push_v2<<<blocks, threads, 0, stream>>>((T*)data,
+                //                                                          (T*)scratch_buff_,
+                //                                                          get_symmetric((T*)data, group).uc,
+                //                                                          get_symmetric((T*)scratch_buff_, group).uc,
+                //                                                          semaphores,
+                //                                                          rank,
+                //                                                          n_ranks - 1,
+                //                                                          slice,
+                //                                                          count / vec_size,
+                //                                                          constant<vec_size>{},
+                //                                                          std::false_type{});
             }
             else {
                 constexpr int threads = 1024;
-                const int     blocks  = std::min(48, (slice + threads - 1) / threads);
-                Allreduce_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)data,
-                                                                      get_symmetric((T*)data, group).uc,
-                                                                      semaphores,
-                                                                      rank,
-                                                                      n_ranks - 1,
-                                                                      slice,
-                                                                      count / vec_size,
-                                                                      constant<vec_size>{},
-                                                                      std::false_type{});
+                // const int     blocks  = std::min(48, (slice + threads - 1) / threads);
+                // Allreduce_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)data,
+                //                                                       get_symmetric((T*)data, group).uc,
+                //                                                       semaphores,
+                //                                                       rank,
+                //                                                       n_ranks - 1,
+                //                                                       slice,
+                //                                                       count / vec_size,
+                //                                                       constant<vec_size>{},
+                //                                                       std::false_type{});
 
-                // const int blocks = std::min(4, (slice + threads - 1) / threads);
+                const int blocks = std::min(4, (slice + threads - 1) / threads);
                 // Allreduce_NVLS<<<blocks, threads, 0, stream>>>(get_symmetric((T*)data, group).mc,
                 //                                                semaphores,
                 //                                                rank,
@@ -473,6 +507,16 @@ void CudaIpcCommImpl::AllReduceSum(
                 //                                                count / vec_size,
                 //                                                constant<vec_size>{},
                 //                                                std::false_type{});
+
+                const int first = rank * slice;
+                const int last  = std::min<int>(count / vec_size, first + slice);
+                Allreduce_NVLS_V2<<<blocks, threads, 0, stream>>>(get_symmetric((T*)data, group).mc,
+                                                                  semaphore_.handle(),
+                                                                  n_ranks,
+                                                                  first,
+                                                                  last,
+                                                                  constant<vec_size>{},
+                                                                  std::true_type{});
             }
         }
     };
