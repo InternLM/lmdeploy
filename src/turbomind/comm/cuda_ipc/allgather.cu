@@ -1,5 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <cstdint>
+
+#include "src/turbomind/comm/cuda_ipc/common.h"
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
 #include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 #include "src/turbomind/comm/cuda_ipc/multimem.cuh"
@@ -10,43 +13,93 @@
 
 namespace turbomind::comm {
 
-// Modified from
-// https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/test/mscclpp-test/allgather_test.cu#L294
-template<class T, class Relaxed>
-__global__ void __launch_bounds__(1024, 1) Allgather_Simple_Pull(T*                           local,
-                                                                 Array<T*, kMaxNearPeers>     near,
-                                                                 mscclpp::D2DSemaphoreHandle* semaphores,
-                                                                 int                          rank,
-                                                                 int                          peers,
-                                                                 int64_t                      slice,
-                                                                 Relaxed                      relaxed)
+static size_t get_ag_memcpy_thres()
 {
-    const int       sem_id = blockIdx.x * peers + threadIdx.x;
-    DeviceSemaphore sem;
-    if (threadIdx.x < peers) {
-        sem.Load(&semaphores[sem_id]);
-        sem.SignalAndWait(relaxed);
-    }
+    static size_t value = []() -> size_t {
+        const auto p = std::getenv("TM_COMM_AG_COPY_THRESHOLD");
+        try {
+            if (p) {
+                return std::stoull(p);
+            }
+        }
+        catch (...) {
+        }
+        return INT64_MAX;
+    }();
+    return value;
+}
+
+static bool get_ag_use_nvls()
+{
+    static bool value = []() -> bool {
+        const auto p = std::getenv("TM_COMM_AG_USE_NVLS");
+        try {
+            if (p) {
+                return std::stoull(p);
+            }
+        }
+        catch (...) {
+        }
+        return false;
+    }();
+    return value;
+}
+
+__global__ void Barrier_V2(SystemSemaphoreInfo* semaphores, int ranks)
+{
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
+    sem.Signal(true);
+    sem.Wait(true);
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
+}
+
+template<class T, class Relaxed>
+__global__ void __launch_bounds__(1024, 1) Allgather_Simple_Pull(
+    Array<T*, kMaxRanks> uc, SystemSemaphoreInfo* semaphores, int rank, int ranks, int64_t slice, Relaxed relaxed)
+{
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
 
     __syncthreads();
 
-    Rank r{rank, peers};
+    auto local = uc[rank];
 
-    for (int i = 0; i < peers; ++i) {
-        const int p      = r.get_next_peer(i);
-        const int p_rank = r.get_peer_rank(p);
-        const T*  ch     = cvta_generic_to_global(near[p]);
+    for (int i = 1; i < ranks; ++i) {
+        const int p  = rank + i < ranks ? rank + i : rank + i - ranks;
+        const T*  ch = cvta_generic_to_global(uc[p]);
         for (int64_t idx = threadIdx.x + blockIdx.x * blockDim.x; idx < slice; idx += blockDim.x * gridDim.x) {
-            local[slice * p_rank + idx] = ch[slice * p_rank + idx];
+            local[slice * p + idx] = ch[slice * p + idx];
         }
     }
 
     __syncthreads();
 
-    if (threadIdx.x < peers) {
-        sem.SignalAndWait(true);
-        sem.Save(&semaphores[sem_id]);
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
+
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
+}
+
+template<class T, class Relaxed>
+__global__ void __launch_bounds__(1024, 1) Allgather_NVLS_V2(
+    T* uc, T* mc, SystemSemaphoreInfo* semaphores, int rank, int ranks, int64_t slice, Relaxed relaxed)
+{
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
+
+    __syncthreads();
+
+    for (int64_t idx = threadIdx.x + blockIdx.x * blockDim.x; idx < slice; idx += blockDim.x * gridDim.x) {
+        multimem_st(&mc[slice * rank + idx], uc[slice * rank + idx]);
     }
+
+    __syncthreads();
+
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
 }
 
 void CudaIpcCommImpl::AllGather(
@@ -54,60 +107,79 @@ void CudaIpcCommImpl::AllGather(
 {
     const size_t bytesize = turbomind::byte_size(type) * sendcount;
 
-    const int peers = this->n_ranks(group) - 1;
+    const int ranks = this->n_ranks(group);
     const int rank  = this->rank(group);
 
-    auto semaphores = groups_.at(group).d2d_semaphores;
-
     auto invoke = [&](auto t) {
-        using T              = decltype(t);
-        const auto   near    = get_symmetric((T*)recvbuff, group).uc;
-        const size_t slice   = bytesize / sizeof(T);
-        const int    threads = 1024;
-        const int    blocks  = std::min<int>(32, (slice + threads - 1) / threads);
-        Allgather_Simple_Pull<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
-                                                                 near,
-                                                                 semaphores,
-                                                                 rank,
-                                                                 peers,
-                                                                 slice,
-                                                                 std::false_type{});
+        using T               = decltype(t);
+        const auto   symm_ptr = get_symmetric_v2((T*)recvbuff, group);
+        const size_t slice    = bytesize / sizeof(T);
+        const int    threads  = 1024;
+        if (symm_ptr.mc && get_ag_use_nvls()) {
+            const int blocks = std::min<int>(1, (slice + threads - 1) / threads);
+            Allgather_NVLS_V2<T><<<blocks, threads, 0, stream>>>(
+                symm_ptr.uc[rank], symm_ptr.mc, semaphore_.handle(), rank, ranks, slice, std::false_type{});
+        }
+        else {
+            const int blocks = std::min<int>(32, (slice + threads - 1) / threads);
+            Allgather_Simple_Pull<T><<<blocks, threads, 0, stream>>>(
+                symm_ptr.uc, semaphore_.handle(), rank, ranks, slice, std::false_type{});
+        }
     };
 
-    if (bytesize % sizeof(uint4) == 0) {
-        invoke(uint4{});
-    }
-    else if (bytesize % sizeof(uint2) == 0) {
-        invoke(uint2{});
-    }
-    else if (bytesize % sizeof(uint) == 0) {
-        invoke(uint{});
+    auto invoke_copy_engine = [&] {
+        auto symm_ptr = get_symmetric_v2((char*)recvbuff, group);
+
+        Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+
+        for (int i = 1; i < ranks; ++i) {
+            const int p = (rank + i) % ranks;
+            check_cuda_error(cudaMemcpyAsync(symm_ptr.uc[p] + rank * bytesize,  //
+                                             (char*)recvbuff + rank * bytesize,
+                                             bytesize,
+                                             cudaMemcpyDefault,
+                                             stream));
+        }
+
+        Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+    };
+
+    if (bytesize < get_ag_memcpy_thres()) {
+        if (bytesize % sizeof(uint4) == 0) {
+            invoke(uint4{});
+        }
+        else if (bytesize % sizeof(uint2) == 0) {
+            invoke(uint2{});
+        }
+        else if (bytesize % sizeof(uint) == 0) {
+            invoke(uint{});
+        }
+        else {
+            throw std::runtime_error("not implemented");
+        }
     }
     else {
-        throw std::runtime_error("not implemented");
+        invoke_copy_engine();
     }
 }
 
 template<class T, int log2_block_dim, class Relaxed>
-__global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_Pull(T*                           local,
-                                                                   Array<T*, kMaxNearPeers>     near,
-                                                                   mscclpp::D2DSemaphoreHandle* semaphores,
-                                                                   int                          rank,
-                                                                   int                          peers,
-                                                                   int64_t                      pitch,
-                                                                   int64_t                      stride,
-                                                                   int                          width,
-                                                                   int                          height,
-                                                                   int                          log2_groups,
+__global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_Pull(T*                   local,
+                                                                   Array<T*, kMaxRanks> uc,
+                                                                   SystemSemaphoreInfo* semaphores,
+                                                                   int                  rank,
+                                                                   int                  ranks,
+                                                                   int64_t              pitch,
+                                                                   int64_t              stride,
+                                                                   int                  width,
+                                                                   int                  height,
+                                                                   int                  log2_groups,
                                                                    constant<log2_block_dim>,
                                                                    Relaxed relaxed)
 {
-    const int       sem_id = blockIdx.x * peers + threadIdx.x;
-    DeviceSemaphore sem;
-    if (threadIdx.x < peers) {
-        sem.Load(&semaphores[sem_id]);
-        sem.SignalAndWait(relaxed);
-    }
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
+
+    sem.Signal(relaxed);
 
     const int log2_threads = log2_block_dim - log2_groups;
     const int threads      = 1 << log2_threads;
@@ -118,15 +190,14 @@ __global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_Pull(T*           
     const int bi = blockIdx.x * groups + gi;
     const int bn = gridDim.x * groups;
 
+    sem.Wait(relaxed);
+
     __syncthreads();
 
-    Rank r{rank, peers};
-
-    for (int i = 0; i < peers; ++i) {
-        const int     p      = r.get_next_peer(i);
-        const int     p_rank = r.get_peer_rank(p);
-        const T*      ch     = cvta_generic_to_global(near[p]);
-        const int64_t offset = stride * p_rank;
+    for (int i = 1; i < ranks; ++i) {
+        const int     p      = rank + i < ranks ? rank + i : rank + i - ranks;
+        const T*      ch     = cvta_generic_to_global(uc[p]);
+        const int64_t offset = stride * p;
         for (int x = di; x < width; x += threads) {
             for (int y = bi; y < height; y += bn) {
                 local[offset + y * pitch + x] = ch[offset + y * pitch + x];
@@ -136,32 +207,30 @@ __global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_Pull(T*           
 
     __syncthreads();
 
-    if (threadIdx.x < peers) {
-        sem.SignalAndWait(true);
-        sem.Save(&semaphores[sem_id]);
-    }
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
+
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
 }
 
 template<class T, int log2_block_dim, class Relaxed>
-__global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_NVLS(T*                           uc_buf,
-                                                                   T*                           mc_buf,
-                                                                   mscclpp::D2DSemaphoreHandle* semaphores,
-                                                                   int                          rank,
-                                                                   int                          peers,
-                                                                   int64_t                      pitch,
-                                                                   int64_t                      stride,
-                                                                   int                          width,
-                                                                   int                          height,
-                                                                   int                          log2_groups,
-                                                                   constant<log2_block_dim>,
-                                                                   Relaxed relaxed)
+__global__ void __launch_bounds__(1024, 1) Allgather2D_NVLS_V2(T*                   uc_buf,
+                                                               T*                   mc_buf,
+                                                               SystemSemaphoreInfo* semaphores,
+                                                               int                  rank,
+                                                               int                  ranks,
+                                                               int64_t              pitch,
+                                                               int64_t              stride,
+                                                               int                  width,
+                                                               int                  height,
+                                                               int                  log2_groups,
+                                                               constant<log2_block_dim>,
+                                                               Relaxed relaxed)
 {
-    const int       sem_id = blockIdx.x * peers + threadIdx.x;
-    DeviceSemaphore sem;
-    if (threadIdx.x < peers) {
-        sem.Load(&semaphores[sem_id]);
-        sem.SignalAndWait(relaxed);
-    }
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
+
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
 
     const int log2_threads = log2_block_dim - log2_groups;
     const int threads      = 1 << log2_threads;
@@ -178,75 +247,16 @@ __global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_NVLS(T*           
     for (int y = bi; y < height; y += bn) {
         for (int x = di; x < width; x += threads) {
             const int64_t idx = offset + y * pitch + x;
-            multimem_st(mc_buf + idx, uc_buf[idx]);
+            multimem_st(&mc_buf[idx], uc_buf[idx]);
         }
     }
 
     __syncthreads();
 
-    if (threadIdx.x < peers) {
-        sem.SignalAndWait(true);
-        sem.Save(&semaphores[sem_id]);
-    }
-}
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
 
-// template<class T, int log2_block_dim, class Relaxed>
-// __global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_NVLS_V2(T*                          uc_buf,
-//                                                                       T*                          mc_buf,
-//                                                                       SystemSemaphoreDeviceHandle semaphores,
-//                                                                       int                         rank,
-//                                                                       int                         ranks,
-//                                                                       int64_t                     pitch,
-//                                                                       int64_t                     stride,
-//                                                                       int                         width,
-//                                                                       int                         height,
-//                                                                       int                         log2_groups,
-//                                                                       constant<log2_block_dim>,
-//                                                                       Relaxed relaxed)
-// {
-//     // SystemSemaphore sem(semaphores, ranks, rank, blockIdx.x, threadIdx.x);
-
-//     // sem.Signal(relaxed);
-//     // sem.Wait(relaxed);
-
-//     const int log2_threads = log2_block_dim - log2_groups;
-//     const int threads      = 1 << log2_threads;
-//     const int groups       = 1 << log2_groups;
-
-//     const int gi = threadIdx.x >> log2_threads;
-//     const int di = (threadIdx.x & (threads - 1));
-//     const int bi = blockIdx.x * groups + gi;
-//     const int bn = gridDim.x * groups;
-
-//     __syncthreads();
-
-//     const int64_t offset = stride * rank;
-//     for (int y = bi; y < height; y += bn) {
-//         for (int x = di; x < width; x += threads) {
-//             const int64_t idx = offset + y * pitch + x;
-//             multimem_st(mc_buf + idx, uc_buf[idx]);
-//         }
-//     }
-
-//     __syncthreads();
-
-//     // sem.Signal(relaxed);
-//     // sem.Wait(relaxed);
-
-//     // sem.Update(semaphores, blockIdx.x);
-// }
-
-__global__ void Barrier(mscclpp::D2DSemaphoreHandle* semaphores, int peers)
-{
-    const int sem_id = blockIdx.x * peers + threadIdx.x;
-
-    DeviceSemaphore sem;
-
-    if (threadIdx.x < peers) {
-        sem.Load(&semaphores[sem_id]);
-        sem.SignalAndWait(false);
-        sem.Save(&semaphores[sem_id]);
-    }
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
 }
 
 void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
@@ -264,12 +274,13 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
     const size_t byte_pitch  = byte_size(type, pitch);
     const size_t byte_stride = byte_size(type, stride);
 
-    const int peers = this->n_ranks(group) - 1;
+    const size_t nbytes = byte_width * height;
+
+    const int ranks = this->n_ranks(group);
     const int rank  = this->rank(group);
 
-    auto semaphores = groups_.at(group).d2d_semaphores;
+    TM_CHECK_EQ((char*)sendbuff, (char*)recvbuff + rank * byte_stride);
 
-#if 1
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
@@ -279,93 +290,78 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
             ++log2_groups;
         }
         const int groups = 1 << log2_groups;
-        // const int blocks = std::min<int>(48, (height + groups - 1) >> log2_groups);
-        // Allgather2D_Simple_Pull<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
-        //                                                            near,
-        //                                                            semaphores,
-        //                                                            rank,
-        //                                                            peers,
-        //                                                            byte_pitch / sizeof(T),
-        //                                                            byte_stride / sizeof(T),
-        //                                                            byte_width / sizeof(T),
-        //                                                            height,
-        //                                                            log2_groups,
-        //                                                            constant<10>{},
-        //                                                            std::false_type{});
 
-        auto symm_ptr = get_symmetric((T*)recvbuff, group);
+        auto symm_ptr = get_symmetric_v2((T*)recvbuff, group);
 
-        const int blocks = std::min<int>(1, (height + groups - 1) >> log2_groups);
-
-        Allgather2D_Simple_NVLS<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,
+        if (symm_ptr.mc && get_ag_use_nvls()) {
+            const int blocks = std::min<int>(1, (height + groups - 1) >> log2_groups);
+            Allgather2D_NVLS_V2<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,
                                                                    symm_ptr.mc,
-                                                                   semaphores,
+                                                                   semaphore_.handle(),
                                                                    rank,
-                                                                   peers,
+                                                                   this->n_ranks(group),
                                                                    byte_pitch / sizeof(T),
                                                                    byte_stride / sizeof(T),
                                                                    byte_width / sizeof(T),
                                                                    height,
                                                                    log2_groups,
                                                                    constant<10>{},
-                                                                   std::false_type{});
-
-        // SystemSemaphoreDeviceHandle sem{get_symmetric_v2(semaphore_.value, group), semaphore_.count};
-
-        // Allgather2D_Simple_NVLS_V2<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,
-        //                                                               symm_ptr.mc,
-        //                                                               sem,
-        //                                                               rank,
-        //                                                               this->n_ranks(group),
-        //                                                               byte_pitch / sizeof(T),
-        //                                                               byte_stride / sizeof(T),
-        //                                                               byte_width / sizeof(T),
-        //                                                               height,
-        //                                                               log2_groups,
-        //                                                               constant<10>{},
-        //                                                               std::false_type{});
+                                                                   std::true_type{});
+        }
+        else {
+            const int blocks = std::min<int>(48, (height + groups - 1) >> log2_groups);
+            Allgather2D_Simple_Pull<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
+                                                                       symm_ptr.uc,
+                                                                       semaphore_.handle(),
+                                                                       rank,
+                                                                       ranks,
+                                                                       byte_pitch / sizeof(T),
+                                                                       byte_stride / sizeof(T),
+                                                                       byte_width / sizeof(T),
+                                                                       height,
+                                                                       log2_groups,
+                                                                       constant<10>{},
+                                                                       std::true_type{});
+        }
     };
 
-    if (byte_width % sizeof(uint4) == 0) {
-        invoke(uint4{});
-    }
-    else if (byte_width % sizeof(uint2) == 0) {
-        invoke(uint2{});
-    }
-    else if (byte_width % sizeof(uint) == 0) {
-        invoke(uint{});
-    }
-    else {
-        throw std::runtime_error("not implemented");
-    }
-#else
-    auto near = get_near((char*)base);
-    for (auto& p : near) {
-        if (p) {
-            p += offset;
+    auto invoke_copy_engine = [&] {
+        auto symm_ptr = get_symmetric_v2((char*)recvbuff, group);
+
+        Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+
+        for (int i = 1; i < ranks; ++i) {
+            const int p = (rank + i) % ranks;
+            check_cuda_error(cudaMemcpy2DAsync(symm_ptr.uc[p] + rank * byte_stride,
+                                               byte_pitch,
+                                               (char*)recvbuff + rank * byte_stride,
+                                               byte_pitch,
+                                               byte_width,
+                                               height,
+                                               cudaMemcpyDefault,
+                                               stream));
+        }
+
+        Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+    };
+
+    if (nbytes < get_ag_memcpy_thres()) {
+        if (byte_width % sizeof(uint4) == 0) {
+            invoke(uint4{});
+        }
+        else if (byte_width % sizeof(uint2) == 0) {
+            invoke(uint2{});
+        }
+        else if (byte_width % sizeof(uint) == 0) {
+            invoke(uint{});
+        }
+        else {
+            throw std::runtime_error("not implemented");
         }
     }
-    const int   peers = world_size_ - 1;
-    Rank        rank{rank_, peers};
-    const char* buff = (const char*)recvbuff;
-    if (flags.x) {  // make sure peer buffers are ready to receive
-        Barrier<<<1, peers, 0, stream>>>(device_semaphores_, peers);
+    else {
+        invoke_copy_engine();
     }
-    for (int i = 0; i < peers; ++i) {
-        const int p = rank.get_next_peer(i);
-        check_cuda_error(cudaMemcpy2DAsync(near[p] + rank_ * byte_stride,
-                                           byte_pitch,
-                                           buff + rank_ * byte_stride,
-                                           byte_pitch,
-                                           byte_width,
-                                           height,
-                                           cudaMemcpyDefault,
-                                           stream));
-    }
-    if (flags.y) {  // make sure receiving is done
-        Barrier<<<1, peers, 0, stream>>>(device_semaphores_, peers);
-    }
-#endif
 }
 
 }  // namespace turbomind::comm
