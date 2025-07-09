@@ -21,6 +21,8 @@ with read_base():
     from opencompass.configs.datasets.math.math_0shot_gen_393424 import math_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_a0fc46 import sanitized_mbpp_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import mmlu_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import \
+        mmlu_pro_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.nq.nq_open_1shot_gen_01cf41 import nq_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.race.race_gen_69ee4f import race_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import TheoremQA_datasets  # noqa: F401, E501
@@ -207,7 +209,7 @@ base_model = dict(type=TurboMindModelwithChatTemplate,
                   gen_config=dict(top_k=1, temperature=1e-6, top_p=0.9, max_new_tokens=32768),
                   max_seq_len=32768,
                   max_out_len=32768,
-                  batch_size=256,
+                  batch_size=500,
                   pred_postprocessor=dict(type=extract_non_reasoning_content),
                   run_cfg=dict(num_gpus=1))
 
@@ -239,6 +241,7 @@ for model in [
     model['run_cfg']['num_gpus'] = 2
     model['engine_config']['tp'] = 2
     model['engine_config']['max_batch_size'] = 1024
+    model['batch_size'] = 2048
 
 for model in [
         v for k, v in locals().items()
