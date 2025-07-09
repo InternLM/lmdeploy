@@ -43,7 +43,6 @@ def get_names_from_model(model_path: str, model_name: str = None):
         config_path = os.path.join(triton_model_path, 'config.yaml')
         with open(config_path, 'r') as f:
             import yaml
-
             config = yaml.safe_load(f)
         chat_template_name = config['model_config']['chat_template']
     model_name = model_name if model_name else model_path
@@ -53,7 +52,6 @@ def get_names_from_model(model_path: str, model_name: str = None):
 @dataclasses.dataclass
 class GenOut:
     """Pack all response information together."""
-
     response: str
     history_token_len: int
     input_token_len: int
@@ -336,7 +334,6 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-
         self.engine = tm.TurboMind.from_pretrained(model_path,
                                                    tokenizer=self.tokenizer,
                                                    engine_config=backend_config,
@@ -394,14 +391,12 @@ class AsyncEngine(LogitsMixin):
         """
         if gen_config is None:
             gen_config = GenerationConfig()
-        return self.batch_infer(
-            prompts,
-            gen_config=gen_config,
-            do_preprocess=do_preprocess,
-            adapter_name=adapter_name,
-            use_tqdm=use_tqdm,
-            **kwargs,
-        )
+        return self.batch_infer(prompts,
+                                gen_config=gen_config,
+                                do_preprocess=do_preprocess,
+                                adapter_name=adapter_name,
+                                use_tqdm=use_tqdm,
+                                **kwargs)
 
     async def do_log_stats(self):
         # loop through CLI logger and Prometheus logger
@@ -498,7 +493,8 @@ class AsyncEngine(LogitsMixin):
         gen_config = gen_config or GenerationConfig()
         if not isinstance(gen_config, List):
             gen_config = [gen_config] * len(prompts)
-        assert len(prompts) == len(gen_config), 'input gen_confg length differs from the length of prompts'  # noqa
+        assert len(prompts) == len(gen_config), \
+                'input gen_confg length differs from the length of prompts'  # noqa
 
         def requests():
             for prompt, gen_cfg in zip(prompts, gen_config):
@@ -730,10 +726,10 @@ class AsyncEngine(LogitsMixin):
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
             gen_config.max_new_tokens = max(128, self.session_len - self.id2step[session_id] - len(input_ids))
-        elif (self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len):
+        elif self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len:
             gen_config.max_new_tokens = max(self.session_len - self.id2step[session_id] - len(input_ids), 128)
             logger.error(f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
-        if (self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len):
+        if self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len:
             logger.error(f'run out of tokens. session={session_id}.')
             yield GenOut('', self.id2step[session_id], len(input_ids), 0, 'length')
             if sequence_end is True and sequence_start is False:
@@ -801,8 +797,7 @@ class AsyncEngine(LogitsMixin):
                         token_ids,
                         state,
                         skip_special_tokens=gen_config.skip_special_tokens,
-                        spaces_between_special_tokens=gen_config.spaces_between_special_tokens,
-                    )
+                        spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
                     res = token_ids[ids_offset:]
 
                     out = GenOut(response,
@@ -880,20 +875,14 @@ class AsyncEngine(LogitsMixin):
         return asyncio.run_coroutine_threadsafe(coro, loop)
 
     def session(self, gen_config: GenerationConfig = None):
-        return Session(
-            self._run(fn=lambda: next(self._session_id)).result(),
-            engine=self,
-            gen_config=gen_config,
-        )
+        return Session(self._run(fn=lambda: next(self._session_id)).result(), engine=self, gen_config=gen_config)
 
-    def chat(
-        self,
-        prompt: str,
-        session=None,
-        gen_config: Optional[GenerationConfig] = None,
-        stream_response=False,
-        **kwargs,
-    ) -> Union[Session, Iterator]:
+    def chat(self,
+             prompt: str,
+             session=None,
+             gen_config: Optional[GenerationConfig] = None,
+             stream_response=False,
+             **kwargs) -> Union[Session, Iterator]:
         """Chat.
 
         Args:
