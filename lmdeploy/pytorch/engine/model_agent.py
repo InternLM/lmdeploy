@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import functools
+import time
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
@@ -801,6 +802,7 @@ class BaseModelAgent:
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
+            out['new_token_timestamp'] = time.perf_counter()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
         return out

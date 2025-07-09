@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import GenerationConfig, LogitsProcessor
+from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -250,7 +250,7 @@ class SchedulerSession:
             num_new_tokens=0,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            arrive_time=time.time(),
+            arrive_time=time.perf_counter(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
@@ -468,6 +468,9 @@ class SchedulerSequence:
     resp_cache: bool = False
     preserve_cache: bool = False
 
+    # For logging
+    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
+
     def __post_init__(self):
         """Post init."""
         self._num_history_ids: int = 0
@@ -636,7 +639,7 @@ class SchedulerSequence:
             self._num_token_ids = len(token_ids)
         self.history_cache.append(token_ids)
         self.random_offsets += 1
-        self.arrive_time = time.time()
+        self.arrive_time = time.perf_counter()
 
     def set_step(self, step: int):
         """Set step."""
@@ -657,3 +660,10 @@ class SchedulerSequence:
         if self.history_multimodals is not None:
             self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
             self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
+
+    def record_event(
+        self,
+        event_type: EngineCoreEventType,
+        timestamp: Optional[float] = None,
+    ) -> None:
+        self.engine_core_events.append(EngineCoreEvent.new_event(event_type, timestamp))
