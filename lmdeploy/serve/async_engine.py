@@ -723,12 +723,6 @@ class AsyncEngine(LogitsMixin):
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
-        if gen_config.max_new_tokens is None:
-            gen_config.max_new_tokens = max(0, self.session_len - len(input_ids))
-            if gen_config.max_new_tokens == 0:
-                logger.error(f'invalid input input_ids length {len(input_ids)}, session_len {self.session_len}')
-                yield GenOut('', self.id2step[session_id], len(input_ids), 0, 'length')
-                return
 
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
