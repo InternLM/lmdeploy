@@ -28,7 +28,7 @@ jobs:
   build:
     strategy:
       matrix:
-        cudaver: [11.8, 12.1]
+        cudaver: [11.8, 12.4]
     name: cuda-${{ matrix.cudaver }}
     runs-on: ubuntu-latest
     steps:
@@ -54,7 +54,7 @@ jobs:
           run: |
             cd /work
             source /opt/conda/bin/activate
-            conda activate py38
+            conda activate py310
             mkdir build && cd build
             bash ../generate.sh make
             make -j$(nproc) && make install

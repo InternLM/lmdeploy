@@ -9,7 +9,6 @@ from typing import Any, Dict
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_utils import load_state_dict
 
 from lmdeploy.utils import get_logger
 
@@ -216,9 +215,9 @@ def _patch_quantization_config(model_config: PretrainedConfig, model_format: str
 @torch.inference_mode()
 def build_patched_model(config: ModelConfig, device: torch.device = None, model_format: str = None):
     """Build patched model."""
-    import copy
-    model_config = copy.deepcopy(config.hf_config)
-    _patch_quantization_config(model_config, model_format)
+    model_config = config.hf_config
+    llm_config = config.llm_config
+    _patch_quantization_config(llm_config, model_format)
     dtype = config.dtype
     return build_model_from_hf_config(model_config, dtype=dtype, device=device)
 
@@ -231,6 +230,7 @@ def add_adapters(model: torch.nn.Module,
     """Add adapters."""
     from peft import PeftConfig
     from peft.tuners.lora import LoraConfig
+    from transformers.modeling_utils import load_state_dict
 
     from lmdeploy.pytorch.adapter.adapter import find_all_target, get_ranks_and_scalings, load_lora_weights
     from lmdeploy.pytorch.nn.linear import LoRA

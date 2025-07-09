@@ -114,6 +114,9 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
     for (auto& layer : decoder_layer_weights) {
         layer->prepare(prop, stream);
     }
+
+    // Block until processing is done
+    check_cuda_error(cudaStreamSynchronize(stream));
 }
 
 }  // namespace turbomind

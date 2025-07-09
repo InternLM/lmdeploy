@@ -150,19 +150,29 @@ class EngineInstance:
         while True:
             resp = await self.req_sender.async_recv(resp)
 
-            cache_block_ids = resp.data.get('cache_block_ids', None)
+            cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
+            metrics_info = resp.data.get('metrics_info', None) if resp.data else None
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
-                yield EngineOutput(resp.type, token_ids, num_ids, cache_block_ids=cache_block_ids)
+                yield EngineOutput(resp.type,
+                                   token_ids,
+                                   num_ids,
+                                   cache_block_ids=cache_block_ids,
+                                   metrics_info=metrics_info)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
                 num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
-                yield EngineOutput(resp.type, token_ids, num_ids, logits=logits, cache_block_ids=cache_block_ids)
+                yield EngineOutput(resp.type,
+                                   token_ids,
+                                   num_ids,
+                                   logits=logits,
+                                   cache_block_ids=cache_block_ids,
+                                   metrics_info=metrics_info)
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')

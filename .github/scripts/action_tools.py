@@ -224,13 +224,17 @@ def generate_benchmark_report(report_path: str):
                     for f in csv_files:
                         df = pd.read_csv(f)
                         merged_df = pd.concat([merged_df, df], ignore_index=True)
+                    if 'throughput' in backend_subfolder:
+                        merged_df = merged_df.sort_values(by=merged_df.columns[1])
 
-                    merged_df = merged_df.sort_values(by=merged_df.columns[0])
+                        grouped_df = merged_df.groupby(merged_df.columns[1])
+                    else:
+                        merged_df = merged_df.sort_values(by=merged_df.columns[0])
 
-                    grouped_df = merged_df.groupby(merged_df.columns[0])
+                        grouped_df = merged_df.groupby(merged_df.columns[0])
                     if 'generation' not in backend_subfolder:
                         average_values = grouped_df.pipe((lambda group: {
-                            'mean': group.mean().round(decimals=3)
+                            'mean': group.mean(numeric_only=True).round(decimals=3)
                         }))['mean']
                         average_values.to_csv(average_csv_path, index=True)
                         avg_df = pd.read_csv(average_csv_path)

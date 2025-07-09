@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.messages import MetricsInfo, PytorchEngineConfig, ResponseType
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -46,6 +46,9 @@ class InferOutput:
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
     cache_block_ids: List[int] = None
+
+    # for logging
+    metrics_info: MetricsInfo = None
 
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
@@ -500,10 +503,10 @@ class Engine:
                 self.scheduler.stop_session(session_id)
                 session = self.scheduler.sessions[session_id]
                 for seq in session.sequences.values():
-                    resp: Response = getattr(seq, 'resp', None)
-                    if resp is not None:
-                        resp.type = ResponseType.FINISH
-                        self.req_manager.response(resp)
+                    _resp: Response = getattr(seq, 'resp', None)
+                    if _resp is not None:
+                        _resp.type = ResponseType.FINISH
+                        self.req_manager.response(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -515,9 +518,9 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                msg = list(self.scheduler.sessions[session_id].sequences.values())[0]
-                if msg.preserve_cache:
-                    self.scheduler._set_message_status(msg, MessageStatus.TO_BE_MIGRATED)
+                msgs = list(self.scheduler.sessions[session_id].sequences.values())
+                if len(msgs) > 0 and msgs[0].preserve_cache:
+                    self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
                 else:
                     self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -526,8 +529,14 @@ class Engine:
 
     def _on_add_message(self, reqs: List[Request], **kwargs):
         """On add message callback."""
+        valid_reqs = []
         for req in reqs:
             req_data = req.data
+            session_id = req_data['session_id']
+            if self.scheduler and session_id not in self.scheduler.sessions:
+                self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
+                continue
+            valid_reqs.append(req)
             if req_data.get('input_multimodals', None) is None:
                 continue
             elif self.input_processor is None:
@@ -546,8 +555,8 @@ class Engine:
             req_data['token_ids'] = input_ids
             req_data['input_multimodals'] = input_multimodals
 
-        if len(reqs) > 0:
-            self._add_message(reqs)
+        if len(valid_reqs) > 0:
+            self._add_message(valid_reqs)
 
     def _add_message(self, reqs: List[Request]):
 
@@ -771,8 +780,8 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
-                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
+    def _make_infer_outputs(self, new_token_timestamp: float, next_token_ids: torch.LongTensor, running: SeqList,
+                            logits: torch.Tensor, stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
         """Make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
@@ -794,11 +803,13 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
+            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
-                              cache_block_ids=cache_block_ids)
+                              cache_block_ids=cache_block_ids,
+                              metrics_info=metrics_info)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -933,7 +944,10 @@ class Engine:
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
             self._response(out.resp,
                            resp_type,
-                           data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
+                           data=dict(token_ids=out.token_ids,
+                                     logits=out.logits,
+                                     cache_block_ids=out.cache_block_ids,
+                                     metrics_info=out.metrics_info))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
@@ -1138,7 +1152,7 @@ class Engine:
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
         except Exception as e:
-            logger.error(f'exception happened: {e}')
+            logger.error(f'exception happened: {type(e)} {e}')
         finally:
             self._loop_finally()
 

@@ -12,7 +12,7 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
 
 assert triton.__version__ >= '2.1.0'
 
-LOG2: tl.constexpr = math.log(2)
+LOG2 = tl.constexpr(math.log(2))
 
 
 @triton.jit

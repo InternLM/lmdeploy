@@ -26,9 +26,7 @@ FROM base as conda
 ADD manywheel/scripts/install_conda.sh install_conda.sh
 RUN bash ./install_conda.sh && rm install_conda.sh
 
-RUN /opt/conda/bin/conda create -n py38 python=3.8 -yq && \
-    /opt/conda/envs/py38/bin/pip install pybind11 && \
-    /opt/conda/bin/conda create -n py39 python=3.9 -yq && \
+RUN /opt/conda/bin/conda create -n py39 python=3.9 -yq && \
     /opt/conda/envs/py39/bin/pip install pybind11 && \
     /opt/conda/bin/conda create -n py310 python=3.10 -yq && \
     /opt/conda/envs/py310/bin/pip install pybind11 && \
@@ -36,6 +34,8 @@ RUN /opt/conda/bin/conda create -n py38 python=3.8 -yq && \
     /opt/conda/envs/py311/bin/pip install pybind11 && \
     /opt/conda/bin/conda create -n py312 python=3.12 -yq && \
     /opt/conda/envs/py312/bin/pip install pybind11
+    /opt/conda/bin/conda create -n py313 python=3.13 -yq && \
+    /opt/conda/envs/py313/bin/pip install pybind11
 
 FROM base as cuda_final
 COPY --from=cuda            /usr/local/cuda-${BASE_CUDA_VERSION}  /usr/local/cuda-${BASE_CUDA_VERSION}

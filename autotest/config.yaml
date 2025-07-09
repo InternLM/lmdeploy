@@ -48,8 +48,6 @@ turbomind_chat_model:
     - internlm/internlm3-8b-instruct-awq
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
-    - internlm/internlm-xcomposer2-4khd-7b
-    - internlm/internlm-xcomposer2d5-7b
     - OpenGVLab/InternVL3-2B
     - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL3-38B
@@ -185,8 +183,6 @@ turbomind_vl_model:
     - OpenGVLab/InternVL2-2B
     - OpenGVLab/InternVL2-40B
     - OpenGVLab/InternVL2-Llama3-76B-AWQ
-    - internlm/internlm-xcomposer2d5-7b
-    - internlm/internlm-xcomposer2-4khd-7b
     - openbmb/MiniCPM-Llama3-V-2_5
     - openbmb/MiniCPM-V-2_6
 
@@ -212,7 +208,6 @@ pytorch_vl_model:
     - THUDM/cogvlm-chat-hf
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
-    - openbmb/MiniCPM-V-2_6
     - microsoft/Phi-3-vision-128k-instruct
     - microsoft/Phi-3.5-vision-instruct
 
@@ -343,10 +338,8 @@ pytorch_quatization:
 
 longtext_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct
-    - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - internlm/internlm2_5-7b-chat-1m
-    - internlm/internlm2-chat-20b
     - internlm/internlm3-8b-instruct
 
 benchmark_model:
@@ -361,6 +354,5 @@ benchmark_model:
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen2.5-7B-Instruct
-    - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
     - deepseek-ai/DeepSeek-V2-Lite-Chat

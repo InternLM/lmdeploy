@@ -174,7 +174,7 @@ class MPEngine:
             cancel_async_tasks(loop)
 
     @staticmethod
-    async def _mp_proc_async(server, engine: "Engine"):
+    async def _mp_proc_async(server, engine):
         """Mp process function."""
         engine.start_loop()
         instance_pool = EngineInstancePool(engine)
@@ -235,8 +235,6 @@ class MPEngine:
 
 class MPEngineInstance:
     """MP Engine Instance."""
-
-    _is_pytorch_engine = True
 
     def __init__(self, engine: MPEngine):
         self.engine = engine

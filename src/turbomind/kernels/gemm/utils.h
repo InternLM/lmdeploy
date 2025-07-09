@@ -50,6 +50,12 @@ __host__ __device__ constexpr int2 cs2mk(int c, int s)
 }
 
 template<Order order>
+__host__ __device__ constexpr int2 cs2mk(int2 cs)
+{
+    return cs2mk<order>(cs.x, cs.y);
+}
+
+template<Order order>
 __host__ __device__ constexpr int2 _kn2cs(int k, int n)
 {
     if constexpr (order == Order::kColMajor) {

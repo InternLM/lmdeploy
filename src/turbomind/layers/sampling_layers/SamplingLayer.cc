@@ -16,6 +16,7 @@
 
 #include "src/turbomind/layers/sampling_layers/SamplingLayer.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
@@ -60,15 +61,15 @@ void SamplingLayer<T>::Forward(TensorMap& args)
 
     core::Copy(kept_.data(), bsz, kept_buf_.data());
 
+    Buffer_<int> indices(bsz * vocab_size_padded_, kDEVICE);
+
     // use topk sort if some request use topk filter
     if (max_topk_ > 0) {
         // TODO: top_k >= 64 is much slower than torch.topk()
         TopKSortFilterParams params{};
-        params.workspace         = topk_ws_.data();
-        params.workspace_size    = topk_ws_.size();
         params.logits            = logits.data();
         params.sorted_logits     = logits.data();
-        params.sorted_indices    = indices_.data();
+        params.sorted_indices    = indices.data();
         params.kept              = kept_buf_.data();
         params.top_ks            = top_k_buf_.data();
         params.max_top_k         = max_topk_;
@@ -83,11 +84,9 @@ void SamplingLayer<T>::Forward(TensorMap& args)
         invokeSoftmax<T>(logits.data(), vocab_size_padded_, vocab_size_, bsz, kept_buf_.data(), stream_);
 
         TopPSortParams params{};
-        params.workspace         = topp_ws_.data();
-        params.workspace_size    = topp_ws_.size();
         params.logits            = logits.data();
         params.sorted_logits     = logits.data();
-        params.sorted_indices    = indices_.data();
+        params.sorted_indices    = indices.data();
         params.kept              = kept_buf_.data();
         params.top_ks            = top_k_buf_.data();
         params.top_ps            = top_p_buf_.data();
@@ -101,7 +100,7 @@ void SamplingLayer<T>::Forward(TensorMap& args)
     if (max_minp_ != 0.f || min_topp_ != 1.f) {
         TopPMinPFilterParams params{};
         params.sorted_logits     = logits.data();
-        params.sorted_indices    = indices_.data();
+        params.sorted_indices    = indices.data();
         params.kept              = kept_buf_.data();
         params.top_ps            = top_p_buf_.data();
         params.min_ps            = min_p_buf_.data();
@@ -116,7 +115,7 @@ void SamplingLayer<T>::Forward(TensorMap& args)
         SamplingParams params{};
         params.logits          = logits.data();
         params.stride          = vocab_size_padded_;
-        params.indices         = indices_.data();
+        params.indices         = indices.data();
         params.kept            = kept_buf_.data();
         params.curandstate     = (curandState_t*)args.at("curand_state").raw_data();
         params.batch_size      = bsz;
@@ -147,31 +146,10 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs, const Tensor
         min_p_[i] = rs[i]->gen_cfg.min_p;
     }
 
-    max_topk_ = *std::max_element(top_k_.begin(), top_k_.end());
-    min_topk_ = *std::min_element(top_k_.begin(), top_k_.end());
-    min_topp_ = *std::min_element(top_p_.begin(), top_p_.end());
-    max_minp_ = *std::max_element(min_p_.begin(), min_p_.end());
-
-    indices_ = Buffer_<int>(bsz * vocab_size_padded_, kDEVICE);
-
-    {
-        // topk buffer
-        TopKSortFilterParams params{};
-        params.batch_size = bsz;
-        params.max_top_k  = max_topk_;
-        invokeTopKSortFilter<T>(params, stream_);
-        topk_ws_ = {(ssize_t)params.workspace_size, kDEVICE};
-    }
-
-    {
-        // topp buffer
-        TopPSortParams params{};
-        params.batch_size        = bsz;
-        params.vocab_size        = vocab_size_;
-        params.vocab_size_padded = vocab_size_padded_;
-        invokeTopPSort<T>(params, stream_);
-        topp_ws_ = {(ssize_t)params.workspace_size, kDEVICE};
-    }
+    max_topk_ = *std::max_element(top_k_.begin(), top_k_.begin() + bsz);
+    min_topk_ = *std::min_element(top_k_.begin(), top_k_.begin() + bsz);
+    min_topp_ = *std::min_element(top_p_.begin(), top_p_.begin() + bsz);
+    max_minp_ = *std::max_element(min_p_.begin(), min_p_.begin() + bsz);
 
     core::Copy(top_k_.data(), bsz, top_k_buf_.data());
     core::Copy(top_p_.data(), bsz, top_p_buf_.data());

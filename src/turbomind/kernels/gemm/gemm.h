@@ -52,6 +52,8 @@ private:
 std::tuple<Order, Pack, Order, Pack>
 get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool force_simt);
 
+void* make_strided_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream);
+
 void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream);
 
 }  // namespace turbomind::gemm

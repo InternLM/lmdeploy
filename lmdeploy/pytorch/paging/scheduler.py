@@ -6,6 +6,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
+from lmdeploy.messages import EngineCoreEventType
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
@@ -136,6 +137,8 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
+        seq.record_event(EngineCoreEventType.QUEUED)
+
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
         running_migration: SeqList = []
@@ -244,23 +247,24 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
-        print({
-            'scheduling type': 'Prefill',
-            'time': time.time(),
-            'role': self.cache_config.role,
-            'max batches': self.scheduler_config.max_batches,
-            'total_waiting': self.num_waiting(),
-            'total_running': self.num_running(),
-            'total_locking': self.num_locked(),
-            'total_to_be_migrated': self.num_to_be_migrated(),
-            'total_migration_waiting': self.num_migration_waiting(),
-            'total_migration_running': self.num_migration_running(),
-            'total_migration_locked': self.num_migration_locked(),
-            'kv_usage': (
-                self.block_manager.get_num_free_gpu_blocks(),
-                self.block_manager.num_gpu_blocks,
-            ),
-        })
+            print({
+                'scheduling type': 'Prefill',
+                'time': time.time(),
+                'role': self.cache_config.role,
+                'max batches': self.scheduler_config.max_batches,
+                'total_waiting': self.num_waiting(),
+                'total_running': self.num_running(),
+                'total_locking': self.num_locked(),
+                'total_to_be_migrated': self.num_to_be_migrated(),
+                'total_migration_waiting': self.num_migration_waiting(),
+                'total_migration_running': self.num_migration_running(),
+                'total_migration_locked': self.num_migration_locked(),
+                'kv_usage': (
+                    self.block_manager.get_num_free_gpu_blocks(),
+                    self.block_manager.num_gpu_blocks,
+                ),
+            })
+            seq.record_event(EngineCoreEventType.SCHEDULED)
 
         return running, swap_in_map, swap_out_map, copy_map
 
@@ -480,3 +484,13 @@ class Scheduler:
         migration_done = self.migration_done
         for seq in migration_done:
             self._set_message_status(seq, MessageStatus.RUNNING)
+
+    def make_stats(self):
+        """Make stats."""
+        return {
+            'running': self.num_running(),
+            'waiting': self.num_waiting(),
+            'locked': self.num_locked(),
+            'free_gpu_blocks': self.block_manager.get_num_free_gpu_blocks(),
+            'total_gpu_blocks': self.block_manager.num_gpu_blocks
+        }
