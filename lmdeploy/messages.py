@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional
 
@@ -317,6 +318,7 @@ class PytorchEngineConfig:
             it to True if you want to update weights after create the pipeline
         enable_microbatch (bool): enable microbatch for specified model
         enable_eplb (bool): enable eplb for specified model
+        enable_metrics (bool): enable metrics system
         role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime'].
@@ -354,6 +356,7 @@ class PytorchEngineConfig:
     enable_eplb: bool = False
     enable_mp_engine: bool = False
     model_format: str = None
+    enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
 
     role: EngineRole = EngineRole.Hybrid
@@ -428,6 +431,45 @@ class Response:
     index: int = 0
 
 
+# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+class EngineCoreEventType(enum.IntEnum):
+    """The type of engine core request event.
+
+    QUEUED - when the request was received by the engine core and added to the scheduler queue
+    SCHEDULED - when the request was first scheduled for execution
+    PREEMPTED - the request has been put back in the waiting queue in order to make room for other requests to complete.
+                It will be re-scheduled in future and re-start its prefill phase
+    """
+    QUEUED = 1
+    SCHEDULED = 2
+    PREEMPTED = 3  # FIXME, currently ignored for simplicity
+
+
+# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+@dataclass
+class EngineCoreEvent():
+    """A timestamped engine core event associated with a request.
+
+    The timestamp is a monotonic timestamps and is used for by the engine frontend to calculate intervals between engine
+    core events. These timestamps should not be compared with timestamps from other processes.
+    """
+    type: EngineCoreEventType
+    timestamp: float
+
+    @classmethod
+    def new_event(cls, event_type: EngineCoreEventType, timestamp: Optional[float] = None) -> 'EngineCoreEvent':
+        timestamp = time.perf_counter() if timestamp is None else timestamp
+        return cls(event_type, timestamp)
+
+
+@dataclass
+class MetricsInfo:
+    """Metrics info from the inference engine."""
+    engine_core_timestamp: float = 0.0
+    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
+    scheduler_raw_info: dict = field(default_factory=dict)
+
+
 @dataclass
 class EngineOutput:
     """Engine output for turbomind/pytorch engine.
@@ -441,6 +483,7 @@ class EngineOutput:
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
+        metrics_info (MetricsInfo): metrics info from the inference engine.
     """
     status: ResponseType
     token_ids: List[int]
@@ -450,6 +493,7 @@ class EngineOutput:
     last_hidden_state: torch.Tensor = None
 
     cache_block_ids: Optional[List[int]] = None
+    metrics_info: Optional[MetricsInfo] = None
 
 
 @dataclass

@@ -105,6 +105,7 @@ Documentation
    advance/structed_output.md
    advance/pytorch_multinodes.md
    advance/pytorch_profiling.md
+   advance/metrics.md
 
 .. toctree::
    :maxdepth: 1

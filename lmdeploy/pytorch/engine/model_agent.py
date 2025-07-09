@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import functools
+import time
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
@@ -388,7 +389,7 @@ class BaseModelAgent:
             return tmp_out
 
         # make long context inputs
-        is_long_context = inputs.input_ids.numel() > max_prefill_token_num
+        is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
         max_seqlen = 0
         if is_long_context:
             seq_len = inputs.seq_length
@@ -801,6 +802,7 @@ class BaseModelAgent:
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
+            out['new_token_timestamp'] = time.perf_counter()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
         return out

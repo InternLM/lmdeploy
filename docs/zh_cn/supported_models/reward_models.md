@@ -6,6 +6,7 @@ LMDeploy 支持以下奖励模型：
 | :--------------: | :-----------: | :------------------------: |
 | Qwen2.5-Math-RM  |      72B      |          PyTorch           |
 | InternLM2-Reward | 1.8B, 7B, 20B |          PyTorch           |
+|      POLAR       |   1.8B, 7B    |          PyTorch           |
 
 ## 离线推理
 

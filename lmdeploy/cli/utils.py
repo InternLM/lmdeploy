@@ -569,6 +569,11 @@ class ArgumentHelper:
 
         return parser.add_argument('--enable-eplb', action='store_true', help='enable eplb for specified model')
 
+    @staticmethod
+    def enable_metrics(parser):
+        """Add argument enable_metrics to parser."""
+        parser.add_argument('--enable-metrics', action='store_true', default=False, help='enable metrics system')
+
     # For Disaggregation
     @staticmethod
     def role(parser):
