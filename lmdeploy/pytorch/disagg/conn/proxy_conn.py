@@ -90,7 +90,6 @@ class PDConnectionPool:
                         timeout=self.aiotimeout,
                 ) as resp:
                     result = await resp.json()
-
                     return DistServeInitResponse.model_validate(result)
 
         async def p2p_connect(server_endpoint, conn_request: DistServeConnectionRequest) -> DistServeConnectionResponse:
@@ -104,57 +103,57 @@ class PDConnectionPool:
                     return DistServeConnectionResponse.model_validate(result)
 
         async def conn_worker(conn_req: PDConnectionMessage, conn_event: asyncio.Event):
-            # try:
-            link = (conn_req.p_url, conn_req.d_url)
-            logger.debug(f'{link} connecting...')
-            # Step 1. Get Remote Engine Configuration
-            prefill_engine_config = await get_engine_config(conn_req.p_url)
-            decode_engine_config = await get_engine_config(conn_req.d_url)
+            try:
+                link = (conn_req.p_url, conn_req.d_url)
+                logger.debug(f'{link} connecting...')
+                # Step 1. Get Remote Engine Configuration
+                prefill_engine_config = await get_engine_config(conn_req.p_url)
+                decode_engine_config = await get_engine_config(conn_req.d_url)
 
-            # Note: Only Same Parallel Configurations are supported by now
-            assert prefill_engine_config.tp_size == decode_engine_config.tp_size
+                # Note: Only Same Parallel Configurations are supported by now
+                assert prefill_engine_config.tp_size == decode_engine_config.tp_size
 
-            # Step 2. Construct Initialize Configuration
-            prefill_init_req = DistServeInitRequest(
-                protocol=conn_req.protocol,
-                local_engine_id=conn_req.p_url,
-                local_engine_config=prefill_engine_config,
-                remote_engine_id=conn_req.d_url,
-                remote_engine_config=decode_engine_config,
-                rdma_config=conn_req.rdma_config,
-                nvlink_config=conn_req.nvlink_config,
-            )
-            decode_init_req = DistServeInitRequest(
-                protocol=conn_req.protocol,
-                local_engine_id=conn_req.d_url,
-                local_engine_config=decode_engine_config,
-                remote_engine_id=conn_req.p_url,
-                remote_engine_config=prefill_engine_config,
-                rdma_config=conn_req.rdma_config,
-                nvlink_config=conn_req.nvlink_config,
-            )
+                # Step 2. Construct Initialize Configuration
+                prefill_init_req = DistServeInitRequest(
+                    protocol=conn_req.protocol,
+                    local_engine_id=conn_req.p_url,
+                    local_engine_config=prefill_engine_config,
+                    remote_engine_id=conn_req.d_url,
+                    remote_engine_config=decode_engine_config,
+                    rdma_config=conn_req.rdma_config,
+                    nvlink_config=conn_req.nvlink_config,
+                )
+                decode_init_req = DistServeInitRequest(
+                    protocol=conn_req.protocol,
+                    local_engine_id=conn_req.d_url,
+                    local_engine_config=decode_engine_config,
+                    remote_engine_id=conn_req.p_url,
+                    remote_engine_config=prefill_engine_config,
+                    rdma_config=conn_req.rdma_config,
+                    nvlink_config=conn_req.nvlink_config,
+                )
 
-            prefill_init_resp = await p2p_initialize(conn_req.p_url, prefill_init_req)
-            decode_init_resp = await p2p_initialize(conn_req.d_url, decode_init_req)
+                prefill_init_resp = await p2p_initialize(conn_req.p_url, prefill_init_req)
+                decode_init_resp = await p2p_initialize(conn_req.d_url, decode_init_req)
 
-            # Step 3. Connection
-            prefill_endpoint_conn_reqs = DistServeConnectionRequest(
-                protocol=conn_req.protocol,
-                remote_engine_id=conn_req.d_url,
-                remote_engine_endpoint_info=decode_init_resp.engine_endpoint_info,
-                remote_kvtransfer_endpoint_info=decode_init_resp.kvtransfer_endpoint_info)
-            decode_endpoint_conn_reqs = DistServeConnectionRequest(
-                protocol=conn_req.protocol,
-                remote_engine_id=conn_req.p_url,
-                remote_engine_endpoint_info=prefill_init_resp.engine_endpoint_info,
-                remote_kvtransfer_endpoint_info=prefill_init_resp.kvtransfer_endpoint_info)
-            await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
-            await p2p_connect(conn_req.d_url, decode_endpoint_conn_reqs)
-            self.pool[link].set_status(PDConnectionStatus.Connected)
-            logger.debug(f'{(conn_req.p_url, conn_req.d_url)} connected')
-            # except Exception as e:
-            #     self.pool[link].set_status(PDConnectionStatus.Disconnected)
-            #     logger.error(f"pd connection error: {e}")
+                # Step 3. Connection
+                prefill_endpoint_conn_reqs = DistServeConnectionRequest(
+                    protocol=conn_req.protocol,
+                    remote_engine_id=conn_req.d_url,
+                    remote_engine_endpoint_info=decode_init_resp.engine_endpoint_info,
+                    remote_kvtransfer_endpoint_info=decode_init_resp.kvtransfer_endpoint_info)
+                decode_endpoint_conn_reqs = DistServeConnectionRequest(
+                    protocol=conn_req.protocol,
+                    remote_engine_id=conn_req.p_url,
+                    remote_engine_endpoint_info=prefill_init_resp.engine_endpoint_info,
+                    remote_kvtransfer_endpoint_info=prefill_init_resp.kvtransfer_endpoint_info)
+                await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
+                await p2p_connect(conn_req.d_url, decode_endpoint_conn_reqs)
+                self.pool[link].set_status(PDConnectionStatus.Connected)
+                logger.debug(f'{(conn_req.p_url, conn_req.d_url)} connected')
+            except Exception as e:
+                self.pool[link].set_status(PDConnectionStatus.Disconnected)
+                logger.error(f'pd connection error: {e}')
             conn_event.set()
 
         async def wait_for_conn(conn_req: PDConnectionMessage, conn_event: asyncio.Event):

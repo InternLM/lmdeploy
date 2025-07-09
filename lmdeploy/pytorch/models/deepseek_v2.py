@@ -578,7 +578,6 @@ class MoEGate(nn.Module):
         self.n_routed_experts = config.n_routed_experts
         self.routed_scaling_factor = config.routed_scaling_factor
         self.scoring_func = config.scoring_func
-        self.alpha = config.aux_loss_alpha
         self.seq_aux = config.seq_aux
         self.topk_method = config.topk_method
         self.n_group = config.n_group
@@ -595,7 +594,6 @@ class MoEGate(nn.Module):
                 torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
-        self.fake_eplb = True
         self.eplb_dispatch_info = info
 
     def _compute_scores(self, logits: torch.Tensor):

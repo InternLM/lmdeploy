@@ -69,17 +69,15 @@ class GenOut:
 
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
-    return Response(
-        text=out.response,
-        generate_token_len=out.generate_token_len,
-        input_token_len=out.input_token_len,
-        finish_reason=out.finish_reason,
-        token_ids=out.token_ids or [],
-        logprobs=out.logprobs,
-        last_hidden_state=out.last_hidden_state,
-        logits=out.logits,
-        index=index,
-    )
+    return Response(text=out.response,
+                    generate_token_len=out.generate_token_len,
+                    input_token_len=out.input_token_len,
+                    finish_reason=out.finish_reason,
+                    token_ids=out.token_ids or [],
+                    logprobs=out.logprobs,
+                    last_hidden_state=out.last_hidden_state,
+                    logits=out.logits,
+                    index=index)
 
 
 def _append_response(dst: Response, src: Response):
@@ -153,20 +151,16 @@ class Session:
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def __call__(
-        self,
-        prompt: str,
-        gen_config: Optional[GenerationConfig] = None,
-        stream_response: bool = True,
-        do_preprocess: bool = True,
-    ) -> Union[Response, Iterator[Response]]:
-        self._engine.chat(
-            prompt=prompt,
-            gen_config=gen_config or self._gen_config,
-            stream_response=stream_response,
-            do_preprocess=do_preprocess,
-            session=self,
-        )
+    def __call__(self,
+                 prompt: str,
+                 gen_config: Optional[GenerationConfig] = None,
+                 stream_response: bool = True,
+                 do_preprocess: bool = True) -> Union[Response, Iterator[Response]]:
+        self._engine.chat(prompt=prompt,
+                          gen_config=gen_config or self._gen_config,
+                          stream_response=stream_response,
+                          do_preprocess=do_preprocess,
+                          session=self)
         if stream_response:
             return self.generator
         else:
@@ -262,16 +256,14 @@ class AsyncEngine(LogitsMixin):
             being printed in log. Default: Unlimited
     """
 
-    def __init__(
-        self,
-        model_path: str,
-        model_name: Optional[str] = None,
-        backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-        backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-        chat_template_config: Optional[ChatTemplateConfig] = None,
-        max_log_len: int = None,
-        **kwargs,
-    ) -> None:
+    def __init__(self,
+                 model_path: str,
+                 model_name: Optional[str] = None,
+                 backend: Literal['turbomind', 'pytorch'] = 'turbomind',
+                 backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+                 chat_template_config: Optional[ChatTemplateConfig] = None,
+                 max_log_len: int = None,
+                 **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
@@ -338,12 +330,10 @@ class AsyncEngine(LogitsMixin):
                 self.free_insts.put_nowait(inst)
         return self.free_insts
 
-    def _build_turbomind(
-        self,
-        model_path: str,
-        backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-        **kwargs,
-    ):
+    def _build_turbomind(self,
+                         model_path: str,
+                         backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+                         **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
 
@@ -354,12 +344,10 @@ class AsyncEngine(LogitsMixin):
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = self.engine.config
 
-    def _build_pytorch(
-        self,
-        model_path: str,
-        backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-        **kwargs,
-    ):
+    def _build_pytorch(self,
+                       model_path: str,
+                       backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+                       **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
         self.engine = Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
@@ -495,17 +483,15 @@ class AsyncEngine(LogitsMixin):
     def _is_single(prompts):
         return isinstance(prompts, str) or isinstance(prompts[0], Dict)
 
-    def infer(
-        self,
-        prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-        gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
-        do_preprocess: bool = True,
-        adapter_name: Optional[str] = None,
-        stream_response: bool = False,
-        multiplex: bool = False,
-        pbar: Optional[tqdm.tqdm] = None,
-        **kwargs,
-    ):
+    def infer(self,
+              prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+              gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
+              do_preprocess: bool = True,
+              adapter_name: Optional[str] = None,
+              stream_response: bool = False,
+              multiplex: bool = False,
+              pbar: Optional[tqdm.tqdm] = None,
+              **kwargs):
 
         prompts = [prompts] if AsyncEngine._is_single(prompts) else prompts
         assert isinstance(prompts, List), 'prompts should be a list'
@@ -516,14 +502,12 @@ class AsyncEngine(LogitsMixin):
 
         def requests():
             for prompt, gen_cfg in zip(prompts, gen_config):
-                r = dict(
-                    messages=prompt,
-                    gen_config=gen_cfg,
-                    do_preprocess=do_preprocess,
-                    adapter_name=adapter_name,
-                    stream_response=stream_response,
-                    **kwargs,
-                )
+                r = dict(messages=prompt,
+                         gen_config=gen_cfg,
+                         do_preprocess=do_preprocess,
+                         adapter_name=adapter_name,
+                         stream_response=stream_response,
+                         **kwargs)
                 r.setdefault('sequence_start', True)
                 r.setdefault('sequence_end', True)
                 if 'session_id' not in r:
@@ -532,15 +516,13 @@ class AsyncEngine(LogitsMixin):
 
         return self._infer(requests(), multiplex, pbar)
 
-    def batch_infer(
-        self,
-        prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-        gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
-        do_preprocess: bool = True,
-        adapter_name: Optional[str] = None,
-        use_tqdm: bool = False,
-        **kwargs,
-    ):
+    def batch_infer(self,
+                    prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+                    gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
+                    do_preprocess: bool = True,
+                    adapter_name: Optional[str] = None,
+                    use_tqdm: bool = False,
+                    **kwargs):
         """Inference a batch of prompts.
 
         Args:
@@ -560,35 +542,30 @@ class AsyncEngine(LogitsMixin):
         outputs = []
         pbar = tqdm.tqdm(total=1 if is_single else len(prompts)) if use_tqdm else None
         try:
-            for g in self.infer(
-                    prompts,
-                    gen_config,
-                    do_preprocess,
-                    adapter_name,
-                    stream_response=False,
-                    pbar=pbar,
-                    **kwargs,
-            ):
+            for g in self.infer(prompts,
+                                gen_config,
+                                do_preprocess,
+                                adapter_name,
+                                stream_response=False,
+                                pbar=pbar,
+                                **kwargs):
                 res = None
                 for out in g:
                     res = _append_response(res, out)
                 outputs.append(res)
         finally:
-            if pbar:
-                pbar.close()  # noqa
+            if pbar: pbar.close()  # noqa
         if is_single:
             return outputs[0]
         return outputs
 
-    def stream_infer(
-        self,
-        prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-        gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
-        do_preprocess: bool = True,
-        adapter_name: Optional[str] = None,
-        stream_response: bool = True,
-        **kwargs,
-    ):
+    def stream_infer(self,
+                     prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+                     gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
+                     do_preprocess: bool = True,
+                     adapter_name: Optional[str] = None,
+                     stream_response: bool = True,
+                     **kwargs):
         """Inference a batch of prompts with stream mode.
 
         Args:
@@ -603,26 +580,16 @@ class AsyncEngine(LogitsMixin):
             adapter_name (str): the adapter name of slora for pytorch backend.
                 Pick one from adapters. Default to None, using the base model.
         """
-        return self.infer(
-            prompts,
-            gen_config,
-            do_preprocess,
-            adapter_name,
-            stream_response,
-            multiplex=True,
-            **kwargs,
-        )
+        return self.infer(prompts, gen_config, do_preprocess, adapter_name, stream_response, multiplex=True, **kwargs)
 
-    async def _get_prompt_input(
-        self,
-        prompt: str,
-        do_preprocess: bool,
-        sequence_start: bool,
-        adapter_name: str,
-        tools: Optional[List[object]] = None,
-        enable_thinking: Optional[bool] = None,
-        **kwargs,
-    ):
+    async def _get_prompt_input(self,
+                                prompt: str,
+                                do_preprocess: bool,
+                                sequence_start: bool,
+                                adapter_name: str,
+                                tools: Optional[List[object]] = None,
+                                enable_thinking: Optional[bool] = None,
+                                **kwargs):
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
@@ -672,23 +639,22 @@ class AsyncEngine(LogitsMixin):
             await generator.aclose()
 
     async def generate(
-        self,
-        messages,
-        session_id: int,
-        gen_config: Optional[GenerationConfig] = None,
-        tools: Optional[List[object]] = None,
-        stream_response: bool = True,
-        sequence_start: bool = True,
-        sequence_end: bool = True,  # no interactive mode by default
-        step: int = 0,
-        do_preprocess: bool = True,
-        adapter_name: Optional[str] = None,
-        skip_stop_tokens: bool = True,
-        rewind_stop_tokens: bool = False,
-        input_ids: Optional[List] = None,
-        enable_thinking: Optional[bool] = None,
-        **kwargs,
-    ):
+            self,
+            messages,
+            session_id: int,
+            gen_config: Optional[GenerationConfig] = None,
+            tools: Optional[List[object]] = None,
+            stream_response: bool = True,
+            sequence_start: bool = True,
+            sequence_end: bool = True,  # no interactive mode by default
+            step: int = 0,
+            do_preprocess: bool = True,
+            adapter_name: Optional[str] = None,
+            skip_stop_tokens: bool = True,
+            rewind_stop_tokens: bool = False,
+            input_ids: Optional[List] = None,
+            enable_thinking: Optional[bool] = None,
+            **kwargs):
         """Generate responses.
 
         Args:
@@ -738,23 +704,19 @@ class AsyncEngine(LogitsMixin):
         if messages:
             prompt = messages
             self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
-            prompt_input = await self._get_prompt_input(
-                prompt,
-                do_preprocess,
-                sequence_start,
-                adapter_name,
-                tools=tools,
-                enable_thinking=enable_thinking,
-            )
+            prompt_input = await self._get_prompt_input(prompt,
+                                                        do_preprocess,
+                                                        sequence_start,
+                                                        adapter_name,
+                                                        tools=tools,
+                                                        enable_thinking=enable_thinking)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
-            self.request_logger.log_inputs(
-                session_id=session_id,
-                prompt=prompt,
-                prompt_token_ids=input_ids,
-                gen_config=gen_config,
-                adapter_name=adapter_name,
-            )
+            self.request_logger.log_inputs(session_id=session_id,
+                                           prompt=prompt,
+                                           prompt_token_ids=input_ids,
+                                           gen_config=gen_config,
+                                           adapter_name=adapter_name)
             logger.info(f'session={session_id}, '
                         f'history_tokens={self.id2step[session_id]}, '
                         f'input_tokens={len(input_ids)}, '
@@ -796,17 +758,15 @@ class AsyncEngine(LogitsMixin):
             start_ids_offset = state.ids_offset
             response = ''
             finish_reason = None
-            async with self.safe_run(
-                    inst,
-                    session_id=session_id,
-                    **prompt_input,
-                    gen_config=gen_config,
-                    adapter_name=adapter_name,
-                    stream_output=stream_response,
-                    sequence_start=sequence_start,
-                    sequence_end=sequence_end,
-                    step=history_len,
-            ) as gen:
+            async with self.safe_run(inst,
+                                     session_id=session_id,
+                                     **prompt_input,
+                                     gen_config=gen_config,
+                                     adapter_name=adapter_name,
+                                     stream_output=stream_response,
+                                     sequence_start=sequence_start,
+                                     sequence_end=sequence_end,
+                                     step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
                 req_state = RequestState(prompt_len=input_len)  # per-requst state
@@ -845,15 +805,13 @@ class AsyncEngine(LogitsMixin):
                     )
                     res = token_ids[ids_offset:]
 
-                    out = GenOut(
-                        response,
-                        history_len,
-                        input_len,
-                        gen_len,
-                        finish_reason,
-                        token_ids=res,
-                        cache_block_ids=outputs.cache_block_ids,
-                    )
+                    out = GenOut(response,
+                                 history_len,
+                                 input_len,
+                                 gen_len,
+                                 finish_reason,
+                                 token_ids=res,
+                                 cache_block_ids=outputs.cache_block_ids)
 
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
@@ -872,7 +830,8 @@ class AsyncEngine(LogitsMixin):
                 metrics_processor.increment_finished_requests()
 
                 if not is_error(outputs.status):
-                    finish_reason = ('length' if gen_len >= gen_config.max_new_tokens else 'stop')
+                    finish_reason = 'length' \
+                        if gen_len >= gen_config.max_new_tokens else 'stop'
                     # utf-8 char at the end means it's a potential unfinished
                     # byte sequence
                     if not response.endswith('�'):
@@ -891,14 +850,12 @@ class AsyncEngine(LogitsMixin):
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
-                    yield GenOut(
-                        response='internal error happened',
-                        history_token_len=self.id2step[session_id],
-                        input_token_len=len(input_ids),
-                        generate_token_len=0,
-                        finish_reason='error',
-                        token_ids=[],
-                    )
+                    yield GenOut(response='internal error happened',
+                                 history_token_len=self.id2step[session_id],
+                                 input_token_len=len(input_ids),
+                                 generate_token_len=0,
+                                 finish_reason='error',
+                                 token_ids=[])
             # update step
             if sequence_end:
                 self.id2step[session_id] = 0
@@ -957,15 +914,13 @@ class AsyncEngine(LogitsMixin):
 
         sequence_start = session._step == 0
 
-        generator = self.infer(
-            prompt,
-            gen_config,
-            sequence_start=sequence_start,
-            sequence_end=False,
-            session_id=session._id,
-            stream_response=stream_response,
-            multiplex=True,
-        )
+        generator = self.infer(prompt,
+                               gen_config,
+                               sequence_start=sequence_start,
+                               sequence_end=False,
+                               session_id=session._id,
+                               stream_response=stream_response,
+                               multiplex=True)
 
         def _gen():
             resp = None
