@@ -389,7 +389,7 @@ class BaseModelAgent:
             return tmp_out
 
         # make long context inputs
-        is_long_context = inputs.input_ids.numel() > max_prefill_token_num
+        is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
         max_seqlen = 0
         if is_long_context:
             seq_len = inputs.seq_length
