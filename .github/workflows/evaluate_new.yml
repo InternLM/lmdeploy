@@ -57,7 +57,7 @@ jobs:
     if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
     strategy:
       matrix:
-        pyver: [py312]
+        pyver: [py310]
     runs-on: ubuntu-latest
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
@@ -101,7 +101,7 @@ jobs:
         HF_HUB_CACHE: /root/models
         HF_HUB_OFFLINE: 1
     container:
-      image: pjlab-shanghai-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/pjlab-eflops/llm:lmdeploy-v0.7.2-cu12
+      image: pjlab-shanghai-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/pjlab-eflops/llm:lmdeploy-v0.9.1-fortest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme1:/nvme1
@@ -129,7 +129,7 @@ jobs:
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
-          name: my-artifact-${{ github.run_id }}-py312
+          name: my-artifact-${{ github.run_id }}-py310
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
@@ -148,9 +148,11 @@ jobs:
           python3 -m pip install -r requirements/test.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
       - name: Install opencompass
         run: |
+          git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
           cd opencompass
-          # cp /nvme1/shared/qa_test_models/offline_pkg/requirements-oc.txt requirements/runtime.txt
-          python3 -m pip install -e .[full] -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+          git checkout ${{ github.event.inputs.oc_repo_ref}}
+          cp /root/models/offline_pkg/requirements-oc.txt requirements/runtime.txt
+          python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
