@@ -53,6 +53,12 @@ __global__ void Barrier_V2(SystemSemaphoreInfo* semaphores, int ranks)
     sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
 }
 
+void CudaIpcCommImpl::Barrier(int group, cudaStream_t stream)
+{
+    const int ranks = n_ranks(group);
+    Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+}
+
 template<class T, class Relaxed>
 __global__ void __launch_bounds__(1024, 1) Allgather_Simple_Pull(
     Array<T*, kMaxRanks> uc, SystemSemaphoreInfo* semaphores, int rank, int ranks, int64_t slice, Relaxed relaxed)
@@ -130,7 +136,7 @@ void CudaIpcCommImpl::AllGather(
     auto invoke_copy_engine = [&] {
         auto symm_ptr = get_symmetric_v2((char*)recvbuff, group);
 
-        Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+        Barrier(group, stream);
 
         for (int i = 1; i < ranks; ++i) {
             const int p = (rank + i) % ranks;
@@ -141,7 +147,7 @@ void CudaIpcCommImpl::AllGather(
                                              stream));
         }
 
-        Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+        Barrier(group, stream);
     };
 
     if (bytesize < get_ag_memcpy_thres()) {
@@ -155,7 +161,7 @@ void CudaIpcCommImpl::AllGather(
             invoke(uint{});
         }
         else {
-            throw std::runtime_error("not implemented");
+            TM_CHECK(0) << "not implemented";
         }
     }
     else {
@@ -328,7 +334,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
     auto invoke_copy_engine = [&] {
         auto symm_ptr = get_symmetric_v2((char*)recvbuff, group);
 
-        Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+        Barrier(group, stream);
 
         for (int i = 1; i < ranks; ++i) {
             const int p = (rank + i) % ranks;
@@ -342,7 +348,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
                                                stream));
         }
 
-        Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+        Barrier(group, stream);
     };
 
     if (nbytes < get_ag_memcpy_thres()) {
@@ -356,7 +362,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
             invoke(uint{});
         }
         else {
-            throw std::runtime_error("not implemented");
+            TM_CHECK(0) << "not implemented";
         }
     }
     else {

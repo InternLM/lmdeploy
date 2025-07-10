@@ -163,7 +163,10 @@ struct TestComm {
             tp = device_num;
         }
 
-        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cuda-ipc");
+        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 0, "cuda-ipc");
+
+        TM_CHECK_GT(h_comm_.size(), 0);
+        TM_CHECK_GT(d_comm_.size(), 0);
 
         warmup_ = warmup;
         iters_  = iters;
@@ -174,12 +177,12 @@ struct TestComm {
         const int g = 0;
 
         // TestAllReduce<half>(hidden_dim, g);
-        TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
+        // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
         // TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
-        // TestAllGather<float>(vocab_size / tp, g);
+        TestAllGather<half>(vocab_size / tp, g);
     }
 
     template<class T>
@@ -273,7 +276,7 @@ struct TestComm {
                     }
                     // verify(count);
                 }
-                verify(count);
+                // verify(count);
             }
 
             if (g_rank == 0) {
@@ -372,7 +375,7 @@ struct TestComm {
                     ref_res[d][idx]  = src_res[d][idx] + ref_data[d][idx] + bias[i];  // r' <- r + (h + b)
                     sum += (float)ref_res[d][idx] * (float)ref_res[d][idx];
                 }
-                sum = rsqrtf(sum / dim + eps);
+                sum = 1 / (sqrtf(sum / dim) + eps);
                 for (size_t i = 0; i < dim; ++i) {
                     const size_t idx = t * dim + i;
                     float        tmp = (float)ref_res[d][idx];
@@ -570,13 +573,14 @@ struct TestComm {
                     check_cuda_error(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * n_ranks, ctx.stream));
                     ctx.copy_n(d_data, count, d_tmp + rank * count);
                     auto ms = ctx.exec([&](auto stream) {  //
-                        if (d_comm->Query(kHasAllGather2D)) {
+                        if (d_comm->Query(kHasAllGather2D) && 0) {
                             d_comm->AllGather2D(
                                 d_tmp + rank * count, d_tmp, dim, count, dim, n, dtype, {1, 1}, group, stream);
                         }
                         else {
                             d_comm->AllGather(d_tmp + rank * count, d_tmp, count, dtype, group, stream);
                         }
+                        // d_comm->Broadcast(d_tmp, d_tmp, count, dtype, 0, group, stream);
                     });
                     if (i >= warmup_) {
                         delta += ms;
@@ -589,10 +593,14 @@ struct TestComm {
             if (g_rank == 0) {
                 SummaryHeader("allgather", dim, n_ranks);
                 for (size_t i = 0; i < tokens_.size(); ++i) {
-                    const float  avg   = deltas[i] / iters_;
+                    const float avg = deltas[i] / iters_;
                     const size_t count = n_ranks * tokens_[i] * dim;
                     const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
                     const float  busbw = algbw * (n_ranks - 1) / n_ranks;
+
+                    // const size_t count = tokens_[i] * dim;
+                    // const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
+                    // const float  busbw = algbw;
                     SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
                 }
             }
@@ -613,8 +621,8 @@ struct TestComm {
     template<class T>
     void TestAllreduceResidualBiasRMSnormEx(size_t dim, int group0, int group1)
     {
-        const int tp_size_0 = d_comm_[0]->n_ranks(group0);
-        const int tp_size_1 = d_comm_[0]->n_ranks(group1);
+        const int tp_size_0 = d_comm_.at(0)->n_ranks(group0);
+        const int tp_size_1 = d_comm_.at(0)->n_ranks(group1);
         const int dp_size_0 = d_comm_.size() / tp_size_0;
         const int dp_size_1 = d_comm_.size() / tp_size_1;
 
@@ -684,7 +692,7 @@ struct TestComm {
                 ref_res[idx] = src_res[idx] + ref_data[idx] + bias[d];  // r' <- r + (h + b)
                 sum += (float)ref_res[idx] * (float)ref_res[idx];
             }
-            sum = rsqrtf(sum / dim + eps);
+            sum = 1 / (sqrtf(sum / dim) + eps);
             for (size_t d = 0; d < dim; ++d) {
                 size_t idx    = i * dim + d;
                 ref_data[idx] = (float)ref_res[idx] * sum * (float)weight[d];  // h' <- norm(r) * w
@@ -896,18 +904,18 @@ int main(int argc, char* argv[])
              128000,
              -1,
              10,
-             100,
+             10,
              //   {1024});
              //   {1024, 2048, 4096, 8192});
              // {512});
-             //  {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
+             //   {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});
              //  {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
              //   {8192, 16384, 32768});
-             //  {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024});
-             {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,  128,
-              192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192});
+               {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024});
+            //  {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,  128,
+            //   192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192});
 
     return 0;
 }

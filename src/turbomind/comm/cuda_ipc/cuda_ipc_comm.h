@@ -54,6 +54,19 @@ public:
     void AllGather(
         const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream) override;
 
+    void Broadcast(const void*  sendbuff,
+                   void*        recvbuff,
+                   size_t       count,
+                   DataType     type,
+                   int          root,
+                   int          group,
+                   cudaStream_t stream) override;
+
+    void
+    Gather(const void* sendbuff, void* recvbuff, size_t count, DataType type, int root, int group, cudaStream_t stream);
+
+    void Barrier(int group, cudaStream_t stream);
+
     void AllreduceResidualBiasRMSnorm(void*        hidden,
                                       void*        residual,
                                       const void*  bias,
