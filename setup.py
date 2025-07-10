@@ -1,7 +1,9 @@
 import os
 import re
 import sys
+from pathlib import Path
 
+import cmake_build_extension
 from setuptools import find_packages, setup
 
 pwd = os.path.dirname(__file__)
@@ -24,12 +26,6 @@ def get_version():
     return locals()['__version__']
 
 
-def check_ext_modules():
-    if os.path.exists(os.path.join(pwd, 'lmdeploy', 'lib')):
-        return True
-    return False
-
-
 def get_cuda_pkgs():
     arg_name = '--cuda='
     arg_value = None
@@ -41,9 +37,19 @@ def get_cuda_pkgs():
 
     cuda_pkgs = []
     if arg_value == '11':
-        cuda_pkgs = ['nvidia-nccl-cu11', 'nvidia-cuda-runtime-cu11', 'nvidia-cublas-cu11', 'nvidia-curand-cu11']
+        cuda_pkgs = [
+            'nvidia-nccl-cu11',
+            'nvidia-cuda-runtime-cu11',
+            'nvidia-cublas-cu11',
+            'nvidia-curand-cu11',
+        ]
     elif arg_value == '12':
-        cuda_pkgs = ['nvidia-nccl-cu12', 'nvidia-cuda-runtime-cu12', 'nvidia-cublas-cu12', 'nvidia-curand-cu12']
+        cuda_pkgs = [
+            'nvidia-nccl-cu12',
+            'nvidia-cuda-runtime-cu12',
+            'nvidia-cublas-cu12',
+            'nvidia-curand-cu12',
+        ]
     return cuda_pkgs
 
 
@@ -146,9 +152,8 @@ if __name__ == '__main__':
         extras_require={
             'all': parse_requirements(f'requirements_{get_target_device()}.txt'),
             'lite': parse_requirements('requirements/lite.txt'),
-            'serve': parse_requirements('requirements/serve.txt')
+            'serve': parse_requirements('requirements/serve.txt'),
         },
-        has_ext_modules=check_ext_modules,
         classifiers=[
             'Programming Language :: Python :: 3.9',
             'Programming Language :: Python :: 3.10',
@@ -160,4 +165,26 @@ if __name__ == '__main__':
             'Intended Audience :: Science/Research',
         ],
         entry_points={'console_scripts': ['lmdeploy = lmdeploy.cli:run']},
+        ext_modules=[
+            cmake_build_extension.CMakeExtension(
+                name='Pybind11Bindings',
+                install_prefix='lmdeploy/lib',
+                cmake_depends_on=['pybind11'],
+                source_dir=str(Path(__file__).parent.absolute()),
+                cmake_configure_options=[
+                    # This option points CMake to the right Python interpreter, and helps
+                    # the logic of FindPython3.cmake to find the active version
+                    f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
+                    f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
+                    '-DCALL_FROM_SETUP_PY:BOOL=ON',
+                    '-DBUILD_SHARED_LIBS:BOOL=OFF',
+                    # Select the bindings implementation
+                    '-DBUILD_PY_FFI=ON',
+                    '-DBUILD_MULTI_GPU=ON',
+                    '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
+                    '-DUSE_NVTX=ON',
+                ],
+            ),
+        ],
+        cmdclass=dict(build_ext=cmake_build_extension.BuildExtension, ),
     )

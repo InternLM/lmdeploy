@@ -52,6 +52,7 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
   GIT_TAG        v3.9.2
   GIT_SHALLOW ON
+  EXCLUDE_FROM_ALL
 )
 
 set(CUTLASS_ENABLE_SM90_EXTENDED_MMA_SHAPES ON CACHE BOOL "Enable extended GMMA shapes")
@@ -233,5 +234,9 @@ add_subdirectory(src)
 
 # install python api
 if (BUILD_PY_FFI)
-  install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+  if (CALL_FROM_SETUP_PY)
+    install(TARGETS _turbomind DESTINATION ${CMAKE_INSTALL_PREFIX})
+  else()
+    install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+  endif()
 endif ()
