@@ -177,7 +177,7 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
-        print({
+        logger.debug({
             'scheduling type': 'Migration',
             'time': time.time(),
             'max batches': self.scheduler_config.max_batches,
@@ -247,18 +247,29 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
-            print({
-                'scheduling type': 'Prefill',
-                'time': time.time(),
-                'role': self.cache_config.role,
-                'max batches': self.scheduler_config.max_batches,
-                'total_waiting': self.num_waiting(),
-                'total_running': self.num_running(),
-                'total_locking': self.num_locked(),
-                'total_to_be_migrated': self.num_to_be_migrated(),
-                'total_migration_waiting': self.num_migration_waiting(),
-                'total_migration_running': self.num_migration_running(),
-                'total_migration_locked': self.num_migration_locked(),
+            logger.debug({
+                'scheduling type':
+                'Prefill',
+                'time':
+                time.time(),
+                'role':
+                self.cache_config.role,
+                'max batches':
+                self.scheduler_config.max_batches,
+                'total_waiting':
+                self.num_waiting(),
+                'total_running':
+                self.num_running(),
+                'total_locking':
+                self.num_locked(),
+                'total_to_be_migrated':
+                self.num_to_be_migrated(),
+                'total_migration_waiting':
+                self.num_migration_waiting(),
+                'total_migration_running':
+                self.num_migration_running(),
+                'total_migration_locked':
+                self.num_migration_locked(),
                 'kv_usage': (
                     self.block_manager.get_num_free_gpu_blocks(),
                     self.block_manager.num_gpu_blocks,
@@ -309,7 +320,7 @@ class Scheduler:
             self.block_manager.allocate(seq, prealloc_size)
             self.block_trie.allocate(seq)
 
-        print({
+        logger.debug({
             'scheduling type': 'Decode',
             'time': time.time(),
             'role': self.cache_config.role,
@@ -381,7 +392,7 @@ class Scheduler:
         for seq in seqs:
             self._remove_sequence(seq)
         self.sessions.pop(session_id)
-        print({
+        logger.debug({
             'scheduling type': 'free',
             'time': time.time(),
             'role': self.cache_config.role,

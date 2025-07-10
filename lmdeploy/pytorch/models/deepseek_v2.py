@@ -725,13 +725,6 @@ class DeepseekV2MoE(nn.Module):
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
 
-        if True:
-            ranks = torch.distributed.get_world_size()
-            shape = topk_ids.shape
-            topk_ids = (torch.arange(0, topk_ids.numel(), dtype=torch.int32, device=topk_ids.device) %
-                        ranks) * self.num_experts / ranks
-            topk_ids = topk_ids.reshape(shape).to(dtype=torch.int64)
-
         out_states = self.experts(
             hidden_states,
             topk_weights,
@@ -905,13 +898,6 @@ class DeepseekV2DecoderLayer(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_idx = self.mlp.gate(hidden_states)
-
-        if True:
-            ranks = torch.distributed.get_world_size()
-            shape = topk_idx.shape
-            topk_idx = (torch.arange(0, topk_idx.numel(), dtype=torch.int32, device=topk_idx.device) %
-                        ranks) * self.mlp.num_experts / ranks
-            topk_idx = topk_idx.reshape(shape).to(dtype=torch.int64)
 
         topk_weights = self.mlp.experts.renormalize(topk_weights)
         topk_weights = topk_weights.to(torch.float32)
