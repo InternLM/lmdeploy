@@ -52,7 +52,7 @@ RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/DeepGEMM.git 
     cd .. && rm -rf DeepGEMM
 
 # install cuda-bindings and dlBLAS
-RUN pip install cuda-python dlblas==0.0.2 --no-cache-dir
+RUN pip install cuda-python dlblas --no-cache-dir
 
 # set workspace
 WORKDIR /opt/lmdeploy
