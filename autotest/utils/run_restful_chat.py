@@ -1,5 +1,7 @@
 import json
 import os
+import random
+import string
 import subprocess
 from time import sleep, time
 
@@ -157,6 +159,13 @@ def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PO
             allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
+
+        with allure.step(case + ' step3 - restful_test - interactive chat'):
+            active_result, interactive_log, msg = interactive_test(config, case, case_info, model, http_url, worker_id)
+            allure.attach.file(interactive_log, attachment_type=allure.attachment_type.TEXT)
+
+        with assume:
+            assert active_result, msg
 
 
 def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
