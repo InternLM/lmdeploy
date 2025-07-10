@@ -21,9 +21,15 @@ def readme():
 
 
 def get_version():
-    with open(os.path.join(pwd, version_file), 'r') as f:
-        exec(compile(f.read(), version_file, 'exec'))
-    return locals()['__version__']
+    file_path = os.path.join(pwd, version_file)
+    pattern = re.compile(r"\s*__version__\s*=\s*'(\d+\.\d+\.\d+)'")
+    with open(file_path, 'r') as f:
+        for line in f:
+            m = pattern.match(line)
+            if m:
+                return m.group(1)
+        else:
+            assert False, f'No version found {file_path}'
 
 
 def get_cuda_pkgs():
