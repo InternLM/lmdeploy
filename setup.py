@@ -173,7 +173,7 @@ if __name__ == '__main__':
         entry_points={'console_scripts': ['lmdeploy = lmdeploy.cli:run']},
         ext_modules=[
             cmake_build_extension.CMakeExtension(
-                name='Pybind11Bindings',
+                name='_turbomind',
                 install_prefix='lmdeploy/lib',
                 cmake_depends_on=['pybind11'],
                 source_dir=str(Path(__file__).parent.absolute()),
