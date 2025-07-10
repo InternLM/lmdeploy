@@ -12,30 +12,30 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
 
 assert triton.__version__ >= '2.1.0'
 
-LOG2: tl.constexpr = math.log(2)
+LOG2 = tl.constexpr(math.log(2))
 
 
 @triton.jit
 def tl_pow(a, b):
-    """triton pow."""
+    """Triton pow."""
     return tl.exp(b * tl.log(a))
 
 
 @triton.jit
 def tl_2pow(b):
-    """triton pow2."""
+    """Triton pow2."""
     return tl.exp(b * LOG2)
 
 
 @triton.jit
 def tl_log2(a):
-    """triton log2."""
+    """Triton log2."""
     return tl.log(a) / LOG2
 
 
 @triton.jit
 def _get_interleave_power_of_2(i, n):
-    """get interleave power of 2."""
+    """Get interleave power of 2."""
     start = -tl_2pow(3 - tl_log2(n))
     start = tl_2pow(start)
     ratio = start
@@ -44,7 +44,7 @@ def _get_interleave_power_of_2(i, n):
 
 @triton.jit
 def get_slope(i, n):
-    """get slope."""
+    """Get slope."""
     closest_power_of_2 = tl_2pow(tl_log2(n).to(tl.int32))
     if i < closest_power_of_2:
         return _get_interleave_power_of_2(i, closest_power_of_2)
@@ -98,7 +98,7 @@ def _fwd_split_kernel(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """first step kernel of split k attention."""
+    """First step kernel of split k attention."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     split_k_id = tl.program_id(2)
@@ -215,7 +215,7 @@ def _reduce_split_kernel(
     SPLIT_K: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
 ):
-    """second step kernel of split k attention."""
+    """Second step kernel of split k attention."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
 
@@ -278,7 +278,7 @@ def _fwd_kernel(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """forward kernel."""
+    """Forward kernel."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     start_m = tl.program_id(2)
@@ -417,7 +417,7 @@ def _fwd_split_kernel_quant(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """first step kernel of split k attention with dequant fused.
+    """First step kernel of split k attention with dequant fused.
 
     Args:
         stride_xbs: stride of block size dim
@@ -604,7 +604,7 @@ def _fwd_kernel_quant(
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """forward kernel with dequant fused.
+    """Forward kernel with dequant fused.
 
     Args:
         stride_xbs: stride of block size dim

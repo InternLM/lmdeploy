@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 
 
 class SiluAndMulImpl(ABC):
-    """silu + multiple residual fused implementation."""
+    """Silu + multiple residual fused implementation."""
 
     @abstractmethod
     def forward(self, x):
@@ -12,7 +12,7 @@ class SiluAndMulImpl(ABC):
 
 
 class SiluAndMulBuilder(ABC):
-    """silu and mul implementation builder."""
+    """Silu and mul implementation builder."""
 
     @staticmethod
     @abstractmethod
@@ -22,7 +22,7 @@ class SiluAndMulBuilder(ABC):
 
 
 class GeluAndMulImpl(ABC):
-    """gelu + multiple residual fused implementation."""
+    """Gelu + multiple residual fused implementation."""
 
     @abstractmethod
     def forward(self, x):
@@ -31,7 +31,7 @@ class GeluAndMulImpl(ABC):
 
 
 class GeluAndMulBuilder(ABC):
-    """gelu and mul implementation builder."""
+    """Gelu and mul implementation builder."""
 
     @staticmethod
     @abstractmethod

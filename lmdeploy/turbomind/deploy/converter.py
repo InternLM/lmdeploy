@@ -20,7 +20,7 @@ from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, BaseOutputModel
 
-SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', None]
+SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'fp8', None]
 logger = get_logger('lmdeploy')
 
 
@@ -102,6 +102,9 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     if model_format in ['awq', 'gptq']:
         weight_type = 'int4'
         group_size = 128 if group_size == 0 else group_size
+    elif model_format == 'fp8':
+        weight_type = 'fp8'
+        group_size = 128
     else:
         torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
         TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
@@ -112,7 +115,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
             weight_type = 'bfloat16'
 
     if dtype == 'auto':
-        weight_type = weight_type if weight_type in ['float16', 'bfloat16', 'int4'] else 'float16'
+        weight_type = weight_type if weight_type in ['float16', 'bfloat16', 'int4', 'fp8'] else 'float16'
     elif dtype in ['float16', 'bfloat16']:
         if weight_type == 'int4':
             logger.warning(f'The model {model_path} is a quantized model, so the '
@@ -136,7 +139,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
 
 
 def pack_model_repository(workspace_path: str):
-    """package the model repository.
+    """Package the model repository.
 
     Args:
         workspace_path: the path of workspace
@@ -197,6 +200,8 @@ def get_tm_model(model_path,
             assert not quant_config.get('desc_act', False) and \
                 quant_config.get('sym', True), \
                 f'unsupported quant config: {quant_config}'
+        elif quant_method == 'fp8':
+            pass
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
@@ -251,7 +256,7 @@ def main(model_name: str,
          revision: str = None,
          download_dir: str = None,
          **kwargs):
-    """deploy llama family models via turbomind.
+    """Deploy llama family models via turbomind.
 
     Args:
         model_name (str): the served model name, which can be accessed by

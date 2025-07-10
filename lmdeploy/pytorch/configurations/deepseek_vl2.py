@@ -12,7 +12,7 @@ class DeepseekVLV2ModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
-        """build deepseek-vl2."""
+        """Build deepseek-vl2."""
 
         if hf_config.language_config.use_mla:
             from .deepseek_v2 import DeepseekV2ModelConfigBuilder

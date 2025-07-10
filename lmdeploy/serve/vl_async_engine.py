@@ -37,7 +37,7 @@ class VLAsyncEngine(AsyncEngine):
 
     @classmethod
     def _convert_prompts(cls, prompts: Union[VLPromptType, List[Dict], List[VLPromptType], List[List[Dict]]]):
-        """convert prompts to openai GPT4V format."""
+        """Convert prompts to openai GPT4V format."""
         if isinstance(prompts, str) or isinstance(prompts, tuple):
             _prompts = cls.prompt_to_messages(prompts)
         elif isinstance(prompts[0], tuple) or isinstance(prompts[0], str):
@@ -53,7 +53,7 @@ class VLAsyncEngine(AsyncEngine):
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
                                 **kwargs):
-        """process messages and return the required data for the inference
+        """Process messages and return the required data for the inference
         engines.
 
         Refer to pytorch.engine.EngineInstance.async_stream_infer and turbomind.TurboMindInstance.async_stream_infer for
@@ -214,7 +214,7 @@ class VLAsyncEngine(AsyncEngine):
 
     @classmethod
     def prompt_to_messages(cls, prompt: VLPromptType):
-        """convert prompt to GTP4V format."""
+        """Convert prompt to GTP4V format."""
         messages = {
             'role': 'user',
             'content': [{

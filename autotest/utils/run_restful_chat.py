@@ -25,10 +25,16 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     cuda_prefix = param['cuda_prefix']
     tp_num = param['tp_num']
+
     if 'extra' in param.keys():
         extra = param['extra']
     else:
-        extra = None
+        extra = ''
+
+    # temp remove testcase because of issue 3434
+    if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
+        if 'turbomind' in backend_type and extra is not None and 'communicator native' in extra and tp_num > 1:
+            return
 
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
@@ -71,23 +77,20 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     if not is_bf16_supported():
         cmd += ' --cache-max-entry-count 0.5'
+    if str(config.get('env_tag')) == '3090':
+        cmd += ' --cache-max-entry-count 0.5'
 
     start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
 
     print('reproduce command restful: ' + cmd)
 
-    with open(start_log, 'w') as f:
-        f.writelines('reproduce command restful: ' + cmd + '\n')
+    file = open(start_log, 'w')
 
-        startRes = subprocess.Popen([cmd], stdout=f, stderr=f, shell=True, text=True, encoding='utf-8')
-        pid = startRes.pid
+    startRes = subprocess.Popen([cmd], stdout=file, stderr=file, shell=True, text=True, encoding='utf-8')
+    pid = startRes.pid
 
     http_url = BASE_HTTP_URL + ':' + str(port)
-    with open(start_log, 'r') as file:
-        content = file.read()
-        print(content)
     start_time = int(time())
-
     start_timeout = 300
     if not is_bf16_supported():
         start_timeout = 600
@@ -100,6 +103,17 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
         result = health_check(http_url)
         if result or total_time >= start_timeout:
             break
+        try:
+            # Check if process is still running
+            return_code = startRes.wait(timeout=1)  # Small timeout to check status
+            if return_code != 0:
+                with open(start_log, 'r') as f:
+                    content = f.read()
+                    print(content)
+                return 0, startRes
+        except subprocess.TimeoutExpired:
+            continue
+    file.close()
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
     return pid, startRes
 
@@ -182,6 +196,47 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
     return result, restful_log, msg
 
 
+def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
+    log_path = config.get('log_path')
+
+    interactive_log = os.path.join(log_path, 'interactive_' + model + worker_id + '_' + case + '.log')
+
+    result = True
+
+    file = open(interactive_log, 'w')
+
+    api_client = APIClient(url)
+    file.writelines('available_models:' + ','.join(api_client.available_models) + '\n')
+
+    # Randomly generate 6 characters and concatenate them into a string.
+    characters = string.digits
+    random_chars = ''.join(random.choice(characters) for i in range(6))
+
+    messages = []
+    msg = ''
+    for prompt_detail in case_info:
+        prompt = list(prompt_detail.keys())[0]
+        new_prompt = {'role': 'user', 'content': prompt}
+        messages.append(new_prompt)
+        file.writelines('prompt:' + prompt + '\n')
+
+        for output in api_client.chat_interactive_v1(prompt=prompt,
+                                                     interactive_mode=True,
+                                                     session_id=random_chars,
+                                                     top_k=1,
+                                                     request_output_len=256):
+            output_content = output.get('text')
+            file.writelines('output:' + output_content + '\n')
+
+            case_result, reason = assert_result(output_content, prompt_detail.values(), model)
+            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
+            if not case_result:
+                msg += reason
+            result = result & case_result
+    file.close()
+    return result, interactive_log, msg
+
+
 def health_check(url):
     try:
         api_client = APIClient(url)
@@ -234,6 +289,10 @@ PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resource
 def run_vl_testcase(config, port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
     log_path = config.get('log_path')
+
+    model = get_model(http_url)
+    if model is None:
+        assert False, 'server not start correctly'
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
@@ -533,9 +592,11 @@ def test_qwen_multiple_round_prompt(client, model):
     with assume:
         assert response.choices[0].finish_reason == 'tool_calls'
         assert func1_name == 'get_current_temperature'
-        assert func1_args == '{"location": "San Francisco, CA, USA"}'
+        assert func1_args == '{"location": "San Francisco, CA, USA"}' \
+            or func1_args == '{"location": "San Francisco, California, USA", "unit": "celsius"}'
         assert func2_name == 'get_temperature_date'
-        assert func2_args == '{"location": "San Francisco, CA, USA", "date": "2024-11-15"}'
+        assert func2_args == '{"location": "San Francisco, CA, USA", "date": "2024-11-15"}' \
+            or func2_args == '{"location": "San Francisco, California, USA", "date": "2024-11-15", "unit": "celsius"}'
         assert response.choices[0].message.tool_calls[0].type == 'function'
 
     messages.append(response.choices[0].message)

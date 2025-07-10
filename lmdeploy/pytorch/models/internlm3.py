@@ -103,7 +103,7 @@ class InternLM3Attention(nn.Module):
 
 
 class InternLM3MLP(nn.Module):
-    """internlm3 mlp."""
+    """Internlm3 mlp."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -140,7 +140,7 @@ class InternLM3MLP(nn.Module):
 
 
 class InternLM3DecoderLayer(nn.Module):
-    """llama decoder layer."""
+    """Llama decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -203,7 +203,7 @@ class InternLM3DecoderLayer(nn.Module):
 
 
 class InternLM3Model(nn.Module):
-    """internlm3 model."""
+    """Internlm3 model."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -294,12 +294,12 @@ class InternLM3Model(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embed_tokens
 
 
 class InternLM3ForCausalLM(nn.Module, CudaGraphMixin):
-    """rewrote model of InternLM3ForCausalLM."""
+    """Rewrote model of InternLM3ForCausalLM."""
 
     packed_modules_mapping = {
         'qkv_proj': [
@@ -339,7 +339,7 @@ class InternLM3ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -350,16 +350,16 @@ class InternLM3ForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def update_weights(self):
-        """update weights."""
+        """Update weights."""
         if self.config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -368,7 +368,7 @@ class InternLM3ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -392,7 +392,7 @@ class InternLM3ForCausalLM(nn.Module, CudaGraphMixin):
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

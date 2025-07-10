@@ -12,6 +12,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from ..op_backend import DlinferOpsBackend
+from .utils import nd_to_nz_spec
 
 logger = get_logger('lmdeploy')
 
@@ -87,16 +88,14 @@ class AscendKVQuantMeta:
 
 
 class AscendOpsBackend(DlinferOpsBackend):
-    """ascend layer backend."""
+    """Ascend layer backend."""
     enable_graph = False
     half_negative_inf = torch.finfo(torch.float16).min
     total_slots = None
-    # compiled atb Transdataoperation to convert tensor from ACL_FORMAT_ND to ACL_FORMAT_FRACTAL_NZ format.
-    transdata_func = None
 
     @staticmethod
     def get_name() -> str:
-        """backend name."""
+        """Backend name."""
         return 'ascend'
 
     @staticmethod
@@ -137,7 +136,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
     @classmethod
     def update_step_context(cls, step_context):
-        """update step context."""
+        """Update step context."""
 
         def get_total_slots():
             if cls.total_slots is None:
@@ -224,7 +223,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                         diagonal=max_kv_seq_len - max_q_seq_len + 1,
                     )
                     # Convert to NZ format
-                    attention_mask.append(cls.get_transdata_func()(single_attention_mask, 2))
+                    attention_mask.append(nd_to_nz_spec(single_attention_mask))
             else:
                 raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
         else:
@@ -254,8 +253,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                     elif SocVersion.is_Ascend310P():
                         # Convert mask to NZ format.
                         attention_mask = [
-                            cls.get_transdata_func()(torch.cat(
-                                [mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1), 2)
+                            nd_to_nz_spec(torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]))
                         ]
                     else:
                         raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
@@ -308,26 +306,11 @@ class AscendOpsBackend(DlinferOpsBackend):
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
-        """build graph runner."""
+        """Build graph runner."""
         from .graph_runner import AscendGraphRunner
         ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
         AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
         return ascend_graph_runner
-
-    @staticmethod
-    def get_transdata_func():
-        """get transdata function."""
-        if AscendOpsBackend.transdata_func is None:
-            import dlinfer
-            from dlinfer.ops import transdata
-            dlinfer.graph.config.enable_graph_mode = True
-            if torch.distributed.is_initialized():
-                torch._inductor.config.compile_threads = 1
-            AscendOpsBackend.transdata_func = torch.compile(transdata,
-                                                            fullgraph=True,
-                                                            dynamic=False,
-                                                            backend='atbgraph')
-        return AscendOpsBackend.transdata_func
 
     @staticmethod
     def init():
@@ -350,13 +333,11 @@ class AscendOpsBackend(DlinferOpsBackend):
 
     @staticmethod
     def device_count():
-        """get num available devices."""
+        """Get num available devices."""
         return torch.npu.device_count()
 
     @staticmethod
     def support_ray():
-        """support ray."""
-        rank_table_file = os.environ.get('ASCEND_RANK_TABLE_FILE_PATH', None)
-        if rank_table_file:
-            return True
-        return False
+        """Support ray."""
+        os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
+        return True

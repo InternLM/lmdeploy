@@ -23,7 +23,7 @@ logger = get_logger('lmdeploy')
 
 
 class AscendGraphRunner(GraphRunner):
-    """ascend graph runner."""
+    """Ascend graph runner."""
 
     def __init__(self, model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                  backend_config: BackendConfig, device: torch.device):
@@ -57,7 +57,7 @@ class AscendGraphRunner(GraphRunner):
                                                       backend='atbgraph')
 
     def check_enable_graph(self):
-        """check enable graph."""
+        """Check enable graph."""
         # eager_mode
         if self.backend_config.eager_mode:
             return False
@@ -113,7 +113,7 @@ class AscendGraphRunner(GraphRunner):
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
-        """prepare inputs."""
+        """Prepare inputs."""
         if self.enable_graph and SocVersion.is_Ascend910B():
             self._convert_kv_format(past_key_values)
         return self.model.prepare_inputs_for_generation(

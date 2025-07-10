@@ -9,13 +9,13 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.messages import MetricsInfo, PytorchEngineConfig, ResponseType
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
-from ..config import BackendConfig, CacheConfig, DistConfig, ModelConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -46,17 +46,39 @@ class InferOutput:
     # when Prefill Engine is Done.
     cache_block_ids: List[int] = None
 
+    # for logging
+    metrics_info: MetricsInfo = None
+
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
-    """tensorlize block_offsets."""
+    """Tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
     block_offsets = [torch.from_numpy(off) for off in block_offsets]
     block_offsets = pad_sequence(block_offsets, batch_first=True).to(dtype)
     return block_offsets
 
 
+def _update_engine_config(engine_config: PytorchEngineConfig):
+    """Update pytorch engine config."""
+    # make sure engine exits
+    if engine_config is None:
+        engine_config = PytorchEngineConfig()
+    else:
+        engine_config = copy.deepcopy(engine_config)
+
+    if engine_config.max_batch_size is None:
+        engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+
+    if engine_config.dp != 1:
+        if engine_config.tp == 1 and engine_config.ep == 1:
+            engine_config.dp = 1
+            engine_config.dp_rank = 0
+
+    return engine_config
+
+
 def _build_scheduler_config(engine_config: PytorchEngineConfig):
-    """build scheduler config."""
+    """Build scheduler config."""
     scheduler_config = SchedulerConfig(max_batches=engine_config.max_batch_size,
                                        max_session_len=engine_config.session_len,
                                        prefill_interval=engine_config.prefill_interval)
@@ -64,7 +86,7 @@ def _build_scheduler_config(engine_config: PytorchEngineConfig):
 
 
 def _build_cache_config(engine_config: PytorchEngineConfig):
-    """build cache config."""
+    """Build cache config."""
     cache_config = CacheConfig(max_batches=engine_config.max_batch_size,
                                block_size=engine_config.block_size,
                                num_cpu_blocks=engine_config.num_cpu_blocks,
@@ -80,7 +102,7 @@ def _build_cache_config(engine_config: PytorchEngineConfig):
 
 
 def _build_backend_config(engine_config: PytorchEngineConfig):
-    """build backend config."""
+    """Build backend config."""
     backend_config = BackendConfig(
         eager_mode=engine_config.eager_mode,
         device_type=engine_config.device_type,
@@ -89,72 +111,80 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
 
 
 def _build_dist_config(engine_config: PytorchEngineConfig):
-    """build dist config."""
+    """Build dist config."""
     dist_config = DistConfig(dp=engine_config.dp,
                              tp=engine_config.tp,
                              ep=engine_config.ep,
                              dp_rank=engine_config.dp_rank,
-                             enable_microbatch=engine_config.enable_microbatch)
+                             enable_microbatch=engine_config.enable_microbatch,
+                             enable_eplb=engine_config.enable_eplb)
     return dist_config
 
 
+def _build_misc_config(engine_config: PytorchEngineConfig):
+    """Build misc config."""
+    misc_config = MiscConfig.from_engine_config(engine_config)
+    return misc_config
+
+
+class CounterEvent:
+
+    def __init__(self):
+        self._counter = 0
+        self._event = asyncio.Event()
+
+    async def wait(self):
+        await self._event.wait()
+
+    def is_set(self):
+        return self._event.is_set()
+
+    def set(self):
+        if self._counter > 0:
+            self._counter -= 1
+        if self._counter == 0:
+            self._event.set()
+
+    def clear(self):
+        if self._counter == 0 and self._event.is_set():
+            self._event.clear()
+        self._counter += 1
+
+
 class RunableEventBase:
-    """runable event base."""
+    """Runable event base."""
 
     async def wait(self, idx: int):
-        """wait event."""
+        """Wait event."""
         raise NotImplementedError('Not implemented.')
 
     def set(self, idx: int = None):
-        """set event."""
+        """Set event."""
         raise NotImplementedError('Not implemented.')
 
 
-class RunableEventSync(RunableEventBase):
-    """awaitable sync runable event."""
-
-    def __init__(self, scheduler: Scheduler):
-        self.scheduler = scheduler
-
-    async def wait(self):
-        """wait event."""
-
-    def set(self):
-        """set event."""
-
-
 class RunableEventAsnyc(RunableEventBase):
-    """awaitable async runable event."""
+    """Awaitable async runable event."""
 
     def __init__(self, scheduler: Scheduler):
         self.scheduler = scheduler
         self.event = asyncio.Event()
 
     async def wait(self):
-        """wait event."""
+        """Wait event."""
         await self.event.wait()
 
-    def set_single(self):
-        """set single."""
-        if self.scheduler.has_unfinished():
-            self.event.set()
-        else:
-            self.event.clear()
-
     def set(self):
-        """set event."""
+        """Set event."""
         if self.scheduler.has_unfinished():
             self.event.set()
         else:
             self.event.clear()
 
 
-def build_runable_event(scheduler: Scheduler, sync: bool):
-    """build runable event."""
-    if sync:
-        return RunableEventSync(scheduler)
-    else:
-        return RunableEventAsnyc(scheduler)
+def build_runable_event(scheduler: Scheduler):
+    """Build runable event."""
+    return RunableEventAsnyc(scheduler)
 
 
 class InputsMakerBase:
@@ -165,11 +195,11 @@ class InputsMakerBase:
         self.executor = engine.executor
 
     def _make_forward_inputs(self, *args, **kwargs):
-        """make forward inputs."""
+        """Make forward inputs."""
         return self.engine._make_forward_inputs(*args, **kwargs)
 
     async def send_next_inputs(self):
-        """send next input."""
+        """Send next input."""
         raise NotImplementedError('Not implemented.')
 
     async def prefetch_next_inputs(self):
@@ -184,7 +214,28 @@ class InputsMakerAsync(InputsMakerBase):
         self.scheduler = self.engine.scheduler
         self.forward_inputs = None
 
-    def do_prefill(self):
+        self.dp = self.engine.dist_config.dp
+        self.role = self.engine.cache_config.role
+
+        self.next_is_prefill = True
+        if self.dp == 1:
+            self.do_prefill = self.do_prefill_default
+        else:
+            self.do_prefill = self.do_prefill_dp
+
+    def do_prefill_dp(self):
+        if self.role == EngineRole.Prefill:
+            return True
+
+        scheduler = self.scheduler
+
+        if self.next_is_prefill:
+            ret = scheduler.has_waiting()
+        else:
+            ret = not scheduler.has_running()
+        return ret
+
+    def do_prefill_default(self):
         # decoding if no waiting
         scheduler = self.scheduler
         if not scheduler.has_waiting():
@@ -208,10 +259,11 @@ class InputsMakerAsync(InputsMakerBase):
             return None, None
         next_running = forward_inputs.pop('running')
         inputs = forward_inputs['inputs']
-        logger.info(f'Sending forward inputs: {inputs.log_info()}')
+        logger.debug(f'Sending forward inputs: {inputs.log_info()}')
         if logger.level <= logging.DEBUG:
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
+        self.next_is_prefill = inputs.is_decoding
         await self.executor.forward_async(forward_inputs)
         self.forward_inputs = forward_inputs
         return forward_inputs, next_running
@@ -236,43 +288,15 @@ class InputsMakerAsync(InputsMakerBase):
 
         if enable:
             # send next forward
-            logger.info('Prefetching next forward inputs.')
+            logger.debug('Prefetching next forward inputs.')
             return await self._send_next_inputs_impl(prefill, True)
         else:
             return None, None
 
 
-class InputsMakerSync(InputsMakerAsync):
-    """inputs maker synchronize."""
-
-    def __init__(self, engine: 'Engine'):
-        super().__init__(engine)
-        self._is_prefill = True
-
-    def do_prefill(self):
-        if self.engine.engine_config.role in [EngineRole.Hybrid, EngineRole.Decode]:
-            ret = self._is_prefill
-            self._is_prefill = not self._is_prefill
-        elif self.engine.engine_config.role == EngineRole.Prefill:
-            ret = True
-        return ret
-
-    async def send_next_inputs(self):
-        prefill = self.do_prefill()
-        return await self._send_next_inputs_impl(prefill)
-
-    async def prefetch_next_inputs(self):
-        """prefetch."""
-        logger.info('Prefetching next forward inputs.')
-        return await self.send_next_inputs()
-
-
 def build_inputs_maker(engine: 'Engine'):
-    """build inputs makers."""
-    if engine.should_execute_dummy_batch:
-        return InputsMakerSync(engine)
-    else:
-        return InputsMakerAsync(engine)
+    """Build inputs makers."""
+    return InputsMakerAsync(engine)
 
 
 class Engine:
@@ -290,22 +314,14 @@ class Engine:
                  tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-        # make sure engine exits
-        if engine_config is None:
-            engine_config = PytorchEngineConfig()
-        else:
-            engine_config = copy.deepcopy(engine_config)
-        if engine_config.max_batch_size is None:
-            engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+        # make sure engine config exist
+        engine_config = _update_engine_config(engine_config)
 
-        tp = engine_config.tp
-        dp = engine_config.dp
-        dp_rank = engine_config.dp_rank
-
+        # dist args
         self.tokenizer = tokenizer
-        self.tp = tp
-        self.dp = dp
-        self.dp_rank = dp_rank
+        self.tp = engine_config.tp
+        self.dp = engine_config.dp
+        self.dp_rank = engine_config.dp_rank
 
         # download models and adapters
         if not os.path.exists(model_path):
@@ -327,7 +343,7 @@ class Engine:
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
-        self.should_execute_dummy_batch = dist_config.need_dummy_batch()
+        misc_config = _build_misc_config(engine_config)
 
         # build model agent
         raw_tokenizer = None
@@ -337,6 +353,7 @@ class Engine:
                                        cache_config=cache_config,
                                        backend_config=backend_config,
                                        dist_config=dist_config,
+                                       misc_config=misc_config,
                                        tokenizer=raw_tokenizer,
                                        adapters=adapters,
                                        device_type=engine_config.device_type,
@@ -355,7 +372,10 @@ class Engine:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
+        self.dist_config = dist_config
         self.max_session_len = self._get_max_session_len()
+        self.engine_config.num_cpu_blocks = self.cache_config.num_cpu_blocks
+        self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
 
         self.req_manager = self._bind_request_manager()
 
@@ -373,7 +393,7 @@ class Engine:
                         engine_config: PytorchEngineConfig = None,
                         trust_remote_code: bool = True,
                         **kwargs):
-        """lmdeploy python inference engine.
+        """Lmdeploy python inference engine.
 
         Args:
             pretrained_model_name_or_path (str):
@@ -390,6 +410,12 @@ class Engine:
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
         """
+        if engine_config is not None and engine_config.enable_mp_engine:
+            from .mp_engine.mp_engine import MPEngine
+            return MPEngine(model_path=pretrained_model_name_or_path,
+                            tokenizer=tokenizer,
+                            engine_config=engine_config,
+                            trust_remote_code=trust_remote_code)
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
@@ -398,7 +424,7 @@ class Engine:
                    trust_remote_code=trust_remote_code)
 
     def _download_adapters(self, adapters: Dict[str, str], engine_config: PytorchEngineConfig):
-        """download adapters."""
+        """Download adapters."""
         download_dir = engine_config.download_dir
         revision = engine_config.revision
         new_adapters = dict()
@@ -415,7 +441,7 @@ class Engine:
         return AdapterManager(adapters)
 
     def _bind_request_manager(self):
-        """bind request manager."""
+        """Bind request manager."""
         req_manager = RequestManager()
         req_manager.bind_func(RequestType.ADD_SESSION, self._on_add_session)
         req_manager.bind_func(RequestType.STOP_SESSION, self._on_stop_session)
@@ -424,7 +450,7 @@ class Engine:
         return req_manager
 
     def _start_loop(self):
-        """start loop."""
+        """Start loop."""
         return self.req_manager.start_loop(self.async_loop)
 
     def _response(self, resp: Response, resp_type: ResponseType, data: Any = None, err_msg: str = ''):
@@ -437,7 +463,7 @@ class Engine:
         self.req_manager.response(resp)
 
     def _get_max_session_len(self):
-        """get max session len."""
+        """Get max session len."""
         session_len = self.scheduler_config.max_session_len
         max_tokens = (self.cache_config.num_gpu_blocks * self.cache_config.block_size)
         window_size = self.cache_config.window_size
@@ -450,7 +476,7 @@ class Engine:
         return session_len
 
     def _on_add_session(self, reqs: List[Request], **kwargs):
-        """on add session callback."""
+        """On add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
@@ -462,7 +488,7 @@ class Engine:
                 self._response(req.resp, resp_type)
 
     def _on_stop_session(self, reqs: List[Request], **kwargs):
-        """on stop session callback."""
+        """On stop session callback."""
         for req in reqs:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
@@ -471,24 +497,24 @@ class Engine:
                 self.scheduler.stop_session(session_id)
                 session = self.scheduler.sessions[session_id]
                 for seq in session.sequences.values():
-                    resp: Response = getattr(seq, 'resp', None)
-                    if resp is not None:
-                        resp.type = ResponseType.FINISH
-                        self.req_manager.response(resp)
+                    _resp: Response = getattr(seq, 'resp', None)
+                    if _resp is not None:
+                        _resp.type = ResponseType.FINISH
+                        self.req_manager.response(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
 
     def _on_end_session(self, reqs: List[Request], **kwargs):
-        """on end session callback."""
+        """On end session callback."""
         for req in reqs:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                msg = list(self.scheduler.sessions[session_id].sequences.values())[0]
-                if msg.preserve_cache:
-                    self.scheduler._set_message_status(msg, MessageStatus.TO_BE_MIGRATED)
+                msgs = list(self.scheduler.sessions[session_id].sequences.values())
+                if len(msgs) > 0 and msgs[0].preserve_cache:
+                    self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
                 else:
                     self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -496,9 +522,15 @@ class Engine:
                 self._response(req.resp, resp_type)
 
     def _on_add_message(self, reqs: List[Request], **kwargs):
-        """on add message callback."""
+        """On add message callback."""
+        valid_reqs = []
         for req in reqs:
             req_data = req.data
+            session_id = req_data['session_id']
+            if self.scheduler and session_id not in self.scheduler.sessions:
+                self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
+                continue
+            valid_reqs.append(req)
             if req_data.get('input_multimodals', None) is None:
                 continue
             elif self.input_processor is None:
@@ -517,13 +549,13 @@ class Engine:
             req_data['token_ids'] = input_ids
             req_data['input_multimodals'] = input_multimodals
 
-        if len(reqs) > 0:
-            self._add_message(reqs)
+        if len(valid_reqs) > 0:
+            self._add_message(valid_reqs)
 
     def _add_message(self, reqs: List[Request]):
 
         def __update_max_new_tokens(msg):
-            """update max new tokens."""
+            """Update max new tokens."""
             max_session_len = self.max_session_len
             sampling_param = msg.sampling_param
             sampling_param.max_new_tokens = min(sampling_param.max_new_tokens, max_session_len - msg.num_all_tokens())
@@ -575,7 +607,7 @@ class Engine:
 
     @property
     def model_config(self) -> ModelConfig:
-        """model config."""
+        """Model config."""
         return self.executor.model_config
 
     @property
@@ -584,7 +616,7 @@ class Engine:
 
     @property
     def torch_int_dtype(self):
-        """return int32 for cuda, int64 for others."""
+        """Return int32 for cuda, int64 for others."""
         if self.executor.device_type == 'cuda':
             return torch.int32
         return torch.int64
@@ -592,7 +624,7 @@ class Engine:
     @torch.inference_mode()
     @logging_timer('CreateModelInputs', logger)
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
-        """create model inputs from messages.
+        """Create model inputs from messages.
 
         Args:
             messages (SeqList): The input messages.
@@ -635,7 +667,7 @@ class Engine:
         model_metas = [msg.model_meta for msg in messages]
 
         def __get_vlm_embeddings():
-            """get vlm input embeddings and indexings."""
+            """Get vlm input embeddings and indexings."""
             input_embeddings = [[
                 emb.embeddings if isinstance(emb.embeddings, torch.Tensor) else torch.from_numpy(emb.embeddings)
                 for emb in msg.input_embeddings
@@ -709,7 +741,7 @@ class Engine:
 
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
                        model_metas: List[Dict[str, Any]]):
-        """update scheduler."""
+        """Update scheduler."""
         if model_metas is None:
             model_metas = [None] * len(running)
         next_token_ids = next_token_ids.numpy()
@@ -726,7 +758,7 @@ class Engine:
 
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
                                  model_metas: List[Dict[str, Any]]):
-        """update scheduler."""
+        """Update scheduler."""
         if model_metas is None:
             model_metas = [None] * len(running)
         for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
@@ -742,9 +774,9 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
-                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
-        """make infer output."""
+    def _make_infer_outputs(self, new_token_timestamp: float, next_token_ids: torch.LongTensor, running: SeqList,
+                            logits: torch.Tensor, stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
+        """Make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
@@ -765,11 +797,13 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
+            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
-                              cache_block_ids=cache_block_ids)
+                              cache_block_ids=cache_block_ids,
+                              metrics_info=metrics_info)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -777,11 +811,11 @@ class Engine:
         return outputs
 
     def _make_forward_inputs(self, prefill: bool, enable_empty: bool = False):
-        """make forward inputs."""
+        """Make forward inputs."""
         prefill_interval = self.scheduler_config.prefill_interval
 
         def __gather_all_ids(seqs: SeqList, sampling_inputs: SamplingInputs):
-            """gather history."""
+            """Gather history."""
             if sampling_inputs.repetition_penalty is None and not any(sampling_inputs.logits_processors):
                 return None
             batch = len(seqs)
@@ -798,7 +832,7 @@ class Engine:
             return output
 
         def __gather_guided_input_ids(seqs: SeqList, sampling_inputs: SamplingInputs):
-            """gather input ids for guided decode."""
+            """Gather input ids for guided decode."""
             if not any(sampling_inputs.response_formats or ()):
                 return None
             batch = len(seqs)
@@ -815,41 +849,21 @@ class Engine:
             return output
 
         def __get_num_appendable_ids(seqs: SeqList):
-            """get num appendable ids."""
+            """Get num appendable ids."""
             ret = [seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
             return torch.tensor(ret)
 
         def __get_num_ignore_eos(seqs: SeqList):
-            """get num ignore eos."""
+            """Get num ignore eos."""
             ret = [seq.sampling_param.min_new_tokens - seq.num_new_tokens for seq in seqs]
             return torch.tensor(ret)
 
         def __need_logits(seqs: SeqList):
-            """need logits."""
+            """Need logits."""
             return any(seq.return_logits for seq in seqs)
 
-        def __make_dummy_inputs():
-            """make dummy inputs."""
-            logger.info(f'make dummy forward inputs: prefill={prefill}.')
-            num_loops = 1 if prefill else prefill_interval
-            return dict(
-                running=[],
-                inputs=ModelInputs.make_dummy(1, is_decoding=not prefill, vocab_size=self.model_config.vocab_size),
-                swap_in_map=dict(),
-                swap_out_map=dict(),
-                loop_count=num_loops,
-                is_dummy=True,
-                sync_long_context=False,
-            )
-
         scheduler = self.scheduler
-        logger.info(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
-
-        if self.should_execute_dummy_batch:
-            if prefill and scheduler.num_waiting() == 0:
-                return __make_dummy_inputs()
-            if not prefill and scheduler.num_running() == 0:
-                return __make_dummy_inputs()
+        logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
         scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
@@ -857,9 +871,7 @@ class Engine:
             return None
 
         # schedule decoding if no valid prefill reqs.
-        if prefill and len(
-                scheduler_output.running
-        ) == 0 and not self.should_execute_dummy_batch and self.engine_config.role != EngineRole.Prefill:
+        if prefill and len(scheduler_output.running) == 0 and self.engine_config.role != EngineRole.Prefill:
             prefill = False
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
@@ -867,9 +879,6 @@ class Engine:
         running = scheduler_output.running
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
-
-        if (self.should_execute_dummy_batch or self.engine_config.role == EngineRole.Prefill) and len(running) == 0:
-            return __make_dummy_inputs()
 
         assert len(running) > 0
 
@@ -900,23 +909,23 @@ class Engine:
         )
 
     async def _await_forward_event(self, forward_event: asyncio.Event):
-        """await forward event."""
+        """Await forward event."""
         if self.scheduler.has_unfinished():
             await forward_event.wait()
 
     @torch.inference_mode()
     async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: RunableEventBase):
-        """preprocess msg."""
+        """Preprocess msg."""
         while True:
             await self._await_forward_event(forward_event)
             await self.req_manager.step()
             has_runable_event.set()
 
     async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
-        """send responses."""
+        """Send responses."""
 
         def __log_resps(outputs: List[InferOutput]):
-            """log resps."""
+            """Log resps."""
             if logger.level <= logging.DEBUG:
                 session_ids = [out.session_id for out in outputs]
                 logger.debug(f'Response sessions: {session_ids}')
@@ -924,14 +933,17 @@ class Engine:
                 logger.debug(f'Response: num_outputs={len(outputs)}.')
 
         def __send_resp(out: InferOutput):
-            """send response."""
+            """Send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
             self._response(out.resp,
                            resp_type,
-                           data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
+                           data=dict(token_ids=out.token_ids,
+                                     logits=out.logits,
+                                     cache_block_ids=out.cache_block_ids,
+                                     metrics_info=out.metrics_info))
 
         def __send_resps(step_outputs: List[InferOutput]):
-            """send response callback."""
+            """Send response callback."""
             __log_resps(step_outputs)
             for out in step_outputs:
                 __send_resp(out)
@@ -949,12 +961,12 @@ class Engine:
 
     @torch.inference_mode()
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
-        """async loop migration."""
+        """Async loop migration."""
         while True:
             migration_running = self.scheduler._schedule_migration()
-            if not migration_running:
+            if not migration_running and not self.scheduler.has_migration_waiting():
                 await self.migration_event.wait()
-            else:
+            elif migration_running:
                 self.migration_event.clear()
                 for msg in migration_running:
                     migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
@@ -990,12 +1002,16 @@ class Engine:
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
                 resp_que.put_nowait(outputs)
                 self.scheduler.unlock_running_migration(migration_running)
-                has_runable_event.event.set()
+                has_runable_event.set()
+            else:
+                # release coroutine for decoding
+                await asyncio.sleep(0)
 
     @torch.inference_mode()
     async def _async_loop_main(
         self,
         resp_que: asyncio.Queue,
+        forward_event: asyncio.Event,
         has_runable_event: RunableEventBase,
         inputs_maker: InputsMakerBase,
     ):
@@ -1008,7 +1024,6 @@ class Engine:
         next_running = None
 
         while True:
-            logger.info('begin loop')
             if next_running is None:
                 await has_runable_event.wait()
                 scheduler.collect_migration_done()
@@ -1018,25 +1033,37 @@ class Engine:
             next_running = None
             scheduler.lock_running(running)
             for idx in range(num_loops):
-                if idx >= num_loops - 1:
+
+                # lock forward event
+                # make sure that prefetch forward would not wait for detokenize
+                # WARNING: this might have side effect on the performance
+                if idx == num_loops // 2:
+                    forward_event.clear()
+
+                # pre-forward before get last token
+                if idx == num_loops - 1:
+                    scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
-                logger.info('inputs forwarding done')
+
+                # send output
                 out = await self.executor.get_output_async()
-                logger.info('get_output_async done')
                 if len(out) > 0:
                     step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
-                logger.info('send response done')
+
+                # unlock forward event.
+                if idx == num_loops - 1:
+                    forward_event.set()
+
             scheduler.unlock_running(running)
             has_runable_event.set()
-            logger.info('end loop')
 
     @staticmethod
     def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
-        """add loop tasks done callback."""
+        """Add loop tasks done callback."""
 
         def __task_callback(task: asyncio.Task) -> None:
-            """raise exception on finish."""
+            """Raise exception on finish."""
             task_name = task.get_name()
             try:
                 task.result()
@@ -1054,17 +1081,21 @@ class Engine:
             task.add_done_callback(__task_callback)
 
     def _loop_finally(self):
-        """finally process for dist."""
+        """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.executor.stop()
         self.executor.release()
+
+    def update_params(self, request: Any):
+        """Update params."""
+        self.executor.update_params(request)
 
     async def async_loop(self):
         try:
             event_loop = asyncio.get_event_loop()
 
             # forward task
-            forward_event = asyncio.Event()
+            forward_event = CounterEvent()
             forward_event.set()
 
             # migration task
@@ -1075,7 +1106,7 @@ class Engine:
 
             # preprocess task
             logger.info('Starting async task MainLoopPreprocessMessage.')
-            has_runable_event = build_runable_event(self.scheduler, self.should_execute_dummy_batch)
+            has_runable_event = build_runable_event(self.scheduler)
             loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
                 forward_event, has_runable_event),
                                                    name='MainLoopPreprocessMessage')
@@ -1086,15 +1117,18 @@ class Engine:
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
 
-            logger.info('Starting async task MigrationLoop.')
-            loop_migration = event_loop.create_task(
-                self._async_loop_migration(resp_que, has_runable_event=has_runable_event),
-                name='MainLoopMigration',
-            )
+            loop_main = asyncio.current_task()
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
+
+            if self.engine_config.role != EngineRole.Hybrid:
+                logger.info('Starting async task MigrationLoop.')
+                loop_migration = event_loop.create_task(
+                    self._async_loop_migration(resp_que, has_runable_event=has_runable_event),
+                    name='MainLoopMigration',
+                )
+                loop_tasks.append(loop_migration)
 
             # binding done callback
-            loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_migration, loop_send_resp]
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 
@@ -1102,9 +1136,11 @@ class Engine:
             logger.info('Starting async task MainLoop.')
             inputs_maker = build_inputs_maker(self)
             await self._async_loop_main(resp_que=resp_que,
+                                        forward_event=forward_event,
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
-
+        except Exception as e:
+            logger.error(f'exception happened: {type(e)} {e}')
         finally:
             self._loop_finally()
 
@@ -1126,8 +1162,29 @@ class Engine:
         return EngineInstance(self)
 
     def start_loop(self):
-        """start engine loop."""
+        """Start engine loop."""
         if self.req_manager.is_loop_alive():
             return True
         self.req_manager.create_loop_task()
         return True
+
+    def end_session(self, session_id: int):
+        """End session."""
+        if session_id in self.scheduler.sessions:
+            self.scheduler.end_session(session_id)
+            return True
+        return False
+
+    def p2p_initialize(self, conn_request):
+        """Init rdma link."""
+        return self.executor.p2p_initialize(conn_request)
+
+    def p2p_connect(self, conn_request):
+        """rdma_connect."""
+        return self.executor.p2p_connect(conn_request)
+
+    def get_model_config(self):
+        return self.model_config
+
+    def get_engine_config(self):
+        return self.engine_config

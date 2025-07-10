@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 
 from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency, TokenDispatcherBuilder
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
@@ -24,7 +25,7 @@ logger = get_logger('lmdeploy')
 
 
 class TritonFusedMoEImpl(FusedMoEImpl):
-    """triton fused moe implementation."""
+    """Triton fused moe implementation."""
 
     def __init__(self, top_k: int, num_experts: int, renormalize: bool = False):
         self.num_experts = num_experts
@@ -37,11 +38,11 @@ class TritonFusedMoEImpl(FusedMoEImpl):
         return gate_up_weights, down_weights
 
     def support_ep(self):
-        """support expert parallelism."""
+        """Support expert parallelism."""
         return True
 
     def ep_expert_list(self, world_size: int, rank: int):
-        """experts list of current rank."""
+        """Experts list of current rank."""
         num_experts = self.num_experts
         expert_per_rank = (num_experts + world_size - 1) // world_size
         first_expert = rank * expert_per_rank
@@ -73,16 +74,16 @@ class TritonFusedMoEImpl(FusedMoEImpl):
 
 
 class TritonFusedMoEBuilder(FusedMoEBuilder):
-    """triton fused moe builder."""
+    """Triton fused moe builder."""
 
     @staticmethod
     def build(top_k: int, num_experts: int, renormalize: bool = False):
-        """build from mlp."""
+        """Build from mlp."""
         return TritonFusedMoEImpl(top_k=top_k, num_experts=num_experts, renormalize=renormalize)
 
 
 class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
-    """triton fused moe w8a8 implementation."""
+    """Triton fused moe w8a8 implementation."""
 
     def __init__(
         self,
@@ -104,11 +105,11 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
         return gate_up_weights, down_weights, gate_up_scale, down_scale
 
     def support_ep(self):
-        """support expert parallelism."""
+        """Support expert parallelism."""
         return True
 
     def ep_expert_list(self, world_size: int, rank: int):
-        """experts list of current rank."""
+        """Experts list of current rank."""
         num_experts = self.num_experts
         expert_per_rank = (num_experts + world_size - 1) // world_size
         first_expert = rank * expert_per_rank
@@ -155,7 +156,7 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
 
 
 class TritonFusedMoEW8A8Builder(FusedMoEW8A8Builder):
-    """triton fused moe w8a8 builder."""
+    """Triton fused moe w8a8 builder."""
 
     @staticmethod
     def build(
@@ -165,7 +166,7 @@ class TritonFusedMoEW8A8Builder(FusedMoEW8A8Builder):
         out_dtype: torch.dtype = torch.float16,
         quant_dtype: torch.dtype = torch.int8,
     ):
-        """build from mlp."""
+        """Build from mlp."""
         return TritonFusedMoEW8A8Impl(top_k=top_k,
                                       num_experts=num_experts,
                                       renormalize=renormalize,
@@ -174,7 +175,7 @@ class TritonFusedMoEW8A8Builder(FusedMoEW8A8Builder):
 
 
 class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
-    """triton fused moe blocked f8 implementation."""
+    """Triton fused moe blocked f8 implementation."""
 
     def __init__(self,
                  top_k: int,
@@ -189,11 +190,11 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         self.out_dtype = out_dtype
 
     def support_ep(self):
-        """support expert parallelism."""
+        """Support expert parallelism."""
         return True
 
     def ep_expert_list(self, world_size: int, rank: int):
-        """experts list of current rank."""
+        """Experts list of current rank."""
         num_experts = self.num_experts
         expert_per_rank = (num_experts + world_size - 1) // world_size
         first_expert = rank * expert_per_rank
@@ -590,13 +591,18 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
-        try:
-            from dlblas.layers.moe.ep_moe import build_deepep_moe
-            self.use_dlblas = True
-            self.build_deepep_moe = build_deepep_moe
-        except ImportError:
-            self.use_dlblas = False
-            logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
+    def ep_expert_list(self, world_size: int, rank: int):
+        """Experts list of current rank."""
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            from dlblas.layers.moe.eplb import get_eplb_phy2log_metadata_by_layer
+            phy2log = get_eplb_phy2log_metadata_by_layer(self.layer_idx)
+            expert_per_rank = (self.num_experts + world_size - 1) // world_size
+            first_expert = rank * expert_per_rank
+            last_expert = min(first_expert + expert_per_rank, self.num_experts)
+            sliced_phy2log = phy2log[first_expert:last_expert].tolist()
+            return sliced_phy2log
+        else:
+            return super().ep_expert_list(world_size=world_size, rank=rank)
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -620,27 +626,21 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        if self.use_dlblas:
-            return self.build_deepep_moe(low_latency_mode,
-                                         self.ep_size,
-                                         self.ep_group,
-                                         self.num_experts,
-                                         self.hidden_dim,
-                                         self.block_size,
-                                         self.top_k,
-                                         self.out_dtype,
-                                         layer_idx=self.layer_idx,
-                                         chunk_size=16 * 1024)
-        elif low_latency_mode:
-            return FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
-                                      self.out_dtype)
-        else:
-            return FusedMoENormal(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
-                                  self.out_dtype)
+        from dlblas.layers.moe.ep_moe import build_deepep_moe
+        return build_deepep_moe(low_latency_mode,
+                                self.ep_size,
+                                self.ep_group,
+                                self.num_experts,
+                                self.hidden_dim,
+                                self.block_size,
+                                self.top_k,
+                                self.out_dtype,
+                                layer_idx=self.layer_idx,
+                                chunk_size=16 * 1024)
 
 
 class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
-    """triton fused moe blocked f8 builder."""
+    """Triton fused moe blocked f8 builder."""
 
     @staticmethod
     def build(top_k: int,
@@ -652,7 +652,7 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
               ep_group: dist.ProcessGroup = None,
               out_dtype: torch.dtype = torch.float16,
               layer_idx: int = 0):
-        """build from mlp."""
+        """Build from mlp."""
         if ep_size > 1:
             return FusedDeepEpMoEBlockedF8Impl(ep_size=ep_size,
                                                ep_group=ep_group,

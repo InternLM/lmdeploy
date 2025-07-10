@@ -965,7 +965,7 @@ class Qwen7BChat(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         model_path = model_path.lower()
-        if 'qwen' in model_path and 'qwen2.5' not in model_path and 'qwq' not in model_path:
+        if 'qwen' in model_path and not any(keyword in model_path for keyword in ('qwen2.5', 'qwq', 'qwen3')):
             return 'qwen'
         if 'minicpm-v-2_6' in model_path:
             return 'minicpmv-2d6'
@@ -1135,6 +1135,34 @@ class QwQ(Qwen2d5Chat):
             return 'qwq'
 
 
+@MODELS.register_module(name='qwen3')
+class Qwen3(Qwen2d5Chat):
+
+    def __init__(self, meta_instruction='', **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    def messages2prompt(self, messages, sequence_start=True, tools=None, enable_thinking=None, **kwargs):
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        prompt = super().messages2prompt(messages, sequence_start, tools, **kwargs)
+
+        if enable_thinking is False:
+            prompt += '<think>\n\n</think>\n\n'
+
+        return prompt
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        lower_path = model_path.lower()
+        if 'qwen3' in lower_path:
+            return 'qwen3'
+
+
 @MODELS.register_module(name='codellama')
 class CodeLlama(Llama2):
 
@@ -1192,7 +1220,7 @@ class ChatGLM2(BaseModel):
         self.count = 0
 
     def get_prompt(self, prompt, sequence_start=True):
-        """get prompt."""
+        """Get prompt."""
         # need more check
         # https://github.com/THUDM/ChatGLM2-6B/issues/48
         # [64790, 64792] to be prepended
@@ -1203,7 +1231,7 @@ class ChatGLM2(BaseModel):
         return ret
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        """message to prompt."""
+        """Message to prompt."""
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         ret = ''
@@ -1947,7 +1975,8 @@ def best_match_model(query: str) -> Optional[str]:
         str: the possible model name.
     """
     for name, model in MODELS.module_dict.items():
-        if model.match(query):
-            return model.match(query)
+        matched_name = model.match(query)  # cache the result to avoid matching twice
+        if matched_name:
+            return matched_name
     logger.warning(f'Did not find a chat template matching {query}.')
     return 'base'

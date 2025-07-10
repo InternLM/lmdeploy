@@ -13,7 +13,7 @@ add_library(core STATIC
         tensor.cu
         module.cc)
 
-target_link_libraries(core PUBLIC cuda_utils CUDA::cudart CUDA::cuda_driver)
+target_link_libraries(core PUBLIC cuda_utils logger CUDA::cudart CUDA::cuda_driver)
 
 set_property(TARGET core PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET core PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

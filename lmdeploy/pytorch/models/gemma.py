@@ -239,7 +239,7 @@ class GemmaMLP(nn.Module):
 
 
 class GemmaDecoderLayer(nn.Module):
-    """llama decoder layer."""
+    """Llama decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -461,7 +461,7 @@ class GemmaModel(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embed_tokens
 
 
@@ -509,7 +509,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         local_attn_masks: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -522,7 +522,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         logits = self.lm_head(hidden_states)
         if self.final_logit_softcapping is not None:
             logits = logits / self.final_logit_softcapping
@@ -531,7 +531,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         return logits
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -540,7 +540,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -564,11 +564,11 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         )
 
     def update_weights(self):
-        """update weights."""
+        """Update weights."""
         self.lm_head.weight = self.model.embed_tokens.weight
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

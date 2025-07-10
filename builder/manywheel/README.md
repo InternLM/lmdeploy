@@ -13,7 +13,7 @@ WITH_PUSH=true ./build_all_docker.sh
 To build a docker image with specific cuda version or manylinux-docker version, you may use:
 
 ```bash
-MANY_LINUX_VERSION=2014 GPU_ARCH_VERSION=11.8 ./build_docker.sh
+MANY_LINUX_VERSION=2014 GPU_ARCH_VERSION=12.4 ./build_docker.sh
 ```
 
 ## Build lmdeploy wheel

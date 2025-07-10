@@ -16,6 +16,7 @@
 
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/macro.h"
+#include <driver_types.h>
 #include <regex>
 
 namespace turbomind {
@@ -251,6 +252,15 @@ int getSMVersion()
     check_cuda_error(cudaDeviceGetAttribute(&sm_major, cudaDevAttrComputeCapabilityMajor, device));
     check_cuda_error(cudaDeviceGetAttribute(&sm_minor, cudaDevAttrComputeCapabilityMinor, device));
     return sm_major * 10 + sm_minor;
+}
+
+int getSMCount()
+{
+    int device{-1};
+    check_cuda_error(cudaGetDevice(&device));
+    int sm_count{};
+    check_cuda_error(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
+    return sm_count;
 }
 
 std::string getDeviceName()

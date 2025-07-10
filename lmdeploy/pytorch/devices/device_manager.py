@@ -22,29 +22,29 @@ class DeviceManager:
         self._next_cb_handle = 0
 
     def register_context_callback(self, callback: Callable):
-        """register callback."""
+        """Register callback."""
         handle = self._next_cb_handle
         self._context_callback[handle] = callback
         self._next_cb_handle += 1
         return handle
 
     def unregister_context_callback(self, handle: int):
-        """unregister callback."""
+        """Unregister callback."""
         self._context_callback.pop(handle, None)
 
     def current_context(self) -> DeviceContext:
-        """get current context."""
+        """Get current context."""
         return getattr(self.t_local, 'device_context', DefaultContext)
 
     def set_context(self, context: DeviceContext):
-        """set current context."""
+        """Set current context."""
         self.t_local.device_context = context
         for callback in self._context_callback.values():
             callback(context)
 
     @contextmanager
     def context(self, context: DeviceContext):
-        """context manager."""
+        """Context manager."""
         origin_context = self.current_context()
         self.set_context(context)
         yield self
@@ -55,7 +55,7 @@ _DEVICE_MANAGER: DeviceManager = None
 
 
 def get_device_manager():
-    """get device manager."""
+    """Get device manager."""
     global _DEVICE_MANAGER
     if _DEVICE_MANAGER is None:
         _DEVICE_MANAGER = DeviceManager()

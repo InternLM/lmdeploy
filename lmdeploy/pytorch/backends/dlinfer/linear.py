@@ -14,7 +14,7 @@ class DlinferLinearImpl(LinearImpl):
     """Dlinfer linear implementation api."""
 
     def update_weights(self, weight: torch.Tensor, bias: Optional[torch.Tensor] = None):
-        """update weights."""
+        """Update weights."""
         if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
         if weight.device.type == 'npu':
@@ -23,8 +23,8 @@ class DlinferLinearImpl(LinearImpl):
                 # Ascend 310P device need weight to be NZ format, so Transdata it initially.
                 # Transdata Linear weight by default, if Error occurs, please set
                 # DLINFER_DISABLE_LINEAR_NZ_FORMAT=1 to disable transdata.
-                from .ascend import AscendOpsBackend
-                weight = AscendOpsBackend.get_transdata_func()(weight, 2)
+                from .ascend.utils import nd_to_nz_spec
+                weight = nd_to_nz_spec(weight)
         return weight, bias
 
     def forward(self,

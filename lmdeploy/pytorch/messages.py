@@ -7,8 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import GenerationConfig, LogitsProcessor
-from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -57,7 +56,7 @@ class SamplingParam:
 
     @classmethod
     def from_gen_config(self, gen_config: GenerationConfig):
-        """from gen config."""
+        """From gen config."""
         min_new_tokens = gen_config.min_new_tokens or 0
 
         stop_words = gen_config.stop_token_ids or []
@@ -153,7 +152,7 @@ _SEQ_COUNT = 0
 
 
 def _new_msg_id():
-    """get a new message id."""
+    """Get a new message id."""
     global _SEQ_COUNT
     seq_id = _SEQ_COUNT
     _SEQ_COUNT += 1
@@ -164,7 +163,7 @@ SeqMap = Dict[int, 'SchedulerSequence']
 
 
 class SequenceManager:
-    """sequence manager."""
+    """Sequence manager."""
 
     def __init__(self) -> None:
         self._seq_map: SeqMap = dict()
@@ -173,19 +172,19 @@ class SequenceManager:
             self._status_seq_map[status] = dict()
 
     def get_all_sequences(self):
-        """get all sequences."""
+        """Get all sequences."""
         return self._seq_map.values()
 
     def get_sequences(self, states: MessageStatus):
-        """get sequences."""
+        """Get sequences."""
         return self._status_seq_map[states]
 
     def num_sequences(self, status: MessageStatus):
-        """num sequences."""
+        """Num sequences."""
         return len(self.get_sequences(status))
 
     def add_sequence(self, seq: 'SchedulerSequence'):
-        """add sequence."""
+        """Add sequence."""
         seq_id = seq.seq_id
         status = seq.status
         status_map = self._status_seq_map[status]
@@ -193,7 +192,7 @@ class SequenceManager:
         status_map[seq_id] = seq
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
-        """remove sequence."""
+        """Remove sequence."""
         seq_id = seq.seq_id
         status = seq.status
         status_map = self._status_seq_map[status]
@@ -201,15 +200,17 @@ class SequenceManager:
         status_map.pop(seq_id)
 
     def update_sequence_status(self, seq: 'SchedulerSequence', new_status: MessageStatus):
-        """update status."""
+        """Update status."""
         old_status = seq.status
         if new_status == old_status:
             return
         seq_id = seq.seq_id
         old_status_map = self._status_seq_map[old_status]
         new_status_map = self._status_seq_map[new_status]
-        old_status_map.pop(seq_id)
-        new_status_map[seq_id] = seq
+        # may be remove by async_end
+        if seq_id in old_status_map:
+            old_status_map.pop(seq_id)
+            new_status_map[seq_id] = seq
 
 
 class SchedulerSession:
@@ -249,7 +250,7 @@ class SchedulerSession:
             num_new_tokens=0,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            arrive_time=time.time(),
+            arrive_time=time.perf_counter(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
@@ -263,7 +264,7 @@ class SchedulerSession:
         return seq
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
-        """remove sequence."""
+        """Remove sequence."""
         assert seq.seq_id in self.sequences
         self.sequences.pop(seq.seq_id)
         if self.seq_manager is not None:
@@ -271,12 +272,12 @@ class SchedulerSession:
 
 
 def _div_up(x, n):
-    """perform div up."""
+    """Perform div up."""
     return (x + n - 1) // n
 
 
 def _round_up(x, n):
-    """perform round up."""
+    """Perform round up."""
     return _div_up(x, n) * n
 
 
@@ -299,7 +300,7 @@ class HistoryEmbeddings:
         return self.clone()
 
     def get_step(self, step: int) -> int:
-        """get step before a whole image."""
+        """Get step before a whole image."""
         real_step = step
         num_all_images = len(self._embeddings)
         history_image_num = 0
@@ -319,16 +320,16 @@ class HistoryEmbeddings:
         return self._embeddings
 
     def __len__(self):
-        """get num images."""
+        """Get num images."""
         return len(self._embeddings)
 
     def __getitem__(self, *args, **kwargs):
-        """get values."""
+        """Get values."""
         return self._embeddings.__getitem__(*args, **kwargs)
 
 
 class HistoryTokenIds:
-    """history token ids."""
+    """History token ids."""
     ALLOC_SIZE = 512
 
     def __init__(self, token_ids: np.ndarray = None):
@@ -340,7 +341,7 @@ class HistoryTokenIds:
             self._num_real = len(token_ids)
 
     def reserve(self, size: int):
-        """reserve cache."""
+        """Reserve cache."""
         num_tokens = len(self._token_ids)
         if num_tokens >= size:
             return
@@ -349,19 +350,19 @@ class HistoryTokenIds:
         self._token_ids = new_token_ids
 
     def get_real(self):
-        """get logical blocks."""
+        """Get logical blocks."""
         return self._token_ids[:self._num_real]
 
     def __setitem__(self, *args, **kwargs):
-        """set values."""
+        """Set values."""
         return self.get_real().__setitem__(*args, **kwargs)
 
     def __getitem__(self, *args, **kwargs):
-        """get values."""
+        """Get values."""
         return self.get_real().__getitem__(*args, **kwargs)
 
     def append(self, token_ids: np.ndarray):
-        """append token ids."""
+        """Append token ids."""
         num_tokens = len(token_ids)
         self.reserve(num_tokens + self._num_real)
         slice_start = self._num_real
@@ -370,7 +371,7 @@ class HistoryTokenIds:
         self._token_ids[slice_start:slice_end] = token_ids
 
     def __len__(self):
-        """get length."""
+        """Get length."""
         return self._num_real
 
     def clone(self):
@@ -392,7 +393,7 @@ class HistoryMultiModals:
         self.multimodals = multimodals
 
     def get_datas(self, start=0, end=-1):
-        """get multimodals from prompts position [start, end)."""
+        """Get multimodals from prompts position [start, end)."""
         outs = dict()
         test_range = range(start, end)
         for modal_type, modal_datas in self.multimodals.items():
@@ -406,7 +407,7 @@ class HistoryMultiModals:
         return outs
 
     def add_inputs(self, input_mms: MultiModalInputs):
-        """add new inputs."""
+        """Add new inputs."""
         for modal_type, vals in input_mms.items():
             if modal_type in self.multimodals:
                 self.multimodals[modal_type] += vals
@@ -421,7 +422,7 @@ class HistoryMultiModals:
 
     @staticmethod
     def update_multimodals(input_mms: MultiModalInputs, prev_len: int):
-        """update multimodals."""
+        """Update multimodals."""
         for vals in input_mms.values():
             for val in vals:
                 val.start += prev_len
@@ -429,7 +430,7 @@ class HistoryMultiModals:
         return input_mms
 
     def get_encoder_len(self, start=0, end=-1):
-        """get lens of encoder."""
+        """Get lens of encoder."""
         test_range = range(start, end)
         out_len = 0
         for _, modal_datas in self.multimodals.items():
@@ -466,10 +467,12 @@ class SchedulerSequence:
     migration_request: Optional[MigrationRequest] = None
     resp_cache: bool = False
     preserve_cache: bool = False
-    migration_inputs: Optional[MigrationExecutionBatch] = None
+
+    # For logging
+    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
 
     def __post_init__(self):
-        """post init."""
+        """Post init."""
         self._num_history_ids: int = 0
         self._num_history_images: int = 0
         self._num_images: int = len(self.history_embeddings)
@@ -480,56 +483,56 @@ class SchedulerSequence:
 
     @property
     def block_size(self) -> int:
-        """block size."""
+        """Block size."""
         return self.session.block_size
 
     @property
     def history_len(self) -> int:
-        """get history length."""
+        """Get history length."""
         return self._num_history_ids
 
     @property
     def history_image_num(self) -> int:
-        """get history image number."""
+        """Get history image number."""
         return self._num_history_images
 
     @property
     def history_image_token_len(self) -> int:
-        """get history image token length."""
+        """Get history image token length."""
         return sum([emb.end - emb.start for emb in self.history_embeddings[:self._num_history_images]])
 
     @property
     def session_id(self) -> int:
-        """get session id."""
+        """Get session id."""
         return self.session.session_id
 
     @property
     def token_ids(self) -> np.ndarray:
-        """token ids."""
+        """Token ids."""
         start = self.history_len
         end = start + self._num_token_ids
         return self.history_cache[start:end]
 
     @property
     def input_embeddings(self) -> List[InputEmbeddings]:
-        """get current embeddings."""
+        """Get current embeddings."""
         start = self.history_image_num
         end = start + self._num_images
         return self.history_embeddings[start:end]
 
     @property
     def history_ids(self) -> np.ndarray:
-        """history ids."""
+        """History ids."""
         return self.history_cache[:self.history_len]
 
     @property
     def all_ids(self) -> np.ndarray:
-        """full token ids."""
+        """Full token ids."""
         return self.history_cache[:self.num_all_ids]
 
     @property
     def num_history_ids(self):
-        """num history ids."""
+        """Num history ids."""
         return self._num_history_ids
 
     @property
@@ -542,27 +545,27 @@ class SchedulerSequence:
 
     @property
     def num_all_ids(self):
-        """num all tokens."""
+        """Num all tokens."""
         return self.history_len + self._num_token_ids
 
     @property
     def num_cross(self):
-        """num cross."""
+        """Num cross."""
         return self._num_cross
 
     @property
     def num_history_cross(self):
-        """num history cross."""
+        """Num history cross."""
         return self._num_history_cross
 
     @property
     def num_blocks(self):
-        """num blocks."""
+        """Num blocks."""
         return len(self.logical_blocks)
 
     @property
     def seq_manager(self) -> SequenceManager:
-        """sequence manager."""
+        """Sequence manager."""
         return self.session.seq_manager
 
     @property
@@ -575,15 +578,15 @@ class SchedulerSequence:
         self._status = value
 
     def num_all_tokens(self):
-        """num all tokens."""
+        """Num all tokens."""
         return self.num_all_ids
 
     def num_all_cross_tokens(self):
-        """num of all cross tokens."""
+        """Num of all cross tokens."""
         return self._num_cross + self._num_history_cross
 
     def get_input_multimodals(self):
-        """get input multimodals."""
+        """Get input multimodals."""
         start = self.num_history_ids
         end = self.num_all_ids
         return self.history_multimodals.get_datas(start, end)
@@ -636,10 +639,10 @@ class SchedulerSequence:
             self._num_token_ids = len(token_ids)
         self.history_cache.append(token_ids)
         self.random_offsets += 1
-        self.arrive_time = time.time()
+        self.arrive_time = time.perf_counter()
 
     def set_step(self, step: int):
-        """set step."""
+        """Set step."""
         num_all_ids = self.num_all_ids
         # update step for vlm
         if len(self.history_embeddings) > 0:
@@ -657,3 +660,10 @@ class SchedulerSequence:
         if self.history_multimodals is not None:
             self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
             self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
+
+    def record_event(
+        self,
+        event_type: EngineCoreEventType,
+        timestamp: Optional[float] = None,
+    ) -> None:
+        self.engine_core_events.append(EngineCoreEvent.new_event(event_type, timestamp))

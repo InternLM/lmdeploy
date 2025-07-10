@@ -44,9 +44,10 @@ repos:
 
 
   - repo: https://github.com/myint/docformatter
-    rev: v1.4
+    rev: v1.7.7
     hooks:
       - id: docformatter
+        language_version: python3.10
         args: ["--in-place", "--wrap-descriptions", "120"]
 
   - repo: https://github.com/open-mmlab/pre-commit-hooks

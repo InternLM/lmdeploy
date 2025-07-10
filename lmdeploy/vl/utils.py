@@ -13,7 +13,7 @@ logger = get_logger('lmdeploy')
 
 
 def encode_image_base64(image: Union[str, Image.Image]) -> str:
-    """encode raw date to base64 format."""
+    """Encode raw date to base64 format."""
     buffered = BytesIO()
     FETCH_TIMEOUT = int(os.environ.get('LMDEPLOY_FETCH_TIMEOUT', 10))
     headers = {
@@ -45,12 +45,12 @@ def encode_image_base64(image: Union[str, Image.Image]) -> str:
 
 
 def load_image_from_base64(image: Union[bytes, str]) -> Image.Image:
-    """load image from base64 format."""
+    """Load image from base64 format."""
     return Image.open(BytesIO(base64.b64decode(image)))
 
 
 def load_image(image_url: Union[str, Image.Image]) -> Image.Image:
-    """load image from url, local path or openai GPT4V."""
+    """Load image from url, local path or openai GPT4V."""
     FETCH_TIMEOUT = int(os.environ.get('LMDEPLOY_FETCH_TIMEOUT', 10))
     headers = {
         'User-Agent':
