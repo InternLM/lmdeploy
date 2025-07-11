@@ -40,7 +40,10 @@ std::shared_ptr<::gloo::transport::Device> createGlooDevice()
 class Store: public ::gloo::rendezvous::PrefixStore {
 public:
     explicit Store(const std::string& host, int port, const std::string& prefix):
-        host_(host), port_(port), store_(host_, port_), ::gloo::rendezvous::PrefixStore(prefix, store_){};
+        host_(host), port_(port), ::gloo::rendezvous::PrefixStore(prefix, nullptr)
+    {
+        store_ = std::make_shared<TCPStore>(host_, port_);
+    };
 
     ~Store() = default;
 
@@ -54,7 +57,7 @@ public:
     std::string host_;
     int         port_;
 
-    TCPStore store_;
+    using ::gloo::rendezvous::PrefixStore::store_;
     using ::gloo::rendezvous::PrefixStore::prefix_;
 };
 
@@ -127,7 +130,7 @@ struct GlooCommImpl: public HostCommImpl {
         // TM_LOG_INFO("[GlooCommImpl] rank=%d, n_ranks=%d, prefix=%s", rank_, n_ranks_, store_->prefix_.c_str());
         device_  = createGlooDevice();
         context_ = std::make_shared<::gloo::rendezvous::Context>(rank_, n_ranks_);
-        context_->connectFullMesh(*store_, device_);
+        context_->connectFullMesh(store_, device_);
     }
 
     ~GlooCommImpl() {}

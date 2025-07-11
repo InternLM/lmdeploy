@@ -15,7 +15,7 @@ namespace turbomind::comm {
 
 namespace {
 
-// copy from pytorch https://github.com/pytorch/pytorch/blob/v2.5.1/torch/csrc/distributed/c10d/TCPStoreBackend.hpp
+// copy from pytorch https://github.com/pytorch/pytorch/blob/v2.8.0-rc4/torch/csrc/distributed/c10d/TCPStoreBackend.hpp
 
 static const uint32_t validationMagicNumber = 0x3C85F7CE;
 
@@ -41,6 +41,9 @@ enum class QueryType : uint8_t
     MULTI_SET,
     CANCEL_WAIT,
     PING,
+    QUEUE_PUSH,
+    QUEUE_POP,
+    QUEUE_LEN,
 };
 
 }  // namespace

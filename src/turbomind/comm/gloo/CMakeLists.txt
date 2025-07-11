@@ -5,7 +5,7 @@ include(FetchContent)
 FetchContent_Declare(
   gloo
   GIT_REPOSITORY https://github.com/pytorch/gloo.git
-  GIT_TAG cbe963b5a43cd75e6eca4f74d2bb38ec8dcfdbc8
+  GIT_TAG c7b7b022c124d9643957d9bd55f57ac59fce8fa2 # pytorch-v2.8.0-rc4
 )
 
 # some settings of gloo,
@@ -13,7 +13,6 @@ set(GLOO_INSTALL OFF CACHE BOOL "" FORCE)
 set(GLOO_STATIC_OR_SHARED STATIC CACHE STRING "" FORCE)
 set(USE_NCCL OFF)
 set(BUILD_TEST OFF)
-# set(USE_REDIS ON) # TODO remove, use tcp_store instead
 FetchContent_MakeAvailable(gloo)
 
 # gloo build doesn't add include directories as a target property...
