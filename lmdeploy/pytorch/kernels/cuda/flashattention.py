@@ -13,6 +13,7 @@ logger = get_logger('lmdeploy')
 
 TRITON_VERSION = version.parse(triton.__version__)
 VERSION_300 = version.parse('3.0.0')
+VERSION_320 = version.parse('3.2.0')
 assert TRITON_VERSION >= version.parse('2.2.0')
 
 # TODO: fast op might not work on non-nv device
@@ -22,7 +23,7 @@ tl_exp2 = tl.exp2
 
 
 def _get_block_d(head_dim_k, head_dim_v):
-    """get block d."""
+    """Get block d."""
     BLOCK_DK = triton.next_power_of_2(head_dim_k)
     BLOCK_DK1 = 0
     if BLOCK_DK != head_dim_k:
@@ -34,7 +35,7 @@ def _get_block_d(head_dim_k, head_dim_v):
 
 @triton.jit
 def softcapping(qk, logit_softcapping: tl.constexpr):
-    """soft capping."""
+    """Soft capping."""
     if logit_softcapping > 0.0:
         qk = qk / logit_softcapping
         qk = tanh(qk)
@@ -44,7 +45,7 @@ def softcapping(qk, logit_softcapping: tl.constexpr):
 
 @triton.jit
 def _load_kv(ptrs, boundary_check: tl.constexpr):
-    """load kv."""
+    """Load kv."""
     if boundary_check is not None:
         return tl.load(ptrs, boundary_check=boundary_check, padding_option='zero')
     else:
@@ -186,7 +187,7 @@ def _flash_prefill_fwd_kernel(
     BLOCK_DK1: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """flash attention kernel."""
+    """Flash attention kernel."""
     start_m = tl.program_id(0)
     head_id = tl.program_id(1)
     batch_id = tl.program_id(2)
@@ -358,12 +359,36 @@ def _kernel_meta_sm8x(BLOCK_DK: int, shared_kv: bool):
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
+def _kernel_meta_sm86(BLOCK_DK: int, shared_kv: bool):
+    """Sm86 has different smem size with sm80."""
+    num_warps = 4
+    if BLOCK_DK <= 128:
+        BLOCK_M = 128
+        BLOCK_N = 64
+        num_stages = 3
+    elif BLOCK_DK <= 256:
+        BLOCK_M = 64
+        BLOCK_N = 32
+        num_stages = 2
+    else:
+        BLOCK_M = 32
+        BLOCK_N = 32
+        num_stages = 2
+
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
 def _kernel_meta_sm9x(BLOCK_DK: int, shared_kv: bool):
 
     num_warps = 8
     BLOCK_M = 128 if BLOCK_DK <= 256 else 64
     if not shared_kv and BLOCK_DK >= 512:
         BLOCK_M = 32
+
+    # fix crash on triton<3.2.0
+    if BLOCK_DK >= 512 and TRITON_VERSION < VERSION_320:
+        BLOCK_M = 32
+        num_warps = 4
 
     BLOCK_N = 128 if BLOCK_DK <= 128 else 64
 
@@ -387,7 +412,7 @@ def flash_attention_fwd(
     causal: bool = True,
     kv_layout: str = 'hsd',
 ):
-    """varlen flash Attention forward.
+    """Varlen flash Attention forward.
 
     Support sliding window, softcapping. Note that this kernel will not perform bound check for k,v.
     """
@@ -435,7 +460,10 @@ def flash_attention_fwd(
     if _nv_cap[0] < 8:
         BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
     if _nv_cap[0] < 9:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
+        if _nv_cap[1] in [6, 9]:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
+        else:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
     else:
         BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
 

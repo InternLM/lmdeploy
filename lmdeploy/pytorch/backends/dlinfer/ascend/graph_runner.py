@@ -15,6 +15,7 @@ from lmdeploy.pytorch.models.qwen2_vl import Qwen2VLForConditionalGeneration
 from lmdeploy.utils import get_logger
 
 from ...graph_runner import GraphRunner
+from .op_backend import SocVersion
 
 ACL_FORMAT_ND = 2
 
@@ -22,7 +23,7 @@ logger = get_logger('lmdeploy')
 
 
 class AscendGraphRunner(GraphRunner):
-    """ascend graph runner."""
+    """Ascend graph runner."""
 
     def __init__(self, model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                  backend_config: BackendConfig, device: torch.device):
@@ -48,9 +49,15 @@ class AscendGraphRunner(GraphRunner):
                                                                backend='atbgraph')
             else:
                 self.model = torch.compile(self.model, fullgraph=True, dynamic=True, backend='atbgraph')
+            if SocVersion.is_Ascend310P() and hasattr(self.model, 'get_logits'):
+                # Compile get_logits for Ascend310P to use ATB linear since we would convert weight to nz format
+                self.model.get_logits = torch.compile(self.model.get_logits,
+                                                      fullgraph=True,
+                                                      dynamic=True,
+                                                      backend='atbgraph')
 
     def check_enable_graph(self):
-        """check enable graph."""
+        """Check enable graph."""
         # eager_mode
         if self.backend_config.eager_mode:
             return False
@@ -106,8 +113,8 @@ class AscendGraphRunner(GraphRunner):
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
-        """prepare inputs."""
-        if self.enable_graph:
+        """Prepare inputs."""
+        if self.enable_graph and SocVersion.is_Ascend910B():
             self._convert_kv_format(past_key_values)
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,

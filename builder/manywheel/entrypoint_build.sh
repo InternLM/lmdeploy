@@ -6,6 +6,8 @@ export PLAT_NAME=$PLAT_NAME
 export USERID=${USERID}
 export GROUPID=${GROUPID}
 export CUDAVER=$(nvcc --version | sed -n 's/^.*release \([0-9]\+\).*$/\1/p')
+export NCCL_INCLUDE_DIR=/usr/local/cuda/include
+export NCCL_LIB_DIR=/usr/local/cuda/lib64
 
 source /opt/conda/bin/activate
 conda activate $PYTHON_VERSION

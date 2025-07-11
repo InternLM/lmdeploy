@@ -88,8 +88,9 @@ LlamaV2::LlamaV2(DataType                     dtype,
 
     unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, lora, ctx);
 
+    // using float to avoid data overflow
     dynamic_decode_ = std::make_unique<DynamicDecodeLayer>(
-        dtype_, max_batch_size, vocab_size_, vocab_size_padded_, stream_, &ctx.device_prop);
+        kFloat32, max_batch_size, model.tokenizer_size, vocab_size_padded_, stream_, &ctx.device_prop);
 }
 
 void LlamaV2::updateEmbedding(char*            decoder_input,

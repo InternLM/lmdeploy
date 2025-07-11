@@ -5,6 +5,7 @@ import csv
 import os
 import time
 from dataclasses import dataclass
+from itertools import count
 from typing import List, Union
 
 import numpy as np
@@ -20,11 +21,12 @@ from lmdeploy.utils import get_logger
 
 get_logger('lmdeploy').setLevel('WARNING')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
+global_session_id = count(0)
 
 
-async def infer(model, session_id: int, input_ids: List, gen_config: GenerationConfig, test_round: int,
+async def infer(model, worker_id: int, input_ids: List, gen_config: GenerationConfig, test_round: int,
                 que: asyncio.Queue):
-    if session_id == 1:
+    if worker_id == 1:
         pbar = tqdm(total=test_round)
     chatbot = model.create_instance()
     output_seqlen = gen_config.max_new_tokens
@@ -33,9 +35,10 @@ async def infer(model, session_id: int, input_ids: List, gen_config: GenerationC
         token_latency_stats = [0] * (output_seqlen + 1)
         prev = time.perf_counter()
         n_prev_token = 0
-        """
-        The iterator provided by `stream_infer` denotes the number of generated tokens so far,
-        which is represented by the variable `n_token`.
+        """The iterator provided by `stream_infer` denotes the number of
+        generated tokens so far, which is represented by the variable
+        `n_token`.
+
         Please note that `n_token` is not a continuous value. In other words, during the iteration,
         its value might be 5, 7, 8, 16, and so on, rather than 1, 2, 3, 4, etc.
         So, it is quite difficult to get the latency of each generated token.
@@ -45,6 +48,7 @@ async def infer(model, session_id: int, input_ids: List, gen_config: GenerationC
         The time elapsing in this iteration `now-prev` is set to the latency of first token of
         the 5 tokens, i.e. `token_latency_stats[0]`, and `token_latency_stats[1:4]` is set 0`
         """   # noqa: E501
+        session_id = next(global_session_id)
         async for outputs in chatbot.async_stream_infer(session_id,
                                                         input_ids,
                                                         gen_config=gen_config,
@@ -60,14 +64,14 @@ async def infer(model, session_id: int, input_ids: List, gen_config: GenerationC
         # for pytorch engine to restart a session
         if hasattr(chatbot, 'end'):
             await chatbot.async_end(session_id)
-        if session_id == 1:
+        if worker_id == 1:
             pbar.update(1)
 
         assert output_seqlen <= n_token <= output_seqlen + 1, \
             f'Error. session_id({session_id}) request {output_seqlen} ' \
             f'tokens, but generate {n_token} tokens'
         stats.append(token_latency_stats[:output_seqlen])
-    await que.put((session_id, stats))
+    await que.put((worker_id, stats))
 
 
 def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int, gen_config: GenerationConfig,
@@ -77,9 +81,10 @@ def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int, gen
 
     print('start to warmup ...')
 
-    async def _infer(model, session_id):
+    async def _infer(model):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
+            session_id = next(global_session_id)
             async for _ in chatbot.async_stream_infer(session_id,
                                                       input_ids=input_ids,
                                                       sequence_start=True,
@@ -96,7 +101,7 @@ def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int, gen
     # start threads
     tasks = []
     for i in range(concurrency):
-        task = _infer(model, i + 1)
+        task = _infer(model)
         tasks.append(task)
 
     async def _gather_tasks(tasks):
@@ -178,7 +183,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
 
     out_token_throughput = np.round(token_latency_stats.size / elapsed_time, 2)
     total_token_throughput = np.round(concurrency * test_round * (input_seqlen + output_seqlen) / elapsed_time, 2)
-    print(f'\n{"-" * 50}\ntotal time: {elapsed_time:.2f}s\n'
+    print(f'\n{" - " * 50}\ntotal time: {elapsed_time:.2f}s\n'
           f'concurrency: {concurrency}, test_round: {test_round}\n'
           f'input_tokens: {input_seqlen}, output_tokens: {output_seqlen}\n'
           f'first_token latency(min, max, ave): '
@@ -188,7 +193,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'{token_latency_ave}s\n'
           f'token_latency percentiles(50%,75%,95%,99%)(s): {percentiles}\n'
           f'throughput(output): {out_token_throughput} token/s\n'
-          f'throughput(total): {total_token_throughput} token/s\n{"-" * 50}')
+          f'throughput(total): {total_token_throughput} token/s\n{" - " * 50}')
     return model_path, \
         [first_token_latency_min, first_token_latency_max,
          first_token_latency_ave], \

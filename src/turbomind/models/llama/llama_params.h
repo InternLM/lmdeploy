@@ -27,6 +27,7 @@ struct ModelParam {
     size_t   layer_num;
     size_t   vocab_size;
     size_t   embedding_size;
+    size_t   tokenizer_size;
     float    norm_eps;
     int      quant_policy;
     bool     attn_bias;
@@ -40,8 +41,7 @@ struct ModelParam {
 };
 
 struct MoeParam {
-    enum Method
-    {
+    enum Method {
         kNaive,
         kFused
     } method;
@@ -97,14 +97,14 @@ struct EngineParam {
     int mlp_tp_rank;
 
     // multi-node
-    int              nnodes;
-    int              node_rank;
-    int              ngpus_per_node;
+    int nnodes;
+    int node_rank;
+    int ngpus_per_node;
+
     std::vector<int> devices;
 };
 
-enum class LoraPolicy : int
-{
+enum class LoraPolicy : int {
     kNull,
     kPlora,
 };

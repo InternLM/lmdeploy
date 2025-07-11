@@ -100,14 +100,24 @@ class Ffn(Module):
         self.inter_size = model.model_config.inter_size
         self.group_size = max(1, model.model_config.group_size)
 
-    def _export(self, inter_size: int, fmt: str, idx: int, w123, kind: str, pack_fn, apply_gs=False):
+    def _export(self,
+                inter_size: int,
+                fmt: str,
+                idx: int,
+                w123,
+                kind: str,
+                pack_fn,
+                apply_gs=False,
+                block_size=1,
+                **kwargs):
         is_lora_a, is_lora_b = get_lora_flags(kind)
         w1, w2, w3 = map(transpose, w123)
 
-        if not is_lora_a:
+        # TODO: handle padding for block_size != 1
+        if not is_lora_a and block_size == 1:
             w1 = pad_out_dims(w1, inter_size)
             w3 = pad_out_dims(w3, inter_size)
-        if not is_lora_b:
+        if not is_lora_b and block_size == 1:
             group_size = self.group_size if apply_gs else 1
             w2 = pad_in_dims(w2, inter_size // group_size)
 
@@ -171,12 +181,15 @@ class Attn(Module):
         self.attn_bias = model.model_config.attn_bias
         self.qk_norm = model.model_config.qk_norm
 
-    def _reorder_and_merge(self, qkvo):
+    def _reorder_and_merge(self, qkvo, block_size):
         q, k, v, o = qkvo
         # reorder output dim for tm's rotary embedding layout
         if self.model.permute_qk:
-            q = permute_v2(q, self.head_dim)
-            k = permute_v2(k, self.head_dim)
+            if block_size == 1:
+                q = permute_v2(q, self.head_dim)
+                k = permute_v2(k, self.head_dim)
+            else:
+                assert block_size % self.head_dim == 0
         qkv = merge_qkv_v2(q, k, v, self.tp)
         # zero bias for `wo` when `w_qkv` has bias but `wo` doesn't
         if o is None and q.dim() == 1:
@@ -184,7 +197,7 @@ class Attn(Module):
         return qkv, o
 
     def _repeat_kv(self, qkvo, kind: str):
-        """replicate kv."""
+        """Replicate kv."""
         q, k, v, o = qkvo
         head_dim = self.model.model_config.size_per_head
         hidden_dim = self.model.model_config.hidden_units
@@ -204,7 +217,7 @@ class Attn(Module):
 
         return (q, k, v, o)
 
-    def _export(self, idx: int, qkvo, kind: str, pack_fn, **kwargs):
+    def _export(self, idx: int, qkvo, kind: str, pack_fn, block_size=1, **kwargs):
         if all(x is None for x in qkvo):
             return
         is_lora_a, is_lora_b = get_lora_flags(kind)
@@ -214,7 +227,7 @@ class Attn(Module):
             qkvo = tuple(map(transpose, qkvo))
             if self.model.repeat_kv:
                 qkvo = self._repeat_kv(qkvo, kind)
-            qkv, o = self._reorder_and_merge(qkvo)
+            qkv, o = self._reorder_and_merge(qkvo, block_size)
         self.model.save_split(pack_fn(qkv),
                               self._attn.format(idx, 'w_qkv', kind),
                               split_dim=-1,

@@ -126,6 +126,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Qwen2 (0.5B - 72B)</li>
   <li>Qwen2-MoE (57BA14B)</li>
   <li>Qwen2.5 (0.5B - 32B)</li>
+  <li>Qwen3, Qwen3-MoE</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -160,6 +161,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
+  <li>InternVL3 (1B-78B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
@@ -187,10 +189,10 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 
 ## 安装
 
-我们推荐在一个干净的conda环境下（python3.8 - 3.12），安装 lmdeploy：
+我们推荐在一个干净的conda环境下（python3.9 - 3.12），安装 lmdeploy：
 
 ```shell
-conda create -n lmdeploy python=3.8 -y
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```

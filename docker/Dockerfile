@@ -11,21 +11,13 @@ FROM ${CUDA_VERSION} AS final
 ARG PYTHON_VERSION=3.10
 
 RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl openssh-server ssh sudo &&\
-    apt-get install libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 -y &&\
+    apt-get install libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core -y &&\
     curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
     ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
 
 ENV PATH=/opt/py3/bin:$PATH
-
-# install openmpi
-RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.gz &&\
-    tar xf openmpi-4.1.5.tar.gz && cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi &&\
-    make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
-
-ENV PATH=$PATH:/usr/local/openmpi/bin
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
 
 # install nccl manually for cuda11.8
 RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then \
@@ -36,6 +28,7 @@ RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then \
     mv build/lib/lib* /usr/local/nccl/lib/ &&\
     cd .. && rm -rf nccl ; \
     fi
+
 
 ENV LD_LIBRARY_PATH=/usr/local/nccl/lib:$LD_LIBRARY_PATH
 
@@ -61,6 +54,8 @@ RUN --mount=type=cache,target=/root/.cache/pip cd /opt/lmdeploy &&\
 
 # use locally built nccl for cuda11.8
 RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then python3 -m pip uninstall -y nvidia-nccl-cu11 ; fi
+# torch 2.7 brings in nvidia-nccl-cu12 2.26.x. Somehow, it causes performance degradation of pytorch engine
+RUN if [ "$CUDA_VERSION_SHORT" = "cu121" ]; then python3 -m pip install nvidia-nccl-cu12==2.25.1; fi
 
 ENV LD_LIBRARY_PATH=/opt/lmdeploy/install/lib:$LD_LIBRARY_PATH
 ENV PATH=/opt/lmdeploy/install/bin:$PATH

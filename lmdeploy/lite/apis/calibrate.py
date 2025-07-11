@@ -18,6 +18,7 @@ LAYER_TYPE_MAP = {
     'InternLM3ForCausalLM': 'InternLM3DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
+    'Qwen3ForCausalLM': 'Qwen3DecoderLayer',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
@@ -28,6 +29,7 @@ LAYER_TYPE_MAP = {
     'ChatGLMForConditionalGeneration': 'GLMBlock',
     'MixtralForCausalLM': 'MixtralDecoderLayer',
     'Qwen2VLForConditionalGeneration': 'Qwen2VLDecoderLayer',
+    'Qwen2_5_VLForConditionalGeneration': 'Qwen2_5_VLDecoderLayer',
     'MistralForCausalLM': 'MistralDecoderLayer',
 }
 
@@ -37,6 +39,7 @@ NORM_TYPE_MAP = {
     'InternLM3ForCausalLM': 'InternLM3RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'Qwen2ForCausalLM': 'Qwen2RMSNorm',
+    'Qwen3ForCausalLM': 'Qwen3RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
@@ -47,6 +50,7 @@ NORM_TYPE_MAP = {
     'ChatGLMForConditionalGeneration': 'RMSNorm',
     'MixtralForCausalLM': 'MixtralRMSNorm',
     'Qwen2VLForConditionalGeneration': 'Qwen2RMSNorm',
+    'Qwen2_5_VLForConditionalGeneration': 'Qwen2RMSNorm',
     'MistralForCausalLM': 'MistralRMSNorm',
 }
 
@@ -56,6 +60,7 @@ HEAD_NAME_MAP = {
     'InternLM3ForCausalLM': 'output',
     'QWenLMHeadModel': 'lm_head',
     'Qwen2ForCausalLM': 'lm_head',
+    'Qwen3ForCausalLM': 'lm_head',
     'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
     'BaichuanForCausalLM': 'lm_head',  # Baichuan2 7B
     'LlamaForCausalLM': 'lm_head',
@@ -66,6 +71,7 @@ HEAD_NAME_MAP = {
     'ChatGLMForConditionalGeneration': 'output_layer',
     'MixtralForCausalLM': 'lm_head',
     'Qwen2VLForConditionalGeneration': 'lm_head',
+    'Qwen2_5_VLForConditionalGeneration': 'lm_head',
     'MistralForCausalLM': 'lm_head',
 }
 

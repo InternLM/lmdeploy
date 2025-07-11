@@ -56,13 +56,13 @@ class Gemma3VisionModel(VisonModel):
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         # TODO, implement for tubomind engine
         raise NotImplementedError()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refers to `super.preprocess() for spec."""
+        """Refers to `super.preprocess() for spec."""
         from transformers.image_utils import make_nested_list_of_images
         output_kwargs = self.processor._merge_kwargs(
             Gemma3ProcessorKwargs,
@@ -74,16 +74,25 @@ class Gemma3VisionModel(VisonModel):
         )
         images = self.collect_images(messages)
         images = [image.convert('RGB') for image, _ in images]
+        num_image = len(images)
         images = make_nested_list_of_images(images)
         image_inputs = self.processor.image_processor(images, **output_kwargs['images_kwargs'])
-        image_inputs['image_tokens'] = self.image_tokens
-        image_inputs['image_token_id'] = self.image_token_id
-        messages.append(dict(role='preprocess', content=[image_inputs]))
+        outputs = []
+        for idx in range(num_image):
+            pixel_values = image_inputs['pixel_values'][idx:idx + 1, ...]
+            num_crops = image_inputs['num_crops'][:idx:idx + 1]
+            data = dict(pixel_values=pixel_values,
+                        num_crops=num_crops,
+                        image_tokens=self.image_tokens,
+                        image_token_id=self.image_token_id)
+            outputs.append(data)
+
+        messages.append(dict(role='preprocess', content=outputs))
         return messages
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
@@ -98,7 +107,7 @@ class Gemma3VisionModel(VisonModel):
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:

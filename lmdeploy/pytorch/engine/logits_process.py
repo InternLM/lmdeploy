@@ -13,7 +13,7 @@ from ..messages import SchedulerSequence
 
 
 def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
-    """process temperature."""
+    """Process temperature."""
     temperature = temperature.to(scores.dtype)
     scores.div_(temperature[:, None])
     return scores
@@ -23,7 +23,7 @@ def _process_bad_words_(scores: torch.Tensor,
                         bad_words: torch.LongTensor,
                         mask: torch.BoolTensor,
                         filter_value: float = -float('inf')):
-    """process bad words."""
+    """Process bad words."""
     filtered_scores = scores.gather(1, bad_words)
     filtered_scores[mask] = filter_value
     scores.scatter_(1, bad_words, filtered_scores)
@@ -31,7 +31,7 @@ def _process_bad_words_(scores: torch.Tensor,
 
 
 def _process_repetition_penalty_(scores: torch.Tensor, input_ids: torch.LongTensor, penalty: torch.Tensor):
-    """process repetition penalty."""
+    """Process repetition penalty."""
     score = torch.gather(scores, 1, input_ids)
     penalty = penalty.to(score.dtype)
     score = torch.where(score < 0, score * penalty[:, None], score / penalty[:, None])
@@ -40,7 +40,7 @@ def _process_repetition_penalty_(scores: torch.Tensor, input_ids: torch.LongTens
 
 
 def _filter_topk_sorted_(scores: torch.Tensor, topk: torch.LongTensor, filter_value: float = -float('inf')):
-    """filter topk on sorted scores."""
+    """Filter topk on sorted scores."""
     filter_value = -float('inf')
     num_tokens = scores.size(1)
     token_idx = torch.arange(num_tokens, device=scores.device)
@@ -50,7 +50,7 @@ def _filter_topk_sorted_(scores: torch.Tensor, topk: torch.LongTensor, filter_va
 
 
 def _filter_topp_sorted_(scores: torch.Tensor, topp: torch.Tensor, filter_value: float = -float('inf')):
-    """filter topp on sorted scores."""
+    """Filter topp on sorted scores."""
     softmax_scores = scores.softmax(-1)
     cum_scores = softmax_scores.cumsum(1) - softmax_scores
     mask = cum_scores > topp[:, None]
@@ -60,7 +60,7 @@ def _filter_topp_sorted_(scores: torch.Tensor, topp: torch.Tensor, filter_value:
 
 
 def _filter_minp_sorted_(scores: torch.Tensor, minp: torch.Tensor, filter_value: float = -float('inf')):
-    """filter minp on sorted scores."""
+    """Filter minp on sorted scores."""
     softmax_scores = scores.softmax(-1)
     top_probs, _ = softmax_scores.max(dim=-1, keepdim=True)
     scaled_min_p = minp.unsqueeze(dim=1) * top_probs
@@ -129,7 +129,7 @@ class SamplingInputs:
 
     @classmethod
     def from_sampling_params(cls, seqs: List[SchedulerSequence]):
-        """from samplingg params."""
+        """From samplingg params."""
         batch_size = len(seqs)
         temperature = [None] * batch_size
         repetition_penalty = [None] * batch_size
@@ -144,7 +144,7 @@ class SamplingInputs:
         logits_processors = [None] * batch_size
 
         def __gather_params():
-            """gather params."""
+            """Gather params."""
             for idx, seq in enumerate(seqs):
                 param = seq.sampling_param
                 temperature[idx] = param.temperature
@@ -166,7 +166,7 @@ class SamplingInputs:
                 logits_processors[idx] = param.logits_processors
 
         def __get_topp(top_p):
-            """get topp."""
+            """Get topp."""
             min_top_p = min(top_p)
             if min_top_p == 1.0:
                 top_p = None
@@ -175,7 +175,7 @@ class SamplingInputs:
             return top_p, min_top_p
 
         def __get_minp(min_p):
-            """get minp."""
+            """Get minp."""
             max_min_p = max(min_p)
             if max_min_p == 0.0:
                 min_p = None
@@ -184,7 +184,7 @@ class SamplingInputs:
             return min_p
 
         def __get_bad_words(bad_words):
-            """get bad words."""
+            """Get bad words."""
             max_bw_len = max(len(bw) for bw in bad_words)
             if max_bw_len == 0:
                 return None, None
@@ -252,7 +252,7 @@ class SamplingInputs:
         return sampling_input
 
     def to_device(self, device: str, non_blocking: bool = False):
-        """to device."""
+        """To device."""
         out_dict = dict()
         for f in fields(self):
             k = f.name
@@ -279,13 +279,15 @@ class FusedLogitsProcessor:
     def __init__(self,
                  sampling_inputs: SamplingInputs,
                  ignore_eos: torch.Tensor,
-                 tokenizer: Optional[Tokenizer] = None):
+                 tokenizer: Optional[Tokenizer] = None,
+                 sampling_vocab_size: Optional[int] = None):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.ignore_eos = ignore_eos
         self.tokenizer = tokenizer
+        self.sampling_vocab_size = sampling_vocab_size
 
     async def _wait_stream_once(self):
-        """wait stream once."""
+        """Wait stream once."""
         stream = torch.cuda.current_stream()
         if not stream.query():
             await asyncio.sleep(0)
@@ -344,7 +346,7 @@ class FusedLogitsProcessor:
         sampling_inputs = self.sampling_inputs
 
         def __random_sampling(scores: torch.Tensor, indices: torch.LongTensor):
-            """random sampling."""
+            """Random sampling."""
             max_topk = sampling_inputs.max_top_k
             top_k = sampling_inputs.top_k
             if max_topk <= 0:
@@ -368,6 +370,9 @@ class FusedLogitsProcessor:
             seeds = sampling_inputs.random_seeds
             offsets = sampling_inputs.random_offsets
             return _multinomial_sampling(softmax_scores, seeds, offsets, indices)
+
+        if self.sampling_vocab_size is not None and logits.size(1) > self.sampling_vocab_size:
+            logits = logits[..., :self.sampling_vocab_size]
 
         if sampling_inputs.max_top_k == 1:
             return logits.argmax(-1)

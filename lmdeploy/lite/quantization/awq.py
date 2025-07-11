@@ -29,6 +29,10 @@ NORM_FCS_MAP = {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
+    'Qwen3DecoderLayer': {
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
     'DecoderLayer': {
         'input_layernorm': ['self_attn.W_pack'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
@@ -47,6 +51,10 @@ NORM_FCS_MAP = {
         ['block_sparse_moe.gate', 'block_sparse_moe.experts.{i}.w1', 'block_sparse_moe.experts.{i}.w3']
     },
     'Qwen2VLDecoderLayer': {
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
+    'Qwen2_5_VLDecoderLayer': {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
@@ -80,6 +88,10 @@ FC_FCS_MAP = {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
     },
+    'Qwen3DecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'mlp.up_proj': ['mlp.down_proj']
+    },
     'DecoderLayer': {
         'self_attn.W_pack': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
@@ -97,6 +109,10 @@ FC_FCS_MAP = {
         'block_sparse_moe.experts.{i}.w3': ['block_sparse_moe.experts.{i}.w2']
     },
     'Qwen2VLDecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'mlp.up_proj': ['mlp.down_proj']
+    },
+    'Qwen2_5_VLDecoderLayer': {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
     },

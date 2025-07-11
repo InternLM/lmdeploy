@@ -1,10 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
+from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.pytorch.disagg.messages import (AssignmentInstruct, DistServeRegisterMRMessage, MigrationAssignment,
+                                              MigrationExecutionBatch)
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, ModelConfig
@@ -29,10 +34,13 @@ class CacheEngine:
         self,
         cache_config: CacheConfig,
         model_config: ModelConfig,
+        rank: int = 0,
+        tp_rank: int = 0,
         world_size: int = 1,
     ) -> None:
         self.world_size = world_size
-
+        self.rank = rank
+        self.tp_rank = tp_rank
         self.cache_config = cache_config
         self.model_config = model_config
 
@@ -51,6 +59,8 @@ class CacheEngine:
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
 
+        self.migration_backend_impl: Optional[MigrationBackendImpl] = None
+
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()
         assert self.cache_stream != torch.cuda.current_stream()
@@ -62,22 +72,22 @@ class CacheEngine:
 
     @property
     def cpu_cache(self):
-        """gpu cache."""
+        """Gpu cache."""
         return self.local_cpu_cache
 
     @property
     def gpu_cache(self):
-        """gpu cache."""
+        """Gpu cache."""
         return self.local_gpu_cache
 
     @property
     def num_gpu_blocks(self):
-        """num gpu blocks."""
+        """Num gpu blocks."""
         return self.cache_config.num_gpu_blocks
 
     @property
     def num_cpu_blocks(self):
-        """num gpu blocks."""
+        """Num gpu blocks."""
         return self.cache_config.num_cpu_blocks
 
     @classmethod
@@ -88,7 +98,7 @@ class CacheEngine:
                                   world_size: int = 1,
                                   quant_policy: Literal[0, 4, 8] = 0,
                                   local: bool = True):
-        """get single block shape."""
+        """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
@@ -110,7 +120,7 @@ class CacheEngine:
                                     world_size: int = 1,
                                     quant_policy: Literal[0, 4, 8] = 0,
                                     local: bool = True):
-        """get single block shape."""
+        """Get single block shape."""
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
@@ -126,7 +136,7 @@ class CacheEngine:
         return attn_backend.get_v_block_shape(block_size, num_heads, head_size, dtype)
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
-        """get shape of key block."""
+        """Get shape of key block."""
         head_size = self.model_config.k_head_dim
         if head_size is None:
             head_size = self.model_config.head_dim
@@ -140,7 +150,7 @@ class CacheEngine:
         )
 
     def get_value_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
-        """get shape of value block."""
+        """Get shape of value block."""
         head_size = self.model_config.v_head_dim
         if head_size is None:
             head_size = self.model_config.head_dim
@@ -154,7 +164,7 @@ class CacheEngine:
         )
 
     def _allocate_cache(self, num_blocks: int, device: torch.device):
-        """allocate cache implement."""
+        """Allocate cache implement."""
         key_block_shape = self.get_key_block_shape(local=True)
         value_block_shape = self.get_value_block_shape(local=True)
 
@@ -191,14 +201,14 @@ class CacheEngine:
         return output
 
     def allocate_gpu_cache(self):
-        """allocate caches on GPU."""
+        """Allocate caches on GPU."""
         caches = self._allocate_cache(self.num_gpu_blocks, 'cuda')
         self.full_gpu_cache = caches
         self.local_gpu_cache = list(zip(*caches))
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
-        """allocate caches on Host."""
+        """Allocate caches on Host."""
         caches = self._allocate_cache(self.num_cpu_blocks, 'cpu')
 
         self.full_cpu_cache = caches
@@ -302,3 +312,68 @@ class CacheEngine:
 
         total = num_layers * (mem_key_block + mem_value_block)
         return total
+
+    """ Metheds for PD Disaggregation Begin. """
+
+    def p2p_initialize(self, migration_init_request: DistServeInitRequest):
+        if not self.migration_backend_impl:
+            self.migration_backend_impl = MIGRATION_BACKENDS.module_dict[self.cache_config.migration_backend.name]()
+        migration_init_request.rank = self.rank
+        self.migration_backend_impl.p2p_initialize(migration_init_request)
+        for i, t in enumerate(self.full_gpu_cache):
+            if t.numel() == 0:
+                continue
+            register_mr_request = DistServeRegisterMRMessage(protocol=migration_init_request.protocol,
+                                                             remote_engine_id=migration_init_request.remote_engine_id,
+                                                             mr_key=str(i),
+                                                             addr=t.data_ptr(),
+                                                             offset=t.storage_offset(),
+                                                             length=t.numel() * t.itemsize)
+            self.migration_backend_impl.register_memory_region(register_mr_request)
+        return self.migration_backend_impl.endpoint_info(migration_init_request.remote_engine_id,
+                                                         migration_init_request.protocol)
+
+    def p2p_connect(self, migration_conn_request: DistServeConnectionRequest):
+        self.migration_backend_impl.p2p_connect(migration_conn_request[self.tp_rank])
+
+    async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
+
+        def get_assignment_len():
+            head_dim = self.model_config.get_head_size()
+            num_heads = self.model_config.num_key_value_heads // self.world_size
+            block_size = self.cache_config.block_size
+            return head_dim * num_heads * block_size * self.model_config.dtype.itemsize
+
+        assignment_len = get_assignment_len()
+        layer_stride = self.cache_config.num_gpu_blocks * assignment_len
+
+        def get_assignment_batch(mr_key, block_ids, assignment_len, layer_stride, remote_layer_stride):
+            return [
+                AssignmentInstruct(mr_key=mr_key,
+                                   target_offset=block_id[0] * assignment_len + layer * remote_layer_stride,
+                                   source_offset=block_id[1] * assignment_len + layer * layer_stride,
+                                   length=assignment_len) for layer in range(self.model_config.num_layers)
+                for block_id in block_ids
+            ]
+
+        assignment_batch: List[Tuple[str, int, int, int]] = []  # mr_key, target, source, offset
+        for migration_exe_req in migration_execution_inputs.requests:
+            remote_engine_id = migration_exe_req[0]
+            blocks_to_migration = migration_exe_req[1]
+            remote_layer_stride = self.migration_backend_impl.links[
+                remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
+
+            for i, t in enumerate(self.full_gpu_cache):
+                if t.numel() == 0:
+                    continue
+                assignment_batch.extend(
+                    get_assignment_batch(str(i), blocks_to_migration, assignment_len, layer_stride,
+                                         remote_layer_stride))
+        await self.migration_backend_impl.p2p_migrate(
+            MigrationAssignment(
+                protocol=migration_execution_inputs.protocol,
+                remote_engine_id=remote_engine_id,
+                batch=assignment_batch,
+            ))
+
+    """ Metheds for PD Disaggregation End. """

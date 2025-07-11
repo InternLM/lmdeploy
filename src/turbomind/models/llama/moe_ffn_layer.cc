@@ -3,11 +3,14 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/kernels/activation_kernels.h"
+
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
+
+#include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -42,8 +45,6 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     scales_  = {param_.experts_per_token * max_token_num, kDEVICE};
     offsets_ = {max_expert_num + 1, kDEVICE};
     accum_   = {max_expert_num * kMoeGateMaxTiles, kDEVICE};
-
-    shared_scales_ = {max_token_num, kDEVICE};
 }
 
 Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& gate)
@@ -168,29 +169,28 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                             context_.get());
         sync_check_cuda_error();
     }
+
+    if (moe.shared_gate.weight) {
+        shared_scales_ = Gate(p.input, moe.shared_gate);
+    }
 }
 
 void MoeFfnLayer::Combine(ForwardParam& p)
 {
     auto& moe = *p.weights;
 
-    Tensor_<float> shared_scales;
-
-    if (moe.shared_gate.weight) {
-        shared_scales = Gate(p.input, moe.shared_gate);
-    }
-
     invokeMoeCombine(p.output,
                      temp_,
                      scales_.data(),
                      en2f_.data(),
-                     shared_scales.data_or((float*)nullptr),
+                     shared_scales_.data_or((float*)nullptr),
                      param_.experts_per_token,
                      p.scale,
                      stream_);
     sync_check_cuda_error();
 
-    temp_ = {};
+    temp_          = {};
+    shared_scales_ = {};
 }
 
 }  // namespace turbomind

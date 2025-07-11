@@ -124,6 +124,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Qwen2 (0.5B - 72B)</li>
   <li>Qwen2-MoE (57BA14B)</li>
   <li>Qwen2.5 (0.5B - 32B)</li>
+  <li>Qwen3, Qwen3-MoE</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -158,6 +159,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
+  <li>InternVL3 (1B-78B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
@@ -185,10 +187,10 @@ They differ in the types of supported models and the inference data type. Please
 
 ## Installation
 
-It is recommended installing lmdeploy using pip in a conda environment (python 3.8 - 3.12):
+It is recommended installing lmdeploy using pip in a conda environment (python 3.9 - 3.13):
 
 ```shell
-conda create -n lmdeploy python=3.8 -y
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```

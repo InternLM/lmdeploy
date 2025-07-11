@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -62,6 +62,7 @@ class SubCliServe:
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
+        model_format_act = ArgumentHelper.model_format(pt_group)
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
@@ -73,7 +74,8 @@ class SubCliServe:
         tb_group._group_actions.append(cache_block_seq_len_act)
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(max_prefill_token_num_act)
-        ArgumentHelper.model_format(tb_group)
+        tb_group._group_actions.append(model_format_act)
+
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
@@ -133,14 +135,13 @@ class SubCliServe:
         ArgumentHelper.model_name(parser)
         ArgumentHelper.max_log_len(parser)
         ArgumentHelper.disable_fastapi_docs(parser)
-
+        ArgumentHelper.allow_terminate_by_client(parser)
         # chat template args
         ArgumentHelper.chat_template(parser)
 
         # parsers
-        parser_group = parser.add_mutually_exclusive_group()
-        ArgumentHelper.tool_call_parser(parser_group)
-        ArgumentHelper.reasoning_parser(parser_group)
+        ArgumentHelper.tool_call_parser(parser)
+        ArgumentHelper.reasoning_parser(parser)
 
         # model args
         ArgumentHelper.revision(parser)
@@ -163,10 +164,17 @@ class SubCliServe:
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
+        model_format = ArgumentHelper.model_format(pt_group)
         dp_act = ArgumentHelper.dp(pt_group)
-        ArgumentHelper.dp_rank(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
+        ArgumentHelper.enable_eplb(pt_group)
+        ArgumentHelper.enable_metrics(pt_group)
+        ArgumentHelper.role(pt_group)
+        ArgumentHelper.migration_backend(pt_group)
+        # multi-node serving args
+        ArgumentHelper.node_rank(parser)
+        ArgumentHelper.num_nodes(parser)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -181,7 +189,7 @@ class SubCliServe:
         tb_group._group_actions.append(prefix_caching_act)
         tb_group._group_actions.append(max_prefill_token_num_act)
         tb_group._group_actions.append(quant_policy)
-        ArgumentHelper.model_format(tb_group)
+        tb_group._group_actions.append(model_format)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
@@ -220,7 +228,13 @@ class SubCliServe:
         parser.set_defaults(run=SubCliServe.proxy)
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for proxy serving')
         parser.add_argument('--server-port', type=int, default=8000, help='Server port of the proxy')
-        parser.add_argument('--strategy',
+        parser.add_argument('--serving-strategy',
+                            type=str,
+                            choices=['Hybrid', 'DistServe'],
+                            default='Hybrid',
+                            help='the strategy to serve, Hybrid for colocating Prefill and Decode'
+                            'workloads into same engine, DistServe for Prefill-Decode Disaggregation')
+        parser.add_argument('--routing-strategy',
                             type=str,
                             choices=['random', 'min_expected_latency', 'min_observed_latency'],
                             default='min_expected_latency',
@@ -230,6 +244,15 @@ class SubCliServe:
                             help='Whether to disable cache status of the '
                             'proxy. If set, the proxy will forget the status '
                             'of the previous time')
+
+        # For Disaggregation
+        parser.add_argument('--migration-protocol',
+                            type=str,
+                            choices=['RDMA', 'NVLINK'],
+                            default='RDMA',
+                            help='transport protocol of KV migration')
+        parser.add_argument('--link-type', type=str, choices=['RoCE', 'IB'], default='RoCE', help='RDMA Link Type')
+        parser.add_argument('--disable-gdr', action='store_true', help='with GPU Direct Memory Access')
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
         ArgumentHelper.log_level(parser)
@@ -259,7 +282,8 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 model_format=args.model_format)
         else:
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
@@ -287,7 +311,7 @@ class SubCliServe:
     def api_server(args):
         """Serve LLMs with restful api using fastapi."""
         from lmdeploy.archs import autoget_backend
-        from lmdeploy.serve.openai.api_server import serve as run_api_server
+
         max_batch_size = args.max_batch_size if args.max_batch_size \
             else get_max_batch_size(args.device)
         backend = args.backend
@@ -301,7 +325,6 @@ class SubCliServe:
             backend_config = PytorchEngineConfig(dtype=args.dtype,
                                                  tp=args.tp,
                                                  dp=args.dp,
-                                                 dp_rank=args.dp_rank,
                                                  ep=args.ep,
                                                  max_batch_size=max_batch_size,
                                                  cache_max_entry_count=args.cache_max_entry_count,
@@ -313,7 +336,12 @@ class SubCliServe:
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
                                                  max_prefill_token_num=args.max_prefill_token_num,
-                                                 enable_microbatch=args.enable_microbatch)
+                                                 enable_microbatch=args.enable_microbatch,
+                                                 enable_eplb=args.enable_eplb,
+                                                 enable_metrics=args.enable_metrics,
+                                                 role=EngineRole[args.role],
+                                                 migration_backend=MigrationBackend[args.migration_backend],
+                                                 model_format=args.model_format)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
@@ -336,27 +364,58 @@ class SubCliServe:
 
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)
-        run_api_server(args.model_path,
-                       model_name=args.model_name,
-                       backend=backend,
-                       backend_config=backend_config,
-                       chat_template_config=chat_template_config,
-                       vision_config=vision_config,
-                       server_name=args.server_name,
-                       server_port=args.server_port,
-                       allow_origins=args.allow_origins,
-                       allow_credentials=args.allow_credentials,
-                       allow_methods=args.allow_methods,
-                       allow_headers=args.allow_headers,
-                       log_level=args.log_level.upper(),
-                       api_keys=args.api_keys,
-                       ssl=args.ssl,
-                       proxy_url=args.proxy_url,
-                       max_log_len=args.max_log_len,
-                       disable_fastapi_docs=args.disable_fastapi_docs,
-                       max_concurrent_requests=args.max_concurrent_requests,
-                       reasoning_parser=args.reasoning_parser,
-                       tool_call_parser=args.tool_call_parser)
+        if args.dp == 1:
+            from lmdeploy.serve.openai.api_server import serve as run_api_server
+
+            run_api_server(args.model_path,
+                           model_name=args.model_name,
+                           backend=backend,
+                           backend_config=backend_config,
+                           chat_template_config=chat_template_config,
+                           vision_config=vision_config,
+                           server_name=args.server_name,
+                           server_port=args.server_port,
+                           allow_origins=args.allow_origins,
+                           allow_credentials=args.allow_credentials,
+                           allow_methods=args.allow_methods,
+                           allow_headers=args.allow_headers,
+                           allow_terminate_by_client=args.allow_terminate_by_client,
+                           log_level=args.log_level.upper(),
+                           api_keys=args.api_keys,
+                           ssl=args.ssl,
+                           proxy_url=args.proxy_url,
+                           max_log_len=args.max_log_len,
+                           disable_fastapi_docs=args.disable_fastapi_docs,
+                           max_concurrent_requests=args.max_concurrent_requests,
+                           reasoning_parser=args.reasoning_parser,
+                           tool_call_parser=args.tool_call_parser)
+        else:
+            from lmdeploy.serve.openai.launch_server import launch_server
+
+            launch_server(args.nnodes,
+                          args.node_rank,
+                          args.model_path,
+                          model_name=args.model_name,
+                          backend=backend,
+                          backend_config=backend_config,
+                          chat_template_config=chat_template_config,
+                          vision_config=vision_config,
+                          server_name=args.server_name,
+                          server_port=args.server_port,
+                          allow_origins=args.allow_origins,
+                          allow_credentials=args.allow_credentials,
+                          allow_methods=args.allow_methods,
+                          allow_headers=args.allow_headers,
+                          allow_terminate_by_client=args.allow_terminate_by_client,
+                          log_level=args.log_level.upper(),
+                          api_keys=args.api_keys,
+                          ssl=args.ssl,
+                          proxy_url=args.proxy_url,
+                          max_log_len=args.max_log_len,
+                          disable_fastapi_docs=args.disable_fastapi_docs,
+                          max_concurrent_requests=args.max_concurrent_requests,
+                          reasoning_parser=args.reasoning_parser,
+                          tool_call_parser=args.tool_call_parser)
 
     @staticmethod
     def api_client(args):

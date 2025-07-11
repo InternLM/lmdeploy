@@ -51,6 +51,7 @@ Documentation
    :caption: Models
 
    supported_models/supported_models.md
+   supported_models/reward_models.md
 
 .. _llm_deployment:
 .. toctree::
@@ -103,6 +104,8 @@ Documentation
    advance/debug_turbomind.md
    advance/structed_output.md
    advance/pytorch_multinodes.md
+   advance/pytorch_profiling.md
+   advance/metrics.md
 
 .. toctree::
    :maxdepth: 1

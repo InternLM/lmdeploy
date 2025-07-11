@@ -9,6 +9,7 @@
 #include <cub/block/block_reduce.cuh>
 
 #include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -355,5 +356,84 @@ template void invokeMask(half* output, const int* mask, int batch_size, int dim,
 #ifdef ENABLE_BF16
 template void invokeMask(__nv_bfloat16* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 #endif
+
+template<typename T, int vec_size>
+__global__ void castFloat2D(const T* input, float* output, int channels)
+{
+    const int vi = blockIdx.x * blockDim.x + threadIdx.x;
+    const int bi = blockIdx.y;
+    input += (size_t)bi * channels;
+    output += (size_t)bi * channels;
+
+    const int step = gridDim.x * blockDim.x * vec_size;
+
+    for (int i = vi * vec_size; i < channels; i += step) {
+        Array<T, vec_size> src;
+
+        if constexpr (sizeof(src) >= sizeof(uint)) {
+            Load(src, input + i);
+        }
+        else {
+            PRAGMA_UNROLL
+            for (int j = 0; j < vec_size; ++j) {
+                src[j] = input[i + j];
+            }
+        }
+
+        auto dst = cast<float>(src);
+
+        // store
+        Store(output + i, dst);
+    }
+}
+
+void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t stream)
+{
+    TM_CHECK(src.is_contiguous());
+    TM_CHECK(dst.is_contiguous());
+    TM_CHECK(src.shape() == dst.shape());
+
+    auto batch_size = src.shape(0);
+    auto channels   = src.shape(1);
+
+    auto invoke = [&](auto t, auto vec_size) {
+        using T                      = decltype(t);
+        constexpr int threads        = 256;
+        const int     blocks_per_tok = (channels + threads * vec_size - 1) / (threads * vec_size);
+        const dim3    blocks(blocks_per_tok, batch_size);
+        castFloat2D<T, vec_size.value><<<blocks, threads, 0, stream>>>(  //
+            src.data<T>(),
+            dst.data<float>(),
+            channels);
+    };
+
+    auto dispatch_t = [&](auto vec_size) {
+        switch (src.dtype()) {
+            case kFloat32:
+                return invoke(float{}, vec_size);
+                break;
+            case kFloat16:
+                return invoke(half{}, vec_size);
+                break;
+#ifdef ENABLE_BF16
+            case kBfloat16:
+                return invoke(__nv_bfloat16{}, vec_size);
+                break;
+#endif
+            default:
+                TM_UNREACHABLE;
+        }
+    };
+
+    if (channels % 4 == 0) {
+        return dispatch_t(std::integral_constant<int, 4>{});
+    }
+    else if (channels % 2 == 0) {
+        return dispatch_t(std::integral_constant<int, 2>{});
+    }
+    else {
+        return dispatch_t(std::integral_constant<int, 1>{});
+    }
+}
 
 }  // namespace turbomind

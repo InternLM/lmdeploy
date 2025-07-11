@@ -2,6 +2,7 @@ from copy import deepcopy
 
 from mmengine.config import read_base
 from opencompass.models import TurboMindModelwithChatTemplate
+from opencompass.utils.text_postprocessors import extract_non_reasoning_content
 
 with read_base():
     # choose a list of datasets
@@ -47,6 +48,8 @@ with read_base():
         models as lmdeploy_internlm2_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_20b import \
         models as lmdeploy_internlm2_chat_20b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm3_8b_instruct import \
+        models as lmdeploy_internlm3_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm_chat_7b import \
         models as lmdeploy_internlm_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.hf_llama2_7b_chat import models as hf_llama2_chat_7b  # noqa: F401, E501
@@ -66,6 +69,8 @@ with read_base():
         models as hf_mixtral_chat_8x7b  # noqa: F401, E501
     from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_7b_instruct import \
         models as lmdeploy_qwen2_5_7b_instruct  # noqa: F401, E501
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_32b_instruct import \
+        models as lmdeploy_qwen2_5_32b_instruct  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen1_5_7b_chat import models as hf_qwen1_5_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen1_5_moe_a2_7b_chat import \
         models as hf_qwen1_5_moe_a2_7b_chat  # noqa: F401, E501
@@ -116,15 +121,12 @@ pytorch_internlm2_5_7b_chat_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_batch1_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 
-turbomind_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm3_8b_instruct_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm3_8b_instruct_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm3_8b_instruct_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-pytorch_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-pytorch_internlm3_8b_instruct_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-for model in [v for k, v in locals().items() if 'internlm3_8b_instruct' in k]:
-    model['abbr'] = 'turbomind-internlm3-8b-instruct'
-    model['path'] = 'internlm/internlm3-8b-instruct'
+turbomind_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm3_8b_instruct)
+turbomind_internlm3_8b_instruct_4bits = deepcopy(*lmdeploy_internlm3_8b_instruct)
+turbomind_internlm3_8b_instruct_kvint4 = deepcopy(*lmdeploy_internlm3_8b_instruct)
+turbomind_internlm3_8b_instruct_kvint8 = deepcopy(*lmdeploy_internlm3_8b_instruct)
+pytorch_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm3_8b_instruct)
+pytorch_internlm3_8b_instruct_w8a8 = deepcopy(*lmdeploy_internlm3_8b_instruct)
 
 # ===== Configs for internlm/internlm2_5_20b_chat =====
 turbomind_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
@@ -186,11 +188,94 @@ turbomind_qwen2_5_7b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 pytorch_qwen2_5_7b_instruct = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 pytorch_qwen2_5_7b_instruct_w8a8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 
+# ===== Configs for Qwen/Qwen25-32B-Instruct =====
+turbomind_qwen2_5_32b_instruct = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+turbomind_qwen2_5_32b_instruct_4bits = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+turbomind_qwen2_5_32b_instruct_kvint4 = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+turbomind_qwen2_5_32b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+pytorch_qwen2_5_32b_instruct = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+pytorch_qwen2_5_32b_instruct_w8a8 = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+
 # ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
 turbomind_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
 turbomind_llama2_7b_chat_4bits = deepcopy(*lmdeploy_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
+
+base_model = dict(type=TurboMindModelwithChatTemplate,
+                  engine_config=dict(session_len=32768, max_batch_size=256),
+                  gen_config=dict(top_k=1, temperature=1e-6, top_p=0.9, max_new_tokens=32768),
+                  max_seq_len=32768,
+                  max_out_len=32768,
+                  batch_size=256,
+                  pred_postprocessor=dict(type=extract_non_reasoning_content),
+                  run_cfg=dict(num_gpus=1))
+
+turbomind_qwen3_32b = deepcopy(base_model)
+pytorch_qwen3_32b = deepcopy(base_model)
+turbomind_qwen3_32b_4bits = deepcopy(base_model)
+turbomind_qwen3_32b_kvint8 = deepcopy(base_model)
+for model in [
+        v for k, v in locals().items() if k.startswith('turbomind_qwen3_32b') or k.startswith('pytorch_qwen3_32b')
+]:
+    model['abbr'] = 'qwen3_32b_turbomind'
+    model['path'] = 'Qwen/Qwen3-32B'
+    model['run_cfg']['num_gpus'] = 2
+    model['engine_config']['tp'] = 2
+
+turbomind_qwen3_30b_a3b = deepcopy(base_model)
+pytorch_qwen3_30b_a3b = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_4bits = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_kvint8 = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_fp8 = deepcopy(base_model)
+pytorch_qwen3_30b_a3b_fp8 = deepcopy(base_model)
+turbomind_qwen3_30b_a3b_fp8['engine_config']['cache_max_entry_count'] = 0.6
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_30b_a3b') or k.startswith('pytorch_qwen3_30b_a3b')
+]:
+    model['abbr'] = 'qwen3_30b_a3b_turbomind'
+    model['path'] = 'Qwen/Qwen3-30B-A3B'
+    model['run_cfg']['num_gpus'] = 2
+    model['engine_config']['tp'] = 2
+    model['engine_config']['max_batch_size'] = 1024
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_30b_a3b_fp8') or k.startswith('pytorch_qwen3_30b_a3b_fp8')
+]:
+    model['abbr'] = 'qwen3_30b_a3b_fp8_turbomind'
+    model['path'] = 'Qwen/Qwen3-30B-A3B-FP8'
+
+turbomind_qwen3_235b_a22b = deepcopy(base_model)
+pytorch_qwen3_235b_a22b = deepcopy(base_model)
+turbomind_qwen3_235b_a22b_4bits = deepcopy(base_model)
+turbomind_qwen3_235b_a22b_kvint8 = deepcopy(base_model)
+turbomind_qwen3_235b_a22b_fp8 = deepcopy(base_model)
+pytorch_qwen3_235b_a22b_fp8 = deepcopy(base_model)
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_235b_a22b') or k.startswith('pytorch_qwen3_235b_a22b')
+]:
+    model['abbr'] = 'qwen3_235b_a22b_turbomind'
+    model['path'] = 'Qwen/Qwen3-235B-A22B'
+    model['run_cfg']['num_gpus'] = 8
+    model['engine_config']['tp'] = 8
+    model['engine_config']['max_batch_size'] = 1024
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_235b_a22b_fp8') or k.startswith('pytorch_qwen3_235b_a22b_fp8')
+]:
+    model['abbr'] = 'qwen3_235b_a22b_fp8_turbomind'
+    model['path'] = 'Qwen/Qwen3-235B-A22B-FP8'
+
+turbomind_qwen3_235b_a22b_fp8['engine_config']['cache_max_entry_count'] = 0.6
+turbomind_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
+turbomind_qwen3_235b_a22b_fp8['run_cfg']['num_gpus'] = 4
+pytorch_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
+pytorch_qwen3_235b_a22b_fp8['run_cfg']['num_gpus'] = 4
 
 for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
     model['engine_config']['max_batch_size'] = 512

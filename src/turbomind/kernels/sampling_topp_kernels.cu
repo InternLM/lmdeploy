@@ -22,9 +22,12 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
+#include "src/turbomind/core/core.h"
+
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
+
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -35,22 +38,24 @@ __global__ void topPSortInitialize(const int    vocab_size_padded,
                                    const size_t batch_size,
                                    const int*   top_ks,
                                    int*         topp_id_val_buf,
-                                   int*         begin_offet_buf,
+                                   int*         begin_offset_buf,
                                    int*         end_offset_buf)
 {
     int tid = threadIdx.x;
     int bid = blockIdx.x;
 
+    // According to https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceSegmentedRadixSort.html
+    // `num_items` should match the largest element within the range `[d_end_offsets, d_end_offsets + num_segments)`
+    // We need to move `begin_offset` (instead of `end_offset`) to make empty intervals
     if (bid == 0) {
         for (int i = tid; i < batch_size; i += blockDim.x) {
-            begin_offet_buf[i] = i * vocab_size_padded;
-            if (top_ks[i] > 0) {
-                // already sorted by topk
-                end_offset_buf[i] = begin_offet_buf[i];
+            int beg = i * vocab_size_padded;
+            int end = i * vocab_size_padded + vocab_size;
+            if (top_ks[i] > 0) {  // already sorted by topk, make it an empty interval
+                beg = end;
             }
-            else {
-                end_offset_buf[i] = begin_offet_buf[i] + vocab_size;
-            }
+            begin_offset_buf[i] = beg;
+            end_offset_buf[i]   = end;
         }
     }
 
@@ -70,14 +75,14 @@ void invokeTopPSortInitialize(const int    vocab_size_padded,
                               const size_t batch_size,
                               const int*   top_ks,
                               int*         topp_id_val_buf,
-                              int*         begin_offet_buf,
+                              int*         begin_offset_buf,
                               int*         end_offset_buf,
                               cudaStream_t stream)
 {
     const size_t block_size = 512;
     const size_t grid_size  = (batch_size * vocab_size_padded + block_size - 1) / block_size;
     topPSortInitialize<<<grid_size, block_size, 0, stream>>>(
-        vocab_size_padded, vocab_size, batch_size, top_ks, topp_id_val_buf, begin_offet_buf, end_offset_buf);
+        vocab_size_padded, vocab_size, batch_size, top_ks, topp_id_val_buf, begin_offset_buf, end_offset_buf);
 }
 
 template<typename T>
@@ -133,7 +138,7 @@ void invokeSoftmax(T*           logits,
                    cudaStream_t stream)
 {
     dim3 grid(batch_size);
-    dim3 block(min(vocab_size_padded, 1024));
+    dim3 block(std::min(vocab_size_padded, 1024));
     softmax<<<grid, block, 0, stream>>>(logits, vocab_size_padded, vocab_size, kept);
 }
 
@@ -145,13 +150,7 @@ void invokeSoftmax(T*           logits,
                                    const int*   kept,                                                                  \
                                    cudaStream_t stream);
 
-#ifdef ENABLE_FP32
 INSTANTIATE_INVOKE_SOFTMAX(float);
-#endif
-INSTANTIATE_INVOKE_SOFTMAX(half);
-#ifdef ENABLE_BF16
-INSTANTIATE_INVOKE_SOFTMAX(nv_bfloat16);
-#endif
 
 template<typename T, int MAX_K, int THREADBLOCK_SIZE>
 __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const T*     logits,
@@ -204,8 +203,8 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const 
         }
 
         if (sum_prob >= p_threshold) {
-            end_offset_buf[batch_id] = begin_offset_buf[batch_id];
-            kept[batch_id]           = MAX_K;
+            begin_offset_buf[batch_id] = end_offset_buf[batch_id];
+            kept[batch_id]             = MAX_K;
 
 #pragma unroll
             for (int i = 0; i < MAX_K; ++i) {
@@ -219,48 +218,41 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const 
 template<typename T>
 void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
 {
+    const int num_items = params.vocab_size_padded * (params.batch_size - 1) + params.vocab_size;
 
-    size_t topp_id_val_buf_size  = sizeof(int) * params.batch_size * params.vocab_size_padded;
-    size_t begin_offset_buf_size = sizeof(int) * params.batch_size;
-    size_t end_offset_buf_size   = sizeof(int) * params.batch_size;
-    topp_id_val_buf_size         = cdiv<size_t>(topp_id_val_buf_size, 256) * 256;
-    begin_offset_buf_size        = cdiv<size_t>(begin_offset_buf_size, 256) * 256;
-    end_offset_buf_size          = cdiv<size_t>(end_offset_buf_size, 256) * 256;
+    size_t cub_temp_storage_size{};
+    check_cuda_error(cub::DeviceSegmentedRadixSort::SortPairsDescending(nullptr,
+                                                                        cub_temp_storage_size,
+                                                                        (T*)nullptr,
+                                                                        (T*)nullptr,
+                                                                        (int*)nullptr,
+                                                                        (int*)nullptr,
+                                                                        num_items,
+                                                                        params.batch_size,
+                                                                        (int*)nullptr,
+                                                                        (int*)nullptr,
+                                                                        0,              // begin_bit
+                                                                        sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
+                                                                        stream));       // cudaStream_t
 
-    if (params.workspace == nullptr) {
-        size_t cub_temp_storage_size;
-        check_cuda_error(
-            cub::DeviceSegmentedRadixSort::SortPairsDescending(nullptr,
-                                                               cub_temp_storage_size,
-                                                               (T*)nullptr,
-                                                               (T*)nullptr,
-                                                               (int*)nullptr,
-                                                               (int*)nullptr,
-                                                               params.batch_size * params.vocab_size,
-                                                               params.batch_size,
-                                                               (int*)nullptr,
-                                                               (int*)nullptr,
-                                                               0,              // begin_bit
-                                                               sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
-                                                               stream));       // cudaStream_t
-        cub_temp_storage_size = cdiv<size_t>(cub_temp_storage_size, 256) * 256;
-        params.workspace_size =
-            topp_id_val_buf_size + begin_offset_buf_size + end_offset_buf_size + cub_temp_storage_size;
-        return;
-    }
+    TM_CHECK(core::Context::stream().handle() == stream);
 
-    void*  workspace = params.workspace;
-    size_t cub_temp_storage_size =
-        params.workspace_size - topp_id_val_buf_size - begin_offset_buf_size - end_offset_buf_size;
-    int* topp_id_val_buf  = (int*)((char*)workspace + cub_temp_storage_size);
-    int* begin_offset_buf = (int*)((char*)topp_id_val_buf + topp_id_val_buf_size);
-    int* end_offset_buf   = (int*)((char*)begin_offset_buf + begin_offset_buf_size);
+    Buffer_<uint8_t> cub_temp_storage(cub_temp_storage_size, kDEVICE);
+
+    Buffer_<int> topp_ids(params.batch_size * params.vocab_size_padded, kDEVICE);
+    Buffer_<int> beg_offset(params.batch_size, kDEVICE);
+    Buffer_<int> end_offset(params.batch_size, kDEVICE);
+
+    auto topp_ids_buf   = topp_ids.data();
+    auto beg_offset_buf = beg_offset.data();
+    auto end_offset_buf = end_offset.data();
+
     invokeTopPSortInitialize(params.vocab_size_padded,
                              params.vocab_size,
                              params.batch_size,
                              params.top_ks,
-                             topp_id_val_buf,
-                             begin_offset_buf,
+                             topp_ids_buf,
+                             beg_offset_buf,
                              end_offset_buf,
                              stream);
 
@@ -270,33 +262,27 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                             params.kept,
                                                                             params.vocab_size,
                                                                             params.vocab_size_padded,
-                                                                            begin_offset_buf,
+                                                                            beg_offset_buf,
                                                                             end_offset_buf,
                                                                             params.top_ps,
                                                                             params.top_ks);
 
-    check_cuda_error(cub::DeviceSegmentedRadixSort::SortPairsDescending(workspace,
+    check_cuda_error(cub::DeviceSegmentedRadixSort::SortPairsDescending(cub_temp_storage.data(),
                                                                         cub_temp_storage_size,
                                                                         (T*)params.logits,
                                                                         (T*)params.sorted_logits,
-                                                                        topp_id_val_buf,
+                                                                        topp_ids_buf,
                                                                         params.sorted_indices,
-                                                                        params.vocab_size * params.batch_size,
+                                                                        num_items,
                                                                         params.batch_size,
-                                                                        begin_offset_buf,
+                                                                        beg_offset_buf,
                                                                         end_offset_buf,
                                                                         0,              // begin_bit
                                                                         sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
                                                                         stream));       // cudaStream_t
 }
 
-#ifdef ENABLE_FP32
 template void invokeTopPSort<float>(TopPSortParams& params, cudaStream_t stream);
-#endif
-template void invokeTopPSort<half>(TopPSortParams& params, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeTopPSort<nv_bfloat16>(TopPSortParams& params, cudaStream_t stream);
-#endif
 
 template<typename T, int BLOCK_SIZE>
 __global__ void topPMinPFilter(T*           sorted_logits,
@@ -404,12 +390,6 @@ void invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream)
                                                                   params.min_ps);
 }
 
-#ifdef ENABLE_FP32
 template void invokeTopPMinPFilter<float>(TopPMinPFilterParams& params, cudaStream_t stream);
-#endif
-template void invokeTopPMinPFilter<half>(TopPMinPFilterParams& params, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeTopPMinPFilter<nv_bfloat16>(TopPMinPFilterParams& params, cudaStream_t stream);
-#endif
 
 }  // namespace turbomind

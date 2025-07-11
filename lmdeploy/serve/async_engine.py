@@ -21,7 +21,10 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
+from lmdeploy.metrics.metrics_processor import metrics_processor
+from lmdeploy.metrics.stats import IterationStats, RequestState
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -59,6 +62,9 @@ class GenOut:
     logits: Any = None
     last_hidden_state: Any = None
 
+    # for disaggregation
+    cache_block_ids: List[int] = None
+
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
     return Response(text=out.response,
@@ -73,7 +79,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
 
 
 def _append_response(dst: Response, src: Response):
-    """dst += src."""
+    """Dst += src."""
     if not dst:
         return src
     dst.text += src.text
@@ -111,7 +117,7 @@ class Session:
         self.history: List[Tuple[Any, str]] = []
 
     def _merge_response(self, resp: Response, step: Union[Response, GenOut]):
-        """merge response."""
+        """Merge response."""
         resp.text += step.text if isinstance(step, Response) else step.response
         resp.input_token_len = step.input_token_len
         resp.generate_token_len = step.generate_token_len
@@ -120,11 +126,11 @@ class Session:
 
     @property
     def response(self) -> Response:
-        """return response."""
+        """Return response."""
         return self._response
 
     def close(self):
-        """release engine storage for this session."""
+        """Release engine storage for this session."""
         if self._engine:
             self._engine._run(coro=self._engine.end_session(self._id)).result()
             self._engine = None
@@ -298,6 +304,9 @@ class AsyncEngine(LogitsMixin):
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
 
+        # build stat loggers
+        self._build_stat_loggers()
+
     def close(self):
         self.internal_thread.close()
         self.free_insts = None
@@ -338,9 +347,25 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        self.engine = Engine(model_path=model_path, tokenizer=self.tokenizer, engine_config=backend_config)
+        self.engine = Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
+
+    def _build_stat_loggers(self):
+        self.stat_loggers = []
+
+        if getattr(self.backend_config, 'enable_metrics', False):
+            from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
+            dp_rank = self.backend_config.dp_rank if self.backend_config.dp else 0
+
+            logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
+            self.stat_loggers = [
+                LoggingStatLogger(dp_rank=dp_rank),
+                PrometheusStatLogger(model_name=self.model_name, max_model_len=self.session_len, dp_rank=dp_rank)
+            ]
+
+            # set stats loggers of metrics processor
+            metrics_processor.stat_loggers = self.stat_loggers
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
@@ -372,6 +397,11 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name=adapter_name,
                                 use_tqdm=use_tqdm,
                                 **kwargs)
+
+    async def do_log_stats(self):
+        # loop through CLI logger and Prometheus logger
+        for stat_logger in self.stat_loggers:
+            stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -554,6 +584,7 @@ class AsyncEngine(LogitsMixin):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
+                                enable_thinking: Optional[bool] = None,
                                 **kwargs):
         if do_preprocess:
             # use adapter's chat template if possible
@@ -562,7 +593,7 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools)
+        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools, enable_thinking=enable_thinking)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -580,6 +611,11 @@ class AsyncEngine(LogitsMixin):
         self.id2inst[session_id] = inst
         try:
             yield inst
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:
+            logger.error(f'[model_inst] exception caught: {e}')
+            if self.backend == 'pytorch':
+                # manually end pytorch session
+                await inst.async_end(session_id)
         finally:
             self.id2inst.pop(session_id)
             inst._active.set()
@@ -594,6 +630,7 @@ class AsyncEngine(LogitsMixin):
             logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
             await inst.async_cancel(session_id)
+            raise e
         finally:
             await generator.aclose()
 
@@ -612,6 +649,7 @@ class AsyncEngine(LogitsMixin):
             skip_stop_tokens: bool = True,
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
+            enable_thinking: Optional[bool] = None,
             **kwargs):
         """Generate responses.
 
@@ -666,7 +704,8 @@ class AsyncEngine(LogitsMixin):
                                                         do_preprocess,
                                                         sequence_start,
                                                         adapter_name,
-                                                        tools=tools)
+                                                        tools=tools,
+                                                        enable_thinking=enable_thinking)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,
@@ -705,6 +744,7 @@ class AsyncEngine(LogitsMixin):
         if skip_stop_tokens and not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
+        metrics_processor.increment_total_requests()
         async with self.model_inst(session_id) as inst:
             token_ids = input_ids.copy()
             history_len = self.id2step[session_id]
@@ -725,12 +765,15 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
+                req_state = RequestState(prompt_len=input_len)  # per-requst state
                 async for outputs in gen:
+                    iteration_stats = IterationStats()  # per-iteration stats
                     # decode res
                     if is_error(outputs.status):
                         break
 
                     output_len = outputs.num_token
+                    metrics_processor.queue_update((input_len, prev_len, outputs, req_state, iteration_stats))
 
                     if hit_stop_token or prev_len == output_len:
                         continue
@@ -757,7 +800,13 @@ class AsyncEngine(LogitsMixin):
                         spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
                     res = token_ids[ids_offset:]
 
-                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res)
+                    out = GenOut(response,
+                                 history_len,
+                                 input_len,
+                                 gen_len,
+                                 finish_reason,
+                                 token_ids=res,
+                                 cache_block_ids=outputs.cache_block_ids)
 
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
@@ -774,6 +823,7 @@ class AsyncEngine(LogitsMixin):
 
                     yield out
                 # end of generator loop
+                metrics_processor.increment_finished_requests()
 
                 if not is_error(outputs.status):
                     finish_reason = 'length' \
@@ -785,8 +835,14 @@ class AsyncEngine(LogitsMixin):
                         response = ''
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
-                                f'{len(input_ids)}, outupt_tokens {gen_len}')
-                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason)
+                                f'{len(input_ids)}, output_tokens {gen_len}')
+                    yield GenOut(response,
+                                 self.id2step[session_id],
+                                 len(input_ids),
+                                 gen_len,
+                                 finish_reason,
+                                 token_ids=[],
+                                 cache_block_ids=outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
@@ -880,3 +936,44 @@ class AsyncEngine(LogitsMixin):
             session.generator = None
 
         return session
+
+    def start_loop(self, use_async_api=False):
+        """Start engine loop.
+
+        When using pytorch backend with dp > 1, all dp_rank should receive at least one request before it can start
+        processing (warmup). Since pytorch engine will bound to event loop, the pipeline can only choose either the
+        synchronous apis(__call__, stream_infer, etc.) or the asynchronous api (generate) during its lifetime.
+
+        The purpose of this function is to allow users to choose whether to use the synchronous interface or the
+        asynchronous interface for the pipeline.
+        """
+        if hasattr(self.engine, 'start_loop'):
+            if use_async_api:
+                return self.engine.start_loop()
+            else:
+                fut = concurrent.futures.Future()
+
+                def _start_loop(fut):
+                    res = self.engine.start_loop()
+                    fut.set_result(res)
+
+                self.internal_thread.loop.call_soon_threadsafe(_start_loop, fut)
+                return fut.result()
+        else:
+            return True
+
+    """ DistServe Async Engine API Begin """
+
+    def free_cache(self, session_id: int):
+        if self.engine.end_session(session_id):
+            logger.debug(f'successfully free session {session_id}')
+        else:
+            logger.warning(f'Invalid Free session {session_id}.')
+
+    def p2p_initialize(self, init_request: DistServeInitRequest):
+        return self.engine.p2p_initialize(init_request)
+
+    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+        return self.engine.p2p_connect(conn_request)
+
+    """ DistServe Async Engine API End """

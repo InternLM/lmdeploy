@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
 
-from lmdeploy.messages import ResponseType
+from lmdeploy.messages import MetricsInfo, ResponseType
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -31,6 +31,7 @@ class Response:
     event: asyncio.Event
     data: Any = None
     err_msg: str = ''
+    metrics_info: MetricsInfo = None
 
 
 @dataclass
@@ -47,7 +48,7 @@ ReqList = List[Request]
 
 
 def _run_until_complete(future: Awaitable):
-    """run untile complete."""
+    """Run untile complete."""
     try:
         event_loop = asyncio.get_event_loop()
     except Exception:
@@ -77,28 +78,28 @@ class RequestSender:
 
     @property
     def req_que(self):
-        """request queue."""
+        """Request queue."""
         return self.manager.requests
 
     @property
     def event_loop(self):
-        """get event loop."""
+        """Get event loop."""
         return self.manager.event_loop
 
     def is_loop_alive(self):
-        """is loop alive."""
+        """Is loop alive."""
         return self.manager.is_loop_alive()
 
     def run_until_complete(self, future: Awaitable):
-        """run untile complete."""
+        """Run untile complete."""
         return self.manager.run_until_complete(future)
 
     def _req_put(self, reqs: Any):
-        """async rq_que put."""
+        """Async rq_que put."""
         self.req_que.put_nowait(reqs)
 
     def _gather_request(self, req_types: List[RequestType], data: List[Any]):
-        """gather requests."""
+        """Gather requests."""
         if self.manager._loop_task is None:
             self.manager.create_loop_task()
         assert len(req_types) == len(data)
@@ -124,11 +125,11 @@ class RequestSender:
         return resps
 
     def send_async(self, req_type: RequestType, data: Any):
-        """send request asynchronize."""
+        """Send request asynchronize."""
         return self.batched_send_async(req_types=[req_type], data=[data])[0]
 
     async def async_recv(self, resp: Response) -> Response:
-        """receive response of given request id async."""
+        """Receive response of given request id async."""
         event = resp.event
         while not event.is_set():
             try:
@@ -142,17 +143,17 @@ class RequestSender:
         return resp
 
     def recv(self, resp: Response) -> Response:
-        """receive response of given request id."""
+        """Receive response of given request id."""
         coro = self.async_recv(resp)
         return self.run_until_complete(coro)
 
     async def async_send(self, req_type: RequestType, data: Any):
-        """send and receive synchronize."""
+        """Send and receive synchronize."""
         resp = self.send_async(req_type, data)
         return await self.async_recv(resp)
 
     def send(self, req_type: RequestType, data: Any) -> Response:
-        """send and receive synchronize."""
+        """Send and receive synchronize."""
         resp = self.send_async(req_type, data)
         return self.recv(resp)
 
@@ -164,7 +165,7 @@ class RequestManager:
         self.senders: Dict[int, RequestSender] = dict()
         self.callbacks: Dict[RequestType, Callable] = dict()
         self.request_priority: List[RequestType] = [
-            RequestType.STOP_ENGINE, RequestType.STOP_SESSION, RequestType.END_SESSION, RequestType.ADD_SESSION,
+            RequestType.STOP_ENGINE, RequestType.ADD_SESSION, RequestType.STOP_SESSION, RequestType.END_SESSION,
             RequestType.ADD_MESSAGE
         ]
         self.requests: asyncio.Queue = None
@@ -173,7 +174,7 @@ class RequestManager:
         self._next_sender_id = 0
 
     def create_loop_task(self):
-        """create coro task."""
+        """Create coro task."""
         logger.debug('creating engine loop task.')
         event_loop = asyncio.get_event_loop()
         assert self._loop_coro is not None, ('Please set loop task with manager.start_loop')
@@ -184,14 +185,14 @@ class RequestManager:
 
     @property
     def event_loop(self):
-        """get event loop."""
+        """Get event loop."""
         if self._loop_task is None:
             return None
         else:
             return self._loop_task.get_loop()
 
     def start_loop(self, loop: asyncio.Task):
-        """start main loop."""
+        """Start main loop."""
         self._loop_coro = loop
 
     def stop_loop(self):
@@ -199,7 +200,7 @@ class RequestManager:
             self._loop_task.cancel()
 
     def is_loop_alive(self):
-        """check if main loop is alive."""
+        """Check if main loop is alive."""
 
         if self._loop_task is None:
             logger.debug('loop task has not been created.')
@@ -211,7 +212,7 @@ class RequestManager:
         return not self._loop_task.done()
 
     def build_sender(self):
-        """create a new sender."""
+        """Create a new sender."""
         sender_id = self._next_sender_id
         self._next_sender_id += 1
         new_sender = RequestSender.new(sender_id, self)
@@ -219,18 +220,18 @@ class RequestManager:
         return new_sender
 
     def has_requests(self):
-        """has unprocessed request."""
+        """Has unprocessed request."""
         if self.requests is None:
             return False
         return not self.requests.empty()
 
     async def get_all_requests(self) -> Dict[RequestType, Request]:
-        """get all requests in current queue."""
+        """Get all requests in current queue."""
         num_reqs = self.requests.qsize()
         reqs: ReqList = []
 
         def __proc_reqs(elem):
-            """proc reqs."""
+            """Proc reqs."""
             nonlocal reqs
             if isinstance(elem, Request):
                 elem = [elem]
@@ -252,19 +253,19 @@ class RequestManager:
         return reqs_by_type
 
     def bind_func(self, req_type: RequestType, callback: Callable):
-        """bind handler for given request type."""
+        """Bind handler for given request type."""
         self.callbacks[req_type] = callback
 
     def set_request_priority(self, priority: List[RequestType]):
-        """set the priority of request type."""
+        """Set the priority of request type."""
         self.request_priority = priority
 
     def response(self, resp: Response):
-        """send response."""
+        """Send response."""
         resp.event.set()
 
     def process_request(self, req_type: RequestType, reqs: ReqList, **kwargs):
-        """process reqs with given req type."""
+        """Process reqs with given req type."""
         # get callback
         func = self.callbacks.get(req_type, None)
         if func is not None:
@@ -279,7 +280,7 @@ class RequestManager:
                 self.response(resp)
 
     async def step(self, **kwargs):
-        """handle requests.
+        """Handle requests.
 
         Should only be called in loop task.
         """
@@ -308,5 +309,5 @@ class RequestManager:
             self.process_request(req_type, reqs, **kwargs)
 
     def run_until_complete(self, future: Awaitable):
-        """run untile complete."""
+        """Run untile complete."""
         return _run_until_complete(future)

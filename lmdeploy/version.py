@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Tuple
 
-__version__ = '0.7.2.post1'
+__version__ = '0.9.1'
 short_version = __version__
 
 

@@ -12,7 +12,7 @@ from ..qmodules import LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder, RM
 
 
 class DlinferLinearW8A8Impl(LinearW8A8Impl):
-    """dlinfer linear w8a8 implementation."""
+    """Dlinfer linear w8a8 implementation."""
 
     def __init__(self,
                  in_features: int,
@@ -25,7 +25,7 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
         self.quant_dtype = quant_dtype
 
     def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
-        """update weights."""
+        """Update weights."""
         if os.getenv('DLINER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
         return weight, scale, bias
@@ -50,7 +50,7 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
 
 
 class DlinferLinearW8A8Builder(LinearW8A8Builder):
-    """dlinfer linear w8a8 implementation builder."""
+    """Dlinfer linear w8a8 implementation builder."""
 
     @staticmethod
     def build(in_features: int,
@@ -63,7 +63,7 @@ class DlinferLinearW8A8Builder(LinearW8A8Builder):
 
 
 class DlinferRMSNormW8A8Impl(RMSNormW8A8Impl):
-    """dlinfer RMS norm w8a8 implementation api."""
+    """Dlinfer RMS norm w8a8 implementation api."""
 
     def __init__(self, hidden_size: int, eps: float = 1e-6, quant_dtype: torch.dtype = torch.int8):
         super().__init__()
@@ -84,7 +84,7 @@ class DlinferRMSNormW8A8Impl(RMSNormW8A8Impl):
 
 
 class DlinferRMSNormW8A8Builder(RMSNormW8A8Builder):
-    """dlinfer RMS norm w8a8 implementation builder."""
+    """Dlinfer RMS norm w8a8 implementation builder."""
 
     @staticmethod
     def build(hidden_size: int, eps: float = 1e-6, quant_dtype: torch.dtype = torch.int8):

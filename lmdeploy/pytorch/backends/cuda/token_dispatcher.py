@@ -45,7 +45,7 @@ def get_buffer_common(
             num_nvl_bytes=num_nvl_bytes,
             num_rdma_bytes=num_rdma_bytes,
             low_latency_mode=True,
-            num_qps_per_rank=num_experts // group.size(),
+            num_qps_per_rank=max(num_experts // group.size(), Buffer.num_sms // 2),
         )
     return _buffer_common
 
@@ -87,12 +87,13 @@ def get_buffer_low_latency(
 
     if (_buffer_low_latency is None or _buffer_low_latency.group != group or not _buffer_low_latency.low_latency_mode
             or _buffer_low_latency.num_rdma_bytes < num_rdma_bytes):
-        assert num_experts % group.size() == 0, f'num_experts:{num_experts} must be divisible by ep_size:{group.size()}'
+        assert num_experts % group.size(
+        ) == 0, f'num_experts: {num_experts} must be divisible by ep_size: {group.size()}'
         _buffer_low_latency = Buffer(
             group,
             num_rdma_bytes=num_rdma_bytes,
             low_latency_mode=True,
-            num_qps_per_rank=num_experts // group.size(),
+            num_qps_per_rank=max(num_experts // group.size(), Buffer.num_sms // 2),
         )
     return _buffer_low_latency
 
@@ -458,7 +459,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
 
 
 class TokenDispatcherBuilder:
-    """token dispatcher builder."""
+    """Token dispatcher builder."""
 
     @staticmethod
     def build(

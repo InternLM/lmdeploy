@@ -5,7 +5,7 @@ from .base import BaseChecker
 
 
 class DeeplinkChecker(BaseChecker):
-    """check pytorch is available."""
+    """Check pytorch is available."""
 
     def __init__(self, device_type: str, logger=None) -> None:
         super().__init__(logger=logger)

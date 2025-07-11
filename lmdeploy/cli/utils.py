@@ -14,9 +14,13 @@ class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
             if action.default is not argparse.SUPPRESS:
                 defaulting_nargs = [argparse.OPTIONAL, argparse.ZERO_OR_MORE]
                 if (action.option_strings or action.nargs in defaulting_nargs) and 'default' not in help.lower():
-                    help += '. Default: %(default)s'
+                    if not help.endswith('.'):
+                        help += '.'
+                    help += ' Default: %(default)s'
                 if action.type:
-                    help += '. Type: %(type)s'
+                    if not help.endswith('.'):
+                        help += '.'
+                    help += ' Type: %(type)s'
         return help
 
 
@@ -57,11 +61,9 @@ def get_lora_adapters(adapters: List[str]):
 
 
 def get_chat_template(chat_template: str):
-    """get chat template config.
+    """Get chat template config.
 
-    Args
-        chat_template(str): it could be a builtin chat template name,
-        or a chat template json file
+    Args     chat_template(str): it could be a builtin chat template name,     or a chat template json file
     """
     import os
 
@@ -120,7 +122,7 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'awq', 'gptq'],
+                                   choices=['hf', 'awq', 'gptq', 'fp8'],
                                    help='The format of input model. `hf` means `hf_llama`, '
                                    '`awq` represents the quantized model by AWQ,'
                                    ' and `gptq` refers to the quantized model by GPTQ')
@@ -171,7 +173,7 @@ class ArgumentHelper:
 
     @staticmethod
     def dp_rank(parser):
-        """add argument dp_rank to parser."""
+        """Add argument dp_rank to parser."""
 
         return parser.add_argument('--dp-rank',
                                    type=int,
@@ -180,19 +182,19 @@ class ArgumentHelper:
 
     @staticmethod
     def node_rank(parser):
-        """add argument node_rank to parser."""
+        """Add argument node_rank to parser."""
 
         return parser.add_argument('--node-rank', type=int, default=0, help='The current node rank.')
 
     @staticmethod
     def num_nodes(parser):
-        """add argument num_nodes to parser."""
+        """Add argument num_nodes to parser."""
 
         return parser.add_argument('--nnodes', type=int, default=1, help='The total node nums')
 
     @staticmethod
     def ngpus_per_node(parser):
-        """add argument ngpus_per_node to parser."""
+        """Add argument ngpus_per_node to parser."""
 
         return parser.add_argument('--ngpus-per-node', type=int, default=None, help='The total gpu nums per node')
 
@@ -425,6 +427,15 @@ class ArgumentHelper:
             help=f'The registered tool parser name {ToolParserManager.module_dict.keys()}. Default to None.')
 
     @staticmethod
+    def allow_terminate_by_client(parser):
+        """Add argument allow_terminate_by_client to parser."""
+
+        return parser.add_argument('--allow-terminate-by-client',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable server to be terminated by request from client')
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
@@ -545,3 +556,33 @@ class ArgumentHelper:
         return parser.add_argument('--enable-microbatch',
                                    action='store_true',
                                    help='enable microbatch for specified model')
+
+    @staticmethod
+    def enable_eplb(parser):
+        """Add argument enable_eplb to parser."""
+
+        return parser.add_argument('--enable-eplb', action='store_true', help='enable eplb for specified model')
+
+    @staticmethod
+    def enable_metrics(parser):
+        """Add argument enable_metrics to parser."""
+        parser.add_argument('--enable-metrics', action='store_true', default=False, help='enable metrics system')
+
+    # For Disaggregation
+    @staticmethod
+    def role(parser):
+        return parser.add_argument('--role',
+                                   type=str,
+                                   default='Hybrid',
+                                   choices=['Hybrid', 'Prefill', 'Decode'],
+                                   help='Hybrid for Non-Disaggregated Engine;'
+                                   'Prefill for Disaggregated Prefill Engine;'
+                                   'Decode for Disaggregated Decode Engine;')
+
+    @staticmethod
+    def migration_backend(parser):
+        return parser.add_argument('--migration-backend',
+                                   type=str,
+                                   default='DLSlime',
+                                   choices=['DLSlime', 'Mooncake'],
+                                   help='kvcache migration management backend when PD disaggregation')

@@ -1,9 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
 
@@ -19,15 +21,17 @@ class ExecutorBase:
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
+                 misc_config: MiscConfig,
                  tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
-        """initialize Executor."""
+        """Initialize Executor."""
         cache_config.window_size = model_config.sliding_window
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.dist_config = dist_config
+        self.misc_config = misc_config,
         self.tokenizer = tokenizer
         self.dp = dist_config.dp
         self.tp = dist_config.tp
@@ -35,63 +39,83 @@ class ExecutorBase:
         self.device_type = device_type
 
     def download_models(self):
-        """download model."""
+        """Download model."""
         raise NotImplementedError('Not Implemented.')
 
     def build_model(self):
-        """build model."""
+        """Build model."""
         raise NotImplementedError('Not Implemented.')
 
     def gather_free_mem(self):
-        """gather available memory."""
+        """Gather available memory."""
         raise NotImplementedError('Not Implemented.')
 
     def set_cache_config(self, cache_config: CacheConfig):
-        """set all cache config."""
+        """Set all cache config."""
         raise NotImplementedError('Not Implemented.')
 
     def set_model_config(self, model_config: ModelConfig):
-        """set all model config."""
+        """Set all model config."""
         raise NotImplementedError('Not Implemented.')
 
     def build_graph_runner(self):
-        """build graph runner."""
+        """Build graph runner."""
         raise NotImplementedError('Not Implemented.')
 
     def build_cache_engine(self):
-        """build cache engine."""
+        """Build cache engine."""
         raise NotImplementedError('Not Implemented.')
 
     def warmup(self):
         """warmup."""
         raise NotImplementedError('Not Implemented.')
 
+    def update_params(self, request: Any):
+        """Update params."""
+        raise NotImplementedError('Not Implemented.')
+
     def get_input_processor(self):
-        """get input processor."""
+        """Get input processor."""
         raise NotImplementedError('Not Implemented.')
 
     def start(self, forward_event: asyncio.Event):
-        """start engine loop."""
+        """Start engine loop."""
         raise NotImplementedError('Not Implemented.')
 
     def stop(self):
-        """stop engine loop."""
+        """Stop engine loop."""
         raise NotImplementedError('Not Implemented.')
 
     def release(self):
-        """release resources."""
+        """Release resources."""
         raise NotImplementedError('Not Implemented.')
 
     async def forward_async(self, inputs):
-        """start forward."""
+        """Start forward."""
         raise NotImplementedError('Not Implemented')
 
     async def get_output_async(self):
-        """get output async."""
+        """Get output async."""
         raise NotImplementedError('Not Implemented')
 
+    """ PD Disaggregation API Begin """
+
+    def p2p_initialize(self, remote_engine_config: DistServeInitRequest):
+        """Init rdma link."""
+        raise NotImplementedError('Not implemented')
+
+    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+        """rdma_connect."""
+        raise NotImplementedError('Not Implemented')
+
+    async def migrate(self, batch: MigrationExecutionBatch):
+        """KV Cache Migration."""
+        raise NotImplementedError('Not Implemented')
+
+    """ PD Disaggregation API End """
+
     def _get_runtime_size(self, num_free_gpu_mem: int, cache_block_size: int, vocal_size: int):
-        """find best prefill num."""
+        """Find best prefill num."""
         cache_max_entry_count = self.cache_config.cache_max_entry_count
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         runtime_cache_size = 0
@@ -105,7 +129,7 @@ class ExecutorBase:
         return runtime_cache_size, max_prefill_token_num
 
     def _adjust_block_size(self):
-        """adjust block_size."""
+        """Adjust block_size."""
         if self.model_config.use_flash_mla is True:
             if self.cache_config.block_size != 64:
                 raise ValueError('Please set block_size to 64 for flash_mla.')
@@ -118,7 +142,7 @@ class ExecutorBase:
             )
 
     def update_configs(self):
-        """update cache config."""
+        """Update cache config."""
         self._adjust_block_size()
         cache_config = self.cache_config
         model_config = self.model_config

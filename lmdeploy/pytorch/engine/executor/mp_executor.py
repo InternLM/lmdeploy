@@ -15,8 +15,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
-from lmdeploy.utils import get_logger
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
 from .base_worker import WorkerWrapperBase
@@ -35,7 +35,7 @@ SHARED_BLOCK_REAL_SIZE = SHARED_BLOCK_SIZE + HEAD_SIZE
 
 
 def get_num_packages(data_size):
-    """get num packages."""
+    """Get num packages."""
     return (data_size + SHARED_BLOCK_SIZE - 1) // SHARED_BLOCK_SIZE
 
 
@@ -93,7 +93,7 @@ class Notifier:
 
 
 class SharedBuffer:
-    """shared buffer."""
+    """Shared buffer."""
 
     def __init__(self, proc_id: int, notifier: Notifier, name: str = None):
         self.proc_id = proc_id
@@ -126,7 +126,7 @@ class SharedBuffer:
         return self.shm.name
 
     def pack_data(self, data, receiver_mask):
-        """pack data."""
+        """Pack data."""
         dumped_data = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
         data_size = len(dumped_data)
 
@@ -142,12 +142,12 @@ class SharedBuffer:
                 yield buf
 
     def send(self, data, receiver_mask: int = 0xff):
-        """pack data."""
+        """Pack data."""
         for _ in self.pack_data(data, receiver_mask):
             self.notifier.set()
 
     async def send_async(self, data, receiver_mask: int = 0xff):
-        """async pack data."""
+        """Async pack data."""
         for _ in self.pack_data(data, receiver_mask):
             await self.notifier.set_async()
 
@@ -183,13 +183,13 @@ class SharedBuffer:
         return data
 
     def receive(self):
-        """unpack data."""
+        """Unpack data."""
         with self.notifier.wait():
             dumped_data, is_receiver, remain_size = self._receive_step0()
         return self._receive_step1(dumped_data, is_receiver, remain_size)
 
     async def receive_async(self):
-        """async receive data."""
+        """Async receive data."""
         async with self.notifier.wait_async():
             dumped_data, is_receiver, remain_size = self._receive_step0()
         return self._receive_step1(dumped_data, is_receiver, remain_size)
@@ -209,7 +209,7 @@ class MPExecutor(ExecutorBase):
 
     @classmethod
     def setup_master_addr(cls):
-        """setup master addr."""
+        """Setup master addr."""
         port = find_available_port()
         os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
         os.environ.setdefault('MASTER_PORT', str(port))
@@ -223,16 +223,18 @@ class MPExecutor(ExecutorBase):
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
+                 misc_config: MiscConfig,
                  tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
-        """initialize Executor."""
+        """Initialize Executor."""
         super().__init__(model_path=model_path,
                          model_config=model_config,
                          cache_config=cache_config,
                          backend_config=backend_config,
                          tokenizer=tokenizer,
                          dist_config=dist_config,
+                         misc_config=misc_config,
                          adapters=adapters,
                          device_type=device_type)
 
@@ -263,6 +265,7 @@ class MPExecutor(ExecutorBase):
                        cache_config=cache_config,
                        backend_config=backend_config,
                        dist_config=dist_config,
+                       misc_config=misc_config,
                        tokenizer=tokenizer,
                        adapters=adapters,
                        device_type=device_type,
@@ -286,7 +289,7 @@ class MPExecutor(ExecutorBase):
                        kwargs: Dict[str, Any] = None,
                        receiver_mask: int = 0xff,
                        return_mask: int = 0xff):
-        """collective rpc."""
+        """Collective rpc."""
         if args is None:
             args = list()
         if kwargs is None:
@@ -315,7 +318,7 @@ class MPExecutor(ExecutorBase):
                                    kwargs: Dict[str, Any] = None,
                                    receiver_mask: int = 0xff,
                                    return_mask: int = 0xff):
-        """collective rpc."""
+        """Collective rpc."""
         if args is None:
             args = list()
         if kwargs is None:
@@ -338,36 +341,36 @@ class MPExecutor(ExecutorBase):
             return outputs
 
     def download_models(self):
-        """download model."""
+        """Download model."""
         raise NotImplementedError('Not Implemented.')
 
     def build_model(self):
-        """build model."""
+        """Build model."""
         self.collective_rpc('build_model')
 
     def gather_free_mem(self):
-        """gather available memory."""
+        """Gather available memory."""
         ret = self.collective_rpc('get_free_mem')
         return ret
 
     def set_cache_config(self, cache_config: CacheConfig):
-        """set all cache config."""
+        """Set all cache config."""
         self.collective_rpc('set_cache_config', args=(cache_config, ))
 
     def set_model_config(self, model_config: ModelConfig):
-        """set all cache config."""
+        """Set all cache config."""
         self.collective_rpc('set_model_config', args=(model_config, ))
 
     def build_graph_runner(self):
-        """build graph runner."""
+        """Build graph runner."""
         self.collective_rpc('build_graph_runner')
 
     def build_cache_engine(self):
-        """build cache engine."""
+        """Build cache engine."""
         self.collective_rpc('build_cache_engine')
 
     def warmup(self):
-        """build cache engine."""
+        """Build cache engine."""
         self.collective_rpc('warmup')
 
     async def _prefetch_outputs(self):
@@ -377,7 +380,7 @@ class MPExecutor(ExecutorBase):
                 self.remote_outs.put_nowait(out)
 
     def start(self, forward_event: asyncio.Event):
-        """start engine loop."""
+        """Start engine loop."""
         self.collective_rpc('start')
 
         self.remote_outs = asyncio.Queue()
@@ -385,19 +388,19 @@ class MPExecutor(ExecutorBase):
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
 
     async def forward_async(self, inputs):
-        """start forward."""
+        """Start forward."""
         await self.collective_rpc_async('forward_async', args=(inputs, ), return_mask=0)
 
     async def get_output_async(self):
-        """get output async."""
+        """Get output async."""
         return await self.remote_outs.get()
 
     def get_input_processor(self):
-        """get input processor."""
+        """Get input processor."""
         return self.collective_rpc('get_input_processor', receiver_mask=1, return_mask=1)[0]
 
     def stop(self):
-        """stop engine loop."""
+        """Stop engine loop."""
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
 
@@ -424,6 +427,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
         backend_config: BackendConfig,
         model_config: ModelConfig,
         dist_config: DistConfig,
+        misc_config: MiscConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         tokenizer: Any = None,
@@ -435,6 +439,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
             backend_config=backend_config,
             model_config=model_config,
             dist_config=dist_config,
+            misc_config=misc_config,
             adapters=adapters,
             device_type=device_type,
             tokenizer=tokenizer,
@@ -445,13 +450,13 @@ class MPWorkerWrapper(WorkerWrapperBase):
 class ExecutorProc:
 
     def __init__(self, proc_id: int, mp_ctx: SpawnContext):
-        """executor proc."""
+        """Executor proc."""
         self.proc_id = proc_id
         self.mp_ctx = mp_ctx
         self._proc = None
 
     def start(self, **kwargs):
-        """start proc."""
+        """Start proc."""
         assert self._proc is None
         proc = self.mp_ctx.Process(target=self._main_loop,
                                    kwargs=kwargs,
@@ -461,7 +466,7 @@ class ExecutorProc:
         self._proc = proc
 
     def close(self):
-        """stop proc."""
+        """Stop proc."""
         if self._proc is None:
             return
         if not self._proc.is_alive():
@@ -485,12 +490,13 @@ class ExecutorProc:
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         dist_config: DistConfig,
+        misc_config: MiscConfig,
         tokenizer: Any,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
     ):
-        """main loop."""
+        """Main loop."""
         init_backend(device_type)
         torch.cuda.set_device(proc_id)
 
@@ -506,10 +512,12 @@ class ExecutorProc:
                                  backend_config=backend_config,
                                  model_config=model_config,
                                  dist_config=dist_config,
+                                 misc_config=misc_config,
                                  adapters=adapters,
                                  device_type=device_type,
                                  tokenizer=tokenizer,
                                  log_level=log_level)
+        try_import_deeplink(device_type)
         worker.init_process_group(proc_id)
         comm_buf = SharedBuffer(proc_id, notifier=comm_notifier, name=comm_buf_name)
         ret_buf = SharedBuffer(-1, notifier=ret_notifier, name=ret_buf_name)
@@ -549,7 +557,7 @@ class ExecutorProc:
 
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,
                               worker: MPWorkerWrapper):
-        """main loop."""
+        """Main loop."""
         proc_mask = 1 << proc_id
         event_loop = asyncio.get_event_loop()
         while True:

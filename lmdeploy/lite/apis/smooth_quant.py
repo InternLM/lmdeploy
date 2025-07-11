@@ -126,7 +126,7 @@ def smooth_quant(model: str,
         from .auto_awq import save_vl_model
         save_vl_model(vl_model, model_path, work_dir)
     else:
-        model.save_pretrained(work_dir, max_shard_size='2GB', safe_serialization=False)
+        model.save_pretrained(work_dir, safe_serialization=True)
     tokenizer.save_pretrained(work_dir)
 
 

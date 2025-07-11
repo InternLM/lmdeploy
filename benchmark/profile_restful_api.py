@@ -11,6 +11,7 @@ python3 -m sglang.bench_serving --backend sglang --dataset-name random --request
 """  # noqa
 import argparse
 import asyncio
+import csv
 import json
 import os
 import random
@@ -627,24 +628,27 @@ async def benchmark(
     else:
         raise ValueError(f'Unknown backend: {backend}')
 
-    print('Starting initial single prompt test run...')
-    test_prompt, test_prompt_len, test_output_len = input_requests[0]
-    test_input = RequestFuncInput(
-        model=model_id,
-        prompt=test_prompt,
-        api_url=api_url,
-        prompt_len=test_prompt_len,
-        output_len=test_output_len,
-        extra_request_body=extra_request_body,
-    )
-    test_output = await request_func(request_func_input=test_input)
-    if not test_output.success:
-        raise ValueError('Initial test run failed - Please make sure benchmark arguments '
-                         f'are correctly specified. Error: {test_output.error}')
-    else:
-        print('Initial test run completed. Starting main benchmark run...')
-
-    time.sleep(1.5)
+    if not args.disable_warmup:
+        print('Starting initial single prompt test run...')
+        start_warmup = time.perf_counter()
+        test_prompt, test_prompt_len, test_output_len = input_requests[0]
+        test_input = RequestFuncInput(
+            model=model_id,
+            prompt=test_prompt,
+            api_url=api_url,
+            prompt_len=test_prompt_len,
+            output_len=test_output_len,
+            extra_request_body=extra_request_body,
+        )
+        test_output = await request_func(request_func_input=test_input)
+        if not test_output.success:
+            raise ValueError('Initial test run failed - Please make sure benchmark arguments '
+                             f'are correctly specified. Error: {test_output.error}')
+        else:
+            print('Initial test run completed. Starting main benchmark run...')
+        end_warmup = time.perf_counter()
+        print(f'warmup time: {end_warmup - start_warmup:.2f}s')
+        time.sleep(1.5)
 
     pbar = None if disable_tqdm else tqdm(total=len(input_requests))
 
@@ -706,17 +710,19 @@ async def benchmark(
 
     if (metrics.median_ttft_ms is not None and metrics.mean_itl_ms is not None
             and metrics.output_throughput is not None):
+        FIELD_NAMES = [
+            'backend', 'dataset_name', 'sharegpt_output_len', 'random_input_len', 'random_output_len',
+            'random_range_ratio', 'request_rate', 'completed', 'total_input_tokens', 'total_output_tokens', 'duration',
+            'request_throughput', 'input_throughput', 'output_throughput', 'mean_e2e_latency_ms', 'mean_ttft_ms',
+            'mean_tpot_ms', 'mean_itl_ms'
+        ]
         result = {
             'backend': args.backend,
             'dataset_name': args.dataset_name,
             'request_rate': request_rate,
             'total_input_tokens': metrics.total_input,
             'total_output_tokens': metrics.total_output,
-            'total_output_tokens_retokenized': metrics.total_output_retokenized,
             'mean_e2e_latency_ms': metrics.mean_e2e_latency_ms,
-            'median_e2e_latency_ms': metrics.median_e2e_latency_ms,
-            'median_ttft_ms': metrics.median_ttft_ms,
-            'median_itl_ms': metrics.median_itl_ms,
             'output_throughput': metrics.output_throughput,
             'sharegpt_output_len': args.sharegpt_output_len,
             'random_input_len': args.random_input_len,
@@ -724,6 +730,11 @@ async def benchmark(
             'random_range_ratio': args.random_range_ratio,
             'duration': benchmark_duration,
             'completed': metrics.completed,
+            'request_throughput': metrics.request_throughput,
+            'input_throughput': metrics.input_throughput,
+            'mean_ttft_ms': metrics.mean_ttft_ms,
+            'mean_tpot_ms': metrics.mean_tpot_ms,
+            'mean_itl_ms': metrics.mean_itl_ms,
         }
     else:
         print(f'Error running benchmark for request rate: {request_rate}')
@@ -737,11 +748,15 @@ async def benchmark(
         if args.dataset_name == 'random':
             output_file_name = f'{args.backend}_{now}_{args.num_prompts}_{args.random_input_len}_{args.random_output_len}.jsonl'  # noqa
         else:
-            output_file_name = f'{args.backend}_{now}_{args.num_prompts}_sharegpt.jsonl'  # noqa
+            output_file_name = f'{args.backend}_{now}_{args.num_prompts}_sharegpt.csv'  # noqa
 
-    # Append results to a JSONL file
-    with open(output_file_name, 'a') as file:
-        file.write(json.dumps(result) + '\n')
+    # Append results to a CSV file
+    file_exists = os.path.isfile(output_file_name)
+    with open(output_file_name, mode='a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=FIELD_NAMES)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(result)
 
     result = {
         'duration': benchmark_duration,
@@ -1053,6 +1068,12 @@ if __name__ == '__main__':
         type=str,
         help='Append given JSON object to the request payload. You can use '
         'this to specify additional generate params like sampling params.',
+    )
+    parser.add_argument(
+        '--disable-warmup',
+        action='store_true',
+        default=None,
+        help='Disable a warmup request before the benchmark. ',
     )
     args = parser.parse_args()
     run_benchmark(args)

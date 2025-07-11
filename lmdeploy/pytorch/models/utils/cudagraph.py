@@ -33,10 +33,11 @@ class CudaGraphMeta:
     device: torch.device
     input_buffers: BuffType = None
     output_buffers: BuffType = None
+    vocab_size: int = 1
 
 
 class CudaGraphMixin:
-    """mixin class to support cudagraph."""
+    """Mixin class to support cudagraph."""
 
     def support_cuda_graph(
         self,
@@ -47,24 +48,27 @@ class CudaGraphMixin:
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """return True is model support cudagraph."""
+        """Return True is model support cudagraph."""
         return attn_metadata.is_decoding
 
     def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs) -> BuffType:
-        """make cudagraph buffers from forward inputs."""
+        """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
         device = graph_meta.device
 
         input_buffers: BuffType = dict()
-        input_buffers['input_ids'] = torch.zeros(1, max_tokens, dtype=torch.int64, device=device)
+        input_buffers['input_ids'] = torch.randint(0,
+                                                   graph_meta.vocab_size, (1, max_tokens),
+                                                   dtype=torch.int64,
+                                                   device=device)
         input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
         if getattr(self.config, 'use_flash_mla', False) is True:
-            import flash_mla_cuda
+            import flash_mla
 
             # create buffers for flash mla
-            input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla_cuda.get_mla_metadata(
+            input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
                 torch.ones(max_batches, dtype=torch.int32, device=device), self.config.num_attention_heads, 1)
 
         # flash_mla requires block_offsets and kv_lens int32
@@ -83,7 +87,7 @@ class CudaGraphMixin:
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
                                past_key_values: List, attn_metadata: Any, inputs_embeds: Tensor,
                                **kwargs) -> Dict[str, Tensor]:
-        """fill cudagraph buffers from forward inputs."""
+        """Fill cudagraph buffers from forward inputs."""
 
         is_decoding = graph_meta.is_decoding
         block_offsets: Tensor = attn_metadata.block_offsets
@@ -96,6 +100,7 @@ class CudaGraphMixin:
         num_tokens = input_ids.size(-1)
 
         # fill buffer
+        input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
         input_buffers['input_ids'][:, :num_tokens] = input_ids
         input_buffers['position_ids'][:, :num_tokens] = position_ids
         input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
@@ -117,9 +122,9 @@ class CudaGraphMixin:
         attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
         if getattr(self.config, 'use_flash_mla', False) is True:
-            import flash_mla_cuda
-            tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(
-                attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads, 1)
+            import flash_mla
+            tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
+                                                                             self.config.num_attention_heads, 1)
             # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
             input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
             input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])
@@ -153,7 +158,7 @@ class CudaGraphMixin:
         return new_inputs
 
     def update_context_cudagraph(self, graph_meta: CudaGraphMeta, context: StepContext):
-        """update step context with input buffers."""
+        """Update step context with input buffers."""
         input_buffers = graph_meta.input_buffers
         local_adapter_ids = context.local_adapter_ids
         if local_adapter_ids is not None:
