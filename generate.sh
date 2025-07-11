@@ -14,5 +14,4 @@ cmake ${builder} .. \
     -DBUILD_PY_FFI=ON \
     -DBUILD_MULTI_GPU=ON \
     -DCMAKE_CUDA_FLAGS="-lineinfo" \
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DUSE_NVTX=ON

@@ -158,7 +158,6 @@ if get_target_device() == 'cuda':
                 # Select the bindings implementation
                 '-DBUILD_PY_FFI=ON',
                 '-DBUILD_MULTI_GPU=ON',
-                '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
                 '-DUSE_NVTX=ON',
             ],
         ),
