@@ -41,7 +41,8 @@ struct ModelParam {
 };
 
 struct MoeParam {
-    enum Method {
+    enum Method
+    {
         kNaive,
         kFused
     } method;
@@ -104,7 +105,8 @@ struct EngineParam {
     std::vector<int> devices;
 };
 
-enum class LoraPolicy : int {
+enum class LoraPolicy : int
+{
     kNull,
     kPlora,
 };

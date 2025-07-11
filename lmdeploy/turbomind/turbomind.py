@@ -217,7 +217,6 @@ class TurboMind:
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
 
-        # TODO: support mpi
         engine_cfg = self.config_dict['engine_config']
         self.node_id = engine_cfg['node_rank']
 

@@ -12,9 +12,6 @@
 #include <gloo/math.h>
 #include <gloo/rendezvous/context.h>
 #include <gloo/rendezvous/prefix_store.h>
-#if GLOO_USE_REDIS
-#include <gloo/rendezvous/redis_store.h>
-#endif
 #include <gloo/rendezvous/store.h>
 #include <gloo/transport/tcp/attr.h>
 #include <gloo/transport/tcp/device.h>
@@ -57,9 +54,6 @@ public:
     std::string host_;
     int         port_;
 
-#if GLOO_USE_REDIS
-// ::gloo::rendezvous::RedisStore store_;
-#endif
     TCPStore store_;
     using ::gloo::rendezvous::PrefixStore::prefix_;
 };
