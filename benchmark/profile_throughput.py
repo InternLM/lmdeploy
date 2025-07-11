@@ -148,8 +148,8 @@ class Engine:
         self.tm_model = tm_model
         self.pbar = None
 
-    async def _inference(self, req_queue: Queue, session_id: int, temperature: float, top_p: float, top_k: int,
-                         stream_output: bool, skip_tokenize: bool, skip_detokenize: bool, concurrency: int):
+    async def _inference(self, req_queue: Queue, temperature: float, top_p: float, top_k: int, stream_output: bool,
+                         skip_tokenize: bool, skip_detokenize: bool):
         model_inst = self.tm_model.create_instance()
         sess: Session = None
         for prompt, _, output_seqlen, cancel_after, sess in iter(req_queue.get_nowait, None):
@@ -193,10 +193,9 @@ class Engine:
 
             # for pytorch engine to restart a session
             if self.backend == 'pytorch':
-                await model_inst.async_end(session_id)
+                await model_inst.async_end(sess.id)
 
             self.pbar.update(1)
-            session_id += concurrency
 
     def process_request(self, requests, profiler: Profiler, concurrency, temperature, top_p, top_k, stream_output,
                         skip_tokenize, skip_detokenize, cancel_rate):
@@ -219,8 +218,7 @@ class Engine:
         # start threads
         tasks = []
         for i in range(concurrency):
-            task = self._inference(req_queue, i, temperature, top_p, top_k, stream_output, skip_tokenize,
-                                   skip_detokenize, concurrency)
+            task = self._inference(req_queue, temperature, top_p, top_k, stream_output, skip_tokenize, skip_detokenize)
             tasks.append(task)
 
         async def _gather_tasks(tasks):
