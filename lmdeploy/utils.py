@@ -405,6 +405,7 @@ def try_import_deeplink(device_type: str):
         'npu',
         'maca',
         'camb',
+        'ppu',
     ]
     if device_type in deeplink_device_type_list:
         try:
