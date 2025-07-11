@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from lmdeploy.utils import get_logger
@@ -17,7 +17,7 @@ logger = get_logger('lmdeploy')
 @dataclass
 class MetricsContext:
     enable_metrics: bool = False
-    scheduler_stats: SchedulerStats = SchedulerStats()
+    scheduler_stats: SchedulerStats = field(default_factory=SchedulerStats)
 
 
 class MetricsManager:
