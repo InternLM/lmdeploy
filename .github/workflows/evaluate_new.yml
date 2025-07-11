@@ -1,4 +1,4 @@
-name: evaluate
+name: evaluate_new
 
 on:
   workflow_dispatch:
@@ -17,17 +17,17 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_7b_chat_batch1_4bits, turbomind_internlm3_8b_instruct, pytorch_internlm3_8b_instruct, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, turbomind_qwen2_5_7b_instruct, pytorch_qwen2_5_7b_instruct, turbomind_qwen2_5_32b_instruct, pytorch_qwen2_5_32b_instruct, turbomind_llama2_7b_chat, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it, pytorch_gemma_2_27b_it, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, turbomind_internlm2_5_7b_chat_kvint8, pytorch_internlm2_5_7b_chat_w8a8, turbomind_internlm3_8b_instruct_4bits, turbomind_internlm3_8b_instruct_kvint4, turbomind_internlm3_8b_instruct_kvint8, pytorch_internlm3_8b_instruct_w8a8, turbomind_llama3_8b_instruct_4bits, turbomind_llama3_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_4bits, turbomind_llama3_1_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_kvint8,turbomind_llama3_8b_instruct_kvint8, pytorch_llama3_1_8b_instruct_w8a8, turbomind_qwen2_7b_instruct_4bits, turbomind_qwen2_7b_instruct_kvint8, pytorch_qwen2_7b_instruct_w8a8, turbomind_qwen2_5_7b_instruct_4bits, turbomind_qwen2_5_7b_instruct_kvint8, pytorch_qwen2_5_7b_instruct_w8a8, turbomind_qwen2_5_32b_instruct_4bits, turbomind_qwen2_5_32b_instruct_kvint8, pytorch_qwen2_5_32b_instruct_w8a8,turbomind_llama2_7b_chat_4bits, turbomind_llama2_7b_chat_kvint4, turbomind_llama2_7b_chat_kvint8]'
+        default: '[turbomind_qwen3_32b, pytorch_qwen3_32b, turbomind_qwen3_30b_a3b, pytorch_qwen3_30b_a3b, turbomind_qwen3_30b_a3b_fp8, pytorch_qwen3_30b_a3b_fp8, turbomind_qwen3_235b_a22b, pytorch_qwen3_235b_a22b, turbomind_qwen3_235b_a22b_fp8, pytorch_qwen3_235b_a22b_fp8]'
       chat_datasets:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
         type: string
-        default: '[*mmlu_datasets, *gsm8k_datasets, *ifeval_datasets]'
+        default: '[d for d in mmlu_pro_datasets if \"math\" in d[\"abbr\"]] +[*gsm8k_datasets]'
       base_models:
         required: true
         description: 'Tested TurboMind models list. eg. [turbomind_internlm2_5_7b, turbomind_internlm2_5_7b_4bits, turbomind_internlm2_5_7b_batch1, turbomind_internlm2_5_7b_batch1_4bits, turbomind_qwen2_7b, turbomind_qwen2_5_7b, turbomind_qwen2_5_14b]'
         type: string
-        default: '[turbomind_internlm2_5_7b, turbomind_internlm2_5_7b_4bits, turbomind_qwen2_7b, turbomind_qwen2_5_7b, turbomind_qwen2_5_14b]'
+        default: '[turbomind_qwen3_8b_base, pytorch_qwen3_8b_base]'
       baes_datasets:
         required: true
         description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
@@ -97,18 +97,19 @@ jobs:
       fail-fast: false
       matrix:
         evaluate_type: ['chat', 'base']
+    env:
+        HF_HUB_CACHE: /root/models
+        HF_HUB_OFFLINE: 1
     container:
-      image: openmmlab/lmdeploy:latest
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      image: pjlab-shanghai-acr-registry-vpc.cn-shanghai.cr.aliyuncs.com/pjlab-eflops/llm:lmdeploy-v0.9.1-fortest
+      options: "--gpus=0,1,2,3,4,5 --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/resources:/root/resources
-        - /nvme/github-actions/opencompass-data:/root/opencompass-data
-        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
-        - /nvme/qa_test_models:/root/models
-        - /mnt/187:/mnt/187
-        - /mnt/shared:/mnt/shared
+        - /nvme1:/nvme1
+        - /nvme2:/nvme2
+        - /nvme1/shared/qa_test_models/pip-cache:/root/.cache/pip
+        - /nvme1/shared/qa_test_models/opencompass-data:/root/opencompass-data
+        - /nvme1/shared/qa_test_models/evaluation-reports:/root/evaluation-reports
+        - /nvme2/huggingface_hub/hub:/root/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -123,7 +124,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /root/models/offline_pkg/lmdeploy/. .
+        run: cp -r /nvme1/shared/qa_test_models/offline_pkg/lmdeploy/. .
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -133,23 +134,21 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install -r /root/models/offline_pkg/requirements.txt
+          python3 -m pip install -r /nvme1/shared/qa_test_models/offline_pkg/requirements.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
+          cp -r /nvme1/shared/qa_test_models/offline_pkg/lmdeploy/opencompass .
           python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
+          python3 -m pip install -r requirements/test.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
       - name: Install lmdeploy - offline
         if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install /root/models/offline_pkg/py310/lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
+          python3 -m pip install /nvme1/shared/qa_test_models/offline_pkg/lmdeploy/lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
       - name: Install opencompass
         run: |
-          git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
           cd opencompass
-          git checkout ${{ github.event.inputs.oc_repo_ref}}
-          cp /root/models/offline_pkg/requirements-oc.txt requirements/runtime.txt
           python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
@@ -159,21 +158,21 @@ jobs:
       - name: Setup paths for evaluation
         run: |
           ln -s /root/opencompass-data ./data
-          python3 .github/scripts/action_tools.py create_model_links /root/models .
+          # python3 .github/scripts/action_tools.py create_model_links /root/models .
       - name: Evaluate chat models
         if: matrix.evaluate_type == 'chat'
         run: |
           echo ${{github.event.inputs.chat_models}}
           echo ${{github.event.inputs.chat_datasets}}
           export LMDEPLOY_DIR=$(pwd)
-          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.chat_models}}" "${{github.event.inputs.chat_datasets}}" /root/evaluation-reports/${{ github.run_id }} chat
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.chat_models}}" "${{github.event.inputs.chat_datasets}}" /root/evaluation-reports/${{ github.run_id }} chat 6
       - name: Evaluate base models
         if: matrix.evaluate_type == 'base'
         run: |
           echo ${{github.event.inputs.base_models}}
           echo ${{github.event.inputs.baes_datasets}}
           export LMDEPLOY_DIR=$(pwd)
-          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation-reports/${{ github.run_id }} base
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation-reports/${{ github.run_id }} base 6
       - name: Clear workspace
         if: always()
         run: |
