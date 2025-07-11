@@ -32,6 +32,9 @@ jobs:
     name: cuda-${{ matrix.cudaver }}
     runs-on: windows-latest
     steps:
+      - name: Set git for windows
+        run: |
+          git config --global core.longpaths true
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Set up python

@@ -58,6 +58,9 @@ jobs:
         pyver: ['3.9', '3.10', '3.11', '3.12', '3.13']
     runs-on: windows-latest
     steps:
+      - name: Set git for windows
+        run: |
+          git config --global core.longpaths true
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Set up python

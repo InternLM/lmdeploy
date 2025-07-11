@@ -136,7 +136,6 @@ if get_target_device() == 'cuda' and not os.getenv('DISABLE_TURBOMIND', '').lowe
                 '-DBUILD_SHARED_LIBS:BOOL=OFF',
                 # Select the bindings implementation
                 '-DBUILD_PY_FFI=ON',
-                '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
                 '-DBUILD_MULTI_GPU=' + ('OFF' if os.name == 'nt' else 'ON'),
                 '-DUSE_NVTX=' + ('OFF' if os.name == 'nt' else 'ON'),
             ],
