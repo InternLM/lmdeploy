@@ -257,11 +257,10 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
-        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, dist_config=dist_config)
-
-        if misc_config.hf_overrides is not None:
-            logger.warning(f'Overriding HF config with {misc_config.hf_overrides}')
-            model_config.hf_config.update(misc_config.hf_overrides)
+        model_config = ModelConfig.from_pretrained(model_path,
+                                                   dtype=dtype,
+                                                   hf_overrides=misc_config.hf_overrides,
+                                                   dist_config=dist_config)
 
         super().__init__(
             model_path=model_path,

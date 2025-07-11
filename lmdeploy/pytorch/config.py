@@ -158,7 +158,8 @@ class ModelConfig:
                         pretrained_model_name_or_path: str,
                         trust_remote_code: bool = True,
                         dtype: str = 'auto',
-                        dist_config: DistConfig = None):
+                        dist_config: DistConfig = None,
+                        hf_overrides: Dict[str, Any] = None):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -168,13 +169,28 @@ class ModelConfig:
                 models defined on the Hub in their own modeling files.
             dtype (str): user specified data type for model weights and
                 activations. Refer to `PyTorchEngineConfig` for details
+            hf_overrides (Dict[str, Any]): overrides for the HF config.
         """
         from transformers import AutoConfig
+
+        from lmdeploy.utils import get_logger
+
         hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
-        return cls.from_hf_config(hf_config, pretrained_model_name_or_path, dtype=dtype, dist_config=dist_config)
+
+        model_config = cls.from_hf_config(hf_config,
+                                          pretrained_model_name_or_path,
+                                          dtype=dtype,
+                                          dist_config=dist_config)
+
+        if hf_overrides is not None:
+            logger = get_logger('lmdeploy')
+            logger.warning(f'Overriding HF config with {hf_overrides}')
+            model_config.hf_config.update(hf_overrides)
+
+        return model_config
 
     @classmethod
     def from_hf_config(cls,

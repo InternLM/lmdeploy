@@ -241,7 +241,7 @@ class ArgumentHelper:
         return parser.add_argument('--hf-overrides',
                                    type=json.loads,
                                    default=None,
-                                   help='Extra arguments to be forwarded to for the HuggingFace config.')
+                                   help='Extra arguments to be forwarded to the HuggingFace config.')
 
     @staticmethod
     def use_logn_attn(parser):
