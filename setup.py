@@ -149,7 +149,6 @@ else:
     extra_deps = []
 
 if __name__ == '__main__':
-    lmdeploy_package_data = ['lmdeploy/bin/llama_gemm']
     setup(
         name='lmdeploy',
         version=get_version(),
@@ -159,9 +158,6 @@ if __name__ == '__main__':
         author='OpenMMLab',
         author_email='openmmlab@gmail.com',
         packages=find_packages(exclude=()),
-        package_data={
-            'lmdeploy': lmdeploy_package_data,
-        },
         include_package_data=True,
         setup_requires=parse_requirements('requirements/build.txt'),
         tests_require=parse_requirements('requirements/test.txt'),

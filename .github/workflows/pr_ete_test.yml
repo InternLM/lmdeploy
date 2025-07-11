@@ -65,14 +65,11 @@ jobs:
           make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-          python3 -m pip install cmake packaging wheel transformers_stream_generator transformers==4.51.3 datasets openai einops timm decord
-          python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt -r requirements/build.txt
-          mkdir -p build && cd build &&\
-          sh ../generate.sh &&\
-          ninja -j$(nproc) && ninja install &&\
-          cd .. &&\
-          python3 -m pip install -e . &&\
-          rm -rf build
+          # We need to pin transformers version (<4.52.0) to avoid test failures due to breaking changes.
+          python3 -m pip install transformers==4.51.3 timm
+          python3 -m pip install -r requirements/lite.txt
+          python3 -m pip install -r requirements/test.txt
+          CUDAVER=12 python3 -m pip install -e .
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /nvme/qa_test_models/offline_pkg/flash_attn-2.8.0.post2-cp310-cp310-linux_x86_64.whl
       - name: Check env
