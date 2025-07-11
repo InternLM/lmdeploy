@@ -148,8 +148,8 @@ class Engine:
         self.tm_model = tm_model
         self.pbar = None
 
-    async def _inference(self, req_queue: Queue, session_id: int, temperature: float, top_p: float, top_k: int,
-                         stream_output: bool, skip_tokenize: bool, skip_detokenize: bool, concurrency: int):
+    async def _inference(self, req_queue: Queue, temperature: float, top_p: float, top_k: int, stream_output: bool,
+                         skip_tokenize: bool, skip_detokenize: bool):
         model_inst = self.tm_model.create_instance()
         sess: Session = None
         for prompt, _, output_seqlen, cancel_after, sess in iter(req_queue.get_nowait, None):
@@ -166,7 +166,7 @@ class Engine:
             prev_len = 0
             token_ids = input_ids.copy()
 
-            generator = model_inst.async_stream_infer(session_id,
+            generator = model_inst.async_stream_infer(sess.id,
                                                       input_ids=input_ids,
                                                       gen_config=GenerationConfig(max_new_tokens=output_seqlen,
                                                                                   temperature=temperature,
@@ -193,10 +193,9 @@ class Engine:
 
             # for pytorch engine to restart a session
             if self.backend == 'pytorch':
-                await model_inst.async_end(session_id)
+                await model_inst.async_end(sess.id)
 
             self.pbar.update(1)
-            session_id += concurrency
 
     def process_request(self, requests, profiler: Profiler, concurrency, temperature, top_p, top_k, stream_output,
                         skip_tokenize, skip_detokenize, cancel_rate):
@@ -219,8 +218,7 @@ class Engine:
         # start threads
         tasks = []
         for i in range(concurrency):
-            task = self._inference(req_queue, i, temperature, top_p, top_k, stream_output, skip_tokenize,
-                                   skip_detokenize, concurrency)
+            task = self._inference(req_queue, temperature, top_p, top_k, stream_output, skip_tokenize, skip_detokenize)
             tasks.append(task)
 
         async def _gather_tasks(tasks):
@@ -311,7 +309,7 @@ def parse_args():
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
-    prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+    prefix_caching_act = ArgumentHelper.disable_prefix_caching(pt_group)
     quant_policy_act = ArgumentHelper.quant_policy(pt_group, default=0)
     dtype_act = ArgumentHelper.dtype(pt_group)
 
@@ -348,7 +346,7 @@ def main():
             quant_policy=args.quant_policy,
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
-            enable_prefix_caching=args.enable_prefix_caching,
+            enable_prefix_caching=not args.disable_prefix_caching,
             dtype=args.dtype,
             communicator=args.communicator,
         )
@@ -359,7 +357,7 @@ def main():
             max_batch_size=args.concurrency,
             tp=args.tp,
             eager_mode=args.eager_mode,
-            enable_prefix_caching=args.enable_prefix_caching,
+            enable_prefix_caching=not args.disable_prefix_caching,
             quant_policy=args.quant_policy,
             dtype=args.dtype,
             distributed_executor_backend=args.distributed_executor_backend,

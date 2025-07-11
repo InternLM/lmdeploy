@@ -292,25 +292,16 @@ struct ScopedGIL {
 PYBIND11_MODULE(_turbomind, m)
 {
     py::class_<ft::SessionParam>(m, "SessionParam")
-        .def(py::init([](uint64_t id, int step, bool start, bool end) {
-                 if (!start && end) {
-                     throw std::logic_error("unsupported arguments: start=false, end=true");
-                 }
+        .def(py::init([](uint64_t id, int step) {
                  ft::SessionParam param{};
-                 param.id         = id;
-                 param.step       = step;
-                 param.start_flag = start;
-                 param.end_flag   = end;
+                 param.id   = id;
+                 param.step = step;
                  return param;
              }),
              "id"_a,
-             "step"_a,
-             "start"_a,
-             "end"_a)
+             "step"_a)
         .def_readwrite("id", &ft::SessionParam::id)
-        .def_readwrite("step", &ft::SessionParam::step)
-        .def_readwrite("start", &ft::SessionParam::start_flag)
-        .def_readwrite("end", &ft::SessionParam::end_flag);
+        .def_readwrite("step", &ft::SessionParam::step);
 
     py::class_<ft::GenerationConfig>(m, "GenerationConfig")
         .def(py::init())
@@ -460,15 +451,7 @@ PYBIND11_MODULE(_turbomind, m)
             [](ModelRequest* model_request) {
                 model_request->Cancel();  //
             },
-            py::call_guard<py::gil_scoped_release>())
-        .def(
-            "end",
-            [](ModelRequest* model_request, std::function<void(int)> cb, uint64_t session_id) {
-                model_request->End(std::move(cb), session_id);  //
-            },
-            py::call_guard<py::gil_scoped_release>(),
-            "cb"_a,
-            "session_id"_a);
+            py::call_guard<py::gil_scoped_release>());
 
     // transformer model
     using ft::LlamaTritonModel;
