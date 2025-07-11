@@ -19,6 +19,12 @@
 
 namespace turbomind {
 
+Logger& Logger::getLogger()
+{
+    thread_local Logger instance;
+    return instance;
+}
+
 Logger::Logger()
 {
     char* is_first_rank_only_char = std::getenv("TM_LOG_FIRST_RANK_ONLY");
