@@ -1,0 +1,5 @@
+[build-system]
+requires = [
+    "cmake_build_extension",
+]
+build-backend = "setuptools.build_meta"

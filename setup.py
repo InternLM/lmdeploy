@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from pathlib import Path
 
 from setuptools import find_packages, setup
 
@@ -19,15 +20,15 @@ def readme():
 
 
 def get_version():
-    with open(os.path.join(pwd, version_file), 'r') as f:
-        exec(compile(f.read(), version_file, 'exec'))
-    return locals()['__version__']
-
-
-def check_ext_modules():
-    if os.path.exists(os.path.join(pwd, 'lmdeploy', 'lib')):
-        return True
-    return False
+    file_path = os.path.join(pwd, version_file)
+    pattern = re.compile(r"\s*__version__\s*=\s*'(\d+\.\d+\.\d+)'")
+    with open(file_path, 'r') as f:
+        for line in f:
+            m = pattern.match(line)
+            if m:
+                return m.group(1)
+        else:
+            assert False, f'No version found {file_path}'
 
 
 def get_cuda_pkgs():
@@ -41,9 +42,19 @@ def get_cuda_pkgs():
 
     cuda_pkgs = []
     if arg_value == '11':
-        cuda_pkgs = ['nvidia-nccl-cu11', 'nvidia-cuda-runtime-cu11', 'nvidia-cublas-cu11', 'nvidia-curand-cu11']
+        cuda_pkgs = [
+            'nvidia-nccl-cu11',
+            'nvidia-cuda-runtime-cu11',
+            'nvidia-cublas-cu11',
+            'nvidia-curand-cu11',
+        ]
     elif arg_value == '12':
-        cuda_pkgs = ['nvidia-nccl-cu12', 'nvidia-cuda-runtime-cu12', 'nvidia-cublas-cu12', 'nvidia-curand-cu12']
+        cuda_pkgs = [
+            'nvidia-nccl-cu12',
+            'nvidia-cuda-runtime-cu12',
+            'nvidia-cublas-cu12',
+            'nvidia-curand-cu12',
+        ]
     return cuda_pkgs
 
 
@@ -121,9 +132,63 @@ def parse_requirements(fname='requirements.txt', with_version=True):
                 yield item
 
     packages = list(gen_packages_items())
-    packages += cuda_pkgs
+
+    if get_target_device() == 'cuda':
+        packages += cuda_pkgs
+
     return packages
 
+
+if get_target_device() == 'cuda':
+    import cmake_build_extension
+
+    if os.name == 'nt':
+        cuda_path = os.environ['CUDA_PATH']
+        ext_modules = [
+            cmake_build_extension.CMakeExtension(
+                name='_turbomind',
+                install_prefix='lmdeploy/lib',
+                cmake_depends_on=['pybind11'],
+                source_dir=str(Path(__file__).parent.absolute()),
+                cmake_generator=None,
+                cmake_configure_options=[
+                    f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
+                    f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
+                    '-DCALL_FROM_SETUP_PY:BOOL=ON',
+                    '-DBUILD_SHARED_LIBS:BOOL=OFF',
+                    # Select the bindings implementation
+                    '-DBUILD_PY_FFI=ON',
+                    '-DBUILD_MULTI_GPU=OFF',
+                    '-DUSE_NVTX=OFF',
+                ],
+            ),
+        ]
+    else:
+        ext_modules = [
+            cmake_build_extension.CMakeExtension(
+                name='_turbomind',
+                install_prefix='lmdeploy/lib',
+                cmake_depends_on=['pybind11'],
+                source_dir=str(Path(__file__).parent.absolute()),
+                cmake_configure_options=[
+                    # This option points CMake to the right Python interpreter, and helps
+                    # the logic of FindPython3.cmake to find the active version
+                    f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
+                    f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
+                    '-DCALL_FROM_SETUP_PY:BOOL=ON',
+                    '-DBUILD_SHARED_LIBS:BOOL=OFF',
+                    # Select the bindings implementation
+                    '-DBUILD_PY_FFI=ON',
+                    '-DBUILD_MULTI_GPU=ON',
+                    '-DUSE_NVTX=ON',
+                ],
+            ),
+        ]
+
+    cmdclass = dict(build_ext=cmake_build_extension.BuildExtension, )
+else:
+    ext_modules = []
+    cmdclass = {}
 
 if __name__ == '__main__':
     lmdeploy_package_data = ['lmdeploy/bin/llama_gemm']
@@ -146,9 +211,8 @@ if __name__ == '__main__':
         extras_require={
             'all': parse_requirements(f'requirements_{get_target_device()}.txt'),
             'lite': parse_requirements('requirements/lite.txt'),
-            'serve': parse_requirements('requirements/serve.txt')
+            'serve': parse_requirements('requirements/serve.txt'),
         },
-        has_ext_modules=check_ext_modules,
         classifiers=[
             'Programming Language :: Python :: 3.9',
             'Programming Language :: Python :: 3.10',
@@ -160,4 +224,6 @@ if __name__ == '__main__':
             'Intended Audience :: Science/Research',
         ],
         entry_points={'console_scripts': ['lmdeploy = lmdeploy.cli:run']},
+        ext_modules=ext_modules,
+        cmdclass=cmdclass,
     )
