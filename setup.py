@@ -142,26 +142,49 @@ def parse_requirements(fname='requirements.txt', with_version=True):
 if get_target_device() == 'cuda':
     import cmake_build_extension
 
-    ext_modules = [
-        cmake_build_extension.CMakeExtension(
-            name='_turbomind',
-            install_prefix='lmdeploy/lib',
-            cmake_depends_on=['pybind11'],
-            source_dir=str(Path(__file__).parent.absolute()),
-            cmake_configure_options=[
-                # This option points CMake to the right Python interpreter, and helps
-                # the logic of FindPython3.cmake to find the active version
-                f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
-                f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
-                '-DCALL_FROM_SETUP_PY:BOOL=ON',
-                '-DBUILD_SHARED_LIBS:BOOL=OFF',
-                # Select the bindings implementation
-                '-DBUILD_PY_FFI=ON',
-                '-DBUILD_MULTI_GPU=ON',
-                '-DUSE_NVTX=ON',
-            ],
-        ),
-    ]
+    if os.name == 'nt':
+        cuda_path = os.environ['CUDA_PATH']
+        ext_modules = [
+            cmake_build_extension.CMakeExtension(
+                name='_turbomind',
+                install_prefix='lmdeploy/lib',
+                cmake_depends_on=['pybind11'],
+                source_dir=str(Path(__file__).parent.absolute()),
+                cmake_generator=None,
+                cmake_configure_options=[
+                    f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
+                    f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
+                    '-DCALL_FROM_SETUP_PY:BOOL=ON',
+                    '-DBUILD_SHARED_LIBS:BOOL=OFF',
+                    # Select the bindings implementation
+                    '-DBUILD_PY_FFI=ON',
+                    '-DBUILD_MULTI_GPU=OFF',
+                    '-DUSE_NVTX=OFF',
+                ],
+            ),
+        ]
+    else:
+        ext_modules = [
+            cmake_build_extension.CMakeExtension(
+                name='_turbomind',
+                install_prefix='lmdeploy/lib',
+                cmake_depends_on=['pybind11'],
+                source_dir=str(Path(__file__).parent.absolute()),
+                cmake_configure_options=[
+                    # This option points CMake to the right Python interpreter, and helps
+                    # the logic of FindPython3.cmake to find the active version
+                    f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
+                    f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
+                    '-DCALL_FROM_SETUP_PY:BOOL=ON',
+                    '-DBUILD_SHARED_LIBS:BOOL=OFF',
+                    # Select the bindings implementation
+                    '-DBUILD_PY_FFI=ON',
+                    '-DBUILD_MULTI_GPU=ON',
+                    '-DUSE_NVTX=ON',
+                ],
+            ),
+        ]
+
     cmdclass = dict(build_ext=cmake_build_extension.BuildExtension, )
 else:
     ext_modules = []
