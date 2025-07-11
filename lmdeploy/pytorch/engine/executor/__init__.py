@@ -68,7 +68,11 @@ def build_executor(model_path: str,
     dp = dist_config.dp
     world_size = dist_config.world_size
 
-    model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, dist_config=dist_config)
+    model_config = ModelConfig.from_pretrained(model_path,
+                                               trust_remote_code=True,
+                                               dtype=dtype,
+                                               hf_overrides=misc_config.hf_overrides,
+                                               dist_config=dist_config)
 
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)
