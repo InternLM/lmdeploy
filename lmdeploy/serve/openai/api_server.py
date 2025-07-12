@@ -26,7 +26,7 @@ from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineCo
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -963,7 +963,7 @@ async def p2p_initialize(init_request: DistServeInitRequest):
 
 
 @router.post('/distserve/p2p_connect')
-async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
+async def p2p_connect(conn_request: DistServeConnectionRequest):
     return VariableInterface.async_engine.p2p_connect(conn_request)
 
 

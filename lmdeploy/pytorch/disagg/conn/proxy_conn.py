@@ -1,16 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import enum
-import json
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import aiohttp
 
 from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeConnectionResponse,
+                                                   DistServeInitRequest, DistServeInitResponse)
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 logger = get_logger('lmdeploy')
 
@@ -79,25 +79,28 @@ class PDConnectionPool:
                         get_server_api(server_endpoint, 'distserve/engine_info'),
                         timeout=self.aiotimeout,
                 ) as resp:
-                    return DistServeEngineConfig.model_validate_json(await resp.json())
+                    result = await resp.json()
+                    return DistServeEngineConfig.model_validate_json(result)
 
-        async def p2p_initialize(server_endpoint, init_request: DistServeInitRequest):
+        async def p2p_initialize(server_endpoint, init_request: DistServeInitRequest) -> DistServeInitResponse:
             async with self.conn_sem:
                 async with self.conn_sess.post(
                         get_server_api(server_endpoint, 'distserve/p2p_initialize'),
                         json=init_request.model_dump(mode='json'),
                         timeout=self.aiotimeout,
                 ) as resp:
-                    return await resp.json()
+                    result = await resp.json()
+                    return DistServeInitResponse.model_validate(result)
 
-        async def p2p_connect(server_endpoint, conn_request: List[DistServeConnectionRequest]):
+        async def p2p_connect(server_endpoint, conn_request: DistServeConnectionRequest) -> DistServeConnectionResponse:
             async with self.conn_sem:
                 async with self.conn_sess.post(
                         get_server_api(server_endpoint, 'distserve/p2p_connect'),
-                        json=[req.model_dump(mode='json') for req in conn_request],
+                        json=conn_request.model_dump(mode='json'),
                         timeout=self.aiotimeout,
                 ) as resp:
-                    return await resp.json()
+                    result = await resp.json()
+                    return DistServeConnectionResponse.model_validate(result)
 
         async def conn_worker(conn_req: PDConnectionMessage, conn_event: asyncio.Event):
             try:
@@ -120,32 +123,30 @@ class PDConnectionPool:
                     rdma_config=conn_req.rdma_config,
                     nvlink_config=conn_req.nvlink_config,
                 )
-                decode_init_req = DistServeInitRequest(protocol=conn_req.protocol,
-                                                       local_engine_id=conn_req.d_url,
-                                                       local_engine_config=decode_engine_config,
-                                                       remote_engine_id=conn_req.p_url,
-                                                       remote_engine_config=prefill_engine_config,
-                                                       rdma_config=conn_req.rdma_config,
-                                                       nvlink_config=conn_req.nvlink_config)
+                decode_init_req = DistServeInitRequest(
+                    protocol=conn_req.protocol,
+                    local_engine_id=conn_req.d_url,
+                    local_engine_config=decode_engine_config,
+                    remote_engine_id=conn_req.p_url,
+                    remote_engine_config=prefill_engine_config,
+                    rdma_config=conn_req.rdma_config,
+                    nvlink_config=conn_req.nvlink_config,
+                )
 
-                prefill_endpoint_info = await p2p_initialize(conn_req.p_url, prefill_init_req)
-                decode_endpoint_info = await p2p_initialize(conn_req.d_url, decode_init_req)
+                prefill_init_resp = await p2p_initialize(conn_req.p_url, prefill_init_req)
+                decode_init_resp = await p2p_initialize(conn_req.d_url, decode_init_req)
 
                 # Step 3. Connection
-                prefill_endpoint_conn_reqs = [
-                    DistServeConnectionRequest(
-                        protocol=conn_req.protocol,
-                        remote_engine_id=conn_req.d_url,
-                        remote_endpoint_info=json.dumps(info),
-                    ) for info in decode_endpoint_info
-                ]
-                decode_endpoint_conn_reqs = [
-                    DistServeConnectionRequest(
-                        protocol=conn_req.protocol,
-                        remote_engine_id=conn_req.p_url,
-                        remote_endpoint_info=json.dumps(info),
-                    ) for info in prefill_endpoint_info
-                ]
+                prefill_endpoint_conn_reqs = DistServeConnectionRequest(
+                    protocol=conn_req.protocol,
+                    remote_engine_id=conn_req.d_url,
+                    remote_engine_endpoint_info=decode_init_resp.engine_endpoint_info,
+                    remote_kvtransfer_endpoint_info=decode_init_resp.kvtransfer_endpoint_info)
+                decode_endpoint_conn_reqs = DistServeConnectionRequest(
+                    protocol=conn_req.protocol,
+                    remote_engine_id=conn_req.p_url,
+                    remote_engine_endpoint_info=prefill_init_resp.engine_endpoint_info,
+                    remote_kvtransfer_endpoint_info=prefill_init_resp.kvtransfer_endpoint_info)
                 await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
                 await p2p_connect(conn_req.d_url, decode_endpoint_conn_reqs)
                 self.pool[link].set_status(PDConnectionStatus.Connected)

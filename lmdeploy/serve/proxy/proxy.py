@@ -21,11 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.pytorch.disagg.config import (DistServeRDMAConfig, EngineRole, MigrationProtocol, RDMALinkType,
-                                            ServingStrategy)
-from lmdeploy.pytorch.disagg.conn import PDConnectionPool
+from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMALinkType, ServingStrategy
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
+from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
-from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
@@ -321,7 +320,7 @@ class NodeManager:
         ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
         return ret
 
-    def handle_unavailable_model(self, model_name):
+    def handle_navailable_model(self, model_name):
         """Handle unavailable model.
 
         Args:
@@ -343,12 +342,7 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    async def stream_generate(self,
-                              request: Dict,
-                              node_url: str,
-                              endpoint: str,
-                              prefill_url: Optional[str] = None,
-                              remote_session_id: int = None):
+    async def stream_generate(self, request: Dict, node_url: str, endpoint: str):
         """Return a generator to handle the input request.
 
         Args:
@@ -362,16 +356,12 @@ class NodeManager:
                     async for line in response.content:
                         if line.strip():
                             yield line + b'\n\n'
-                if prefill_url:
-                    async with session.post(f'{prefill_url}/distserve/free_cache',
-                                            json={'session_id': remote_session_id}) as response:
-                        await response.json()
         except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
             logger.error(f'catched an exception: {e}')
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, request: Dict, node_url: str, endpoint: str, is_prefill: bool = False):
+    async def generate(self, request: Dict, node_url: str, endpoint: str):
         """Return a the response of the input request.
 
         Args:
@@ -614,10 +604,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         logger.info(f'A Prefill request is dispatched to {p_url}')
 
         start = node_manager.pre_call(p_url)
-        prefill_info = json.loads(await node_manager.generate(prefill_request_dict,
-                                                              p_url,
-                                                              '/v1/chat/completions',
-                                                              is_prefill=True))
+        prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/chat/completions'))
         node_manager.post_call(p_url, start)
 
         # # Decode
@@ -644,11 +631,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
         start = node_manager.pre_call(d_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict,
-                                                    d_url,
-                                                    '/v1/chat/completions',
-                                                    prefill_url=p_url,
-                                                    remote_session_id=int(prefill_info['id']))
+            response = node_manager.stream_generate(request_dict, d_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
             return StreamingResponse(response, background=background_task)
         else:
@@ -657,10 +640,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 node_manager.post_call(d_url, start)
                 resp = JSONResponse(json.loads(response))
             finally:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(f'{p_url}/distserve/free_cache', json={'session_id':
-                                                                                   prefill_info['id']}) as response:
-                        await response.json()
                 return resp
     else:
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
@@ -738,10 +717,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         logger.info(f'A Prefill request is dispatched to {p_url}')
 
         start = node_manager.pre_call(p_url)
-        prefill_info = json.loads(await node_manager.generate(prefill_request_dict,
-                                                              p_url,
-                                                              '/v1/completions',
-                                                              is_prefill=True))
+        prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/completions'))
         node_manager.post_call(p_url, start)
 
         # # Decode
@@ -769,22 +745,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
         start = node_manager.pre_call(d_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict,
-                                                    d_url,
-                                                    '/v1/completions',
-                                                    prefill_url=p_url,
-                                                    remote_session_id=int(prefill_info['id']))
+            response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
             return StreamingResponse(response, background=background_task)
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/completions')
             node_manager.post_call(d_url, start)
-            resp = JSONResponse(json.loads(response))
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f'{p_url}/distserve/free_cache', json={'session_id':
-                                                                               prefill_info['id']}) as response:
-                    await response.json()
-            return resp
+            return JSONResponse(json.loads(response))
     else:
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
