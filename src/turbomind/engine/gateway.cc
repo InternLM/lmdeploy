@@ -7,9 +7,13 @@
 
 namespace turbomind {
 
-Gateway::Gateway(int groups, int group_size, std::function<std::shared_ptr<void>()> ctx_factory):
+Gateway::Gateway(int                                    groups,
+                 int                                    group_size,
+                 std::vector<int>                       node_dp_ranks,
+                 std::function<std::shared_ptr<void>()> ctx_factory):
     size_{groups * group_size},
     group_size_{group_size},
+    node_dp_ranks_{std::move(node_dp_ranks)},
     queues_(size_),
     flags_(groups),
     ctx_factory_{ctx_factory},

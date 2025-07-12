@@ -97,6 +97,11 @@ struct EngineParam {
     int mlp_tp_size;
     int mlp_tp_rank;
 
+    // multi-node
+    int nnodes;
+    int node_rank;
+    int ngpus_per_node;
+
     std::vector<int> devices;
 };
 
