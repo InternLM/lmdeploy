@@ -6,7 +6,6 @@ import triton.language as tl
 
 from .activation import silu_and_mul
 from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize
-from .triton_utils import get_kernel_meta
 from .w8a8_triton_kernels import per_token_quant_int8
 
 
@@ -50,8 +49,6 @@ def get_cuda_autotune_config():
 @triton.autotune(
     configs=get_cuda_autotune_config(),
     key=['N', 'K', 'M_NP2'],
-    warmup=10,
-    rep=25,
 )
 @triton.jit
 def fused_moe_w8a8_kernel(
@@ -198,7 +195,6 @@ def fused_moe_w8a8_kernel_launcher(
     C = C.flatten(0, -2)
 
     grid = _grid_fn
-    kernel_meta = get_kernel_meta(A)
     fused_moe_w8a8_kernel[grid](
         A,
         A_scale,
@@ -226,7 +222,6 @@ def fused_moe_w8a8_kernel_launcher(
         reindex_c=reindex_c,
         M_NP2=M_NP2,
         ACCUMULATOR_DTYPE=accumulator_dtype,
-        **kernel_meta,
     )
 
 
