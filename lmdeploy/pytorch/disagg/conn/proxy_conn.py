@@ -74,7 +74,7 @@ class PDConnectionPool:
         # put migrating session to `self.migration_session_shelf` for increasing fault tolerance
         # if a session is finished, then pop it from `self.migration_session_shelf`
         # if a decode instance is disconnected, then gc all blocks of these sessions in prefill instance.
-        self.migration_session_shelf: Dict[Tuple[str, str], Set[int]] = defaultdict(set)
+        self.migration_session_shelf: Dict[str, Set[int]] = defaultdict(set)
 
         # conn_perform handler queue
         self.waiting_conn: asyncio.Queue[Tuple[PDConnectionMessage, asyncio.Event]] = (asyncio.Queue())
@@ -93,17 +93,15 @@ class PDConnectionPool:
 
     def reg_instance(self, role: EngineRole, endpoint: str):
         if role == EngineRole.Prefill:
-            logger.error('????????????????')
             self.prefill_endpoints.add(endpoint)
         elif role == EngineRole.Decode:
-            logger.error('????????????????')
             self.decode_endpoints.add(endpoint)
         else:
             raise ValueError(f'Unsupported role: {role}')
 
     def dereg_instance(self, endpoint: str):
         if endpoint in self.prefill_endpoints:
-            self.prefill_endpoints.pop(endpoint)
+            self.prefill_endpoints.remove(endpoint)
         elif endpoint in self.decode_endpoints:
             dropped_key = []
             for conn_key in self.pool.keys():
@@ -112,7 +110,13 @@ class PDConnectionPool:
             for k in dropped_key:
                 self.drop(k)
             # TODO(JimyMa): handle side-effect by kvcache migration
-            self.decode_endpoints.pop(endpoint)
+            self.decode_endpoints.remove(endpoint)
+
+    def shelf_prefill_session(self, conn_key: Tuple[str, str], session_id: int):
+        self.migration_session_shelf[conn_key].add(session_id)
+
+    def unshelf_prefill_session(self, conn_key: Tuple[str, str], session_id: int):
+        self.migration_session_shelf[conn_key].remove(session_id)
 
     async def connect(self, conn_req: PDConnectionMessage):
 

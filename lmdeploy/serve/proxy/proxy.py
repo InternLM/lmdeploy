@@ -507,6 +507,12 @@ async def connection_warmup():
     return JSONResponse({'SUCCESS': True})
 
 
+@app.post('/distserve/gc')
+async def cache_block_gc_to_be_migrated():
+    # TODO (JimyMa): add garbage collection of to be migrated request
+    raise NotImplementedError
+
+
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -625,9 +631,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         ).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
+        node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
+            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info['id'])
             return StreamingResponse(response, background=background_task)
         else:
             try:
@@ -635,7 +643,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 node_manager.post_call(d_url, start)
                 resp = JSONResponse(json.loads(response))
             finally:
+                node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info['id'])
                 return resp
+
     else:
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
@@ -737,15 +747,18 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             remote_block_ids=prefill_info['cache_block_ids'],
             remote_token_id=prefill_info['remote_token_ids'][-1],
         ).model_dump(mode='json')
+        node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
 
         start = node_manager.pre_call(d_url)
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
+            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info['id'])
             return StreamingResponse(response, background=background_task)
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/completions')
             node_manager.post_call(d_url, start)
+            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info['id'])
             return JSONResponse(json.loads(response))
     else:
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
