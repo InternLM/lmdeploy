@@ -93,22 +93,25 @@ class PDConnectionPool:
 
     def reg_instance(self, role: EngineRole, endpoint: str):
         if role == EngineRole.Prefill:
+            logger.error('????????????????')
             self.prefill_endpoints.add(endpoint)
         elif role == EngineRole.Decode:
+            logger.error('????????????????')
             self.decode_endpoints.add(endpoint)
         else:
             raise ValueError(f'Unsupported role: {role}')
 
     def dereg_instance(self, endpoint: str):
         if endpoint in self.prefill_endpoints:
-            print('????????????????')
             self.prefill_endpoints.pop(endpoint)
         elif endpoint in self.decode_endpoints:
-            print('????????????????')
+            dropped_key = []
             for conn_key in self.pool.keys():
                 if conn_key[1] == endpoint:
-                    self.drop(conn_key)
-            # handle side-effect by kvcache migration
+                    dropped_key.append(conn_key)
+            for k in dropped_key:
+                self.drop(k)
+            # TODO(JimyMa): handle side-effect by kvcache migration
             self.decode_endpoints.pop(endpoint)
 
     async def connect(self, conn_req: PDConnectionMessage):
