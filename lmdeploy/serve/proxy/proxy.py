@@ -173,12 +173,8 @@ class NodeManager:
         if node_url in self.nodes.keys():
             self.nodes.pop(node_url)
             self.update_config_file()
-            dropped_conn = []
-            for conn in self.pd_connection_pool.pool:
-                if node_url in conn:
-                    dropped_conn.append(conn)
-            for conn in dropped_conn:
-                self.pd_connection_pool.drop(*conn)
+            self.pd_connection_pool.dereg_instance(node_url)
+            
 
     def terminate_node(self, node_url: str):
         """Terminate a node."""

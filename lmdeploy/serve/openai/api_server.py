@@ -26,7 +26,7 @@ from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineCo
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
-from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest, DistServeCacheFreeRequest
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -968,9 +968,8 @@ async def p2p_connect(conn_request: DistServeConnectionRequest):
 
 
 @router.post('/distserve/free_cache')
-async def free_cache(raw_request: Request) -> JSONResponse:
-    config = await raw_request.json()
-    session_id = int(config['session_id'])
+async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONResponse:
+    session_id = cache_free_request.remote_session_id
     VariableInterface.async_engine.free_cache(session_id)
     return {'status': 'SUCCESS'}
 

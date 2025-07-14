@@ -2,14 +2,16 @@
 import asyncio
 import enum
 import os
-from typing import Dict, Tuple
+from collections import defaultdict
+from typing import Dict, Set, Tuple
 
 import aiohttp
+import requests
 
 from lmdeploy.logger import get_logger
-from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeConnectionResponse,
-                                                   DistServeInitRequest, DistServeInitResponse)
+                                                   DistServeInitRequest, DistServeInitResponse, DistServeCacheFreeRequest)
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
 
 logger = get_logger('lmdeploy')
@@ -37,6 +39,10 @@ class PDConnectionState:
         self.status = status
 
 
+def get_server_api(url: str, api: str):
+    return f'{url}/{api}'
+
+
 class PDConnectionPool:
     """Constructing the link of Prefill and Decode engine for the migration of
     KVCache.
@@ -45,13 +51,29 @@ class PDConnectionPool:
     Note: Lazy link construction is supported, which perform connection
         at the first LLM request. As a result, we don't need to construct
         PD Communication group when start a engine server.
-    Warning: By now, only engines with same parallel configuration can be
+    Note: we perform simple fault tolerance by checkpointing the session_id of a
+        request which is under migrating and will trigger `gc` when the decode
+        instanceis crushed. 
+    TODO (JimyMa): By now, only engines with same parallel configuration can be
         correctly connected.
     """
 
+    # Maximum concurrent connections​​
+    CONN_SEMAPHORE_SIZE = 2048
+
     def __init__(self):
+        # all prefill and decode instances
+        # TODO (JimyMa): Maybe encoding instances
+        self.prefill_endpoints: Set[str] = set()
+        self.decode_endpoints: Set[str] = set()
+
         # Links of PD Connection.
         self.pool: Dict[Tuple[str, str], PDConnectionState] = {}
+
+        # put migrating session to `self.migration_session_shelf` for increasing fault tolerance
+        # if a session is finished, then pop it from `self.migration_session_shelf`  
+        # if a decode instance is disconnected, then gc all blocks of these sessions in prefill instance.  
+        self.migration_session_shelf: Dict[Tuple[str, str], Set[int]] = defaultdict(set)
 
         # conn_perform handler queue
         self.waiting_conn: asyncio.Queue[Tuple[PDConnectionMessage, asyncio.Event]] = (asyncio.Queue())
@@ -68,11 +90,25 @@ class PDConnectionPool:
         # conn initialized signal
         self.initialized = False
 
-    async def perform_conn(self):
+    def reg_instance(self, role: EngineRole, endpoint: str):
+        if role == EngineRole.Prefill:
+            self.prefill_endpoints.add(endpoint)
+        elif role == EngineRole.Decode:
+            self.decode_endpoints.add(endpoint)
+        else:
+            raise ValueError(f"Unsupported role: {role}")
 
-        def get_server_api(url: str, api: str):
-            return f'{url}/{api}'
+    def dereg_instance(self, endpoint: str):
+        if endpoint in self.prefill_endpoints:
+            self.prefill_endpoints.pop(endpoint)
+        elif endpoint in self.decode_endpoints:
+            for conn_key in self.pool.keys():
+                if conn_key[1] == endpoint:
+                    self.drop(conn_key)
+            # handle side-effect by kvcache migration
+            self.decode_endpoints.pop(endpoint)
 
+    async def connect(self, conn_req: PDConnectionMessage):
         async def get_engine_config(server_endpoint):
             async with self.conn_sem:
                 async with self.conn_sess.get(
@@ -160,32 +196,32 @@ class PDConnectionPool:
             await self.pool[(conn_req.p_url, conn_req.d_url)].event.wait()
             conn_event.set()
 
-        logger.debug('perform_conn start')
-        while True:
-            if self.waiting_conn.empty():
-                await self.conn_req_event.wait()
+        async def _perform_conn():
+            logger.debug('perform_conn start')
+            while True:
+                if self.waiting_conn.empty():
+                    await self.conn_req_event.wait()
 
-            self.conn_req_event.clear()
+                self.conn_req_event.clear()
 
-            while not self.waiting_conn.empty():
-                conn_req, conn_event = self.waiting_conn.get_nowait()
-                link = (conn_req.p_url, conn_req.d_url)
-                if link not in self.pool:
-                    self.pool[link] = PDConnectionState(
-                        PDConnectionStatus.Disconnected,
-                        conn_event,
-                    )
-                if self.pool[link].status == PDConnectionStatus.Connecting:
-                    asyncio.create_task(wait_for_conn(conn_req, conn_event))
-                elif self.pool[link].status == PDConnectionStatus.Disconnected:
-                    self.pool[link].set_status(PDConnectionStatus.Connecting)
-                    asyncio.create_task(conn_worker(conn_req, conn_event))
+                while not self.waiting_conn.empty():
+                    conn_req, conn_event = self.waiting_conn.get_nowait()
+                    link = (conn_req.p_url, conn_req.d_url)
+                    if link not in self.pool:
+                        self.pool[link] = PDConnectionState(
+                            PDConnectionStatus.Disconnected,
+                            conn_event,
+                        )
+                    if self.pool[link].status == PDConnectionStatus.Connecting:
+                        asyncio.create_task(wait_for_conn(conn_req, conn_event))
+                    elif self.pool[link].status == PDConnectionStatus.Disconnected:
+                        self.pool[link].set_status(PDConnectionStatus.Connecting)
+                        asyncio.create_task(conn_worker(conn_req, conn_event))
 
-    async def connect(self, conn_req: PDConnectionMessage):
         if not self.initialized:
             loop = asyncio.get_event_loop()
-            loop.create_task(self.perform_conn())
-            self.conn_sem = asyncio.Semaphore(1024)
+            loop.create_task(_perform_conn(self))
+            self.conn_sem = asyncio.Semaphore(self.CONN_SEMAPHORE_SIZE)
             self.conn_sess = aiohttp.ClientSession(
                 connector=aiohttp.TCPConnector(limit_per_host=256),
                 timeout=aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT),
@@ -213,5 +249,18 @@ class PDConnectionPool:
             return False
         return link.status == PDConnectionStatus.Connected
 
-    def drop(self, left: str, right: str):
+    def drop(self, pd_key: Tuple[str, str]):
+        left = pd_key[0]
+        right = pd_key[1]
+        def cache_free(server_endpoint, cache_free_request: DistServeCacheFreeRequest) -> Dict:
+            requests.post(
+                    get_server_api(server_endpoint, 'distserve/free_cache'),
+                    json=cache_free_request.model_dump(mode='json'),
+                    timeout=self.aiotimeout,
+            )
+
+        # trigger gc
+        for session_id in self.migration_session_shelf[(left, right)]:
+            cache_free(left, DistServeCacheFreeRequest(remote_engine_id=left, remote_session_id=session_id))
+
         self.pool.pop((left, right), None)
