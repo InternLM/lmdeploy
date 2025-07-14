@@ -716,7 +716,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
 
-        p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+        try:
+            p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+        except Exception as e:
+            logger.error(f'error Msg: {str(e)}')
+            return {'status': 'Instance sch error, cannot find available p_url'}
+
         if not p_url:
             return node_manager.handle_unavailable_model(request.model)
         logger.info(f'A Prefill request is dispatched to {p_url}')
@@ -725,20 +730,29 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/completions'))
         node_manager.post_call(p_url, start)
 
-        # # Decode
-        d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
+        # Decode
+        try:
+            d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
+        except Exception as e:
+            logger.error(f'error Msg: {str(e)}')
+            return {'status': 'Instance sch error, cannot find available p_url'}
+
         if not d_url:
             return node_manager.handle_unavailable_model(request.model)
         logger.info(f'A Decode request is dispatched to {d_url}')
 
         if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
-            await node_manager.pd_connection_pool.connect(
-                PDConnectionMessage(
-                    p_url=p_url,
-                    d_url=d_url,
-                    protocol=node_manager.migration_protocol,
-                    rdma_config=node_manager.rdma_config,
-                ))
+            try:
+                await node_manager.pd_connection_pool.connect(
+                    PDConnectionMessage(
+                        p_url=p_url,
+                        d_url=d_url,
+                        protocol=node_manager.migration_protocol,
+                        rdma_config=node_manager.rdma_config,
+                    ))
+            except Exception as e:
+                logger.error(f'error Msg: {str(e)}')
+                return {'status': f'Connection error, cannot establish connection {(p_url, d_url)}'}
 
         request_dict['migration_request'] = MigrationRequest(
             protocol=node_manager.migration_protocol,
