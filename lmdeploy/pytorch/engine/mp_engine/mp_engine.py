@@ -174,7 +174,7 @@ class MPEngine:
             cancel_async_tasks(loop)
 
     @staticmethod
-    async def _mp_proc_async(server, engine: Engine):
+    async def _mp_proc_async(server, engine: 'Engine'):
         """Mp process function."""
         engine.start_loop()
         instance_pool = EngineInstancePool(engine)
