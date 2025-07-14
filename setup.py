@@ -1,5 +1,6 @@
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -35,7 +36,9 @@ def get_turbomind_deps():
     if os.name == 'nt':
         return []
 
-    CUDAVER = os.getenv('CUDAVER', '11')
+    CUDA_COMPILER = os.getenv('CUDACXX', os.getenv('CMAKE_CUDA_COMPILER', 'nvcc'))
+    nvcc_output = subprocess.check_output([CUDA_COMPILER, '--version'], stderr=subprocess.DEVNULL).decode()
+    CUDAVER, = re.search(r'release\s+(\d+).', nvcc_output).groups()
     return [
         f'nvidia-nccl-cu{CUDAVER}',
         f'nvidia-cuda-runtime-cu{CUDAVER}',
