@@ -101,8 +101,10 @@ class PDConnectionPool:
 
     def dereg_instance(self, endpoint: str):
         if endpoint in self.prefill_endpoints:
+            print('????????????????')
             self.prefill_endpoints.pop(endpoint)
         elif endpoint in self.decode_endpoints:
+            print('????????????????')
             for conn_key in self.pool.keys():
                 if conn_key[1] == endpoint:
                     self.drop(conn_key)
@@ -230,6 +232,10 @@ class PDConnectionPool:
             )
             self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
             self.initialized = True
+
+        self.reg_instance(EngineRole.Prefill, conn_req.p_url)
+        self.reg_instance(EngineRole.Decode, conn_req.d_url)
+
         cnt = 0
         while cnt < self.max_retry_cnt:
             if self.is_connected(conn_req.p_url, conn_req.d_url):

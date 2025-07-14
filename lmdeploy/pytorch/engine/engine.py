@@ -969,7 +969,7 @@ class Engine:
             __send_resps(resps)
 
     async def p2p_initialize(self, init_request: DistServeInitRequest):
-        return await self.engine_conn(init_request)
+        return await self.engine_conn.p2p_initialize(init_request)
 
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         return self.engine_conn.p2p_connect(conn_request)
