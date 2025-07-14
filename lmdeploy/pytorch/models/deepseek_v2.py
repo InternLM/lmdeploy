@@ -578,7 +578,6 @@ class MoEGate(nn.Module):
         self.n_routed_experts = config.n_routed_experts
         self.routed_scaling_factor = config.routed_scaling_factor
         self.scoring_func = config.scoring_func
-        self.seq_aux = config.seq_aux
         self.topk_method = config.topk_method
         self.n_group = config.n_group
         self.topk_group = config.topk_group

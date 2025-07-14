@@ -21,6 +21,8 @@ with read_base():
     from opencompass.configs.datasets.math.math_0shot_gen_393424 import math_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_a0fc46 import sanitized_mbpp_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import mmlu_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import \
+        mmlu_pro_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.nq.nq_open_1shot_gen_01cf41 import nq_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.race.race_gen_69ee4f import race_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import TheoremQA_datasets  # noqa: F401, E501
@@ -207,7 +209,7 @@ base_model = dict(type=TurboMindModelwithChatTemplate,
                   gen_config=dict(top_k=1, temperature=1e-6, top_p=0.9, max_new_tokens=32768),
                   max_seq_len=32768,
                   max_out_len=32768,
-                  batch_size=256,
+                  batch_size=500,
                   pred_postprocessor=dict(type=extract_non_reasoning_content),
                   run_cfg=dict(num_gpus=1))
 
@@ -215,13 +217,6 @@ turbomind_qwen3_32b = deepcopy(base_model)
 pytorch_qwen3_32b = deepcopy(base_model)
 turbomind_qwen3_32b_4bits = deepcopy(base_model)
 turbomind_qwen3_32b_kvint8 = deepcopy(base_model)
-for model in [
-        v for k, v in locals().items() if k.startswith('turbomind_qwen3_32b') or k.startswith('pytorch_qwen3_32b')
-]:
-    model['abbr'] = 'qwen3_32b_turbomind'
-    model['path'] = 'Qwen/Qwen3-32B'
-    model['run_cfg']['num_gpus'] = 2
-    model['engine_config']['tp'] = 2
 
 turbomind_qwen3_30b_a3b = deepcopy(base_model)
 pytorch_qwen3_30b_a3b = deepcopy(base_model)
@@ -230,22 +225,6 @@ turbomind_qwen3_30b_a3b_kvint8 = deepcopy(base_model)
 turbomind_qwen3_30b_a3b_fp8 = deepcopy(base_model)
 pytorch_qwen3_30b_a3b_fp8 = deepcopy(base_model)
 turbomind_qwen3_30b_a3b_fp8['engine_config']['cache_max_entry_count'] = 0.6
-for model in [
-        v for k, v in locals().items()
-        if k.startswith('turbomind_qwen3_30b_a3b') or k.startswith('pytorch_qwen3_30b_a3b')
-]:
-    model['abbr'] = 'qwen3_30b_a3b_turbomind'
-    model['path'] = 'Qwen/Qwen3-30B-A3B'
-    model['run_cfg']['num_gpus'] = 2
-    model['engine_config']['tp'] = 2
-    model['engine_config']['max_batch_size'] = 1024
-
-for model in [
-        v for k, v in locals().items()
-        if k.startswith('turbomind_qwen3_30b_a3b_fp8') or k.startswith('pytorch_qwen3_30b_a3b_fp8')
-]:
-    model['abbr'] = 'qwen3_30b_a3b_fp8_turbomind'
-    model['path'] = 'Qwen/Qwen3-30B-A3B-FP8'
 
 turbomind_qwen3_235b_a22b = deepcopy(base_model)
 pytorch_qwen3_235b_a22b = deepcopy(base_model)
@@ -253,29 +232,6 @@ turbomind_qwen3_235b_a22b_4bits = deepcopy(base_model)
 turbomind_qwen3_235b_a22b_kvint8 = deepcopy(base_model)
 turbomind_qwen3_235b_a22b_fp8 = deepcopy(base_model)
 pytorch_qwen3_235b_a22b_fp8 = deepcopy(base_model)
-
-for model in [
-        v for k, v in locals().items()
-        if k.startswith('turbomind_qwen3_235b_a22b') or k.startswith('pytorch_qwen3_235b_a22b')
-]:
-    model['abbr'] = 'qwen3_235b_a22b_turbomind'
-    model['path'] = 'Qwen/Qwen3-235B-A22B'
-    model['run_cfg']['num_gpus'] = 8
-    model['engine_config']['tp'] = 8
-    model['engine_config']['max_batch_size'] = 1024
-
-for model in [
-        v for k, v in locals().items()
-        if k.startswith('turbomind_qwen3_235b_a22b_fp8') or k.startswith('pytorch_qwen3_235b_a22b_fp8')
-]:
-    model['abbr'] = 'qwen3_235b_a22b_fp8_turbomind'
-    model['path'] = 'Qwen/Qwen3-235B-A22B-FP8'
-
-turbomind_qwen3_235b_a22b_fp8['engine_config']['cache_max_entry_count'] = 0.6
-turbomind_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
-turbomind_qwen3_235b_a22b_fp8['run_cfg']['num_gpus'] = 4
-pytorch_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
-pytorch_qwen3_235b_a22b_fp8['run_cfg']['num_gpus'] = 4
 
 for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
     model['engine_config']['max_batch_size'] = 512
@@ -310,6 +266,59 @@ for model in [v for k, v in locals().items() if '_batch1' in k]:
     model['abbr'] = model['abbr'] + '_batch1'
     model['engine_config']['max_batch_size'] = 1
     model['batch_size'] = 1
+
+# update config for Qwen3-32B, Qwen3-30B-A3B, Qwen3-235B-A22B
+for model in [
+        v for k, v in locals().items() if k.startswith('turbomind_qwen3_32b') or k.startswith('pytorch_qwen3_32b')
+]:
+    model['abbr'] = 'qwen3_32b_turbomind'
+    model['path'] = 'Qwen/Qwen3-32B'
+    model['run_cfg']['num_gpus'] = 2
+    model['engine_config']['tp'] = 2
+    model['engine_config']['max_batch_size'] = 1024
+    model['batch_size'] = 2048
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_30b_a3b') or k.startswith('pytorch_qwen3_30b_a3b')
+]:
+    model['abbr'] = 'qwen3_30b_a3b_turbomind'
+    model['path'] = 'Qwen/Qwen3-30B-A3B'
+    model['run_cfg']['num_gpus'] = 2
+    model['engine_config']['tp'] = 2
+    model['engine_config']['max_batch_size'] = 1024
+    model['batch_size'] = 2048
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_30b_a3b_fp8') or k.startswith('pytorch_qwen3_30b_a3b_fp8')
+]:
+    model['abbr'] = 'qwen3_30b_a3b_fp8_turbomind'
+    model['path'] = 'Qwen/Qwen3-30B-A3B-FP8'
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_235b_a22b') or k.startswith('pytorch_qwen3_235b_a22b')
+]:
+    model['abbr'] = 'qwen3_235b_a22b_turbomind'
+    model['path'] = 'Qwen/Qwen3-235B-A22B'
+    model['run_cfg']['num_gpus'] = 8
+    model['engine_config']['tp'] = 8
+    model['engine_config']['max_batch_size'] = 1024
+    model['batch_size'] = 2048
+
+for model in [
+        v for k, v in locals().items()
+        if k.startswith('turbomind_qwen3_235b_a22b_fp8') or k.startswith('pytorch_qwen3_235b_a22b_fp8')
+]:
+    model['abbr'] = 'qwen3_235b_a22b_fp8_turbomind'
+    model['path'] = 'Qwen/Qwen3-235B-A22B-FP8'
+
+turbomind_qwen3_235b_a22b_fp8['engine_config']['cache_max_entry_count'] = 0.6
+turbomind_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
+turbomind_qwen3_235b_a22b_fp8['run_cfg']['num_gpus'] = 4
+pytorch_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
+pytorch_qwen3_235b_a22b_fp8['run_cfg']['num_gpus'] = 4
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN, max_batch_size=512, tp=1),

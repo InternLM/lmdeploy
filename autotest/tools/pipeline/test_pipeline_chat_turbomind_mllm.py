@@ -222,10 +222,9 @@ def test_pipeline_chat_fallback_backend_kvint8_tp2(config, model, communicator, 
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
 @pytest.mark.pr_test
-@pytest.mark.parametrize('model', [
-    'liuhaotian/llava-v1.6-vicuna-7b', 'OpenGVLab/InternVL2-4B', 'OpenGVLab/InternVL2-8B',
-    'internlm/internlm-xcomposer2d5-7b'
-])
+@pytest.mark.parametrize(
+    'model',
+    ['liuhaotian/llava-v1.6-vicuna-7b', 'OpenGVLab/InternVL2-4B', 'OpenGVLab/InternVL2-8B', 'OpenGVLab/InternVL3-8B'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_pr_test(config, model, communicator, worker_id):
     if 'gw' in worker_id:
