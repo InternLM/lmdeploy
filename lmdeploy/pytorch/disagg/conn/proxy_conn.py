@@ -10,8 +10,9 @@ import requests
 
 from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, EngineRole
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeConnectionResponse,
-                                                   DistServeInitRequest, DistServeInitResponse, DistServeCacheFreeRequest, DistServeDropConnectionRequest)
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
+                                                   DistServeConnectionResponse, DistServeDropConnectionRequest,
+                                                   DistServeInitRequest, DistServeInitResponse)
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
 
 logger = get_logger('lmdeploy')
@@ -53,7 +54,7 @@ class PDConnectionPool:
         PD Communication group when start a engine server.
     Note: we perform simple fault tolerance by checkpointing the session_id of a
         request which is under migrating and will trigger `gc` when the decode
-        instanceis crushed. 
+        instanceis crushed.
     TODO (JimyMa): By now, only engines with same parallel configuration can be
         correctly connected.
     """
@@ -71,8 +72,8 @@ class PDConnectionPool:
         self.pool: Dict[Tuple[str, str], PDConnectionState] = {}
 
         # put migrating session to `self.migration_session_shelf` for increasing fault tolerance
-        # if a session is finished, then pop it from `self.migration_session_shelf`  
-        # if a decode instance is disconnected, then gc all blocks of these sessions in prefill instance.  
+        # if a session is finished, then pop it from `self.migration_session_shelf`
+        # if a decode instance is disconnected, then gc all blocks of these sessions in prefill instance.
         self.migration_session_shelf: Dict[Tuple[str, str], Set[int]] = defaultdict(set)
 
         # conn_perform handler queue
@@ -96,7 +97,7 @@ class PDConnectionPool:
         elif role == EngineRole.Decode:
             self.decode_endpoints.add(endpoint)
         else:
-            raise ValueError(f"Unsupported role: {role}")
+            raise ValueError(f'Unsupported role: {role}')
 
     def dereg_instance(self, endpoint: str):
         if endpoint in self.prefill_endpoints:
@@ -109,6 +110,7 @@ class PDConnectionPool:
             self.decode_endpoints.pop(endpoint)
 
     async def connect(self, conn_req: PDConnectionMessage):
+
         async def get_engine_config(server_endpoint):
             async with self.conn_sem:
                 async with self.conn_sess.get(
@@ -252,15 +254,16 @@ class PDConnectionPool:
     def drop(self, pd_key: Tuple[str, str]):
         left = pd_key[0]
         right = pd_key[1]
+
         def cache_free(server_endpoint, cache_free_request: DistServeCacheFreeRequest) -> Dict:
             try:
                 requests.post(
-                        get_server_api(server_endpoint, 'distserve/free_cache'),
-                        json=cache_free_request.model_dump(mode='json'),
-                        timeout=self.aiotimeout,
+                    get_server_api(server_endpoint, 'distserve/free_cache'),
+                    json=cache_free_request.model_dump(mode='json'),
+                    timeout=self.aiotimeout,
                 )
             except Exception as e:
-                logger.error(f"error cache block free {server_endpoint, cache_free_request}. ErrorMsg: {str(e)}")
+                logger.error(f'error cache block free {server_endpoint, cache_free_request}. ErrorMsg: {str(e)}')
 
         def drop_connect(server_endpoint: str, p2p_disconnect_request: DistServeDropConnectionRequest):
             try:
@@ -270,22 +273,22 @@ class PDConnectionPool:
                     timeout=self.aiotimeout,
                 )
             except Exception as e:
-                logger.error(f"error drop connect {server_endpoint, p2p_disconnect_request}. ErrorMsg: {str(e)}")
+                logger.error(f'error drop connect {server_endpoint, p2p_disconnect_request}. ErrorMsg: {str(e)}')
 
         # trigger gc
-        logger.error("cache block gc triggered.")
+        logger.error('cache block gc triggered.')
         try:
             for session_id in self.migration_session_shelf[(left, right)]:
                 cache_free(left, DistServeCacheFreeRequest(remote_engine_id=left, remote_session_id=session_id))
         except Exception as e:
-            logger.error(f"gc error, ErrorMsg: {str(e)}")
+            logger.error(f'gc error, ErrorMsg: {str(e)}')
 
         # trigger p2p disconnect
-        logger.error("drop connection triggered.")
+        logger.error('drop connection triggered.')
         try:
             drop_connect(left, DistServeDropConnectionRequest(engine_id=left, remote_engine_id=right))
             drop_connect(right, DistServeDropConnectionRequest(engine_id=right, remote_engine_id=left))
         except Exception as e:
-            logger.error(f"p2p disconnect error, ErrorMsg: {str(e)}")
+            logger.error(f'p2p disconnect error, ErrorMsg: {str(e)}')
 
         self.pool.pop((left, right), None)

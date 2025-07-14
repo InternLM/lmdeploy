@@ -174,7 +174,6 @@ class NodeManager:
             self.nodes.pop(node_url)
             self.update_config_file()
             self.pd_connection_pool.dereg_instance(node_url)
-            
 
     def terminate_node(self, node_url: str):
         """Terminate a node."""

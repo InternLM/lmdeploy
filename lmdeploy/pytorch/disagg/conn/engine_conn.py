@@ -11,8 +11,9 @@ import zmq.asyncio
 from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
                                                    DistServeConnectionResponse, DistServeConnectionStatus,
-                                                   DistServeEngineEndpointInfo, DistServeInitRequest,
-                                                   DistServeInitResponse, DistServeKVTransferEndpointInfo, DistServeDropConnectionRequest)
+                                                   DistServeDropConnectionRequest, DistServeEngineEndpointInfo,
+                                                   DistServeInitRequest, DistServeInitResponse,
+                                                   DistServeKVTransferEndpointInfo)
 from lmdeploy.pytorch.engine.executor.dist_utils import find_available_port
 from lmdeploy.pytorch.messages import MessageStatus
 
@@ -63,7 +64,7 @@ class EngineP2PConnection:
     def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
         # TODO (JimyMa): drop RDMA Connection
         self.p2p_disconnect(drop_conn_request.remote_engine_id)
-        return {"success": True}
+        return {'success': True}
 
     async def zmq_send(self, remote_engine_id: str, remote_session_id: int):
         await self.p2p_sender[remote_engine_id].send_pyobj(

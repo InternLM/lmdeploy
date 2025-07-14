@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 import torch.multiprocessing as mp
 
 from lmdeploy.messages import PytorchEngineConfig
-from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest, DistServeDropConnectionRequest
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
+                                                   DistServeInitRequest)
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
-
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.engine import Engine
@@ -230,7 +230,8 @@ class MPEngine:
         return self._collective_rpc('p2p_connect', conn_request)
 
     def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
-        """ drop connection. 
+        """Drop connection.
+
         1. drop engine connection (zmq connection)
         2. TODO(JimyMa) drop RDMA Connection.
         """
