@@ -12,6 +12,8 @@ import torch
 from lmdeploy.messages import MetricsInfo, PytorchEngineConfig, ResponseType
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
+                                                   DistServeInitRequest)
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
@@ -966,6 +968,15 @@ class Engine:
             await self._await_forward_event(forward_event)
             __send_resps(resps)
 
+    async def p2p_initialize(self, init_request: DistServeInitRequest):
+        return await self.engine_conn(init_request)
+
+    def p2p_connect(self, conn_request: DistServeConnectionRequest):
+        return self.engine_conn.p2p_connect(conn_request)
+
+    async def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
+        return self.engine_conn.p2p_drop_connect()
+
     @torch.inference_mode()
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """Async loop migration."""
@@ -1038,7 +1049,11 @@ class Engine:
                 scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
                 if next_running is None:
+                    # TODO (JimyMa): add watermark check event instead of async sleep.
                     # self.perfill_watermark_event.wait()
+                    logger.warning(f'no next prefill running request, Maybe cache is full, '
+                                   f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
+                                   f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
                     await asyncio.sleep(0.1)
                     continue
             num_loops = forward_inputs['loop_count']

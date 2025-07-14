@@ -63,7 +63,7 @@ class EngineP2PConnection:
 
     def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
         # TODO (JimyMa): drop RDMA Connection
-        self.p2p_disconnect(drop_conn_request.remote_engine_id)
+        self.zmq_disconnect(drop_conn_request.remote_engine_id)
         return {'success': True}
 
     async def zmq_send(self, remote_engine_id: str, remote_session_id: int):
@@ -114,7 +114,7 @@ class EngineP2PConnection:
             else:
                 raise ValueError(f'Unsupported zmq request {type(req)}')
 
-    async def p2p_disconnect(self, remote_engine_id: str):
+    async def zmq_disconnect(self, remote_engine_id: str):
         self.p2p_receiver[remote_engine_id].close()
         self.p2p_sender[remote_engine_id].close()
         self.p2p_conn_ctx[remote_engine_id].term()
