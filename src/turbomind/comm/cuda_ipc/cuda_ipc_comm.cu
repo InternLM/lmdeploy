@@ -248,32 +248,25 @@ void CudaIpcCommImpl::register_for_group(const Allocation& alloc, const std::vec
     }
 
     if (multicast_capability_) {
-        CUmulticastObjectProp prop{};
-        prop.numDevices = n_ranks(group);
-        prop.size       = size;
 
-        if (rank(group) == 0) {
-            CUDRVCHECK(cuMulticastCreate(&s.mc_handle, &prop));
+        const int ranks = n_ranks(group);
+        const int rank  = this->rank(group);
+
+        CUmulticastObjectProp mc_prop{};
+        mc_prop.numDevices = ranks;
+        mc_prop.size       = size;
+        if (rank == 0) {
+            CUDRVCHECK(cuMulticastCreate(&s.mc_handle, &mc_prop));
         }
-
         auto handles = comm::AllGather(h_comm_, s.mc_handle);
         s.mc_handle  = handles.at(g.l2g[0]);
-
         CUDRVCHECK(cuMulticastAddDevice(s.mc_handle, ordinals_[global_rank_]));
-
-        // wait for all `cuMulticastAddDevice`
-        h_comm_->Sync();
-
+        h_comm_->Sync();  // wait for all `cuMulticastAddDevice`
         CUDRVCHECK(cuMulticastBindMem(s.mc_handle, 0, alloc.handle, 0, size, 0));
-
-        static_assert(sizeof(CUdeviceptr) == sizeof(void*));
-
         CUdeviceptr mc_ptr{};
-
         CUDRVCHECK(cuMemAddressReserve(&mc_ptr, size, alloc.alignment, 0, 0));
         CUDRVCHECK(cuMemMap(mc_ptr, size, 0, s.mc_handle, 0));
         CUDRVCHECK(cuMemSetAccess(mc_ptr, size, &alloc_access_descs_[global_rank_], 1));
-
         s.mc_ptr = reinterpret_cast<void*>(mc_ptr);
     }
 
