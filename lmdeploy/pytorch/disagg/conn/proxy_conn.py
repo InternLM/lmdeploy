@@ -11,7 +11,7 @@ import requests
 from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeConnectionResponse,
-                                                   DistServeInitRequest, DistServeInitResponse, DistServeCacheFreeRequest)
+                                                   DistServeInitRequest, DistServeInitResponse, DistServeCacheFreeRequest, DistServeDropConnectionRequest)
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
 
 logger = get_logger('lmdeploy')
@@ -220,7 +220,7 @@ class PDConnectionPool:
 
         if not self.initialized:
             loop = asyncio.get_event_loop()
-            loop.create_task(_perform_conn(self))
+            loop.create_task(_perform_conn())
             self.conn_sem = asyncio.Semaphore(self.CONN_SEMAPHORE_SIZE)
             self.conn_sess = aiohttp.ClientSession(
                 connector=aiohttp.TCPConnector(limit_per_host=256),
@@ -253,14 +253,39 @@ class PDConnectionPool:
         left = pd_key[0]
         right = pd_key[1]
         def cache_free(server_endpoint, cache_free_request: DistServeCacheFreeRequest) -> Dict:
-            requests.post(
-                    get_server_api(server_endpoint, 'distserve/free_cache'),
-                    json=cache_free_request.model_dump(mode='json'),
+            try:
+                requests.post(
+                        get_server_api(server_endpoint, 'distserve/free_cache'),
+                        json=cache_free_request.model_dump(mode='json'),
+                        timeout=self.aiotimeout,
+                )
+            except Exception as e:
+                logger.error(f"error cache block free {server_endpoint, cache_free_request}. ErrorMsg: {str(e)}")
+
+        def drop_connect(server_endpoint: str, p2p_disconnect_request: DistServeDropConnectionRequest):
+            try:
+                requests.post(
+                    get_server_api(server_endpoint, 'distserve/p2p_drop_connect'),
+                    json=p2p_disconnect_request.model_dump(mode='json'),
                     timeout=self.aiotimeout,
-            )
+                )
+            except Exception as e:
+                logger.error(f"error drop connect {server_endpoint, p2p_disconnect_request}. ErrorMsg: {str(e)}")
 
         # trigger gc
-        for session_id in self.migration_session_shelf[(left, right)]:
-            cache_free(left, DistServeCacheFreeRequest(remote_engine_id=left, remote_session_id=session_id))
+        logger.error("cache block gc triggered.")
+        try:
+            for session_id in self.migration_session_shelf[(left, right)]:
+                cache_free(left, DistServeCacheFreeRequest(remote_engine_id=left, remote_session_id=session_id))
+        except Exception as e:
+            logger.error(f"gc error, ErrorMsg: {str(e)}")
+
+        # trigger p2p disconnect
+        logger.error("drop connection triggered.")
+        try:
+            drop_connect(left, DistServeDropConnectionRequest(engine_id=left, remote_engine_id=right))
+            drop_connect(right, DistServeDropConnectionRequest(engine_id=right, remote_engine_id=left))
+        except Exception as e:
+            logger.error(f"p2p disconnect error, ErrorMsg: {str(e)}")
 
         self.pool.pop((left, right), None)

@@ -89,3 +89,8 @@ class MigrationRequest(BaseModel):
 class DistServeCacheFreeRequest(BaseModel):
     remote_engine_id: str
     remote_session_id: int
+
+
+class DistServeDropConnectionRequest(BaseModel):
+    engine_id: str
+    remote_engine_id: str

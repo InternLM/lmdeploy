@@ -12,7 +12,7 @@ from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
                                                    DistServeConnectionResponse, DistServeConnectionStatus,
                                                    DistServeEngineEndpointInfo, DistServeInitRequest,
-                                                   DistServeInitResponse, DistServeKVTransferEndpointInfo)
+                                                   DistServeInitResponse, DistServeKVTransferEndpointInfo, DistServeDropConnectionRequest)
 from lmdeploy.pytorch.engine.executor.dist_utils import find_available_port
 from lmdeploy.pytorch.messages import MessageStatus
 
@@ -60,6 +60,11 @@ class EngineP2PConnection:
         event_loop.create_task(self.handle_zmq_rercv(conn_request.remote_engine_id))
         return DistServeConnectionResponse(status=DistServeConnectionStatus.SUCCESS)
 
+    def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
+        # TODO (JimyMa): drop RDMA Connection
+        self.p2p_disconnect(drop_conn_request.remote_engine_id)
+        return {"success": True}
+
     async def zmq_send(self, remote_engine_id: str, remote_session_id: int):
         await self.p2p_sender[remote_engine_id].send_pyobj(
             DistServeCacheFreeRequest(remote_engine_id=remote_engine_id, remote_session_id=remote_session_id))
@@ -71,7 +76,7 @@ class EngineP2PConnection:
                 session_id = req.remote_session_id
                 if session_id in self.engine.scheduler.sessions:
                     self.engine.scheduler.end_session(session_id=session_id)
-                    logger.error({
+                    logger.debug({
                         'scheduling type':
                         'free',
                         'time':

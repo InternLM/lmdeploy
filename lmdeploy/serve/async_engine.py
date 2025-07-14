@@ -24,7 +24,7 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, R
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestState
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
-from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeConnectionRequest, DistServeInitRequest, DistServeDropConnectionRequest
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -974,5 +974,8 @@ class AsyncEngine(LogitsMixin):
 
     def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
         return self.engine.p2p_connect(conn_request)
+
+    def p2p_drop_connect(self, drop_conn_request: List[DistServeDropConnectionRequest]):
+        return self.engine.p2p_drop_connect(drop_conn_request)
 
     """ DistServe Async Engine API End """
