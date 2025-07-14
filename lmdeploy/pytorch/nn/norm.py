@@ -33,11 +33,16 @@ class RMSNorm(nn.Module):
                  device: torch.device = None,
                  quant_config: Any = None,
                  tp: bool = False,
-                 align: int = 1):
+                 align: int = 1,
+                 qk_norm: bool = False,):
         super().__init__()
         backend = get_backend()
 
         w8a8_flag, quant_dtype = _is_w8a8(quant_config)
+
+        if qk_norm:
+            w8a8_flag = False
+
         if w8a8_flag:
             builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
         else:
