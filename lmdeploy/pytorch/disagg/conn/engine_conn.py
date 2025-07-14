@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import os
-import time
 from typing import TYPE_CHECKING, Dict, List
 from urllib.parse import urlparse
 
@@ -15,7 +14,6 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, Di
                                                    DistServeInitRequest, DistServeInitResponse,
                                                    DistServeKVTransferEndpointInfo)
 from lmdeploy.pytorch.engine.executor.dist_utils import find_available_port
-from lmdeploy.pytorch.messages import MessageStatus
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.engine import Engine
@@ -77,38 +75,6 @@ class EngineP2PConnection:
                 session_id = req.remote_session_id
                 if session_id in self.engine.scheduler.sessions:
                     self.engine.scheduler.end_session(session_id=session_id)
-                    logger.debug({
-                        'scheduling type':
-                        'free',
-                        'time':
-                        time.time(),
-                        'dp_rank':
-                        self.engine.engine_config.dp_rank,
-                        'role':
-                        self.engine.scheduler.cache_config.role,
-                        'max batches':
-                        self.engine.scheduler.scheduler_config.max_batches,
-                        'total_waiting':
-                        self.engine.scheduler.num_waiting(),
-                        'total_running':
-                        self.engine.scheduler.num_running(),
-                        'total_locking':
-                        self.engine.scheduler.num_locked(),
-                        'total_to_be_migrated':
-                        self.engine.scheduler.num_to_be_migrated(),
-                        'total_migration_waiting':
-                        self.engine.scheduler.num_migration_waiting(),
-                        'total_migration_running':
-                        self.engine.scheduler.num_migration_running(),
-                        'total_migration_locked':
-                        self.engine.scheduler.num_migration_locked(),
-                        'total_stopped':
-                        self.engine.scheduler.seq_manager.num_sequences(MessageStatus.STOPPED),
-                        'kv_usage': (
-                            self.engine.scheduler.block_manager.get_num_free_gpu_blocks(),
-                            self.engine.scheduler.block_manager.num_gpu_blocks,
-                        ),
-                    })
                 else:
                     logger.error(f'invalid free, {remote_engine_id}, {session_id}')
             else:
