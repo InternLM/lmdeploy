@@ -9,6 +9,14 @@
 
 namespace turbomind::comm {
 
+template<class T>
+__device__ T* cvta_generic_to_global(T* p)
+{
+    uintptr_t ret;
+    asm("cvta.to.global.u64 %0, %1;" : "=l"(ret) : "l"(p));
+    return reinterpret_cast<T*>(ret);
+}
+
 struct SystemSemaphore {
 
     using T = uint64_t;
@@ -70,20 +78,22 @@ struct SystemSemaphore {
         }
     }
 
-//     __device__ void SignalMulticast(bool relaxed)
-//     {
-// #if TURBOMIND_ARCH_SM90
-//         if (mc_predicate_) {
-//             if (relaxed) {
-//                 asm volatile("multimem.red.relaxed.sys.global.add.u64 [%0], %1;" ::"l"(mc_ptr_), "n"(1) : "memory");
-//             }
-//             else {
-//                 asm volatile("multimem.red.release.sys.global.add.u64 [%0], %1;" ::"l"(mc_ptr_), "n"(1) : "memory");
-//             }
-//             asm volatile("fence.proxy.alias;" ::: "memory");
-//         }
-// #endif
-//     }
+    //     __device__ void SignalMulticast(bool relaxed)
+    //     {
+    // #if TURBOMIND_ARCH_SM90
+    //         if (mc_predicate_) {
+    //             if (relaxed) {
+    //                 asm volatile("multimem.red.relaxed.sys.global.add.u64 [%0], %1;" ::"l"(mc_ptr_), "n"(1) :
+    //                 "memory");
+    //             }
+    //             else {
+    //                 asm volatile("multimem.red.release.sys.global.add.u64 [%0], %1;" ::"l"(mc_ptr_), "n"(1) :
+    //                 "memory");
+    //             }
+    //             asm volatile("fence.proxy.alias;" ::: "memory");
+    //         }
+    // #endif
+    //     }
 };
 
 }  // namespace turbomind::comm

@@ -4,18 +4,11 @@
 
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
 #include "src/turbomind/comm/cuda_ipc/mscclpp.h"
+#include "semaphore.cuh"
 
 #include <cuda/atomic>
 
 namespace turbomind::comm {
-
-template<class T>
-__device__ T* cvta_generic_to_global(T* p)
-{
-    uintptr_t ret;
-    asm("cvta.to.global.u64 %0, %1;" : "=l"(ret) : "l"(p));
-    return reinterpret_cast<T*>(ret);
-}
 
 // Modified from
 // https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/include/mscclpp/semaphore_device.hpp#L40
