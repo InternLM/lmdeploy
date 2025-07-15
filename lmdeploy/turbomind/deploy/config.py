@@ -165,17 +165,18 @@ class TurbomindModelConfig:
                 rope_param.factor = override_params.get('factor', 1.0)
                 rope_param.max_position_embeddings = override_params.get('original_max_position_embeddings', None)
 
+                self.attention_config.rope_param = rope_param
             logger.warning(f'Overriding HF config with {hf_overrides}')
 
         # use dynamic ntk
         if config.rope_scaling_factor:
             # some ut will create empty RopeParam, will check base/dim in src code
             rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
-
             rope_param.type = 'dynamic'
             rope_param.factor = config.rope_scaling_factor
             rope_param.max_position_embeddings = self.attention_config.max_position_embeddings
 
+            self.attention_config.rope_param = rope_param
             logger.warning(
                 '`--rope-scaling-factor` will be removed in a future release. Please instead use `--hf-overrides`.')
 
