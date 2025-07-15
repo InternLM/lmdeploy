@@ -686,6 +686,7 @@ class TurboMindInstance:
                 if status in [7, 8]:  # finish / canceled
                     finish, status = True, 0
                 elif status:
+                    logger.error(f'internal error. status_code {status}')
                     yield self._get_error_output()
                     break
 
