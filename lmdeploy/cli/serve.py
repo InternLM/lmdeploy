@@ -165,7 +165,8 @@ class SubCliServe:
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
         model_format = ArgumentHelper.model_format(pt_group)
-        ArgumentHelper.dp(pt_group)
+        dp_act = ArgumentHelper.dp(pt_group)
+        num_nodes_act = ArgumentHelper.num_nodes(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
         ArgumentHelper.enable_eplb(pt_group)
@@ -173,14 +174,14 @@ class SubCliServe:
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
         # multi-node serving args
-        ArgumentHelper.node_rank(parser)
-        ArgumentHelper.num_nodes(parser)
+        node_rank_act = ArgumentHelper.node_rank(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
         tb_group._group_actions.append(dtype_act)
         tb_group._group_actions.append(tp_act)
+        tb_group._group_actions.append(dp_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(max_batch_size_act)
         tb_group._group_actions.append(cache_max_entry_act)
@@ -189,10 +190,13 @@ class SubCliServe:
         tb_group._group_actions.append(max_prefill_token_num_act)
         tb_group._group_actions.append(quant_policy)
         tb_group._group_actions.append(model_format)
+        tb_group._group_actions.append(num_nodes_act)
+        tb_group._group_actions.append(node_rank_act)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
         ArgumentHelper.communicator(tb_group)
+        ArgumentHelper.ngpus_per_node(tb_group)
 
         # vlm args
         vision_group = parser.add_argument_group('Vision model arguments')
@@ -342,6 +346,10 @@ class SubCliServe:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
+                                                   dp=args.dp,
+                                                   nnodes=args.nnodes,
+                                                   ngpus_per_node=args.ngpus_per_node,
+                                                   node_rank=args.node_rank,
                                                    max_batch_size=max_batch_size,
                                                    session_len=args.session_len,
                                                    model_format=args.model_format,
