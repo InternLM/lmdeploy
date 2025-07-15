@@ -165,6 +165,7 @@ class SubCliServe:
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
         model_format = ArgumentHelper.model_format(pt_group)
+        hf_overrides = ArgumentHelper.hf_overrides(pt_group)
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
@@ -189,6 +190,7 @@ class SubCliServe:
         tb_group._group_actions.append(max_prefill_token_num_act)
         tb_group._group_actions.append(quant_policy)
         tb_group._group_actions.append(model_format)
+        tb_group._group_actions.append(hf_overrides)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
@@ -318,26 +320,29 @@ class SubCliServe:
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             adapters = get_lora_adapters(args.adapters)
-            backend_config = PytorchEngineConfig(dtype=args.dtype,
-                                                 tp=args.tp,
-                                                 dp=args.dp,
-                                                 ep=args.ep,
-                                                 max_batch_size=max_batch_size,
-                                                 cache_max_entry_count=args.cache_max_entry_count,
-                                                 block_size=args.cache_block_seq_len,
-                                                 session_len=args.session_len,
-                                                 adapters=adapters,
-                                                 enable_prefix_caching=args.enable_prefix_caching,
-                                                 device_type=args.device,
-                                                 quant_policy=args.quant_policy,
-                                                 eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num,
-                                                 enable_microbatch=args.enable_microbatch,
-                                                 enable_eplb=args.enable_eplb,
-                                                 enable_metrics=args.enable_metrics,
-                                                 role=EngineRole[args.role],
-                                                 migration_backend=MigrationBackend[args.migration_backend],
-                                                 model_format=args.model_format)
+            backend_config = PytorchEngineConfig(
+                dtype=args.dtype,
+                tp=args.tp,
+                dp=args.dp,
+                ep=args.ep,
+                max_batch_size=max_batch_size,
+                cache_max_entry_count=args.cache_max_entry_count,
+                block_size=args.cache_block_seq_len,
+                session_len=args.session_len,
+                adapters=adapters,
+                enable_prefix_caching=args.enable_prefix_caching,
+                device_type=args.device,
+                quant_policy=args.quant_policy,
+                eager_mode=args.eager_mode,
+                max_prefill_token_num=args.max_prefill_token_num,
+                enable_microbatch=args.enable_microbatch,
+                enable_eplb=args.enable_eplb,
+                enable_metrics=args.enable_metrics,
+                role=EngineRole[args.role],
+                migration_backend=MigrationBackend[args.migration_backend],
+                model_format=args.model_format,
+                hf_overrides=args.hf_overrides,
+            )
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
@@ -351,7 +356,8 @@ class SubCliServe:
                                                    cache_block_seq_len=args.cache_block_seq_len,
                                                    enable_prefix_caching=args.enable_prefix_caching,
                                                    max_prefill_token_num=args.max_prefill_token_num,
-                                                   communicator=args.communicator)
+                                                   communicator=args.communicator,
+                                                   hf_overrides=args.hf_overrides)
         chat_template_config = get_chat_template(args.chat_template)
 
         from lmdeploy.messages import VisionConfig
