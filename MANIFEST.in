@@ -1,6 +1,0 @@
-
-include lmdeploy/lib/*.so
-include lmdeploy/lib/*.so*
-include lmdeploy/lib/*.dll
-include lmdeploy/lib/*.pyd
-include lmdeploy/bin/*
