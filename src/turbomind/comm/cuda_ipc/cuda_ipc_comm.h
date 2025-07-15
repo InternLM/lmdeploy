@@ -102,24 +102,6 @@ public:
                      cudaStream_t stream) override;
 
 private:
-    uint64_t* create_semaphore_buffer();
-
-    mscclpp::D2DSemaphoreHandle* init_semaphores(const std::vector<uint64_t*>& buffers, int group);
-
-    template<class T>
-    inline SymmetricPtr<T> get_symmetric(T* ptr, int group)
-    {
-        auto            tmp = get_symmetric_impl(ptr, group);
-        SymmetricPtr<T> ret{};
-        ret.mc = static_cast<T*>(tmp.mc);
-        for (int i = 0; i < ret.uc.size(); ++i) {
-            ret.uc[i] = static_cast<T*>(tmp.uc[i]);
-        }
-        return ret;
-    }
-
-    SymmetricPtr<void> get_symmetric_impl(void* ptr, int group);
-
     template<class T>
     inline SymmetricPtr_V2<T> get_symmetric_v2(T* ptr, int group)
     {
@@ -203,8 +185,8 @@ private:
         std::vector<int> l2g;  // local -> global
         std::vector<int> g2l;  // global -> local
 
-        uint64_t*                    d2d_semaphore_data;
-        mscclpp::D2DSemaphoreHandle* d2d_semaphores;
+        // uint64_t*                    d2d_semaphore_data;
+        // mscclpp::D2DSemaphoreHandle* d2d_semaphores;
 
         std::set<Symmetric, std::less<>> symmetric;
     };

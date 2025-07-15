@@ -254,7 +254,7 @@ void CudaIpcCommImpl::AllReduceSum(
     const int n_ranks = this->n_ranks(group);
     const int rank    = this->rank(group);
 
-    auto semaphores = groups_.at(group).d2d_semaphores;
+    // auto semaphores = groups_.at(group).d2d_semaphores;
 
     auto invoke = [&](auto t) {
         using T               = decltype(t);

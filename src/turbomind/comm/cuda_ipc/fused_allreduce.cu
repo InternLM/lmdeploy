@@ -6,9 +6,9 @@
 #include "cub/block/block_reduce.cuh"
 
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
-#include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 #include "src/turbomind/comm/cuda_ipc/group_sum.h"
 #include "src/turbomind/comm/cuda_ipc/multimem.cuh"
+#include "src/turbomind/comm/cuda_ipc/semaphore.cuh"
 
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -22,30 +22,28 @@
 namespace turbomind::comm {
 
 template<class T, int vec_size, int block_dim, int groups, class Relaxed>
-__global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                           buf,
-                                                         T*                           res,
-                                                         const T*                     bias,
-                                                         const T*                     weights,
-                                                         Array<T*, kMaxNearPeers>     near,
-                                                         mscclpp::D2DSemaphoreHandle* semaphores,
-                                                         int                          rank,
-                                                         int                          peers,
-                                                         int                          slice,
-                                                         int                          count,
-                                                         int                          vdim,
-                                                         float                        inv_dim,
-                                                         float                        eps,
+__global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                   buf,
+                                                         T*                   res,
+                                                         const T*             bias,
+                                                         const T*             weights,
+                                                         Array<T*, kMaxRanks> symm,
+                                                         SystemSemaphoreInfo* semaphores,
+                                                         int                  rank,
+                                                         int                  ranks,
+                                                         int                  slice,
+                                                         int                  count,
+                                                         int                  vdim,
+                                                         float                inv_dim,
+                                                         float                eps,
                                                          constant<vec_size>,
                                                          constant<block_dim>,
                                                          constant<groups>,
                                                          Relaxed relaxed)
 {
-    DeviceSemaphore sem;
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
 
-    if (threadIdx.x < peers) {
-        sem.Load(&semaphores[blockIdx.x * peers + threadIdx.x]);
-        sem.SignalAndWait(relaxed);
-    }
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
 
     __syncthreads();
 
@@ -68,14 +66,12 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
         asm volatile("bar.sync %0, %1;" : : "r"(15 - xi), "r"(threads) : "memory");
     };
 
-    Rank r{rank, peers};
-
     const int first = rank * slice;
     const int last  = min(count, first + slice);
 
-    for (int i = 0; i < peers - 1; ++i) {
-        const int  p   = r.get_next_peer(i);
-        const auto src = cvta_generic_to_global(near[p]);
+    for (int i = 1; i < ranks - 1; ++i) {
+        const int  p   = rank + i < ranks ? rank + i : rank + i - ranks;
+        const auto src = cvta_generic_to_global(symm[p]);
         Vec        acc, tmp;
         for (int ti = first + bi; ti < last; ti += bn) {
             const int idx = (ti * vdim + di) * vec_size;
@@ -99,8 +95,8 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
     }
 
     {
-        const int p   = r.get_next_peer(peers - 1);  // last peer
-        auto      chn = cvta_generic_to_global(near[p]);
+        const int p   = rank > 0 ? rank - 1 : ranks - 1;  // last peer
+        auto      chn = cvta_generic_to_global(symm[p]);
         for (int ti = first + bi; ti < last; ti += bn) {
             const int idx = (ti * vdim + di) * vec_size;
             Vec       acc, tmp;
@@ -140,18 +136,16 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
 
     __syncthreads();
 
-    if (threadIdx.x < peers) {
-        sem.SignalAndWait(relaxed);
-    }
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
 
     __syncthreads();
 
-    for (int i = 0; i < peers; ++i) {
-        const int p      = r.get_next_peer(i);
-        const int p_rank = r.get_peer_rank(p);
-        const int first  = slice * p_rank;
-        const int last   = min(count, first + slice);
-        auto      src    = cvta_generic_to_global(near[p]);
+    for (int i = 1; i < ranks; ++i) {
+        const int p     = rank + i < ranks ? rank + i : rank + i - ranks;
+        const int first = slice * p;
+        const int last  = min(count, first + slice);
+        auto      src   = cvta_generic_to_global(symm[p]);
         for (int ti = first + bi; ti < last; ti += bn) {
             const int idx = (ti * vdim + di) * vec_size;
             if (di < vdim) {
@@ -164,40 +158,34 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
 
     __syncthreads();
 
-    if (threadIdx.x < peers) {
-        // this and the `__syncthreads` above are used to block later kernels from modifying shared `buf` before all
-        // ranks done copying from it
-        sem.SignalAndWait(true);
-        sem.Save(&semaphores[blockIdx.x * peers + threadIdx.x]);
-    }
+    sem.Signal(true);
+    sem.Wait(true);
+
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
 }
 
 template<class T, int vec_size, int block_dim, int groups, class Relaxed>
-__global__ void AllreduceResidualBiasRMSnorm_NVLS(T*                           mc_buf,
-                                                  T*                           uc_buf,
-                                                  T*                           res,
-                                                  const T*                     bias,
-                                                  const T*                     weights,
-                                                  Array<T*, kMaxNearPeers>     near,
-                                                  mscclpp::D2DSemaphoreHandle* semaphores,
-                                                  int                          rank,
-                                                  int                          peers,
-                                                  int                          slice,
-                                                  int                          count,
-                                                  int                          vdim,
-                                                  float                        inv_dim,
-                                                  float                        eps,
+__global__ void AllreduceResidualBiasRMSnorm_NVLS(T*                   mc_buf,
+                                                  T*                   uc_buf,
+                                                  T*                   res,
+                                                  const T*             bias,
+                                                  const T*             weights,
+                                                  SystemSemaphoreInfo* semaphores,
+                                                  int                  rank,
+                                                  int                  ranks,
+                                                  int                  slice,
+                                                  int                  count,
+                                                  int                  vdim,
+                                                  float                inv_dim,
+                                                  float                eps,
                                                   constant<vec_size>,
                                                   constant<block_dim>,
                                                   constant<groups>,
                                                   Relaxed relaxed)
 {
-    DeviceSemaphore sem;
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
 
-    if (threadIdx.x < peers) {
-        sem.Load(&semaphores[blockIdx.x * peers + threadIdx.x]);
-        sem.Signal();
-    }
+    sem.Signal(relaxed);
 
     static_assert(block_dim % groups == 0);
     constexpr int threads = block_dim / groups;
@@ -220,9 +208,7 @@ __global__ void AllreduceResidualBiasRMSnorm_NVLS(T*                           m
         Ldg(w_vec, weights + di * vec_size);
     }
 
-    if (threadIdx.x < peers) {
-        sem.Wait();
-    }
+    sem.Wait(relaxed);
 
     __syncthreads();
 
@@ -273,151 +259,28 @@ __global__ void AllreduceResidualBiasRMSnorm_NVLS(T*                           m
 
     __syncthreads();
 
-    if (threadIdx.x < peers) {
-        // this and the `__syncthreads` above are used to block later kernels from modifying shared `buf` before all
-        // ranks done copying from it
-        sem.SignalAndWait(true);
-        sem.Save(&semaphores[blockIdx.x * peers + threadIdx.x]);
-    }
+    sem.Signal(true);
+    sem.Wait(true);
+
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
 }
 
-template<class T, int vec_size, int block_dim, bool aligned, class Peers, class Relaxed>
-__global__ void AllreduceResidualBiasRMSnormKernel_Simple_v3(T*                           buf,
-                                                             T*                           res,
-                                                             const T*                     bias,
-                                                             const T*                     weights,
-                                                             Array<T*, kMaxNearPeers>     chns,
-                                                             mscclpp::D2DSemaphoreHandle* semaphores,
-                                                             int                          rank,
-                                                             Peers                        peers,
-                                                             int                          slice,
-                                                             int                          count,
-                                                             int                          vdim,
-                                                             float                        inv_dim,
-                                                             float                        eps,
-                                                             constant<vec_size>,
-                                                             constant<block_dim>,
-                                                             constant<aligned>,
-                                                             Relaxed relaxed)
-{
-    const int bi        = blockIdx.x;
-    const int block_num = gridDim.x;
-
-    DeviceSemaphore sem;
-
-    if (threadIdx.x < peers) {
-        sem.Load(&semaphores[blockIdx.x * peers + threadIdx.x]);
-        sem.SignalAndWait(relaxed);
-    }
-
-    __syncthreads();
-
-    using Vec = Array<T, vec_size>;
-
-    using namespace ops;
-
-    const int  di       = threadIdx.x;
-    const bool is_valid = di < vdim;
-
-    if (aligned || is_valid) {
-
-        const int first = rank * slice;
-        const int last  = min(count, first + slice);
-
-        __shared__ const T* chs[8];
-        for (int p = 0; p < peers; ++p) {
-            const int peer = p + rank < peers ? p + rank : p + rank - peers;
-            chs[p]         = chns[peer];
-        }
-
-        for (int ti = first + bi; ti < last; ti += block_num) {
-            const int idx = (ti * vdim + di) * vec_size;
-            Vec       acc;
-            Load(acc, buf + idx);
-            for (int p = 0; p < peers; ++p) {
-                Vec tmp;
-                Load(tmp, chs[p] + idx);
-                acc = acc + tmp;
-            }
-            Vec r_vec, x_vec;
-            Load(r_vec, res + idx);
-            r_vec = r_vec + acc;
-            if (bias) {
-                Load(x_vec, bias + di * vec_size);
-                r_vec = r_vec + x_vec;
-            }
-            Store(res + idx, r_vec);
-            float sum{};
-            PRAGMA_UNROLL
-            for (int i = 0; i < vec_size; ++i) {
-                sum += (float)r_vec[i] * (float)r_vec[i];
-            }
-            using BlockReduce = cub::BlockReduce<float, block_dim>;
-            __shared__ typename BlockReduce::TempStorage temp_storage;
-            __shared__ float                             shared_sum;
-            sum = BlockReduce{temp_storage}.Sum(sum);
-            if (di == 0) {
-                shared_sum = rsqrtf(sum * inv_dim + eps);
-            }
-            __syncthreads();
-            sum = shared_sum;
-            Load(x_vec, weights + di * vec_size);
-            PRAGMA_UNROLL
-            for (int i = 0; i < vec_size; ++i) {
-                r_vec[i] = static_cast<T>(((float)r_vec[i] * sum)) * x_vec[i];
-            }
-            Store(buf + idx, r_vec);
-        }
-    }
-
-    __syncthreads();
-
-    if (threadIdx.x < peers) {
-        sem.SignalAndWait(relaxed);
-    }
-
-    __syncthreads();
-
-    if (aligned || is_valid) {
-        for (int p = 0; p < peers; ++p) {
-            const int peer      = p + rank < peers ? p + rank : p + rank - peers;
-            const int peer_rank = peer < rank ? peer : peer + 1;
-            const int first     = slice * peer_rank;
-            const int last      = min(count, first + slice);
-            auto      chn       = cvta_generic_to_global(chns[peer]);
-            Vec       vec;
-            for (int ti = first + bi; ti < last; ti += block_num) {
-                const int idx = (ti * vdim + di) * vec_size;
-                Load(vec, chn + idx);
-                Store(buf + idx, vec);
-            }
-        }
-    }
-
-    __syncthreads();
-
-    if (threadIdx.x < peers) {
-        sem.SignalAndWait(relaxed);
-        sem.Save(&semaphores[blockIdx.x * peers + threadIdx.x]);
-    }
-}
-
-template<class T, int vec_size, int block_dim, int groups, class Peers, class Relaxed>
-__global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                           buf,
-                                                         T*                           res,
-                                                         const T*                     bias,
-                                                         const T*                     weights,
-                                                         T*                           scratch,
-                                                         Array<T*, kMaxNearPeers>     near_buf,
-                                                         Array<T*, kMaxNearPeers>     near_scratch,
-                                                         mscclpp::D2DSemaphoreHandle* semaphores,
-                                                         int                          rank,
-                                                         Peers                        peers,
-                                                         int                          slice,
-                                                         int                          count,
-                                                         int                          vdim,
-                                                         float                        inv_dim,
-                                                         float                        eps,
+template<class T, int vec_size, int block_dim, int groups, class Relaxed>
+__global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                   buf,
+                                                         T*                   res,
+                                                         const T*             bias,
+                                                         const T*             weights,
+                                                         T*                   scratch,
+                                                         Array<T*, kMaxRanks> symm_buf,
+                                                         Array<T*, kMaxRanks> symm_scratch,
+                                                         SystemSemaphoreInfo* semaphores,
+                                                         int                  rank,
+                                                         int                  ranks,
+                                                         int                  slice,
+                                                         int                  count,
+                                                         int                  vdim,
+                                                         float                inv_dim,
+                                                         float                eps,
                                                          constant<vec_size>,
                                                          constant<block_dim>,
                                                          constant<groups>,
@@ -442,14 +305,11 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
         asm volatile("bar.sync %0, %1;" : : "r"(15 - xi), "r"(threads) : "memory");
     };
 
-    Rank r{rank, peers};
-
-    for (int i = 0; i < peers; ++i) {
-        const int  p      = r.get_next_peer(i);
-        const int  p_rank = r.get_peer_rank(p);
-        const int  n      = min(count, p_rank * slice + slice) - p_rank * slice;
-        const auto src    = buf + p_rank * slice * vdim * vec_size;
-        const auto dst    = near_scratch[p] + r.inverse_peer(p) * slice * vdim * vec_size;
+    for (int i = 1; i < ranks; ++i) {
+        const int  p   = rank + i < ranks ? rank + i : rank + i - ranks;
+        const int  n   = min(count, p * slice + slice) - p * slice;
+        const auto src = buf + p * slice * vdim * vec_size;
+        const auto dst = symm_scratch[p] + rank * slice * vdim * vec_size;
         for (int ti = bi; ti < n; ti += bn) {
             if (di < vdim) {
                 Vec vec;
@@ -461,12 +321,10 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
 
     __syncthreads();
 
-    DeviceSemaphore sem;
+    SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
 
-    if (threadIdx.x < peers) {
-        sem.Load(&semaphores[blockIdx.x * peers + threadIdx.x]);
-        sem.SignalAndWait(relaxed);
-    }
+    sem.Signal(relaxed);
+    sem.Wait(relaxed);
 
     __syncthreads();
 
@@ -489,9 +347,10 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
         if (di < vdim) {
             Vec acc;
             Load(acc, buf + idx);
-            for (int i = 0; i < peers; ++i) {
-                Vec tmp;
-                Load(tmp, scratch + ((i * slice + ti) * vdim + di) * vec_size);
+            for (int i = 1; i < ranks; ++i) {
+                const int p = rank + i < ranks ? rank + i : rank + i - ranks;
+                Vec       tmp;
+                Load(tmp, scratch + ((p * slice + ti) * vdim + di) * vec_size);
                 acc = acc + tmp;
             }
             Load(r_vec, res + idx);
@@ -520,19 +379,19 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
                 r_vec[i] = static_cast<T>(((float)r_vec[i] * sum)) * w_vec[i];
             }
             Store(buf + idx, r_vec);
-            for (int i = 0; i < peers; ++i) {
-                const int p = r.get_next_peer(i);
-                Store(near_buf[p] + ((rank * slice + ti) * vdim + di) * vec_size, r_vec);
+            for (int i = 1; i < ranks; ++i) {
+                const int p = rank + i < ranks ? rank + i : rank + i - ranks;
+                Store(symm_buf[p] + ((rank * slice + ti) * vdim + di) * vec_size, r_vec);
             }
         }
     }
 
     __syncthreads();
 
-    if (threadIdx.x < peers) {
-        sem.SignalAndWait(relaxed);
-        sem.Save(&semaphores[blockIdx.x * peers + threadIdx.x]);
-    }
+    sem.Signal(true);
+    sem.Wait(true);
+
+    sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
 }
 
 void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
@@ -553,73 +412,27 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
     const int n_ranks = this->n_ranks(group);
     const int rank    = this->rank(group);
 
-    auto semaphores = groups_.at(group).d2d_semaphores;
+    // auto semaphores = groups_.at(group).d2d_semaphores;
 
     auto invoke = [&](auto t, auto groups) {
-        using T                 = decltype(t);
-        constexpr int vec_size  = sizeof(uint4) / sizeof(T);
-        const int     slice     = (token_num + n_ranks - 1) / n_ranks;
-        const int     count     = token_num;
-        constexpr int block_dim = 1024;
-        const int     max_ctas  = 48;
-        const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
-        if (0 && bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
-            AllreduceResidualBiasRMSnorm_Simple_Push<<<blocks, block_dim, 0, stream>>>(
-                (T*)hidden,
-                (T*)residual,
-                (const T*)bias,
-                (const T*)weights,
-                (T*)scratch_buff_,
-                get_symmetric((T*)hidden, group).uc,
-                get_symmetric((T*)scratch_buff_, group).uc,
-                semaphores,
-                rank,
-                n_ranks - 1,
-                slice,
-                count,
-                dim / vec_size,
-                1.f / dim,
-                eps,
-                constant<vec_size>{},
-                constant<block_dim>{},
-                groups,
-                std::false_type{});
-        }
-        else if (0) {
-            AllreduceResidualBiasRMSnorm_Simple_Pull<<<blocks, block_dim, 0, stream>>>((T*)hidden,
-                                                                                       (T*)residual,
-                                                                                       (const T*)bias,
-                                                                                       (const T*)weights,
-                                                                                       get_symmetric((T*)hidden, group).uc,
-                                                                                       semaphores,
-                                                                                       rank,
-                                                                                       n_ranks - 1,
-                                                                                       slice,
-                                                                                       count,
-                                                                                       dim / vec_size,
-                                                                                       1.f / dim,
-                                                                                       eps,
-                                                                                       constant<vec_size>{},
-                                                                                       constant<block_dim>{},
-                                                                                       groups,
-                                                                                       std::false_type{});
-        }
-        else {
-            auto symm_ptr = get_symmetric((T*)hidden, group);
+        using T                = decltype(t);
+        auto          symm_ptr = get_symmetric_v2((T*)hidden, group);
+        constexpr int vec_size = sizeof(uint4) / sizeof(T);
+        const int     slice    = (token_num + n_ranks - 1) / n_ranks;
+        const int     count    = token_num;
 
+        if (symm_ptr.mc) {
             constexpr int block_dim = 1024;
             const int     max_ctas  = 4;
             const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
-
             AllreduceResidualBiasRMSnorm_NVLS<<<blocks, block_dim, 0, stream>>>(symm_ptr.mc,
                                                                                 (T*)hidden,
                                                                                 (T*)residual,
                                                                                 (const T*)bias,
                                                                                 (const T*)weights,
-                                                                                symm_ptr.uc,
-                                                                                semaphores,
+                                                                                semaphore_.handle(),
                                                                                 rank,
-                                                                                n_ranks - 1,
+                                                                                n_ranks,
                                                                                 slice,
                                                                                 count,
                                                                                 dim / vec_size,
@@ -630,6 +443,58 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                                                 groups,
                                                                                 std::false_type{});
         }
+        else if (bytesize <= 1 << 19) {
+            return false;
+        }
+        else if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
+            constexpr int block_dim = 1024;
+            const int     max_ctas  = 48;
+            const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
+            AllreduceResidualBiasRMSnorm_Simple_Push<<<blocks, block_dim, 0, stream>>>(
+                (T*)hidden,
+                (T*)residual,
+                (const T*)bias,
+                (const T*)weights,
+                (T*)scratch_buff_,
+                get_symmetric_v2((T*)hidden, group).uc,
+                get_symmetric_v2((T*)scratch_buff_, group).uc,
+                semaphore_.handle(),
+                rank,
+                n_ranks,
+                slice,
+                count,
+                dim / vec_size,
+                1.f / dim,
+                eps,
+                constant<vec_size>{},
+                constant<block_dim>{},
+                groups,
+                std::false_type{});
+        }
+        else {
+            constexpr int block_dim = 1024;
+            const int     max_ctas  = 48;
+            const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
+            AllreduceResidualBiasRMSnorm_Simple_Pull<<<blocks, block_dim, 0, stream>>>(
+                (T*)hidden,
+                (T*)residual,
+                (const T*)bias,
+                (const T*)weights,
+                get_symmetric_v2((T*)hidden, group).uc,
+                semaphore_.handle(),
+                rank,
+                n_ranks,
+                slice,
+                count,
+                dim / vec_size,
+                1.f / dim,
+                eps,
+                constant<vec_size>{},
+                constant<block_dim>{},
+                groups,
+                std::false_type{});
+        }
+
         return true;
     };
 
@@ -655,14 +520,9 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
 
     auto dispatch = [&]() -> bool { TM_DISPATCH_PRIMARY_DTYPES_RET(dtype, dispatch_D); };
 
-    dispatch();
-    return;
-
-    // if (bytesize > (1 << 19)) {
-    //     if (dispatch()) {
-    //         return;
-    //     }
-    // }
+    if (dispatch()) {
+        return;
+    }
 
     // fallback
     AllReduceSum(hidden, hidden, token_num * dim, dtype, group, stream);
