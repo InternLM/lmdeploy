@@ -176,6 +176,9 @@ class TurbomindModelConfig:
             rope_param.factor = config.rope_scaling_factor
             rope_param.max_position_embeddings = self.attention_config.max_position_embeddings
 
+            logger.warning(
+                '`--rope-scaling-factor` will be removed in a future release. Please instead use `--hf-overrides`.')
+
     @classmethod
     def from_dict(cls, config: dict = {}):
         """Construct TurbomindModelConfig instance from config in a dict."""
