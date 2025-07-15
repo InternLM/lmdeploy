@@ -59,7 +59,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     if (0) {}
     else if (group0 || group1) {
         d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states.raw_data(),
-                                                residual.raw_data(),
+                                                residual.data_or((void*)nullptr),
                                                 bias.data_or((void*)nullptr),
                                                 weight.raw_data(),
                                                 rmsnorm_eps_,
@@ -73,7 +73,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     }
     else if (d_comm_) {
         d_comm_->AllreduceResidualBiasRMSnorm(hidden_states.raw_data(),
-                                              residual.raw_data(),
+                                              residual.data_or((void*)nullptr),
                                               bias.data_or((void*)nullptr),
                                               weight.raw_data(),
                                               rmsnorm_eps_,
@@ -86,7 +86,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     }
     else {
         invokeResidualBiasRMSNorm(hidden_states.raw_data(),
-                                  residual.raw_data(),
+                                  residual.data_or((void*)nullptr),
                                   weight.raw_data(),
                                   bias.data_or((void*)nullptr),
                                   dtype,
@@ -132,7 +132,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
     Tensor local_hidden_states = global_hidden_states;
 
     const auto global_token_num = global_hidden_states.shape(0);
-    const auto local_token_num  = local_residual.shape(0);
+    const auto local_token_num  = local_residual.size() ? local_residual.shape(0) : 0;
 
     if (attn_dp_size_ > 1) {  // Offset hidden states buffer for mixed DP
         TM_CHECK_EQ(local_token_nums.size(), attn_dp_size_);
