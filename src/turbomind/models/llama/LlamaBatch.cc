@@ -97,7 +97,7 @@ void DropEmbeddings(const Sequence& seq)
     seq.input_embedding_ranges.resize(sz);
 }
 
-void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs)
+void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs)
 {
     NvtxScope _("disable invalid");
 
@@ -126,10 +126,7 @@ void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_req
         }
     }
 
-    count(kill_reqs);
     count(infer_reqs);
-
-    validate(kill_reqs, "kill");
     validate(infer_reqs, "infer");
 
     // New requests that never get a chance to start
@@ -169,25 +166,6 @@ void LlamaBatch::ProcessCancelRequests(std::vector<int>& indices, std::vector<Si
     }
 }
 
-void LlamaBatch::ProcessKillRequests(const Requests& kill_reqs, std::vector<Signal>& signals)
-{
-    for (auto& r : kill_reqs) {
-        if (r) {
-            int ec = r->ec;
-            if (!ec) {
-                if (!sequence_manager_->Erase(r->id)) {
-                    ec = Request::kInvalid;
-                }
-            }
-            signals.push_back([=] {
-                if (r->end_cb) {
-                    r->end_cb(ec);
-                }
-            });
-        }
-    }
-}
-
 void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>& signals)
 {
     NvtxScope scope("infer_request");
@@ -202,7 +180,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
     for (const auto& r : reqs) {
 
         if (tp_rank_ == 0) {
-            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request for %llu received.", r->id);
         }
 
         if (r->ec) {
@@ -217,28 +195,9 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             continue;
         }
 
-        auto ptr = r->session.start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
+        auto ptr = sequence_manager_->Create(r->id);
         if (!ptr) {
             signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
-            continue;
-        }
-
-        const int step = [&] {
-            int s = r->session.step;
-            if (s < 0) {
-                s = ptr->tokens.size();
-            }
-            else if (s > ptr->tokens.size()) {
-                if (tp_rank_ == 0) {
-                    TM_LOG_WARNING("[ProcessInferRequests] Skipping invalid step (%d) setting for ID %lu", s, ptr->id);
-                }
-                s = ptr->tokens.size();
-            }
-            return s;
-        }();
-
-        if (step + input_length > session_len_) {
-            signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
             continue;
         }
 
@@ -248,13 +207,6 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         state.sequences[idx] = ptr;
 
         auto& seq = *state.sequences[idx];
-
-        if (step < seq.tokens.size()) {
-            // resize sequence tokens to match step
-            seq.tokens.resize(step);
-            seq.cache_len = std::min(seq.cache_len, step);
-            DropEmbeddings(seq);
-        }
 
         const int* input_ids = r->inputs.at("input_ids").data<int>();
 
@@ -282,10 +234,15 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         }
 
         // copy input tokens to prompt for prefix matching
-        if (input_length && r->session.start_flag && !r->inputs.contains("input_embedding_ranges")) {
-            // TODO: truncate prompt to enable prefix caching for VLM
+        if (input_length && !r->inputs.contains("input_embedding_ranges")) {
             seq.prompt.resize(input_length);
             std::copy_n(input_ids, input_length, seq.prompt.data());
+            seq.prefix_match_end_index = input_length;
+            if (r->gen_cfg.output_logits || r->gen_cfg.output_last_hidden_state) {
+                // when output logits or output last hidden state, prefix match can only
+                // apply to prompts[0:step)
+                seq.prefix_match_end_index = r->session.step;
+            }
         }
 
         const int elem_size = byte_size(data_type_);
@@ -359,36 +316,26 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         }
 
         // compute rope scaling factor
-        if (r->session.start_flag) {
-            seq.rope_theta = model_->attn_param_.rope.base;
-            if (model_->attn_param_.rope.type == RopeType::kDynamic) {
-                auto scaling_factor = model_->attn_param_.rope.factor;
-                if (scaling_factor >= 1.f) {  // infer by current context length
-                    auto max_seq_len = state.h_context_length[idx];
-                    auto max_pos_emb = model_->attn_param_.rope.max_position_embeddings;
-                    if (max_seq_len > max_pos_emb) {
-                        scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
-                        float rope_dim = model_->attn_param_.rope.dim;
-                        seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
-                        TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
-                                    (long)seq.id,
-                                    scaling_factor,
-                                    seq.rope_theta);
-                    }
+        seq.rope_theta = model_->attn_param_.rope.base;
+        if (model_->attn_param_.rope.type == RopeType::kDynamic) {
+            auto scaling_factor = model_->attn_param_.rope.factor;
+            if (scaling_factor >= 1.f) {  // infer by current context length
+                auto max_seq_len = state.h_context_length[idx];
+                auto max_pos_emb = model_->attn_param_.rope.max_position_embeddings;
+                if (max_seq_len > max_pos_emb) {
+                    scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
+                    float rope_dim = model_->attn_param_.rope.dim;
+                    seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
+                    TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
+                                (long)seq.id,
+                                scaling_factor,
+                                seq.rope_theta);
                 }
             }
         }
         state.h_rope_theta[idx] = seq.rope_theta;
 
-        if (r->session.start_flag) {
-            // prepare to initialize random state for new sequence
-            h_random_seed_[idx] = r->gen_cfg.random_seed;
-        }
-        else {
-            // Recover device states if not a new sequence
-            ((curandState_t*)h_curand_state_.data())[existing_idx.size()] = *(curandState_t*)seq.random_state.data();
-            existing_idx.push_back(idx);
-        }
+        h_random_seed_[idx] = r->gen_cfg.random_seed;
 
         // increment pointer
         idx++;
@@ -987,21 +934,21 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 {
     const auto& src_buf   = logits.buffer();
     const auto  elem_size = byte_size(logits.dtype(), 1);
-    // when `is_all` is true, logits only contains last token of the sequences
+    // when `is_all` is false, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
 
     int base = 0;
 
     for (int i = first; i < last; ++i) {
 
-        const int input_len = h_input_length_buf_[i];  // input lenght for this iter
+        const int input_len = h_input_length_buf_[i];  // input length for this iter
 
         if (state_->requests[i]->gen_cfg.output_logits == out_type) {
 
             auto& dst_buf = state_->requests[i]->outputs.at("logits").buffer();
 
             const int cache_len   = state_->sequences[i]->cache_len;
-            const int history_len = state_->sequences[i]->tokens.size();
+            const int history_len = state_->requests[i]->session.step;
 
             // ----------H------I-------P-----------
             //      C        C      C         C
@@ -1011,16 +958,16 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
             int diff = (history_len + offset) - cache_len;
 
-            const int valid_len = input_len - std::max(0, (history_len + offset) - cache_len);
+            const int valid_len = input_len - std::max(0, diff);
 
-            // TM_LOG_ERROR("%d %d   %d %d  %d  %d %d",
-            //              history_len,
-            //              offset,
-            //              cache_len,
-            //              input_len,
-            //              valid_len,
-            //              std::max(0, diff),
-            //              std::max(0, -diff));
+            TM_LOG_DEBUG("[output_logits] %d %d   %d %d  %d  %d %d",
+                         history_len,
+                         offset,
+                         cache_len,
+                         input_len,
+                         valid_len,
+                         std::max(0, diff),
+                         std::max(0, -diff));
 
             if (valid_len <= 0) {
                 continue;
@@ -1030,10 +977,10 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
             if (is_all) {
                 // Skip invalid tokens caused by cache miss
-                src_base += std::max(0, (history_len + offset) - cache_len);
+                src_base += std::max(0, diff);
             }
             // Skip previous chunks
-            int dst_base = std::max(0, cache_len - (history_len + offset));
+            int dst_base = std::max(0, -diff);
 
             check_cuda_error(cudaMemcpy2DAsync(dst_buf.raw_data(dst_base * model_->vocab_size_),
                                                elem_size * model_->vocab_size_,
@@ -1180,7 +1127,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // Cache computed blocks to block trie
-    sequence_manager_->CacheIfEnabled(state_->sequences, batch_size);
+    sequence_manager_->CachePrompt(state_->sequences, batch_size);
 
     if (debug_ && tp_rank_ == 0) {
         for (int i = 0; i < batch_size; ++i) {
@@ -1202,9 +1149,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (state_->h_finished[i]) {
                 ++g.finished_count;
-                if (!state_->requests[i]->session.end_flag) {
-                    need_sync = true;
-                }
+                need_sync = true;
             }
         }
         if (need_sync) {
@@ -1245,14 +1190,10 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 }
 
-auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
+auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
 {
     if (tp_rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d",
-                    index,
-                    (long)state_->requests[index]->id,
-                    force_stop,
-                    force_end);
+        TM_LOG_INFO("[Interrupt] slot %d, request %llu, stop %d", index, state_->requests[index]->id, force_stop);
     }
 
     if (debug_ && tp_rank_ == 0) {
@@ -1266,31 +1207,29 @@ auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-    if (state_->requests[index]->session.end_flag || force_end) {
-        // Sequence is ending this round or a stop request is issued to end it
-        FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
-    }
-    else {
-        const int output_len = state_->h_context_length[index];
-        auto&     seq        = *state_->sequences[index];
+    const int output_len = state_->h_context_length[index];
+    auto&     seq        = *state_->sequences[index];
 
-        // Update token IDs
-        seq.tokens.resize(output_len);
+    // Update token IDs
+    seq.tokens.resize(output_len);
 
-        // output_ids is updated & synced in `Finish`
-        const auto output_ids = state_->requests[index]->output_ids.data();
-        std::copy_n(output_ids, output_len, seq.tokens.data());
+    // output_ids is updated & synced in `Finish`
+    const auto output_ids = state_->requests[index]->output_ids.data();
+    std::copy_n(output_ids, output_len, seq.tokens.data());
+    // Cache the generated tokens of the sequence
+    sequence_manager_->CacheGeneration(seq);
 
-        // Save random state in host memory
-        seq.random_state.resize(sizeof(curandState_t));
-        // This async copy must be synchronized by the caller
-        core::Copy((curandState_t*)state_->curand_state.data() + index, 1, (curandState_t*)seq.random_state.data());
+    // Save random state in host memory
+    seq.random_state.resize(sizeof(curandState_t));
+    // This async copy must be synchronized by the caller
+    core::Copy((curandState_t*)state_->curand_state.data() + index, 1, (curandState_t*)seq.random_state.data());
 
-        // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
-        sequence_manager_->UpdateAndSetUnlock(seq);
-    }
+    // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
+    sequence_manager_->UpdateAndSetUnlock(seq);
 
     state_->sequences[index] = nullptr;
+
+    FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
 
     auto ec = std::exchange(state_->errors[index], Request::kOk);
 
@@ -1305,7 +1244,6 @@ namespace {
 
 struct RequestData {
     std::vector<std::shared_ptr<Request>> infer;  // incoming inference request
-    std::vector<std::shared_ptr<Request>> kill;   // incoming kill request
 
     std::vector<int> cancel;  // canceled indices in current batch
     bool             abort;
@@ -1336,10 +1274,10 @@ void LlamaBatch::InternalThreadEntry()
                 const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
                 const bool is_empty        = (free_slot_count == max_batch_size_);
                 // Block if batch is empty AND no silbings are ready
-                gateway_->pop(req->infer, req->kill, free_slot_count, is_empty, req->abort, dp_rank_);
+                gateway_->pop(req->infer, free_slot_count, is_empty, req->abort, dp_rank_);
             }
             // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
-            DisableInvalidRequests(req->infer, req->kill);
+            DisableInvalidRequests(req->infer);
             FindCanceledIndices(req->cancel);
         }
 
@@ -1358,8 +1296,6 @@ void LlamaBatch::InternalThreadEntry()
         }
 
         std::vector<Signal> signals;
-
-        ProcessKillRequests(req->kill, signals);
 
         // Shared `priority` field will be assigned by rank-0
         ProcessInferRequests(req->infer, signals);
