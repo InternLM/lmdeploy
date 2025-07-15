@@ -63,16 +63,13 @@ class Qwen3Attention(nn.Module):
         # q, k norm
         self.q_norm = RMSNorm(head_dim,
                               config.rms_norm_eps,
-                              quant_config=quantization_config,
                               dtype=dtype,
-                              device=device,
-                              qk_norm=True,)
+                              device=device)
+        
         self.k_norm = RMSNorm(head_dim,
                               config.rms_norm_eps,
-                              quant_config=quantization_config,
                               dtype=dtype,
-                              device=device,
-                              qk_norm=True,)
+                              device=device)
 
     def forward(
         self,
