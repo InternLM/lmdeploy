@@ -159,25 +159,22 @@ class TurbomindModelConfig:
 
             if hf_overrides.get('rope_scaling'):
                 override_params = hf_overrides.get('rope_scaling')
-                if self.attention_config.rope_param is None:
-                    self.attention_config.rope_param = RopeParam(type='', base=0, dim=0)
 
-                self.attention_config.rope_param.__dict__.update(type=override_params.get('rope_type', ''),
-                                                                 factor=override_params.get('factor', 1.0),
-                                                                 max_position_embeddings=override_params.get(
-                                                                     'original_max_position_embeddings', None))
+                rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
+                rope_param.type = override_params.get('rope_type', '')
+                rope_param.factor = override_params.get('factor', 1.0)
+                rope_param.max_position_embeddings = override_params.get('original_max_position_embeddings', None)
 
             logger.warning(f'Overriding HF config with {hf_overrides}')
 
         # use dynamic ntk
         if config.rope_scaling_factor:
-            if self.attention_config.rope_param is None:
-                # some ut will create empty RopeParam, will check base/dim in src code
-                self.attention_config.rope_param = RopeParam(type='', base=0, dim=0)
-            self.attention_config.rope_param.__dict__.update(
-                type='dynamic',
-                factor=config.rope_scaling_factor,
-                max_position_embeddings=self.attention_config.max_position_embeddings)
+            # some ut will create empty RopeParam, will check base/dim in src code
+            rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
+
+            rope_param.type = 'dynamic'
+            rope_param.factor = config.rope_scaling_factor
+            rope_param.max_position_embeddings = self.attention_config.max_position_embeddings
 
     @classmethod
     def from_dict(cls, config: dict = {}):

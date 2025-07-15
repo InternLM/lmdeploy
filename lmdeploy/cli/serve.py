@@ -194,6 +194,7 @@ class SubCliServe:
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
         ArgumentHelper.communicator(tb_group)
+        ArgumentHelper.hf_overrides(tb_group)
 
         # vlm args
         vision_group = parser.add_argument_group('Vision model arguments')
