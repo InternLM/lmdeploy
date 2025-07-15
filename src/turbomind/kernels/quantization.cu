@@ -22,14 +22,17 @@ __global__ void quant_symm_row(
 #if TURBOMIND_ARCH_SM90
     static_assert(group_size % vec_size == 0);
     constexpr int threads = group_size / vec_size;
+    const int     dim1    = round_up(dim, WARP_SIZE * vec_size);
     for (int ti = blockIdx.x; ti < num; ti += gridDim.x) {
-        for (int di = threadIdx.x * vec_size; di < dim; di += blockDim.x * vec_size) {
-            Array<T, vec_size> vec;
-            Ldg(vec, src + ti * src_ld + di);
+        for (int di = threadIdx.x * vec_size; di < dim1; di += blockDim.x * vec_size) {
+            Array<T, vec_size> vec{};
+            if (di < dim) {
+                Ldg(vec, src + ti * src_ld + di);
+            }
             auto         absmax    = fmaxf(static_cast<Tscale>(find_absmax<threads>(vec)), 1e-8f);
             const Tscale scale     = absmax / qmax;
             const Tscale inv_scale = qmax / absmax;
-            if (threadIdx.x % threads == 0) {
+            if (threadIdx.x % threads == 0 && di < dim) {
                 // column-major
                 scales[(di / group_size) * scales_ld + ti] = scale;
             }
@@ -38,7 +41,9 @@ __global__ void quant_symm_row(
             for (int c = 0; c < vec_size; ++c) {
                 tmp[c] = Tout(static_cast<Tscale>(vec[c]) * inv_scale);
             }
-            Store(out + ti * out_ld + di, tmp);
+            if (di < dim) {
+                Store(out + ti * out_ld + di, tmp);
+            }
         }
     }
 #endif
@@ -69,11 +74,13 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
 
     const int aligned_num = round_up<int>(num, alignment);
 
+    const int s_dim = cdiv<ssize_t>(dim, group_size);
+
     if (!scale) {
-        scale = Tensor_<Tscale>({{dim / group_size, num}, {aligned_num, 1}}, kDEVICE);
+        scale = Tensor_<Tscale>({{s_dim, num}, {aligned_num, 1}}, kDEVICE);
     }
     else {
-        TM_CHECK(std::make_tuple(dim / group_size, num) == scale.shapes(0, 1));
+        TM_CHECK(std::make_tuple(s_dim, num) == scale.shapes(0, 1));
         TM_CHECK(scale.stride(1) == 1);
         TM_CHECK(scale.stride(0) % alignment == 0);
     }
@@ -159,17 +166,17 @@ __global__ void quant_symm_block(Tout* out, Tscale* scales, const T* src, Tscale
     __shared__ typename BlockReduce::TempStorage temp_storage;
     __shared__ T                                 shared_inv_scale;
 
-    const int ti  = blockIdx.x * block_size;
-    const int di  = blockIdx.y * block_size;
-    const int col = threadIdx.x % threads;
     const int row = threadIdx.x / threads;
+    const int col = threadIdx.x % threads;
+    const int ti  = blockIdx.x * block_size;
+    const int di  = blockIdx.y * block_size + col * vec_size;
 
     T                  absmax{};
     Array<T, vec_size> xs[S]{};
     PRAGMA_UNROLL
     for (int s = 0; s < S; ++s) {
-        if (auto r = ti + s * rows + row; r < num) {
-            Ldg(xs[s], src + (int64_t)r * dim + di + col * vec_size);
+        if (auto r = ti + s * rows + row; r < num && di < dim) {
+            Ldg(xs[s], src + (int64_t)r * dim + di);
         }
         PRAGMA_UNROLL
         for (int i = 0; i < vec_size; ++i) {
@@ -193,14 +200,14 @@ __global__ void quant_symm_block(Tout* out, Tscale* scales, const T* src, Tscale
         for (int i = 0; i < vec_size; ++i) {
             ys[s][i] = Tout(static_cast<Tscale>(xs[s][i]) * inv_scale);
         }
-        if (auto r = ti + s * rows + row; r < num) {
-            Store(out + (int64_t)r * dim + di + col * vec_size, ys[s]);
+        if (auto r = ti + s * rows + row; r < num && di < dim) {
+            Store(out + (int64_t)r * dim + di, ys[s]);
         }
     }
 #endif
 }
 
-void QuantizeSymmBlock(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st)
+void QuantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> scale_, const Tensor& src, cudaStream_t st)
 {
     TM_CHECK(src.is_contiguous());
     TM_CHECK_EQ(src.ndim(), 2);
@@ -219,6 +226,9 @@ void QuantizeSymmBlock(Tensor& out, Tensor& scale, const Tensor& src, cudaStream
 
     constexpr int cta_size = 1024;
     const dim3    grid(bnum, bdim);
+
+    auto& out   = out_.get();
+    auto& scale = scale_.get();
 
     if (!out) {
         out = Tensor_<Tout>{src.layout(), kDEVICE};
@@ -259,7 +269,7 @@ __global__ void dequant_symm_block(Tout* out, const T* src, const Tscale* scales
     PRAGMA_UNROLL
     for (int s = 0; s < S; ++s) {
         const auto ti = blockIdx.x * block_size + s * rows + row;
-        if (ti < num) {
+        if (ti < num && di < dim) {
             Array<T, vec_size> x;
             Ldg(x, src + (int64_t)ti * dim + di);
             Array<Tout, vec_size> y;
@@ -273,7 +283,7 @@ __global__ void dequant_symm_block(Tout* out, const T* src, const Tscale* scales
 #endif
 }
 
-void DequantizeSymmBlock(Tensor& out, const Tensor& src, const Tensor& scale, cudaStream_t st)
+void DequantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> src_, const Tensor& scale, cudaStream_t st)
 {
     using T      = fp8_e4m3_t;
     using Tout   = bfloat16_t;
@@ -281,6 +291,9 @@ void DequantizeSymmBlock(Tensor& out, const Tensor& src, const Tensor& scale, cu
 
     constexpr int block_size = 128;
     constexpr int vec_size   = 8;
+
+    auto& out = out_.get();
+    auto& src = src_.get();
 
     if (!out) {
         out = Tensor_<Tout>{src.layout(), kDEVICE};
