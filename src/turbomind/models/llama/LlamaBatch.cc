@@ -202,7 +202,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
     for (const auto& r : reqs) {
 
         if (tp_rank_ == 0) {
-            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request for %llu received.", r->id);
         }
 
         if (r->ec) {
@@ -216,6 +216,11 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
             continue;
         }
+        if (param_.enable_prefix_caching && !r->session.start_flag) {
+            // Prefix caching is incompatible with interactive mode
+            signals.push_back([r] { UpdateState(*r, Request::kInconsistency, 0); });
+            continue;
+        }
 
         auto ptr = r->session.start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
         if (!ptr) {
@@ -224,6 +229,10 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         }
 
         const int step = [&] {
+            if (param_.enable_prefix_caching) {
+                // Prefix caching is incompatible with interactive mode
+                return 0;
+            }
             int s = r->session.step;
             if (s < 0) {
                 s = ptr->tokens.size();
@@ -249,7 +258,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
 
         auto& seq = *state.sequences[idx];
 
-        if (step < seq.tokens.size()) {
+        if (!param_.enable_prefix_caching && step < seq.tokens.size()) {
             // resize sequence tokens to match step
             seq.tokens.resize(step);
             seq.cache_len = std::min(seq.cache_len, step);
@@ -286,6 +295,12 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             // TODO: truncate prompt to enable prefix caching for VLM
             seq.prompt.resize(input_length);
             std::copy_n(input_ids, input_length, seq.prompt.data());
+            seq.prefix_match_end_index = input_length;
+            if (r->gen_cfg.output_logits || r->gen_cfg.output_last_hidden_state) {
+                // when output logits or output last hidden state, prefix match can only
+                // apply to prompts[0:step)
+                seq.prefix_match_end_index = r->session.step;
+            }
         }
 
         const int elem_size = byte_size(data_type_);
@@ -987,21 +1002,23 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 {
     const auto& src_buf   = logits.buffer();
     const auto  elem_size = byte_size(logits.dtype(), 1);
-    // when `is_all` is true, logits only contains last token of the sequences
+    // when `is_all` is false, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
 
     int base = 0;
 
     for (int i = first; i < last; ++i) {
 
-        const int input_len = h_input_length_buf_[i];  // input lenght for this iter
+        const int input_len = h_input_length_buf_[i];  // input length for this iter
 
         if (state_->requests[i]->gen_cfg.output_logits == out_type) {
 
             auto& dst_buf = state_->requests[i]->outputs.at("logits").buffer();
 
             const int cache_len   = state_->sequences[i]->cache_len;
-            const int history_len = state_->sequences[i]->tokens.size();
+            const int history_len = !param_.enable_prefix_caching 
+                ? state_->sequences[i]->tokens.size() 
+                : state_->requests[i]->session.step;
 
             // ----------H------I-------P-----------
             //      C        C      C         C
@@ -1013,14 +1030,14 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
             const int valid_len = input_len - std::max(0, (history_len + offset) - cache_len);
 
-            // TM_LOG_ERROR("%d %d   %d %d  %d  %d %d",
-            //              history_len,
-            //              offset,
-            //              cache_len,
-            //              input_len,
-            //              valid_len,
-            //              std::max(0, diff),
-            //              std::max(0, -diff));
+            TM_LOG_DEBUG("[output_logits] %d %d   %d %d  %d  %d %d",
+                history_len,
+                offset,
+                cache_len,
+                input_len,
+                valid_len,
+                std::max(0, diff),
+                std::max(0, -diff));
 
             if (valid_len <= 0) {
                 continue;
@@ -1180,7 +1197,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // Cache computed blocks to block trie
-    sequence_manager_->CacheIfEnabled(state_->sequences, batch_size);
+    sequence_manager_->CachePrompt(state_->sequences, batch_size);
 
     if (debug_ && tp_rank_ == 0) {
         for (int i = 0; i < batch_size; ++i) {
@@ -1245,14 +1262,13 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 }
 
-auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
+auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
 {
     if (tp_rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d",
+        TM_LOG_INFO("[Interrupt] slot %d, request %llu, stop %d, end %d",
                     index,
-                    (long)state_->requests[index]->id,
-                    force_stop,
-                    force_end);
+                    state_->requests[index]->id,
+                    force_stop);
     }
 
     if (debug_ && tp_rank_ == 0) {
@@ -1266,28 +1282,30 @@ auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-    if (state_->requests[index]->session.end_flag || force_end) {
-        // Sequence is ending this round or a stop request is issued to end it
+    const int output_len = state_->h_context_length[index];
+    auto&     seq        = *state_->sequences[index];
+
+    // Update token IDs
+    seq.tokens.resize(output_len);
+
+    // output_ids is updated & synced in `Finish`
+    const auto output_ids = state_->requests[index]->output_ids.data();
+    std::copy_n(output_ids, output_len, seq.tokens.data());
+    // Cache the generated tokens of the sequence
+    sequence_manager_->CacheGeneration(seq);
+
+    // Save random state in host memory
+    seq.random_state.resize(sizeof(curandState_t));
+    // This async copy must be synchronized by the caller
+    core::Copy((curandState_t*)state_->curand_state.data() + index, 1, (curandState_t*)seq.random_state.data());
+
+    // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
+    sequence_manager_->UpdateAndSetUnlock(seq);
+
+
+    if (state_->requests[index]->session.end_flag) {
+        // Sequence is ending this round
         FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
-    }
-    else {
-        const int output_len = state_->h_context_length[index];
-        auto&     seq        = *state_->sequences[index];
-
-        // Update token IDs
-        seq.tokens.resize(output_len);
-
-        // output_ids is updated & synced in `Finish`
-        const auto output_ids = state_->requests[index]->output_ids.data();
-        std::copy_n(output_ids, output_len, seq.tokens.data());
-
-        // Save random state in host memory
-        seq.random_state.resize(sizeof(curandState_t));
-        // This async copy must be synchronized by the caller
-        core::Copy((curandState_t*)state_->curand_state.data() + index, 1, (curandState_t*)seq.random_state.data());
-
-        // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
-        sequence_manager_->UpdateAndSetUnlock(seq);
     }
 
     state_->sequences[index] = nullptr;

@@ -92,7 +92,7 @@ public:
 
     void Finish(GenerationState& g, std::vector<Signal>& signals);
 
-    [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
+    [[nodiscard]] Signal Interrupt(int index, bool force_stop = false);
 
     void ComputeAndOutputLogits(const Tensor& hidden_states, int first, int last);
 
