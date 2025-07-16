@@ -267,7 +267,7 @@ void CudaIpcCommImpl::Deregister(Symmetric& s)
         CUDRVCHECK(cuMulticastUnbind(s.mc_handle, ordinals_.at(global_rank_), 0, s.size));
         CUDRVCHECK(cuMemRelease(s.mc_handle));
         s.mc_handle = {};
-        s.mc_ptr = {};
+        s.mc_ptr    = {};
     }
 }
 
