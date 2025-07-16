@@ -56,7 +56,7 @@ class EngineP2PConnection:
         self.engine.executor.p2p_connect(remote_engine_id=conn_request.remote_engine_id,
                                          conn_request=conn_request.remote_kvtransfer_endpoint_info)
         event_loop = asyncio.get_event_loop()
-        event_loop.create_task(self.handle_zmq_rercv(conn_request.remote_engine_id))
+        event_loop.create_task(self.handle_zmq_recv(conn_request.remote_engine_id))
         return DistServeConnectionResponse(status=DistServeConnectionStatus.SUCCESS)
 
     def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
@@ -68,7 +68,7 @@ class EngineP2PConnection:
         await self.p2p_sender[remote_engine_id].send_pyobj(
             DistServeCacheFreeRequest(remote_engine_id=remote_engine_id, remote_session_id=remote_session_id))
 
-    async def handle_zmq_rercv(self, remote_engine_id: str):
+    async def handle_zmq_recv(self, remote_engine_id: str):
         while True:
             req: DistServeCacheFreeRequest = await self.p2p_receiver[remote_engine_id].recv_pyobj()
             if isinstance(req, DistServeCacheFreeRequest):
