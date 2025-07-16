@@ -178,7 +178,7 @@ private:
 
     std::vector<CUmemAccessDesc> alloc_access_descs_{};
 
-    int multicast_capability_{true};
+    int multicast_capability_{false};
 
     std::set<Allocation, std::less<>> allocation_;
 

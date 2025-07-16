@@ -206,6 +206,9 @@ __global__ void AllreduceResidualBiasRMSnormV_NVLS(T*                   rs_mc_bu
                                                    constant<groups>,
                                                    Relaxed relaxed)
 {
+
+#if TURBOMIND_ARCH_SM90
+
     SystemSemaphore sem(semaphores, g_ranks, blockIdx.x, threadIdx.x);
 
     sem.Signal(relaxed);
@@ -285,6 +288,7 @@ __global__ void AllreduceResidualBiasRMSnormV_NVLS(T*                   rs_mc_bu
     sem.Wait(true);
 
     sem.Update(semaphores, g_ranks, blockIdx.x, threadIdx.x);
+#endif
 }
 
 void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,

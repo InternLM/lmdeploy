@@ -183,6 +183,9 @@ __global__ void AllreduceResidualBiasRMSnorm_NVLS(T*                   mc_buf,
                                                   constant<groups>,
                                                   Relaxed relaxed)
 {
+
+#if TURBOMIND_ARCH_SM90
+
     SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
 
     sem.Signal(relaxed);
@@ -263,6 +266,8 @@ __global__ void AllreduceResidualBiasRMSnorm_NVLS(T*                   mc_buf,
     sem.Wait(true);
 
     sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
+
+#endif
 }
 
 template<class T, int vec_size, int block_dim, int groups, class Relaxed>

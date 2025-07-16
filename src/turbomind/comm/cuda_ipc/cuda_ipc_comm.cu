@@ -77,9 +77,10 @@ CudaIpcCommImpl::CudaIpcCommImpl(HostComm h_comm):
     check_cuda_error(cudaGetDevice(&ordinals_[rank]));
     comm::AllGather(h_comm_, ordinals_.data(), 1);
 
+#if __CUDACC_VER_MAJOR__ >= 12
     CUDRVCHECK(cuDeviceGetAttribute(&multicast_capability_, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, ordinals_[rank]));
-
     multicast_capability_ = comm::AllReduce(h_comm_, multicast_capability_, RedOp::kMin);
+#endif
 
     // Prepare access descriptors
     alloc_access_descs_.resize(n_ranks);
@@ -148,10 +149,14 @@ void* CudaIpcCommImpl::Allocate(size_t size)
     prop.location.id   = ordinals_[global_rank_];
 
     if (multicast_capability_) {
+#if __CUDACC_VER_MAJOR__ >= 12
         CUmulticastObjectProp prop{};
         prop.numDevices = alloc_access_descs_.size();
         prop.size       = size;
         CUDRVCHECK(cuMulticastGetGranularity(&granularity, &prop, CU_MULTICAST_GRANULARITY_RECOMMENDED));
+#else
+        TM_CHECK(0);
+#endif
     }
     else {
         CUDRVCHECK(cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
@@ -233,6 +238,7 @@ void CudaIpcCommImpl::Register(const Allocation& alloc, int group)
     const int rank  = this->rank(group);
 
     if (multicast_capability_) {
+#if __CUDACC_VER_MAJOR__ >= 12
         CUmulticastObjectProp mc_prop{};
         mc_prop.numDevices = ranks;
         mc_prop.size       = size;
@@ -253,6 +259,9 @@ void CudaIpcCommImpl::Register(const Allocation& alloc, int group)
             // without explicit synchronization
             CUDRVCHECK(cuMemRetainAllocationHandle(&s.mc_handle, s.mc_ptr));
         }
+#else
+        TM_CHECK(0);
+#endif
     }
 
     g.symmetric.insert(std::move(s));
@@ -261,6 +270,7 @@ void CudaIpcCommImpl::Register(const Allocation& alloc, int group)
 void CudaIpcCommImpl::Deregister(Symmetric& s)
 {
     if (s.mc_handle) {
+#if __CUDACC_VER_MAJOR__ >= 12
         auto deviceptr = reinterpret_cast<CUdeviceptr>(s.mc_ptr);
         CUDRVCHECK(cuMemUnmap(deviceptr, s.size));
         CUDRVCHECK(cuMemAddressFree(deviceptr, s.size));
@@ -268,6 +278,9 @@ void CudaIpcCommImpl::Deregister(Symmetric& s)
         CUDRVCHECK(cuMemRelease(s.mc_handle));
         s.mc_handle = {};
         s.mc_ptr    = {};
+#else
+        TM_CHECK(0);
+#endif
     }
 }
 

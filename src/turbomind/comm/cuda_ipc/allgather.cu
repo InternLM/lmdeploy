@@ -90,6 +90,7 @@ template<class T, class Relaxed>
 __global__ void __launch_bounds__(1024, 1) Allgather_NVLS_V2(
     T* uc, T* mc, SystemSemaphoreInfo* semaphores, int rank, int ranks, int64_t slice, Relaxed relaxed)
 {
+#if TURBOMIND_ARCH_SM90
     SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
     sem.Signal(relaxed);
     sem.Wait(relaxed);
@@ -105,6 +106,7 @@ __global__ void __launch_bounds__(1024, 1) Allgather_NVLS_V2(
     sem.Signal(relaxed);
     sem.Wait(relaxed);
     sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
+#endif
 }
 
 void CudaIpcCommImpl::AllGather(
@@ -234,6 +236,9 @@ __global__ void __launch_bounds__(1024, 1) Allgather2D_NVLS_V2(T*               
                                                                constant<log2_block_dim>,
                                                                Relaxed relaxed)
 {
+
+#if TURBOMIND_ARCH_SM90
+
     SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
 
     sem.Signal(relaxed);
@@ -264,6 +269,7 @@ __global__ void __launch_bounds__(1024, 1) Allgather2D_NVLS_V2(T*               
     sem.Wait(relaxed);
 
     sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
+#endif
 }
 
 void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,

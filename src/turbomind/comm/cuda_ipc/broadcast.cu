@@ -25,6 +25,9 @@ __global__ void __launch_bounds__(1024, 1) Broadcast_NVLS_V2(const T*           
                                                              int64_t              count,
                                                              Relaxed              relaxed)
 {
+
+#if TURBOMIND_ARCH_SM90
+
     SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
     sem.Signal(relaxed);
     sem.Wait(relaxed);
@@ -43,6 +46,7 @@ __global__ void __launch_bounds__(1024, 1) Broadcast_NVLS_V2(const T*           
     sem.Signal(relaxed);
     sem.Wait(relaxed);
     sem.Update(semaphores, ranks, blockIdx.x, threadIdx.x);
+#endif
 }
 
 template<class T, class Relaxed>
