@@ -89,6 +89,8 @@ void CudaIpcCommImpl::Broadcast(const void*  sendbuff,  //
 
     const size_t bytesize = turbomind::byte_size(type, count);
 
+    auto semaphore = groups_.at(group).semaphore.handle();
+
     const int algo = 3;
 
     if (algo == 0) {
@@ -144,7 +146,7 @@ void CudaIpcCommImpl::Broadcast(const void*  sendbuff,  //
         const int    threads  = 1024;
         const int    blocks   = std::min<int>(2, (slice + threads - 1) / threads);
         Broadcast_NVLS_V2<T><<<blocks, threads, 0, stream>>>(
-            symm_ptr.uc[root], symm_ptr.mc, semaphore_.handle(), rank, ranks, root, slice, count, std::true_type{});
+            symm_ptr.uc[root], symm_ptr.mc, semaphore, rank, ranks, root, slice, count, std::true_type{});
     }
     else if (algo == 4) {
         using T               = uint4;
@@ -152,8 +154,8 @@ void CudaIpcCommImpl::Broadcast(const void*  sendbuff,  //
         const size_t slice    = bytesize / sizeof(T);
         const int    threads  = 1024;
         const int    blocks   = std::min<int>(32, (slice + threads - 1) / threads);
-        Broadcast_Simple_Pull<T><<<blocks, threads, 0, stream>>>(
-            symm_ptr.uc, semaphore_.handle(), rank, ranks, root, slice, std::false_type{});
+        Broadcast_Simple_Pull<T>
+            <<<blocks, threads, 0, stream>>>(symm_ptr.uc, semaphore, rank, ranks, root, slice, std::false_type{});
     }
 }
 

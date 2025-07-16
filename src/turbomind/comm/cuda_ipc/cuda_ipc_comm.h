@@ -6,7 +6,6 @@
 #include <set>
 
 #include "src/turbomind/comm/cuda_ipc/common.h"
-#include "src/turbomind/comm/cuda_ipc/mscclpp.h"
 #include "src/turbomind/comm/cuda_ipc/semaphore.h"
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
@@ -116,7 +115,9 @@ private:
 
     SymmetricPtr_V2<void> get_symmetric_v2_impl(void* ptr, int group);
 
-    void register_for_group(const Allocation& alloc, const std::vector<void*>& ucps, int group);
+    void Register(const Allocation& alloc, int group);
+
+    void Deregister(Symmetric& s);
 
 private:
     HostComm h_comm_;
@@ -127,11 +128,12 @@ private:
     std::vector<int> ordinals_;
 
     struct Symmetric {
-        void*                        uc_beg;
-        void*                        uc_end;
-        size_t                       size;
-        std::vector<void*>           uc_ptrs;  // peers
-        void*                        mc_ptr;
+        void*              uc_beg;
+        void*              uc_end;
+        size_t             size;
+        std::vector<void*> uc_ptrs;  // peers
+        void*              mc_ptr;
+
         CUmemGenericAllocationHandle mc_handle;
 
         friend bool operator<(const Symmetric& a, const Symmetric& b)
@@ -179,14 +181,12 @@ private:
     int multicast_capability_{true};
 
     std::set<Allocation, std::less<>> allocation_;
-    SystemSemaphoreStorage            semaphore_;
 
     struct Group {
         std::vector<int> l2g;  // local -> global
         std::vector<int> g2l;  // global -> local
 
-        // uint64_t*                    d2d_semaphore_data;
-        // mscclpp::D2DSemaphoreHandle* d2d_semaphores;
+        SystemSemaphoreStorage semaphore;
 
         std::set<Symmetric, std::less<>> symmetric;
     };

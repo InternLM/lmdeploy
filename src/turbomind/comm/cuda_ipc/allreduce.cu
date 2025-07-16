@@ -2,6 +2,7 @@
 
 #include "src/turbomind/comm/cuda_ipc/common.h"
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/cuda_ipc/mscclpp.h"
 #include "src/turbomind/comm/cuda_ipc/multimem.cuh"
 #include "src/turbomind/comm/cuda_ipc/semaphore.cuh"
 
@@ -254,7 +255,7 @@ void CudaIpcCommImpl::AllReduceSum(
     const int n_ranks = this->n_ranks(group);
     const int rank    = this->rank(group);
 
-    // auto semaphores = groups_.at(group).d2d_semaphores;
+    auto semaphore = groups_.at(group).semaphore.handle();
 
     auto invoke = [&](auto t) {
         using T               = decltype(t);
@@ -270,7 +271,7 @@ void CudaIpcCommImpl::AllReduceSum(
             const int     last     = std::min<int>(count / vec_size, first + slice);
             const int     blocks   = std::min(4, (slice + threads - 1) / threads);
             Allreduce_NVLS_V2<<<blocks, threads, 0, stream>>>(symm_ptr.mc,  //
-                                                              semaphore_.handle(),
+                                                              semaphore,
                                                               n_ranks,
                                                               first,
                                                               last,
@@ -305,7 +306,7 @@ void CudaIpcCommImpl::AllReduceSum(
                                                                      (T*)scratch_buff_,
                                                                      symm_ptr.uc,
                                                                      get_symmetric_v2((T*)scratch_buff_, group).uc,
-                                                                     semaphore_.handle(),
+                                                                     semaphore,
                                                                      rank,
                                                                      n_ranks,
                                                                      slice,
@@ -320,7 +321,7 @@ void CudaIpcCommImpl::AllReduceSum(
             const int     blocks   = std::min(48, (slice + threads - 1) / threads);
             Allreduce_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)data,
                                                                   symm_ptr.uc,
-                                                                  semaphore_.handle(),
+                                                                  semaphore,
                                                                   rank,
                                                                   n_ranks,
                                                                   slice,

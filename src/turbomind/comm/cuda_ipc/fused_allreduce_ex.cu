@@ -333,6 +333,8 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
     const int last   = lasts[g_rank];
     const int offset = offsets[g_rank];
 
+    auto semaphore = groups_.at(0).semaphore.handle();
+
     auto invoke = [&](auto t, auto groups) {
         using T                = decltype(t);
         constexpr int vec_size = sizeof(uint4) / sizeof(T);
@@ -340,13 +342,13 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
         auto rs_symm_ptr = get_symmetric_v2((T*)hidden, group0);
         auto ag_symm_ptr = get_symmetric_v2((T*)hidden, group1);
 
-        if (rs_symm_ptr.mc && ag_symm_ptr.mc && 0) {
+        if (rs_symm_ptr.mc && ag_symm_ptr.mc) {
             AllreduceResidualBiasRMSnormV_NVLS<<<40, 1024, 0, stream>>>(rs_symm_ptr.mc,
                                                                         ag_symm_ptr.mc,
                                                                         (T*)residual,
                                                                         (const T*)bias,
                                                                         (const T*)weights,
-                                                                        semaphore_.handle(),
+                                                                        semaphore,
                                                                         g_rank,
                                                                         n_ranks(0),
                                                                         first,
@@ -372,7 +374,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                                                (const T*)weights,
                                                                                rs_symm_ptr.uc,
                                                                                ag_symm_ptr.uc,
-                                                                               semaphore_.handle(),
+                                                                               semaphore,
                                                                                rank(group0),
                                                                                rank(group1),
                                                                                tp0,

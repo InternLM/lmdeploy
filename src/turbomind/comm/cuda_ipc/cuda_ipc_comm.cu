@@ -6,6 +6,7 @@
 
 #include <cuda.h>
 
+#include "src/turbomind/comm/cuda_ipc/common.h"
 #include "src/turbomind/kernels/core/math.h"
 
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
@@ -24,12 +25,9 @@ int CudaIpcCommImpl::Split(int color, int key, int group)
     FT_CHECK(color >= 0);
     FT_CHECK(rank(group) >= 0);
 
-    auto& t = groups_.at(group);
+    auto& parent = groups_.at(group);
 
-    // auto buffer = create_semaphore_buffer();
-    uint64_t* buffer{};
-
-    auto vec = comm::AllGather(h_comm_, std::make_tuple(color, key, t.g2l[global_rank_], buffer));
+    auto vec = comm::AllGather(h_comm_, std::make_tuple(color, key, parent.g2l[global_rank_]));
 
     auto last = std::stable_partition(vec.begin(), vec.end(), [&](auto x) {  //
         return std::get<0>(x) == color;
@@ -40,14 +38,11 @@ int CudaIpcCommImpl::Split(int color, int key, int group)
     });
 
     std::vector<int> l2g;
-    std::vector<int> g2l(t.g2l.size(), -1);
-
-    std::vector<uint64_t*> buffers;
+    std::vector<int> g2l(parent.g2l.size(), -1);
 
     for (size_t local = 0; local < vec.size(); ++local) {
-        const auto& [c, k, r, b] = vec[local];
-        buffers.push_back(b);
-        int global = t.l2g.at(r);
+        const auto r      = std::get<2>(vec[local]);
+        int        global = parent.l2g.at(r);
         l2g.push_back(global);
         g2l[global] = local;
     }
@@ -56,12 +51,15 @@ int CudaIpcCommImpl::Split(int color, int key, int group)
 
     auto& g = groups_.emplace_back(Group{l2g, g2l});
 
-    // g.d2d_semaphore_data = buffer;
-    // g.d2d_semaphores     = init_semaphores(buffers, index);
-
     for (auto& a : allocation_) {
-        register_for_group(a, a.uc_ptrs, index);
+        Register(a, index);
     }
+
+    g.semaphore.Allocate(l2g.size(), g2l[global_rank_], [&](size_t size) {
+        auto ptr = (uint64_t*)Allocate(size);
+        Register(ptr, size);
+        return get_symmetric_v2(ptr, index);
+    });
 
     return index;
 };
@@ -106,7 +104,7 @@ CudaIpcCommImpl::CudaIpcCommImpl(HostComm h_comm):
     check_cuda_error(cudaMemsetAsync(scratch_buff_, 0, kScratchBuffSize));
 
     /// TODO: release
-    semaphore_.Allocate(global_n_ranks_, global_rank_, [this](size_t size) {
+    g.semaphore.Allocate(global_n_ranks_, global_rank_, [this](size_t size) {
         auto ptr = (uint64_t*)Allocate(size);
         Register(ptr, size);
         return get_symmetric_v2(ptr, 0);
@@ -122,31 +120,20 @@ CudaIpcCommImpl::~CudaIpcCommImpl()
 {
     Deregister(scratch_buff_);
     Deregister(packet_buff_);
-    // device_semaphores_ is not registered
 
     Free(scratch_buff_);
     Free(packet_buff_);
 
-    // for (auto i = (int)groups_.size() - 1; i >= 0; --i) {
-    //     Free(groups_[i].d2d_semaphore_data);
-    // }
-
-    semaphore_.Free([this](void* ptr) {
-        Deregister(ptr);
-        Free(ptr);
-    });
-
-    // for (const auto& [ptr, _] : registered_memories_) {
-    //     TM_LOG_WARNING("[COMM][%d] Buffer %p is not deregistered", global_rank_, ptr);
-    // }
+    for (auto i = (int)groups_.size() - 1; i >= 0; --i) {
+        groups_[i].semaphore.Free([this](void* ptr) {
+            Deregister(ptr);
+            Free(ptr);
+        });
+    }
 
     for (const auto& a : allocation_) {
         TM_LOG_WARNING("[COMM][%d] Allocation (%p, %lu) is not freed", global_rank_, a.uc_beg, a.size);
     }
-
-    // for (auto i = (int)groups_.size() - 1; i >= 0; --i) {
-    //     cudaFreeAsync(groups_[i].d2d_semaphores, 0);
-    // }
 
     cudaStreamSynchronize(0);
 }
@@ -223,11 +210,11 @@ void CudaIpcCommImpl::Register(void* ptr, size_t size)
     TM_CHECK(alloc != allocation_.end());
 
     for (size_t i = 0; i < groups_.size(); ++i) {
-        register_for_group(*alloc, alloc->uc_ptrs, i);
+        Register(*alloc, i);
     }
 }
 
-void CudaIpcCommImpl::register_for_group(const Allocation& alloc, const std::vector<void*>& ucps, int group)
+void CudaIpcCommImpl::Register(const Allocation& alloc, int group)
 {
     auto size = alloc.size;
 
@@ -239,14 +226,13 @@ void CudaIpcCommImpl::register_for_group(const Allocation& alloc, const std::vec
     s.uc_end = alloc.uc_end;
 
     for (auto r : g.l2g) {
-        s.uc_ptrs.push_back(ucps[r]);
+        s.uc_ptrs.push_back(alloc.uc_ptrs[r]);
     }
 
+    const int ranks = n_ranks(group);
+    const int rank  = this->rank(group);
+
     if (multicast_capability_) {
-
-        const int ranks = n_ranks(group);
-        const int rank  = this->rank(group);
-
         CUmulticastObjectProp mc_prop{};
         mc_prop.numDevices = ranks;
         mc_prop.size       = size;
@@ -256,25 +242,43 @@ void CudaIpcCommImpl::register_for_group(const Allocation& alloc, const std::vec
         auto handles = comm::AllGather(h_comm_, s.mc_handle);
         s.mc_handle  = handles.at(g.l2g[0]);
         CUDRVCHECK(cuMulticastAddDevice(s.mc_handle, ordinals_[global_rank_]));
-        h_comm_->Sync();  // wait for all `cuMulticastAddDevice`
         CUDRVCHECK(cuMulticastBindMem(s.mc_handle, 0, alloc.handle, 0, size, 0));
         CUdeviceptr mc_ptr{};
         CUDRVCHECK(cuMemAddressReserve(&mc_ptr, size, alloc.alignment, 0, 0));
         CUDRVCHECK(cuMemMap(mc_ptr, size, 0, s.mc_handle, 0));
         CUDRVCHECK(cuMemSetAccess(mc_ptr, size, &alloc_access_descs_[global_rank_], 1));
         s.mc_ptr = reinterpret_cast<void*>(mc_ptr);
+        if (rank != 0) {
+            // Increase reference count to the original handle so that all handles can be released
+            // without explicit synchronization
+            CUDRVCHECK(cuMemRetainAllocationHandle(&s.mc_handle, s.mc_ptr));
+        }
     }
 
     g.symmetric.insert(std::move(s));
 }
 
+void CudaIpcCommImpl::Deregister(Symmetric& s)
+{
+    if (s.mc_handle) {
+        auto deviceptr = reinterpret_cast<CUdeviceptr>(s.mc_ptr);
+        CUDRVCHECK(cuMemUnmap(deviceptr, s.size));
+        CUDRVCHECK(cuMemAddressFree(deviceptr, s.size));
+        CUDRVCHECK(cuMulticastUnbind(s.mc_handle, ordinals_.at(global_rank_), 0, s.size));
+        CUDRVCHECK(cuMemRelease(s.mc_handle));
+        s.mc_handle = {};
+        s.mc_ptr = {};
+    }
+}
+
 void CudaIpcCommImpl::Deregister(void* ptr)
 {
-    // TODO: release multicast object
+    std::vector<CUmemGenericAllocationHandle> handles;
+
     for (size_t i = 0; i < groups_.size(); ++i) {
         auto& s = groups_[i].symmetric;
         if (auto it = s.find(ptr); it != s.end()) {
-            s.erase(it);
+            Deregister(s.extract(it).value());
         }
         else {
             TM_LOG_WARNING("[TM][COMM][%d] Deregistering non-registered address %p", global_rank_, ptr);

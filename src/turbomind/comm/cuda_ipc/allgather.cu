@@ -55,7 +55,7 @@ __global__ void Barrier_V2(SystemSemaphoreInfo* semaphores, int ranks)
 void CudaIpcCommImpl::Barrier(int group, cudaStream_t stream)
 {
     const int ranks = n_ranks(group);
-    Barrier_V2<<<1, ranks, 0, stream>>>(semaphore_.handle(), ranks);
+    Barrier_V2<<<1, ranks, 0, stream>>>(groups_.at(group).semaphore.handle(), ranks);
 }
 
 template<class T, class Relaxed>
@@ -115,6 +115,8 @@ void CudaIpcCommImpl::AllGather(
     const int ranks = this->n_ranks(group);
     const int rank  = this->rank(group);
 
+    auto semaphore = groups_.at(group).semaphore.handle();
+
     auto invoke = [&](auto t) {
         using T               = decltype(t);
         const auto   symm_ptr = get_symmetric_v2((T*)recvbuff, group);
@@ -123,12 +125,12 @@ void CudaIpcCommImpl::AllGather(
         if (symm_ptr.mc && get_ag_use_nvls()) {
             const int blocks = std::min<int>(1, (slice + threads - 1) / threads);
             Allgather_NVLS_V2<T><<<blocks, threads, 0, stream>>>(
-                symm_ptr.uc[rank], symm_ptr.mc, semaphore_.handle(), rank, ranks, slice, std::false_type{});
+                symm_ptr.uc[rank], symm_ptr.mc, semaphore, rank, ranks, slice, std::false_type{});
         }
         else {
             const int blocks = std::min<int>(32, (slice + threads - 1) / threads);
-            Allgather_Simple_Pull<T><<<blocks, threads, 0, stream>>>(
-                symm_ptr.uc, semaphore_.handle(), rank, ranks, slice, std::false_type{});
+            Allgather_Simple_Pull<T>
+                <<<blocks, threads, 0, stream>>>(symm_ptr.uc, semaphore, rank, ranks, slice, std::false_type{});
         }
     };
 
@@ -286,6 +288,8 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
 
     TM_CHECK_EQ((char*)sendbuff, (char*)recvbuff + rank * byte_stride);
 
+    auto semaphore = groups_.at(group).semaphore.handle();
+
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
@@ -302,7 +306,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
             const int blocks = std::min<int>(1, (height + groups - 1) >> log2_groups);
             Allgather2D_NVLS_V2<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,
                                                                    symm_ptr.mc,
-                                                                   semaphore_.handle(),
+                                                                   semaphore,
                                                                    rank,
                                                                    this->n_ranks(group),
                                                                    byte_pitch / sizeof(T),
@@ -317,7 +321,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
             const int blocks = std::min<int>(48, (height + groups - 1) >> log2_groups);
             Allgather2D_Simple_Pull<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
                                                                        symm_ptr.uc,
-                                                                       semaphore_.handle(),
+                                                                       semaphore,
                                                                        rank,
                                                                        ranks,
                                                                        byte_pitch / sizeof(T),

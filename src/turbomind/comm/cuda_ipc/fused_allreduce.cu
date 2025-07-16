@@ -412,7 +412,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
     const int n_ranks = this->n_ranks(group);
     const int rank    = this->rank(group);
 
-    // auto semaphores = groups_.at(group).d2d_semaphores;
+    auto semaphore = groups_.at(group).semaphore.handle();
 
     auto invoke = [&](auto t, auto groups) {
         using T                = decltype(t);
@@ -430,7 +430,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                                                 (T*)residual,
                                                                                 (const T*)bias,
                                                                                 (const T*)weights,
-                                                                                semaphore_.handle(),
+                                                                                semaphore,
                                                                                 rank,
                                                                                 n_ranks,
                                                                                 slice,
@@ -447,52 +447,51 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
             return false;
         }
         else if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
-            constexpr int block_dim = 1024;
-            const int     max_ctas  = 48;
-            const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
-            AllreduceResidualBiasRMSnorm_Simple_Push<<<blocks, block_dim, 0, stream>>>(
-                (T*)hidden,
-                (T*)residual,
-                (const T*)bias,
-                (const T*)weights,
-                (T*)scratch_buff_,
-                get_symmetric_v2((T*)hidden, group).uc,
-                get_symmetric_v2((T*)scratch_buff_, group).uc,
-                semaphore_.handle(),
-                rank,
-                n_ranks,
-                slice,
-                count,
-                dim / vec_size,
-                1.f / dim,
-                eps,
-                constant<vec_size>{},
-                constant<block_dim>{},
-                groups,
-                std::false_type{});
+            constexpr int block_dim    = 1024;
+            const int     max_ctas     = 48;
+            const int     blocks       = std::min((slice + groups - 1) / groups, max_ctas);
+            auto          symm_scratch = get_symmetric_v2((T*)scratch_buff_, group).uc;
+            AllreduceResidualBiasRMSnorm_Simple_Push<<<blocks, block_dim, 0, stream>>>((T*)hidden,
+                                                                                       (T*)residual,
+                                                                                       (const T*)bias,
+                                                                                       (const T*)weights,
+                                                                                       (T*)scratch_buff_,
+                                                                                       symm_ptr.uc,
+                                                                                       symm_scratch,
+                                                                                       semaphore,
+                                                                                       rank,
+                                                                                       n_ranks,
+                                                                                       slice,
+                                                                                       count,
+                                                                                       dim / vec_size,
+                                                                                       1.f / dim,
+                                                                                       eps,
+                                                                                       constant<vec_size>{},
+                                                                                       constant<block_dim>{},
+                                                                                       groups,
+                                                                                       std::false_type{});
         }
         else {
             constexpr int block_dim = 1024;
             const int     max_ctas  = 48;
             const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
-            AllreduceResidualBiasRMSnorm_Simple_Pull<<<blocks, block_dim, 0, stream>>>(
-                (T*)hidden,
-                (T*)residual,
-                (const T*)bias,
-                (const T*)weights,
-                get_symmetric_v2((T*)hidden, group).uc,
-                semaphore_.handle(),
-                rank,
-                n_ranks,
-                slice,
-                count,
-                dim / vec_size,
-                1.f / dim,
-                eps,
-                constant<vec_size>{},
-                constant<block_dim>{},
-                groups,
-                std::false_type{});
+            AllreduceResidualBiasRMSnorm_Simple_Pull<<<blocks, block_dim, 0, stream>>>((T*)hidden,
+                                                                                       (T*)residual,
+                                                                                       (const T*)bias,
+                                                                                       (const T*)weights,
+                                                                                       symm_ptr.uc,
+                                                                                       semaphore,
+                                                                                       rank,
+                                                                                       n_ranks,
+                                                                                       slice,
+                                                                                       count,
+                                                                                       dim / vec_size,
+                                                                                       1.f / dim,
+                                                                                       eps,
+                                                                                       constant<vec_size>{},
+                                                                                       constant<block_dim>{},
+                                                                                       groups,
+                                                                                       std::false_type{});
         }
 
         return true;
