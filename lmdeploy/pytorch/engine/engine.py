@@ -784,6 +784,7 @@ class Engine:
         self.update_running(running, next_token_ids, stopped, model_metas)
 
         # generate output
+        scheduler_stats = self.scheduler.make_stats()
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
@@ -797,7 +798,7 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
-            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
+            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, scheduler_stats)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -910,8 +911,7 @@ class Engine:
 
     async def _await_forward_event(self, forward_event: asyncio.Event):
         """Await forward event."""
-        if self.scheduler.has_unfinished():
-            await forward_event.wait()
+        await forward_event.wait()
 
     @torch.inference_mode()
     async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: RunableEventBase):
@@ -1025,20 +1025,19 @@ class Engine:
 
         while True:
             if next_running is None:
-                await has_runable_event.wait()
+                if not scheduler.has_unfinished():
+                    forward_event.set()
+                    await has_runable_event.wait()
+                    forward_event.clear()
+
                 scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
+            forward_event.set()
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
             scheduler.lock_running(running)
             for idx in range(num_loops):
-
-                # lock forward event
-                # make sure that prefetch forward would not wait for detokenize
-                # WARNING: this might have side effect on the performance
-                if idx == num_loops // 2:
-                    forward_event.clear()
 
                 # pre-forward before get last token
                 if idx == num_loops - 1:
@@ -1051,9 +1050,11 @@ class Engine:
                     step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
 
-                # unlock forward event.
-                if idx == num_loops - 1:
-                    forward_event.set()
+                # lock forward event
+                # make sure that prefetch forward would not wait for detokenize
+                # WARNING: this might have side effect on the performance
+                if idx == num_loops // 2:
+                    forward_event.clear()
 
             scheduler.unlock_running(running)
             has_runable_event.set()
@@ -1096,7 +1097,6 @@ class Engine:
 
             # forward task
             forward_event = CounterEvent()
-            forward_event.set()
 
             # migration task
             self.migration_event = asyncio.Event()
