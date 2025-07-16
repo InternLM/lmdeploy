@@ -255,7 +255,12 @@ class TurboMind:
 
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
-        self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
+        engine_config_dict = asdict(engine_config)
+        # Sanitize `engine_config` for YAML serialization.
+        # `PyYAML` raises a `RepresenterError` on `mmengine.ConfigDict` objects
+        # passed by frameworks like OpenCompass. This ensures a standard dict.
+        engine_config_dict = json.loads(json.dumps(engine_config_dict))
+        self.config_dict.update(dict(engine_config=engine_config_dict))
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
@@ -686,6 +691,7 @@ class TurboMindInstance:
                 if status in [7, 8]:  # finish / canceled
                     finish, status = True, 0
                 elif status:
+                    logger.error(f'internal error. status_code {status}')
                     yield self._get_error_output()
                     break
 

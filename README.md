@@ -187,10 +187,10 @@ They differ in the types of supported models and the inference data type. Please
 
 ## Installation
 
-It is recommended installing lmdeploy using pip in a conda environment (python 3.8 - 3.12):
+It is recommended installing lmdeploy using pip in a conda environment (python 3.9 - 3.13):
 
 ```shell
-conda create -n lmdeploy python=3.8 -y
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```

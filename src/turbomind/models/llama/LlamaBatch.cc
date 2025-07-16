@@ -1682,6 +1682,10 @@ void LlamaBatch::Warmup()
     // remove bs that is too large
     bss.erase(std::remove_if(bss.begin(), bss.end(), [&](auto x) { return x > max_forward_token_num_; }), bss.end());
 
+    if (bss.empty() || bss.back() < max_forward_token_num_) {
+        bss.push_back(max_forward_token_num_);
+    }
+
     if (tp_rank_ == 0) {
         auto str = Join(bss.begin(), bss.end(), ", ");
         TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
@@ -1689,13 +1693,14 @@ void LlamaBatch::Warmup()
 
     if (!bss.empty()) {
         const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
-        std::vector<int>                   input_ids(max_bs);
+        Buffer_<int>                       input_ids(max_bs, kCPU);
+        Buffer_<int>                       input_ids_buf(max_bs, kDEVICE);
         std::mt19937                       g{};
         std::uniform_int_distribution<int> d{0, (int)model_->vocab_size_ - 1};
         for (auto& x : input_ids) {
             x = d(g);
         }
-        core::Copy(input_ids.data(), max_bs, input_ids_buf_.data());
+        Copy(input_ids, input_ids_buf);
         check_cuda_error(cudaStreamSynchronize(stream_));
 
         TuningContext context{linear, stream_};
@@ -1714,7 +1719,7 @@ void LlamaBatch::Warmup()
             const auto bsz = 1;
 
             // A single sequence containing `token_num` prefill tokens
-            model_->Forward(input_ids_buf_.slice(0, token_num),
+            model_->Forward(input_ids_buf.slice(0, token_num),
                             symm_hidden_states_buf_.slice(0, token_num * param_.attn_dp_size),
                             decoder_output_buf_.slice(0, bsz),
                             block_ptrs_,

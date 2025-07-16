@@ -257,7 +257,11 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
-        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, dist_config=dist_config)
+        model_config = ModelConfig.from_pretrained(model_path,
+                                                   dtype=dtype,
+                                                   hf_overrides=misc_config.hf_overrides,
+                                                   dist_config=dist_config)
+
         super().__init__(
             model_path=model_path,
             cache_config=cache_config,
@@ -299,6 +303,9 @@ class RayWorkerWrapper(WorkerWrapperBase):
         """Pack output."""
         for k, v in output.items():
             if isinstance(v, torch.Tensor):
+                # fix numpy do not have BFloat16 type
+                if v.dtype is torch.bfloat16:
+                    v = v.to(torch.float16)
                 output[k] = v.numpy()
         return output
 
