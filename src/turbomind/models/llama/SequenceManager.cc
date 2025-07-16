@@ -142,12 +142,12 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
     if (!block_trie_) {
         return;
     }
-    
+
     block_trie_->Verify();
 
     BlockIds  block_ids;
     UniqueIds block_unique_ids;
-    
+
     std::tie(block_ids, block_unique_ids) = block_trie_->Cache(seq, seq.tokens);
     if (rank_ == 0) {
         TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, tokens %d, valid blocks %d",

@@ -1016,8 +1016,8 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
             auto& dst_buf = state_->requests[i]->outputs.at("logits").buffer();
 
             const int cache_len   = state_->sequences[i]->cache_len;
-            const int history_len = !param_.enable_prefix_caching 
-                ? state_->sequences[i]->tokens.size() 
+            const int history_len = !param_.enable_prefix_caching
+                ? state_->sequences[i]->tokens.size()
                 : state_->requests[i]->session.step;
 
             // ----------H------I-------P-----------
