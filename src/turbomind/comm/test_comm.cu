@@ -152,6 +152,17 @@ struct TestComm {
         return std::make_tuple(h_comm, std::move(d_comm), h_split, d_split);
     }
 
+    static void Deinit(std::vector<DeviceComm>& comm)
+    {
+        std::vector<std::thread> threads;
+        for (size_t i = 0; i < comm.size(); ++i) {
+            threads.emplace_back([&] { comm[i] = {}; });
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+    }
+
     void Run(int hidden_dim, int vocab_size, int tp, int warmup, int iters, std::vector<int> tokens)
     {
         int device_num{};
@@ -163,7 +174,7 @@ struct TestComm {
             tp = device_num;
         }
 
-        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 0, "cuda-ipc");
+        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cuda-ipc");
 
         TM_CHECK_GT(h_comm_.size(), 0);
         TM_CHECK_GT(d_comm_.size(), 0);
@@ -176,13 +187,15 @@ struct TestComm {
 
         const int g = 0;
 
-        // TestAllReduce<half>(hidden_dim, g);
+        // TestAllReduce<half>(hidden_dim, 0);
         // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
         // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
-        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
-        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
         // TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
-        TestAllGather<half>(vocab_size / tp, g);
+        // TestAllGather<half>(vocab_size / tp, g);
+
+        Deinit(d_comm_);
     }
 
     template<class T>
@@ -276,7 +289,7 @@ struct TestComm {
                     }
                     // verify(count);
                 }
-                // verify(count);
+                verify(count);
             }
 
             if (g_rank == 0) {
@@ -593,7 +606,7 @@ struct TestComm {
             if (g_rank == 0) {
                 SummaryHeader("allgather", dim, n_ranks);
                 for (size_t i = 0; i < tokens_.size(); ++i) {
-                    const float avg = deltas[i] / iters_;
+                    const float  avg   = deltas[i] / iters_;
                     const size_t count = n_ranks * tokens_[i] * dim;
                     const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
                     const float  busbw = algbw * (n_ranks - 1) / n_ranks;
@@ -904,18 +917,18 @@ int main(int argc, char* argv[])
              128000,
              -1,
              10,
-             10,
+             1000,
              //   {1024});
              //   {1024, 2048, 4096, 8192});
              // {512});
-             //   {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
+             //    {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});
              //  {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
              //   {8192, 16384, 32768});
-               {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024});
-            //  {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,  128,
-            //   192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192});
+             //  {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 8192});
+             {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,   128,
+              192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 16384});
 
     return 0;
 }
