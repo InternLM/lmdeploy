@@ -273,29 +273,29 @@ class PDConnectionPool:
                 requests.post(get_server_api(server_endpoint, 'distserve/free_cache'),
                               json=cache_free_request.model_dump(mode='json'))
             except Exception as e:
-                logger.error(f'error cache block free {server_endpoint, cache_free_request}. ErrorMsg: {str(e)}')
+                logger.warning(f'error cache block free {server_endpoint, cache_free_request}. ErrorMsg: {str(e)}')
 
         def drop_connect(server_endpoint: str, p2p_disconnect_request: DistServeDropConnectionRequest):
             try:
                 requests.post(get_server_api(server_endpoint, 'distserve/p2p_drop_connect'),
                               json=p2p_disconnect_request.model_dump(mode='json'))
             except Exception as e:
-                logger.error(f'error drop connect {server_endpoint, p2p_disconnect_request}. ErrorMsg: {str(e)}')
+                logger.warning(f'error drop connect {server_endpoint, p2p_disconnect_request}. ErrorMsg: {str(e)}')
 
         # trigger gc
-        logger.error('cache block gc triggered.')
+        logger.warning('cache block gc triggered.')
         try:
             for session_id in self.migration_session_shelf[(left, right)]:
                 cache_free(left, DistServeCacheFreeRequest(remote_engine_id=left, remote_session_id=session_id))
         except Exception as e:
-            logger.error(f'gc error, ErrorMsg: {str(e)}')
+            logger.warning(f'gc error, ErrorMsg: {str(e)}')
 
         # trigger p2p disconnect
-        logger.error('drop connection triggered.')
+        logger.warning('drop connection triggered.')
         try:
             drop_connect(left, DistServeDropConnectionRequest(engine_id=left, remote_engine_id=right))
             drop_connect(right, DistServeDropConnectionRequest(engine_id=right, remote_engine_id=left))
         except Exception as e:
-            logger.error(f'p2p disconnect error, ErrorMsg: {str(e)}')
+            logger.warning(f'p2p disconnect error, ErrorMsg: {str(e)}')
 
         self.pool.pop((left, right), None)
