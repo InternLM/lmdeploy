@@ -15,8 +15,7 @@ def get_launching_server_cmd(model_path, backend, server_config):
     elif backend == 'vllm':
         pass
     else:
-        print(f'Unknown backend: {backend}')
-        return
+        raise ValueError(f'unknown backend: {backend}')
     for key, value in server_config.items():
         # change the key like 'cache_max_entry_count' to 'cache-max-entry-count' to suit the optional
         # arguments when performing "lmdeploy serve api_server"
@@ -24,6 +23,28 @@ def get_launching_server_cmd(model_path, backend, server_config):
         cmd.append(f'--{key}')
         cmd.append(str(value))
     return cmd
+
+
+def get_output_file(model_path, backend, server_config):
+    """Generate the benchmark output filename"""
+    model_name = server_config.get('model_name', None) or os.path.basename(model_path)
+
+    if backend not in ['turbomind', 'pytorch', 'sglang', 'vllm']:
+        raise ValueError(f'Unknown backend: {backend}')
+    
+    if backend in ['sglang', 'vllm']:
+        return f'benchmark_{model_name}_{backend}.csv'
+    
+    # For turbomind/pytorch backends
+    params = {
+        'bs': server_config['max_batch_size'],
+        'tp': server_config.get('tp', 1),
+        'cache': server_config.get('cache_max_entry_count', 0.8),
+        'mptk': server_config.get('max_prefill_token_num', '')
+    }
+    
+    params_str = '_'.join(f'{k}{v}' for k, v in params.items() if v != '')
+    return f'benchmark_{model_name}_{backend}_{params_str}.csv'
 
 
 def get_server_ip_port(backend, server_config):
@@ -35,8 +56,7 @@ def get_server_ip_port(backend, server_config):
     elif backend == 'vllm':
         pass
     else:
-        print(f'Unknown backend: {backend}')
-        return None, None
+        raise ValueError(f'unknown backend: {backend}')
     return server_ip, server_port
 
 
@@ -91,11 +111,8 @@ def benchmark(model_path, backend, server_config, data_config):
     :param server_config: Configuration for the server and the inference engine.
     :param data_config: Configuration for the data.
     """
-    model_name = os.path.basename(model_path)
-    max_batch_size = server_config['max_batch_size']
-    cache_max_entry_count = server_config.get('cache_max_entry_count', 0.8)
-    tp = server_config.get('tp', 1)
-    output_file = f'benchmark_{model_name}_{backend}_bs{max_batch_size}_tp{tp}_cache{cache_max_entry_count}.csv'
+    output_file = get_output_file(model_path, backend, server_config)
+
     server_cmd = get_launching_server_cmd(model_path, backend, server_config)
     server_ip, server_port = get_server_ip_port(backend, server_config)
     try:
