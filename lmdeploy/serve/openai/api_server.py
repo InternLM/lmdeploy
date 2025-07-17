@@ -2,22 +2,31 @@
 # yapf: disable
 import asyncio
 import copy
+import json
 import os
+import re
 import time
+from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Mount
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -26,8 +35,11 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponse, CompletionResponseChoice,
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-                                            FunctionResponse, GenerateRequest, GenerateResponse, LogProbs, ModelCard,
-                                            ModelList, ModelPermission, ToolCall, TopLogprob, UsageInfo)
+                                            GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
+                                            ModelPermission, PoolingRequest, PoolingResponse, TopLogprob,
+                                            UpdateParamsRequest, UsageInfo)
+from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
+from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -45,6 +57,11 @@ class VariableInterface:
     # following are for registering to proxy server
     proxy_url: Optional[str] = None
     api_server_url: Optional[str] = None
+    # following are for reasoning parsers
+    reasoning_parser: Optional[ReasoningParser] = None
+    # following is for tool parsers
+    tool_parser: Optional[ToolParser] = None
+    allow_terminate_by_client: bool = False
 
 
 router = APIRouter()
@@ -132,7 +149,7 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
                                 all_token_ids: List[int] = None,
                                 state: DetokenizeState = None,
                                 spaces_between_special_tokens: bool = True):
-    """create openai LogProbs for completion.
+    """Create openai LogProbs for completion.
 
     Args:
         tokenizer (Tokenizer): tokenizer.
@@ -186,7 +203,7 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
 def _create_chat_completion_logprobs(tokenizer: Tokenizer,
                                      token_ids: List[int] = None,
                                      logprobs: List[Dict[int, float]] = None):
-    """create openai LogProbs for chat.completion.
+    """Create openai LogProbs for chat.completion.
 
     Args:
         tokenizer (Tokenizer): tokenizer.
@@ -225,6 +242,19 @@ async def health() -> Response:
     return Response(status_code=200)
 
 
+@router.get('/terminate')
+async def terminate():
+    """Terminate server."""
+    import signal
+
+    if not VariableInterface.allow_terminate_by_client:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            'The server can not be terminated. Please add --allow-terminate-by-client when start the server.')
+    os.kill(os.getpid(), signal.SIGTERM)
+    return Response(status_code=200)
+
+
 # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
 def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, float]], tokenizer) -> LogitsProcessor:
     try:
@@ -257,7 +287,7 @@ def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, fl
 
 
 @router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
-async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
+async def chat_completions_v1(raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -317,6 +347,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    json_request = await raw_request.json()
+    request = ChatCompletionRequest.model_validate(json_request)
+    migration_request = json_request.pop('migration_request', None)
+    with_cache = json_request.pop('with_cache', False)
+    preserve_cache = json_request.pop('preserve_cache', False)
+    if migration_request:
+        migration_request = MigrationRequest.model_validate(migration_request)
+
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -370,14 +408,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  migration_request=migration_request,
+                                  with_cache=with_cache,
+                                  preserve_cache=preserve_cache)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
         gen_config.skip_special_tokens = False
-        if request.stream is True:
-            logger.warning('Set stream to False for tools')
-            request.stream = False
         # internlm2 only uses contents inside function regardless of 'type'
         if not isinstance(request.tool_choice, str):
             tools = [
@@ -386,6 +424,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             ]
         else:
             tools = [item.function.model_dump() for item in request.tools]
+    # text completion for string input
+    do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
@@ -394,17 +434,18 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
-        do_preprocess=not isinstance(request.messages, str),  # text completion for string input
+        do_preprocess=do_preprocess,
         adapter_name=adapter_name,
+        enable_thinking=request.enable_thinking,
     )
 
     def create_stream_response_json(index: int,
-                                    text: str,
+                                    delta_message: DeltaMessage,
                                     finish_reason: Optional[str] = None,
                                     logprobs: Optional[LogProbs] = None,
                                     usage: Optional[UsageInfo] = None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
-                                                         delta=DeltaMessage(role='assistant', content=text),
+                                                         delta=delta_message,
                                                          finish_reason=finish_reason,
                                                          logprobs=logprobs)
         response = ChatCompletionStreamResponse(
@@ -419,6 +460,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
+        previous_text = ''
+        current_text = ''
+        previous_token_ids = []
+        current_token_ids = []
+        delta_token_ids = []
+        has_parser = VariableInterface.tool_parser is not None or VariableInterface.reasoning_parser is not None
+        streaming_tools = False
         async for res in result_generator:
             logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
@@ -431,11 +479,51 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
                 )
+            delta_message = DeltaMessage(role='assistant', content=res.response)
+            if has_parser:
+                current_text = current_text + res.response
+                delta_token_ids = res.token_ids if res.token_ids is not None else []
+                current_token_ids = current_token_ids + delta_token_ids
+            if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+                if res.finish_reason == 'stop' and streaming_tools is True:
+                    res.finish_reason = 'tool_calls'
+                tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
+                    previous_text=previous_text,
+                    current_text=current_text,
+                    delta_text=delta_message.content,
+                    previous_token_ids=previous_token_ids,
+                    current_token_ids=current_token_ids,
+                    delta_token_ids=delta_token_ids,
+                    request=request)
+                if tool_delta is not None:
+                    delta_message.tool_calls = tool_delta.tool_calls
+                    delta_message.content = tool_delta.content
+                    if isinstance(tool_delta.tool_calls, List) and len(tool_delta.tool_calls):
+                        streaming_tools = True
+            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+                logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
+            if VariableInterface.reasoning_parser is not None:
+                reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
+                    previous_text=previous_text,
+                    current_text=current_text,
+                    delta_text=delta_message.content or '',
+                    previous_token_ids=previous_token_ids,
+                    current_token_ids=current_token_ids,
+                    delta_token_ids=delta_token_ids)
+                if reasoning_delta is not None:
+                    delta_message.reasoning_content = reasoning_delta.reasoning_content
+                    delta_message.content = reasoning_delta.content
+            if has_parser:
+                previous_text = current_text
+                previous_token_ids = current_token_ids
             response_json = create_stream_response_json(index=0,
-                                                        text=res.response,
+                                                        delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
                                                         usage=usage)
+            if res.cache_block_ids is not None:
+                response_json['cache_block_ids'] = res.cache_block_ids
+                response_json['remote_token_ids'] = res.token_ids
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -448,6 +536,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     final_token_ids = []
     final_res = None
     text = ''
+    cache_block_ids = []
+    remote_token_ids = []
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
@@ -459,21 +549,27 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             final_token_ids.extend(res.token_ids)
         if res.logprobs:
             final_logprobs.extend(res.logprobs)
+        cache_block_ids.append(res.cache_block_ids)
+        remote_token_ids.append(res.token_ids)
 
     tool_calls = None
-    if request.tool_choice != 'none' and ('<|plugin|>' in text or '<function=' in text or '<tool_call>' in text):
-        if final_res.finish_reason == 'stop':
-            final_res.finish_reason = 'tool_calls'
+    reasoning_content = None
+    if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
         try:  # TODO add json_schema guidance to turbomind
-            text, call_info_list = VariableInterface.async_engine.parse_tool_response(  # noqa
-                text, request.tools)
-            tool_calls = [
-                ToolCall(id=str(call_info[0]), function=FunctionResponse(name=call_info[1], arguments=call_info[2]))
-                for call_info in call_info_list
-            ]
+            tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
+            text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
+            if isinstance(tool_calls, List) and len(tool_calls):
+                if final_res.finish_reason == 'stop':
+                    final_res.finish_reason = 'tool_calls'
+
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
+    elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+        logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
+
+    if VariableInterface.reasoning_parser is not None:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -484,11 +580,15 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     choices = []
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls),
+        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls, reasoning_content=reasoning_content),
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
     )
     choices.append(choice_data)
+
+    if with_cache:
+        cache_block_ids = cache_block_ids[0]
+        remote_token_ids = [remote_token_ids[0][-1]]
 
     total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
     usage = UsageInfo(
@@ -502,13 +602,17 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         model=model_name,
         choices=choices,
         usage=usage,
-    )
+    ).model_dump()
+
+    if with_cache:
+        response['cache_block_ids'] = cache_block_ids
+        response['remote_token_ids'] = remote_token_ids
 
     return response
 
 
 @router.post('/v1/completions', dependencies=[Depends(check_api_key)])
-async def completions_v1(request: CompletionRequest, raw_request: Request = None):
+async def completions_v1(raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Go to `https://platform.openai.com/docs/api-reference/completions/create`
@@ -543,12 +647,25 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         this to False. This is setup to True in slow tokenizers.
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
+    - min_p (float): Minimum token probability, which will be scaled by the
+        probability of the most likely token. It must be a value between
+        0 and 1. Typical values are in the 0.01-0.2 range, comparably
+        selective as setting `top_p` in the 0.99-0.8 range (use the
+        opposite of normal `top_p` values)
 
     Currently we do not support the following features:
     - logprobs (not supported yet)
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    json_request = await raw_request.json()
+    request = CompletionRequest.model_validate(json_request)
+    migration_request = json_request.pop('migration_request', None)
+    with_cache = json_request.pop('with_cache', False)
+    preserve_cache = json_request.pop('preserve_cache', False)
+    if migration_request:
+        migration_request = MigrationRequest.model_validate(migration_request)
+
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -580,8 +697,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                   ignore_eos=request.ignore_eos,
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
+                                  min_p=request.min_p,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  migration_request=migration_request,
+                                  with_cache=with_cache,
+                                  preserve_cache=preserve_cache)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -611,8 +732,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             choices=[choice_data],
             usage=usage,
         )
-        response_json = response.model_dump_json()
-
+        response_json = response.model_dump()
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
@@ -643,7 +763,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                                             finish_reason=res.finish_reason,
                                                             logprobs=logprobs,
                                                             usage=usage)
-                yield f'data: {response_json}\n\n'
+                if res.cache_block_ids is not None:
+                    response_json['cache_block_ids'] = res.cache_block_ids
+                    response_json['remote_token_ids'] = res.token_ids
+                yield f'data: {json.dumps(response_json)}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -653,8 +776,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     # Non-streaming response
     usage = UsageInfo()
     choices = [None] * len(generators)
+    cache_block_ids = []
+    remote_token_ids = []
 
     async def _inner_call(i, generator):
+        nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
@@ -666,6 +792,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
             if res.token_ids:
                 final_token_ids.extend(res.token_ids)
             if res.logprobs:
@@ -689,6 +817,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         )
         choices[i] = choice_data
 
+        if with_cache:
+            cache_block_ids = cache_block_ids[0]
+            remote_token_ids = [remote_token_ids[0][-1]]
+
         total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
@@ -702,7 +834,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         model=model_name,
         choices=choices,
         usage=usage,
-    )
+    ).model_dump()
+
+    if with_cache:
+        response['cache_block_ids'] = cache_block_ids
+        response['remote_token_ids'] = remote_token_ids
 
     return response
 
@@ -742,6 +878,106 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
+@router.post('/pooling')
+async def pooling(request: PoolingRequest, raw_request: Request = None):
+    """Pooling prompts for reward model.
+
+    In vLLM documentation, https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#pooling-api_1,
+    the input format of Pooling API is the same as Embeddings API.
+
+    Go to https://platform.openai.com/docs/api-reference/embeddings/create
+    for the Embeddings API specification.
+
+    The request should be a JSON object with the following fields:
+    - model (str): model name. Available from /v1/models.
+    - input (List[int] | List[List[int]] | str | List[str]): input text to be embed
+    """
+
+    async_engine = VariableInterface.async_engine
+
+    request_input = request.input
+    model_name = request.model or async_engine.model_name
+
+    # Normalize all inputs to be a batch (List[List[int]])
+    if isinstance(request_input, str):
+        input_ids = [async_engine.tokenizer.encode(request_input)]
+    elif isinstance(request_input, List):
+        if not request_input:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list cannot be empty.')
+        if isinstance(request_input[0], str):  # List[str]
+            input_ids = [async_engine.tokenizer.encode(p) for p in request_input]
+        elif isinstance(request_input[0], int):  # List[int]
+            input_ids = [request_input]
+        elif isinstance(request_input[0], List):  # List[List[int]]
+            input_ids = request_input
+        else:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list contains an invalid type.')
+    else:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must be a string or a list.')
+
+    batch_scores = await async_engine._async_get_reward_score(input_ids)
+    prompt_tokens = sum(len(ids) for ids in input_ids)
+    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+
+    data = []
+    for i, score in enumerate(batch_scores):
+        data.append({
+            'index': i,
+            'object': 'pooling',
+            'data': score,
+        })
+
+    response = PoolingResponse(model=model_name, data=data, usage=usage)
+    return response.model_dump()
+
+
+@router.post('/update_weights', dependencies=[Depends(check_api_key)])
+def update_params(request: UpdateParamsRequest, raw_request: Request = None):
+    """Update weights for the model."""
+    VariableInterface.async_engine.engine.update_params(request)
+    return JSONResponse(content=None)
+
+
+""" PD Disaggregation API Begin """
+
+
+@router.get('/distserve/engine_info')
+async def engine_info():
+    engine_config = VariableInterface.async_engine.backend_config
+
+    response = DistServeEngineConfig(tp_size=engine_config.tp,
+                                     dp_size=engine_config.dp,
+                                     pp_size=None,
+                                     ep_size=engine_config.ep,
+                                     dp_rank=engine_config.dp_rank,
+                                     block_size=engine_config.block_size,
+                                     num_cpu_blocks=engine_config.num_cpu_blocks,
+                                     num_gpu_blocks=engine_config.num_gpu_blocks)
+
+    return response.model_dump_json()
+
+
+@router.post('/distserve/p2p_initialize')
+async def p2p_initialize(init_request: DistServeInitRequest):
+    return VariableInterface.async_engine.p2p_initialize(init_request)
+
+
+@router.post('/distserve/p2p_connect')
+async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
+    return VariableInterface.async_engine.p2p_connect(conn_request)
+
+
+@router.post('/distserve/free_cache')
+async def free_cache(raw_request: Request) -> JSONResponse:
+    config = await raw_request.json()
+    session_id = int(config['session_id'])
+    VariableInterface.async_engine.free_cache(session_id)
+    return {'status': 'SUCCESS'}
+
+
+""" PD Disaggregation API End """
+
+
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
 async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = None):
     """Generate completion for the request.
@@ -775,6 +1011,9 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
     - adapter_name (str): For slora inference. Choose which lora to do the
         inference.
     - min_new_tokens (int): To generate at least numbers of tokens.
@@ -819,6 +1058,7 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
                                   ignore_eos=request.ignore_eos,
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed)
@@ -893,20 +1133,42 @@ def handle_torchrun():
 
 @router.on_event('startup')
 async def startup_event():
+    async_engine = VariableInterface.async_engine
+    async_engine.start_loop(use_async_api=True)
+
     if VariableInterface.proxy_url is None:
         return
     try:
         import requests
+        engine_config = VariableInterface.async_engine.backend_config
+        engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
         url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list()}}
+        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail='Service registration failed')
-        print(response.text)
+            raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
-        print(f'Service registration failed: {e}')
+        logger.error(f'Service registration failed: {e}')
+
+
+@router.on_event('shutdown')
+async def shutdown_event():
+    async_engine = VariableInterface.async_engine
+    if async_engine is not None:
+        async_engine.close()
+
+
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handler for RequestValidationError."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content=jsonable_encoder({
+            'detail': exc.errors(),
+            'body': exc.body
+        }),
+    )
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -919,6 +1181,72 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
         async with self.semaphore:
             response = await call_next(request)
             return response
+
+
+def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[str] = None):
+    """Set tool parser and reasoning parsers."""
+    # set reasoning parser
+    if reasoning_parser is not None:
+        if reasoning_parser in ReasoningParserManager.module_dict:
+            tokenizer = VariableInterface.async_engine.tokenizer
+            VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
+        else:
+            raise ValueError(
+                f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
+            )
+    # set tool parsers
+    if tool_parser is not None:
+        if tool_parser in ToolParserManager.module_dict:
+            tokenizer = VariableInterface.async_engine.tokenizer
+            VariableInterface.tool_parser = ToolParserManager.get(tool_parser)(tokenizer)
+        else:
+            raise ValueError(
+                f'The reasoning parser {tool_parser} is not in the parser list: {ToolParserManager.module_dict.keys()}'  # noqa
+            )
+
+
+def mount_metrics(app: FastAPI, backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig]):
+    if not getattr(backend_config, 'enable_metrics', False):
+        return
+
+    from prometheus_client import REGISTRY, make_asgi_app
+    registry = REGISTRY
+
+    # Add prometheus asgi middleware to route /metrics requests
+    metrics_route = Mount('/metrics', make_asgi_app(registry=registry))
+
+    # Workaround for 307 Redirect for /metrics
+    metrics_route.path_regex = re.compile('^/metrics(?P<path>.*)$')
+    app.routes.append(metrics_route)
+
+
+def create_lifespan_handler(backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig],
+                            async_engine: AsyncEngine):
+    """Factory function to create a lifespan handler."""
+
+    @asynccontextmanager
+    async def lifespan_handler(app: FastAPI):
+        task = None
+        try:
+            if getattr(backend_config, 'enable_metrics', False):
+                metrics_processor.start_metrics_handler(enable_metrics=True)
+                log_interval = 10.
+
+                async def _force_log():
+                    while True:
+                        await asyncio.sleep(log_interval)
+
+                        await async_engine.do_log_stats()
+
+                task = asyncio.create_task(_force_log())
+
+            yield
+        finally:
+            if task:
+                task.cancel()
+            await metrics_processor.stop_metrics_handler()
+
+    return lifespan_handler
 
 
 def serve(model_path: str,
@@ -939,6 +1267,9 @@ def serve(model_path: str,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: Optional[int] = None,
+          reasoning_parser: Optional[str] = None,
+          tool_call_parser: Optional[str] = None,
+          allow_terminate_by_client: bool = False,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -988,34 +1319,15 @@ def serve(model_path: str,
             process the engine’s tasks once the maximum number of concurrent
             requests is reached, regardless of any additional requests sent by
             clients concurrently during that time. Default to None.
+        reasoning_parser (str): The reasoning parser name.
+        tool_call_parser (str): The tool call parser name.
+        allow_terminate_by_client (bool): Allow request from client to terminate server.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
 
-    if disable_fastapi_docs:
-        app = FastAPI(
-            docs_url=None,
-            redoc_url=None,
-            openapi_url=None,
-        )
-    else:
-        app = FastAPI(docs_url='/')
-
-    app.include_router(router)
-
-    if allow_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=allow_origins,
-            allow_credentials=allow_credentials,
-            allow_methods=allow_methods,
-            allow_headers=allow_headers,
-        )
-    # Set the maximum number of concurrent requests
-    if max_concurrent_requests is not None:
-        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
-
+    VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')
@@ -1028,6 +1340,8 @@ def serve(model_path: str,
 
     handle_torchrun()
     _, pipeline_class = get_task(model_path)
+    if isinstance(backend_config, PytorchEngineConfig):
+        backend_config.enable_mp_engine = True
     VariableInterface.async_engine = pipeline_class(model_path=model_path,
                                                     model_name=model_name,
                                                     backend=backend,
@@ -1035,6 +1349,33 @@ def serve(model_path: str,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
                                                     **kwargs)
+    # set reasoning parser and tool parser
+    set_parsers(reasoning_parser, tool_call_parser)
+
+    # create FastAPI lifespan events
+    lifespan = create_lifespan_handler(backend_config, VariableInterface.async_engine)
+
+    if disable_fastapi_docs:
+        app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    else:
+        app = FastAPI(docs_url='/', lifespan=lifespan)
+
+    app.include_router(router)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    mount_metrics(app, backend_config)
+
+    if allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_credentials=allow_credentials,
+            allow_methods=allow_methods,
+            allow_headers=allow_headers,
+        )
+
+    # set the maximum number of concurrent requests
+    if max_concurrent_requests is not None:
+        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url
@@ -1046,7 +1387,7 @@ def serve(model_path: str,
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
-                log_level='info',
+                log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
                 ssl_keyfile=ssl_keyfile,
                 ssl_certfile=ssl_certfile)
 

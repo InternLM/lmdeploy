@@ -8,7 +8,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
@@ -151,7 +151,7 @@ class Qwen2MoeMLP(nn.Module):
 
 
 class Qwen2MoeSparseMoeBlock(nn.Module):
-    """moe block."""
+    """Moe block."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -204,7 +204,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
                                                        dtype=dtype,
                                                        device=device,
                                                        all_reduce=False)
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         if world_size > 1:
             self._all_reduce = True
         else:
@@ -236,7 +236,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
 
 
 class Qwen2MoeDecoderLayer(nn.Module):
-    """decoder layer."""
+    """Decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -372,7 +372,7 @@ class Qwen2MoeModel(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embed_tokens
 
 
@@ -417,7 +417,7 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -428,11 +428,11 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -441,7 +441,7 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -466,7 +466,7 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
-        """load weight experts."""
+        """Load weight experts."""
         for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
                 continue
@@ -479,7 +479,7 @@ class Qwen2MoeForCausalLM(nn.Module, CudaGraphMixin):
             load_weight(param, loaded_weight)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

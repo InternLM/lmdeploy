@@ -14,193 +14,65 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/utils/cuda_fp8_utils.h"
-#ifndef CUDART_VERSION
-#error CUDART_VERSION Undefined!
-#elif (CUDART_VERSION >= 11000)
 #include <cub/cub.cuh>
-#else
-#include "3rdparty/cub/cub.cuh"
-#endif
+
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
-// PROMPT_SRC: 0 --> no prompts, 1 --> from loaded prompts, 2 --> from request prompts
-template<typename T, bool OUTPUT_ID, int PROMPT_SRC>
-__global__ void start_id_embedding_position_lookups_kernel(T*                    from_tensor,
-                                                           int*                  output_ids,
-                                                           const T*              embedding_table,
-                                                           const T*              pos_table,
-                                                           pPromptTuningParam<T> prompt_param,
-                                                           const int*            input_ids,
-                                                           const int             start_step,
-                                                           const int             length,
-                                                           const int             max_length,
-                                                           const int             batch_size,
-                                                           const int64_t         hidden_units)
+template<class T, int vec_size>
+__global__ void
+embeddingLookupKernel(T* dst, int dst_stride, const T* src, int src_stride, const int* ids, int num, int dim)
 {
-    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * length * hidden_units;
-         index += blockDim.x * gridDim.x) {
-        // transpose the input_ids [batch, length] (part of [batch, max_length]) to output_ids [length, batch]
-        if (OUTPUT_ID && index < batch_size * max_length) {
-            // for p/prompt_tuning (have prompt templates like [input1, prompt1, input2, prompt2])
-            // we have to process it to like [input1, input2, prompt1, prompt2], and then remove the prompts during post
-            // processing
-            if (PROMPT_SRC > 0) {
-                if (index < batch_size) {
-                    int no_prompt_output_seq_id = 0;
-#pragma unroll 1
-                    for (int seq_id = 0; seq_id < max_length; seq_id++) {
-                        int current_input_id = input_ids[index * max_length + seq_id];
-                        if (current_input_id < prompt_param.p_prompt_tuning_id_start) {
-                            output_ids[no_prompt_output_seq_id * batch_size + index] = current_input_id;
-                            no_prompt_output_seq_id++;
-                        }
-                    }
-                }
-            }
-            else {
-                const int seq_id   = index % max_length;
-                const int batch_id = index / max_length;
-                if (seq_id < length) {
-                    output_ids[seq_id * batch_size + batch_id] = input_ids[index];
-                }
-            }
-        }
+    const int ti = blockIdx.x;
 
-        // embedding lookup from word ids [batch, length] (part of [batch, max_length]) and [vocab, hidden] to generate
-        // embedding [batch, length, hidden]
-        const int word_index      = index / hidden_units;
-        const int word_index_row  = word_index / length;  // batch_id
-        const int word_index_col  = word_index % length;
-        const int real_word_index = word_index_row * max_length + word_index_col;
-        const int step            = start_step + word_index % length;
-        const int col_index       = index % hidden_units;
-        const int input_id        = input_ids == nullptr ? real_word_index : input_ids[real_word_index];
-        const int prompt_id       = input_id - prompt_param.p_prompt_tuning_id_start;
-        T         embedding       = (T)0.0f;
-        if (PROMPT_SRC > 0 && prompt_id >= 0) {
-            if (PROMPT_SRC == 1) {
-                // from loaded prompt embedding tables
-                embedding =
-                    prompt_param.p_prompt_tuning_batch_weights[word_index_row][prompt_id * hidden_units + col_index];
-            }
-            else {
-                // from request prompt embedding
-                embedding =
-                    prompt_param
-                        .request_prompt_embedding[word_index_row * prompt_param.request_prompt_max_length * hidden_units
-                                                  + prompt_id * hidden_units + col_index];
-            }
-        }
-        else {
-            embedding = embedding_table[input_id * hidden_units + col_index];
-        }
-        T pos_embed        = pos_table == nullptr ? (T)0.f : pos_table[(step - 1) * hidden_units + col_index];
-        from_tensor[index] = embedding + pos_embed;
+    const int64_t idx = ids[ti];
+
+    src += idx * src_stride;
+    dst += ti * dst_stride;
+
+    for (int di = threadIdx.x * vec_size; di < dim; di += blockDim.x * vec_size) {
+        Array<T, vec_size> vec;
+        Ldg(vec, &src[di]);
+        Store(&dst[di], vec);
     }
 }
 
-#define WORD_POS_EMBEDDING_LOOPUP_KERNEL(OUTPUT_ID, PROMPT_SRC)                                                        \
-    start_id_embedding_position_lookups_kernel<T, OUTPUT_ID, PROMPT_SRC><<<grid, block, 0, stream>>>(from_tensor,      \
-                                                                                                     output_ids,       \
-                                                                                                     embedding_table,  \
-                                                                                                     pos_table,        \
-                                                                                                     prompt_param,     \
-                                                                                                     input_ids,        \
-                                                                                                     start_step,       \
-                                                                                                     length,           \
-                                                                                                     max_length,       \
-                                                                                                     batch_size,       \
-                                                                                                     hidden_units);
-
-template<typename T>
-void invokeInputIdsEmbeddingLookupPosEncoding(T*                    from_tensor,
-                                              int*                  output_ids,
-                                              const T*              embedding_table,  // can also be inputs_embeds
-                                              const T*              pos_table,
-                                              pPromptTuningParam<T> prompt_param,
-                                              const int*            input_ids,
-                                              const int             start_step,
-                                              const int             length,
-                                              const int             max_length,
-                                              const int             batch_size,
-                                              const int             hidden_units,
-                                              cudaStream_t          stream)
+void invokeEmbeddingLookup(Ref<Tensor>         out_,
+                           const Buffer_<int>& token_ids,
+                           const Tensor&       embedding_table,
+                           cudaStream_t        st)
 {
-    dim3       grid(min(batch_size * length, 65536));
-    dim3       block(min(hidden_units, 512));
-    const bool has_output_ids = output_ids != nullptr;
-    FT_CHECK(!(has_output_ids && input_ids == nullptr));
+    auto& out = out_.get();
 
-    if (has_output_ids) {
-        if (prompt_param.use_request_p_prompt_embedding) {
-            WORD_POS_EMBEDDING_LOOPUP_KERNEL(true, 2);
-        }
-        else if (prompt_param.p_prompt_tuning_batch_weights != nullptr) {
-            WORD_POS_EMBEDDING_LOOPUP_KERNEL(true, 1);
-        }
-        else {
-            WORD_POS_EMBEDDING_LOOPUP_KERNEL(true, 0);
-        }
+    TM_CHECK_EQ(out.shape(0), token_ids.size());
+    TM_CHECK_EQ(out.shape(1), embedding_table.shape(1));
+
+    int num, dim;
+    std::tie(num, dim) = out.shapes(0, 1);
+
+    auto invoke = [&](auto t) {
+        using T                = decltype(t);
+        constexpr int vec_size = sizeof(uint4) / sizeof(T);
+        TM_CHECK(dim % vec_size == 0) << dim << " " << vec_size;
+        const int threads = std::min(dim / vec_size, 1024);
+        const int blocks  = num;
+        embeddingLookupKernel<T, vec_size><<<blocks, threads, 0, st>>>((T*)out.raw_data(),
+                                                                       out.stride(0),
+                                                                       (const T*)embedding_table.raw_data(),
+                                                                       embedding_table.stride(0),
+                                                                       token_ids.data(),
+                                                                       num,
+                                                                       dim);
+    };
+
+    if (byte_size(out.dtype()) == byte_size<uint16_t>()) {
+        return invoke(uint16_t{});
     }
-    else {
-        if (prompt_param.use_request_p_prompt_embedding) {
-            WORD_POS_EMBEDDING_LOOPUP_KERNEL(false, 2);
-        }
-        else if (prompt_param.p_prompt_tuning_batch_weights != nullptr) {
-            WORD_POS_EMBEDDING_LOOPUP_KERNEL(false, 1);
-        }
-        else {
-            WORD_POS_EMBEDDING_LOOPUP_KERNEL(false, 0);
-        }
-    }
+    TM_CHECK(0) << "not implemented";
 }
-
-#ifdef ENABLE_FP32
-template void invokeInputIdsEmbeddingLookupPosEncoding(float*                    from_tensor,
-                                                       int*                      output_ids,
-                                                       const float*              embedding_table,
-                                                       const float*              pos_table,
-                                                       pPromptTuningParam<float> prompt_param,
-                                                       const int*                input_ids,
-                                                       const int                 start_step,
-                                                       const int                 length,
-                                                       const int                 max_length,
-                                                       const int                 batch_size,
-                                                       const int                 hidden_units,
-                                                       cudaStream_t              stream);
-#endif
-
-template void invokeInputIdsEmbeddingLookupPosEncoding(half*                    from_tensor,
-                                                       int*                     output_ids,
-                                                       const half*              embedding_table,
-                                                       const half*              pos_table,
-                                                       pPromptTuningParam<half> prompt_param,
-                                                       const int*               input_ids,
-                                                       const int                start_step,
-                                                       const int                length,
-                                                       const int                max_length,
-                                                       const int                batch_size,
-                                                       const int                hidden_units,
-                                                       cudaStream_t             stream);
-
-#ifdef ENABLE_BF16
-template void invokeInputIdsEmbeddingLookupPosEncoding(__nv_bfloat16*                    from_tensor,
-                                                       int*                              output_ids,
-                                                       const __nv_bfloat16*              embedding_table,
-                                                       const __nv_bfloat16*              pos_table,
-                                                       pPromptTuningParam<__nv_bfloat16> prompt_param,
-                                                       const int*                        input_ids,
-                                                       const int                         start_step,
-                                                       const int                         length,
-                                                       const int                         max_length,
-                                                       const int                         batch_size,
-                                                       const int                         hidden_units,
-                                                       cudaStream_t                      stream);
-#endif
 
 // TODO Add half2 implementation
 template<typename T>
@@ -238,6 +110,14 @@ invokeTransposeAxis01(int* out, int* in, const int dim0, const int dim1, const i
 
 template void
 invokeTransposeAxis01(uint16_t* out, uint16_t* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
+
+template void
+invokeTransposeAxis01(uint8_t* out, uint8_t* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeTransposeAxis01(
+    __nv_bfloat16* out, __nv_bfloat16* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
+#endif
 
 template<typename T>
 __global__ void transposeAxis01(T* out, T* in, const int* in_skipping_dim1, const int dim0, const int dim1)

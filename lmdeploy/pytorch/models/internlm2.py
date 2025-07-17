@@ -8,7 +8,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -49,13 +50,13 @@ class InternLM2Attention(nn.Module):
         )
 
         # o_proj
-        self.wo = build_rowwise_linear(num_heads * head_dim,
-                                       hidden_size,
-                                       bias=config.bias,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device,
-                                       is_tp=True)
+        self.wo = build_o_proj(num_heads * head_dim,
+                               hidden_size,
+                               bias=config.bias,
+                               quant_config=quantization_config,
+                               dtype=dtype,
+                               device=device,
+                               is_tp=True)
 
     def forward(
         self,
@@ -107,7 +108,7 @@ class InternLM2MLP(nn.Module):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
-        self.gate_up_proj = build_merged_colwise_linear(
+        self.gate_up_proj = build_gateup_linear(
             config.hidden_size,
             [config.intermediate_size, config.intermediate_size],
             bias=False,
@@ -121,13 +122,13 @@ class InternLM2MLP(nn.Module):
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.w2 = build_rowwise_linear(config.intermediate_size,
-                                       config.hidden_size,
-                                       bias=False,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device,
-                                       is_tp=True)
+        self.w2 = build_down_linear(config.intermediate_size,
+                                    config.hidden_size,
+                                    bias=False,
+                                    quant_config=quantization_config,
+                                    dtype=dtype,
+                                    device=device,
+                                    is_tp=True)
 
     def forward(self, x):
         """forward."""
@@ -137,7 +138,7 @@ class InternLM2MLP(nn.Module):
 
 
 class InternLM2DecoderLayer(nn.Module):
-    """decoder layer."""
+    """Decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -200,7 +201,7 @@ class InternLM2DecoderLayer(nn.Module):
 
 
 class InternLM2Model(nn.Module):
-    """internlm2 model."""
+    """Internlm2 model."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -285,12 +286,12 @@ class InternLM2Model(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.tok_embeddings
 
 
 class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
-    """rewrote model of InternLM2ForCausalLM."""
+    """Rewrote model of InternLM2ForCausalLM."""
 
     packed_modules_mapping = {
         'gate_up_proj': [
@@ -325,7 +326,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -336,11 +337,11 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.output(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -349,7 +350,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -373,7 +374,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         )
 
     def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
-        """load lora weights."""
+        """Load lora weights."""
 
         from lmdeploy.pytorch.adapter.adapter import load_lora_weights
 
@@ -397,7 +398,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         load_lora_weights(self, weights_iter, adapter_id)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

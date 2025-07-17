@@ -75,7 +75,12 @@ def add_summary(csv_path: str):
         _append_summary('\n')
 
 
-def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_type: str, is_smoke: bool = False):
+def evaluate(models: List[str],
+             datasets: List[str],
+             workspace: str,
+             evaluate_type: str,
+             max_num_workers: int = 8,
+             is_smoke: bool = False):
     """Evaluate models from lmdeploy using opencompass.
 
     Args:
@@ -121,7 +126,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_ty
 
         work_dir = os.path.join(workspace, model)
         cmd_eval = [
-            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
+            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers {max_num_workers}'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         start_time = time.time()
@@ -224,13 +229,17 @@ def generate_benchmark_report(report_path: str):
                     for f in csv_files:
                         df = pd.read_csv(f)
                         merged_df = pd.concat([merged_df, df], ignore_index=True)
+                    if 'throughput' in backend_subfolder:
+                        merged_df = merged_df.sort_values(by=merged_df.columns[1])
 
-                    merged_df = merged_df.sort_values(by=merged_df.columns[0])
+                        grouped_df = merged_df.groupby(merged_df.columns[1])
+                    else:
+                        merged_df = merged_df.sort_values(by=merged_df.columns[0])
 
-                    grouped_df = merged_df.groupby(merged_df.columns[0])
+                        grouped_df = merged_df.groupby(merged_df.columns[0])
                     if 'generation' not in backend_subfolder:
                         average_values = grouped_df.pipe((lambda group: {
-                            'mean': group.mean().round(decimals=3)
+                            'mean': group.mean(numeric_only=True).round(decimals=3)
                         }))['mean']
                         average_values.to_csv(average_csv_path, index=True)
                         avg_df = pd.read_csv(average_csv_path)
@@ -263,6 +272,33 @@ def generate_csv_from_profile_result(file_path: str, out_path: str):
             writer = csv.writer(f)
             writer.writerow(['request_rate', 'completed', 'RPM', 'median_ttft_ms', 'output_throughput'])
             writer.writerows(data_csv)
+
+
+def generate_output_for_evaluation(result_dir: str):
+    # find latest result
+    latest_csv_file = find_csv_files(result_dir)
+    df = pd.read_csv(latest_csv_file)
+    transposed_df = df.T
+    head_part = transposed_df.head(4)
+    tail_part = transposed_df[4:]
+    sorted_tail_part = tail_part.sort_index()
+    transposed_df = pd.concat([head_part, sorted_tail_part])
+    transposed_df.to_csv('transposed_output.csv', header=False, index=True)
+    # output to github action summary
+    add_summary('transposed_output.csv')
+
+
+def find_csv_files(directory):
+    csv_files = []
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if file.endswith('.csv') and file.startswith('summary'):
+                csv_files.append(os.path.join(root, file))
+
+    csv_files_with_time = {f: os.path.getctime(f) for f in csv_files}
+    sorted_csv_files = sorted(csv_files_with_time.items(), key=lambda x: x[1])
+    latest_csv_file = sorted_csv_files[-1][0]
+    return latest_csv_file
 
 
 if __name__ == '__main__':

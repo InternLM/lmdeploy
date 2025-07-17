@@ -98,7 +98,7 @@ class MolmoModel(LlamaModel):
         additional_vocab_size = 128
         inter_size = config['intermediate_size'] // 2
         attn_bias = config['qkv_bias']
-        rope_param = RopeParam.create('default', base=rope_theta, dim=hidden_units // attn_head_num)
+        rope_param = RopeParam(type='default', base=rope_theta, dim=hidden_units // attn_head_num)
         return dict(
             num_layer=num_layer,
             norm_eps=norm_eps,

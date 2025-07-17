@@ -77,15 +77,13 @@ class QwenModel(LlamaModel):
             use_logn_attn = int(config['use_logn_attn'])
             vocab_size = config['vocab_size']
             inter_size = config['intermediate_size']
-            if use_dynamic_ntk:
-                # need setting rope_scaling_factor in TurbomindEngineConfig
-                rope_param = RopeParam.create('dynamic',
-                                              base=rope_theta,
-                                              dim=kv_channels,
-                                              max_position_embeddings=seq_length,
-                                              factor=0)
-            else:
-                rope_param = RopeParam.create('default', base=rope_theta, dim=kv_channels)
+            scaling_type = 'dynamic' if use_dynamic_ntk else 'default'
+            # need setting rope_scaling_factor in TurbomindEngineConfig if scaling_type is dynamic
+            rope_param = RopeParam(type=scaling_type,
+                                   base=rope_theta,
+                                   dim=kv_channels,
+                                   max_position_embeddings=seq_length,
+                                   factor=0)
 
         return dict(size_per_head=kv_channels,
                     num_layer=num_layer,
@@ -133,7 +131,7 @@ class Qwen2MoeReader(LlamaReader):
         return (*result, )
 
     def moe_ffn_gate(self, i):
-        return self.params.get(f'model.layers.{i}.mlp.gate.weight')
+        return self.transform(self.params.get(f'model.layers.{i}.mlp.gate.weight'), 'weight')
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
@@ -164,5 +162,54 @@ class Qwen2MoeModel(LlamaModel):
         info['inter_size'] = cfg['shared_expert_intermediate_size']
         info['moe_shared_gate'] = True
         info['norm_topk_prob'] = cfg['norm_topk_prob']
-        info['attn_bias'] = 1
+        info['attn_bias'] = cfg.get('qkv_bias', 1)
+        return info
+
+
+class Qwen3Reader(LlamaReader):
+
+    def qk_norm(self, i: int):
+        result = []
+        for x in ['q', 'k']:
+            name = f'{self.attn_layer_prefix}.{i}.self_attn.{x}_norm.weight'
+            result.append(self.transform(self.params.get(name), 'weight'))
+        return (*result, )
+
+
+@INPUT_MODELS.register_module(name='qwen3')
+class Qwen3Model(LlamaModel):
+    Reader = Qwen3Reader
+
+    def model_info(self):
+        cfg = self.model_config
+        info = super().model_info()
+        info.update(qk_norm=True, attn_bias=cfg.get('attention_bias', 0))
+        return info
+
+
+class Qwen3MoeReader(Qwen2MoeReader):
+
+    def qk_norm(self, i: int):
+        result = []
+        for x in ['q', 'k']:
+            name = f'{self.attn_layer_prefix}.{i}.self_attn.{x}_norm.weight'
+            result.append(self.transform(self.params.get(name), 'weight'))
+        return (*result, )
+
+
+@INPUT_MODELS.register_module(name='qwen3-moe')
+class Qwen3MoeModel(LlamaModel):
+    Reader = Qwen3MoeReader
+
+    def model_info(self):
+        cfg = self.model_config
+        info = super().model_info()
+        info.update(
+            qk_norm=True,
+            expert_num=cfg.get('num_experts', 128),
+            experts_per_token=cfg.get('num_experts_per_tok', 8),
+            expert_inter_size=cfg.get('moe_intermediate_size', 768),
+            attn_bias=cfg.get('attention_bias', 0),
+            inter_size=0,  # no shared expert
+            norm_topk_prob=cfg.get('norm_topk_prob', False))
         return info

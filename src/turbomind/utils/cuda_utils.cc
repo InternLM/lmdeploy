@@ -16,124 +16,32 @@
 
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/macro.h"
-#include "src/turbomind/utils/cuda_fp8_utils.h"
+#include <driver_types.h>
 #include <regex>
 
 namespace turbomind {
 
+void syncAndCheck(const char* const file, int const line)
+{
+    // When FT_DEBUG_LEVEL=DEBUG, must check error
+    static char* level_name = std::getenv("TM_DEBUG_LEVEL");
+    if (level_name != nullptr) {
+        static std::string level = std::string(level_name);
+        if (level == "DEBUG") {
+            cudaDeviceSynchronize();
+            cudaError_t result = cudaGetLastError();
+            if (result) {
+                TM_LOG_ERROR((std::string("CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " " + file + ":"
+                              + std::to_string(line))
+                                 .c_str());
+                std::abort();
+            }
+            TM_LOG_DEBUG(fmtstr("run syncAndCheck at %s:%d", file, line));
+        }
+    }
+}
+
 /* **************************** debug tools ********************************* */
-
-template<typename T>
-void print_to_file(const T* result, const int size, const char* file, cudaStream_t stream, std::ios::openmode open_mode)
-{
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-    printf("[INFO] file: %s with size %d.\n", file, size);
-    std::ofstream outFile(file, open_mode);
-    if (outFile) {
-        T* tmp = new T[size];
-        check_cuda_error(cudaMemcpyAsync(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost, stream));
-        for (int i = 0; i < size; ++i) {
-            float val = (float)(tmp[i]);
-            outFile << val << std::endl;
-        }
-        delete[] tmp;
-    }
-    else {
-        throw std::runtime_error(std::string("[TM][ERROR] Cannot open file: ") + file + "\n");
-    }
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-}
-
-template void
-print_to_file(const float* result, const int size, const char* file, cudaStream_t stream, std::ios::openmode open_mode);
-template void
-print_to_file(const half* result, const int size, const char* file, cudaStream_t stream, std::ios::openmode open_mode);
-#ifdef ENABLE_BF16
-template void print_to_file(
-    const __nv_bfloat16* result, const int size, const char* file, cudaStream_t stream, std::ios::openmode open_mode);
-#endif
-
-template<typename T>
-void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string name)
-{
-    if (buf == nullptr) {
-        TM_LOG_WARNING("It is an nullptr, skip!");
-        return;
-    }
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-    T* h_tmp = new T[size];
-    cudaMemcpyAsync(h_tmp, buf, sizeof(T) * size, cudaMemcpyDeviceToHost, stream);
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-    double   sum        = 0.0f;
-    uint64_t zero_count = 0;
-    float    max_val    = -1e10;
-    bool     find_inf   = false;
-    for (uint i = 0; i < size; i++) {
-        if (std::isinf((float)(h_tmp[i]))) {
-            find_inf = true;
-            continue;
-        }
-        sum += abs((double)h_tmp[i]);
-        if ((float)h_tmp[i] == 0.0f) {
-            zero_count++;
-        }
-        max_val = max_val > abs(float(h_tmp[i])) ? max_val : abs(float(h_tmp[i]));
-    }
-    printf("[TM][INFO] %20s size: %u, abs mean: %f, abs sum: %f, abs max: %f, find inf: %s",
-           name.c_str(),
-           size,
-           sum / size,
-           sum,
-           max_val,
-           find_inf ? "true" : "false");
-    std::cout << std::endl;
-    delete[] h_tmp;
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-}
-
-template void print_abs_mean(const float* buf, uint size, cudaStream_t stream, std::string name);
-template void print_abs_mean(const half* buf, uint size, cudaStream_t stream, std::string name);
-#ifdef ENABLE_BF16
-template void print_abs_mean(const __nv_bfloat16* buf, uint size, cudaStream_t stream, std::string name);
-#endif
-template void print_abs_mean(const int* buf, uint size, cudaStream_t stream, std::string name);
-template void print_abs_mean(const uint* buf, uint size, cudaStream_t stream, std::string name);
-template void print_abs_mean(const int8_t* buf, uint size, cudaStream_t stream, std::string name);
-#ifdef ENABLE_FP8
-template void print_abs_mean(const __nv_fp8_e4m3* buf, uint size, cudaStream_t stream, std::string name);
-#endif
-
-template<typename T>
-void print_to_screen(const T* result, const int size)
-{
-    if (result == nullptr) {
-        TM_LOG_WARNING("It is an nullptr, skip! \n");
-        return;
-    }
-    T* tmp = reinterpret_cast<T*>(malloc(sizeof(T) * size));
-    check_cuda_error(cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost));
-    for (int i = 0; i < size; ++i) {
-        printf("%d, %f\n", i, static_cast<float>(tmp[i]));
-    }
-    free(tmp);
-}
-
-template void print_to_screen(const float* result, const int size);
-template void print_to_screen(const half* result, const int size);
-#ifdef ENABLE_BF16
-template void print_to_screen(const __nv_bfloat16* result, const int size);
-#endif
-template void print_to_screen(const int* result, const int size);
-template void print_to_screen(const uint* result, const int size);
-template void print_to_screen(const bool* result, const int size);
-#ifdef ENABLE_FP8
-template void print_to_screen(const __nv_fp8_e4m3* result, const int size);
-#endif
 
 template<typename T>
 void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr)
@@ -335,35 +243,47 @@ template void check_abs_mean_val(const __nv_bfloat16* result, const int size);
 
 /* ***************************** common utils ****************************** */
 
-cudaError_t getSetDevice(int i_device, int* o_device)
+int getSMVersion()
 {
-    int         current_dev_id = 0;
-    cudaError_t err            = cudaSuccess;
+    int device{-1};
+    check_cuda_error(cudaGetDevice(&device));
+    int sm_major = 0;
+    int sm_minor = 0;
+    check_cuda_error(cudaDeviceGetAttribute(&sm_major, cudaDevAttrComputeCapabilityMajor, device));
+    check_cuda_error(cudaDeviceGetAttribute(&sm_minor, cudaDevAttrComputeCapabilityMinor, device));
+    return sm_major * 10 + sm_minor;
+}
 
-    if (o_device != NULL) {
-        err = cudaGetDevice(&current_dev_id);
-        if (err != cudaSuccess) {
-            return err;
-        }
-        if (current_dev_id == i_device) {
-            *o_device = i_device;
-        }
-        else {
-            err = cudaSetDevice(i_device);
-            if (err != cudaSuccess) {
-                return err;
-            }
-            *o_device = current_dev_id;
-        }
-    }
-    else {
-        err = cudaSetDevice(i_device);
-        if (err != cudaSuccess) {
-            return err;
-        }
-    }
+int getSMCount()
+{
+    int device{-1};
+    check_cuda_error(cudaGetDevice(&device));
+    int sm_count{};
+    check_cuda_error(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
+    return sm_count;
+}
 
-    return cudaSuccess;
+std::string getDeviceName()
+{
+    int device{-1};
+    check_cuda_error(cudaGetDevice(&device));
+    cudaDeviceProp props;
+    check_cuda_error(cudaGetDeviceProperties(&props, device));
+    return std::string(props.name);
+}
+
+int getDevice()
+{
+    int current_dev_id = 0;
+    check_cuda_error(cudaGetDevice(&current_dev_id));
+    return current_dev_id;
+}
+
+int getDeviceCount()
+{
+    int count = 0;
+    check_cuda_error(cudaGetDeviceCount(&count));
+    return count;
 }
 
 bool is_16xx_series(const char* name)

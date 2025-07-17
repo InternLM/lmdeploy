@@ -18,7 +18,7 @@ class InternVLReader(LlamaReader):
     output_weight_key = 'language_model.lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('llm_config')
+        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
         super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
@@ -45,7 +45,8 @@ class InternVLModel(LlamaModel):
         super().__init__(model_path, tokenizer_path, **kwargs)
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        arch = config.llm_config.architectures[0]
+        llm_config = getattr(config, 'llm_config', None) or getattr(config, 'text_config', None)
+        arch = llm_config.architectures[0]
         _readers = dict(InternLM2ForCausalLM=InternVL2Reader,
                         LlamaForCausalLM=InternVLReader,
                         Qwen2ForCausalLM=InternVLReader)
@@ -55,7 +56,8 @@ class InternVLModel(LlamaModel):
         """Read model info."""
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
-            model_arg = json.load(f)['llm_config']
+            file_content = json.load(f)
+            model_arg = file_content.get('llm_config') or file_content.get('text_config')
             num_layer = model_arg['num_hidden_layers']
             norm_eps = model_arg['rms_norm_eps']
             hidden_units = model_arg['hidden_size']
@@ -70,22 +72,17 @@ class InternVLModel(LlamaModel):
             max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
-            use_dynamic_ntk = 0
+            scaling_type = 'default'
             if isinstance(rope_scaling, dict):
-                scaling_type = model_arg['rope_scaling'].get('type', '')
+                scaling_type = model_arg['rope_scaling'].get('type', 'default')
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
-                if scaling_type == 'dynamic':
-                    use_dynamic_ntk = 1
             attn_bias = 1 if model_arg['architectures'][0] == 'Qwen2ForCausalLM' else 0
             rotary_embedding = hidden_units // attn_head_num
-            if use_dynamic_ntk:
-                rope_param = RopeParam.create('dynamic',
-                                              base=rope_theta,
-                                              dim=rotary_embedding,
-                                              max_position_embeddings=max_position_embeddings,
-                                              factor=scaling_factor)
-            else:
-                rope_param = RopeParam.create('default', base=rope_theta, dim=rotary_embedding)
+            rope_param = RopeParam(type=scaling_type,
+                                   base=rope_theta,
+                                   dim=rotary_embedding,
+                                   max_position_embeddings=max_position_embeddings,
+                                   factor=scaling_factor)
 
         return dict(num_layer=num_layer,
                     size_per_head=hidden_units // attn_head_num,

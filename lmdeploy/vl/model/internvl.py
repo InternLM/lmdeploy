@@ -112,7 +112,7 @@ class InternVLVisionModel(VisonModel):
         self.image_tokens_per_patch = int((force_image_size // patch_size)**2 * (downsample_ratio**2))
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
@@ -154,7 +154,7 @@ class InternVLVisionModel(VisonModel):
         return pixel_values
 
     def _forward_v1_5(self, inputs, max_batch_size):
-        """forward for internvl-chat-v1-5."""
+        """Forward for internvl-chat-v1-5."""
         assert all(x.get('pixel_values') is not None for x in inputs)
         outputs = []
         for idx in range(0, len(inputs), max_batch_size):
@@ -169,12 +169,12 @@ class InternVLVisionModel(VisonModel):
         return outputs
 
     def _preprocess(self, image, params=None):
-        """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
+        """Forward for internvl-chat-v1-1, internvl-chat-v1-2."""
         pixel_values = self.image_processor(images=image, return_tensors='pt').pixel_values
         return pixel_values
 
     def _forward(self, inputs, max_batch_size):
-        """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
+        """Forward for internvl-chat-v1-1, internvl-chat-v1-2."""
         assert all(x.get('pixel_values') is not None for x in inputs)
         outputs = []
         for idx in range(0, len(inputs), max_batch_size):
@@ -188,7 +188,7 @@ class InternVLVisionModel(VisonModel):
         return outputs
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refers to `super.preprocess() for spec."""
+        """Refers to `super.preprocess() for spec."""
         images = self.collect_images(messages)
         outputs = []
         for image, params in images:
@@ -205,7 +205,7 @@ class InternVLVisionModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
@@ -223,7 +223,7 @@ class InternVLVisionModel(VisonModel):
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
@@ -233,7 +233,7 @@ class InternVLVisionModel(VisonModel):
             elif message['role'] in ['preprocess', 'forward']:
                 continue
             n_images = len([1 for x in message['content'] if x['type'] == 'image'])
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
+            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             prompt = content[0]
             if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
                 prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{IMAGE_TOKEN}</img>')

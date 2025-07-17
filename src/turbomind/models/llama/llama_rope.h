@@ -26,7 +26,7 @@ inline RopeType GetRoPEType(const std::string& type)
                                               {"dynamic", RopeType::kDynamic},
                                               {"yarn", RopeType::kYarn},
                                               {"llama3", RopeType::kLlama3},
-                                              {"multimodal", RopeType::kMultimodal}};
+                                              {"mrope", RopeType::kMultimodal}};
     return lookup.at(type);
 }
 
@@ -101,7 +101,12 @@ inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_
     rope_kernel.type         = rope.type;
     rope_kernel.dim          = rope.dim;
     rope_kernel.scale_factor = -std::log2f(rope.base) / rope.dim;
-    rope_kernel.inv_factor   = (rope.factor != 0.f) ? 1.0 / rope.factor : 1.f;
+    if (rope.type == RopeType::kDynamic) {
+        rope_kernel.inv_factor = 1.f;
+    }
+    else {
+        rope_kernel.inv_factor = (rope.factor != 0.f) ? 1.0 / rope.factor : 1.f;
+    }
 
     if (rope.type == RopeType::kYarn) {
         auto&        src = rope.yarn;
@@ -139,6 +144,7 @@ inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_
         dst.alpha                         = src.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
         dst.beta                          = src.low_freq_factor * inv_diff_freq_factor;
     }
+
     else if (rope.type == RopeType::kMultimodal) {
         auto& src     = rope.multimodal;
         auto& dst     = rope_kernel.multimodal;

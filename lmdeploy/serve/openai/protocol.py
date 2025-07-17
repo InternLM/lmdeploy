@@ -127,6 +127,7 @@ class ChatCompletionRequest(BaseModel):
     user: Optional[str] = None
     response_format: Optional[ResponseFormat] = Field(default=None, examples=[None])  # noqa
     # additional argument of lmdeploy
+    do_preprocess: Optional[bool] = True
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
@@ -136,9 +137,10 @@ class ChatCompletionRequest(BaseModel):
     seed: Optional[int] = None
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
     min_p: float = 0.0
+    enable_thinking: Optional[bool] = None
 
 
-class FunctionResponse(BaseModel):
+class FunctionCall(BaseModel):
     """Function response."""
     name: str
     arguments: str
@@ -146,15 +148,27 @@ class FunctionResponse(BaseModel):
 
 class ToolCall(BaseModel):
     """Tool call response."""
-    id: str
+    id: str = Field(default_factory=lambda: f'chatcmpl-{shortuuid.random()}')
     type: Literal['function'] = 'function'
-    function: FunctionResponse
+    function: FunctionCall
+
+
+class ExtractedToolCallInformation(BaseModel):
+    # modified from https://github.com/vllm-project/vllm/blob/v0.7.3/vllm/entrypoints/openai/protocol.py#L1199
+    # indicate if tools were called
+    tools_called: bool
+    # extracted tool calls
+    tool_calls: List[ToolCall]
+    # content - per OpenAI spec, content AND tool calls can be returned rarely
+    # But some models will do this intentionally
+    content: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
-    content: str
+    content: Optional[str] = None
+    reasoning_content: Optional[str] = Field(default=None, examples=[None])
     tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
 
 
@@ -200,10 +214,25 @@ class ChatCompletionResponse(BaseModel):
     usage: UsageInfo
 
 
+class DeltaFunctionCall(BaseModel):
+    name: Optional[str] = None
+    arguments: Optional[str] = None
+
+
+# a tool call delta where everything is optional
+class DeltaToolCall(BaseModel):
+    id: str = Field(default_factory=lambda: f'chatcmpl-tool-{shortuuid.random()}')
+    type: Literal['function'] = 'function'
+    index: int
+    function: Optional[DeltaFunctionCall] = None
+
+
 class DeltaMessage(BaseModel):
     """Delta messages."""
     role: Optional[str] = None
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
+    tool_calls: List[DeltaToolCall] = Field(default_factory=list)
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
@@ -211,7 +240,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -249,6 +278,7 @@ class CompletionRequest(BaseModel):
     spaces_between_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40  # for opencompass
     seed: Optional[int] = None
+    min_p: float = 0.0
 
 
 class CompletionResponseChoice(BaseModel):
@@ -256,7 +286,7 @@ class CompletionResponseChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[LogProbs] = None
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
 class CompletionResponse(BaseModel):
@@ -274,7 +304,7 @@ class CompletionResponseStreamChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[LogProbs] = None
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
 class CompletionStreamResponse(BaseModel):
@@ -299,6 +329,33 @@ class EmbeddingsResponse(BaseModel):
     object: str = 'list'
     data: List[Dict[str, Any]]
     model: str
+    usage: UsageInfo
+
+
+class PoolingRequest(BaseModel):
+    """Pooling request.
+
+    Currently we follow vLLM API protocol,
+    https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/openai/protocol.py#L1174
+
+    Notice that ideally we should reuse the input format of embedding API
+    https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/openai/protocol.py#L1174
+    https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/entrypoints/http_server.py#L383
+    """
+    model: Optional[str] = None
+    input: Union[List[int], List[List[int]], str, List[str]]
+    encoding_format: Literal['float', 'base64'] = 'float'
+    dimensions: Optional[int] = None
+    user: Optional[str] = None
+
+
+class PoolingResponse(BaseModel):
+    """Pooling response."""
+    id: str = Field(default_factory=lambda: f'pool-{shortuuid.random()}')
+    object: str = 'list'
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str = None
+    data: List[Dict[str, Any]]
     usage: UsageInfo
 
 
@@ -330,6 +387,7 @@ class GenerateRequest(BaseModel):
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     skip_special_tokens: Optional[bool] = True
+    spaces_between_special_tokens: Optional[bool] = True
     cancel: Optional[bool] = False  # cancel a responding request
     adapter_name: Optional[str] = Field(default=None, examples=[None])
     seed: Optional[int] = None
@@ -343,4 +401,10 @@ class GenerateResponse(BaseModel):
     tokens: int
     input_tokens: int
     history_tokens: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+
+
+class UpdateParamsRequest(BaseModel):
+    """Update weights request."""
+    serialized_named_tensors: Union[str, List[str], Dict]
+    finished: bool = False

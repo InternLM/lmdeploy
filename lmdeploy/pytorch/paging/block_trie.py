@@ -11,7 +11,7 @@ from .block_manager import BaseBlockManager
 
 
 class Node:
-    """node of block trie."""
+    """Node of block trie."""
 
     def __init__(self, hash_key: int, block: int, tokens: np.ndarray, num_matched: int = 0):
         self.hash_key = hash_key
@@ -42,7 +42,7 @@ class Node:
 
 
 class BlockTrie:
-    """block trie for prefix caching."""
+    """Block trie for prefix caching."""
 
     def __init__(self, cache_config: CacheConfig, block_manager: BaseBlockManager):
         self.block_manager = block_manager
@@ -56,13 +56,13 @@ class BlockTrie:
         self.leaves: Set[Node] = set()
 
     def get_root(self, adapter_name: str):
-        """get root by adapter name."""
+        """Get root by adapter name."""
         if adapter_name not in self._roots:
             self._roots[adapter_name] = Node(-1, -1, None)
         return self._roots[adapter_name]
 
     def match(self, seq: SchedulerSequence):
-        """match sequence and cache."""
+        """Match sequence and cache."""
         if not self.enable:
             return
 
@@ -84,7 +84,7 @@ class BlockTrie:
         while num_matched + block_size < seq.num_all_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
-            key = hash(tuple(curr_tokens))
+            key = hash(('random', tuple(curr_tokens)))
             if key not in curr.children:
                 break
 
@@ -132,7 +132,7 @@ class BlockTrie:
 
             block = logical_blocks[block_id]
 
-            hash_key = hash(tuple(curr_tokens))
+            hash_key = hash(('random', tuple(curr_tokens)))
             parent = node
             if hash_key in parent.children:
                 child = parent.children[hash_key]

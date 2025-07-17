@@ -5,6 +5,8 @@
 #include <random>
 #include <vector>
 
+#include "src/turbomind/core/core.h"
+
 namespace turbomind {
 
 constexpr int kMoeGateMaxTiles = 16;
@@ -26,38 +28,26 @@ void invokeMoeGate_V2(int*         f2n,
                       float        routed_scale,
                       cudaStream_t st);
 
-template<class T>
-void invokeMoeGather(
-    T* dst, const T* src, const int* f2n, int tokens, int experts_per_token, int dims, cudaStream_t st);
+void invokeMoeDispatch(Ref<Tensor>   out_,  //
+                       const Tensor& src,
+                       const int*    f2n,
+                       int           expert_per_token,
+                       cudaStream_t  st);
 
-template<class T>
-inline void
-dispatchMoeGather(T* dst, const T* src, const int* f2n, int tokens, int experts_per_token, int dims, cudaStream_t st)
-{
-    const auto invoke = [&](auto type) {
-        using V = decltype(type);
-        invokeMoeGather((V*)dst, (const V*)src, f2n, tokens, experts_per_token, dims, st);
-    };
+void invokeMoeDispatchScales(Ref<Tensor>   out_,  //
+                             const Tensor& src,
+                             const int*    f2n,
+                             int           expert_per_token,
+                             cudaStream_t  st);
 
-    if constexpr (sizeof(T) == 2) {
-        invoke(uint16_t{});
-    }
-    else {  /// TODO: dispatch for more types
-        static_assert(sizeof(T) != sizeof(T), "Not implemented");
-    }
-}
-
-template<class T>
-void invokeMoeReduce(T*           dst,
-                     const T*     src,
-                     const float* scales,
-                     const int*   en2f,
-                     const float* dst_scales,
-                     int          tokens,
-                     int          experts_per_token,
-                     int          dims,
-                     float        dst_scale,
-                     cudaStream_t st);
+void invokeMoeCombine(Ref<Tensor>   out_,
+                      const Tensor& src,
+                      const float*  scales,
+                      const int*    en2f,
+                      const float*  dst_scales,
+                      int           experts_per_token,
+                      float         dst_scale,
+                      cudaStream_t  st);
 
 void invokeMoeSoftmaxMaskTopKGroups(
     float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st);

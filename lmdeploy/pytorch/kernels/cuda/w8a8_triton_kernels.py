@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 from packaging import version
 
+from ..default.w8a8_kernels import per_channel_quant
 from .triton_utils import get_kernel_meta
 
 TRITON_VERSION = version.parse(triton.__version__)
@@ -12,34 +13,6 @@ if TRITON_VERSION >= version.parse('3.0.0'):
     tl_round = tl.extra.cuda.libdevice.round
 else:
     tl_round = tl.math.round
-
-
-def per_channel_quant(x: torch.Tensor, dtype: torch.dtype):
-    """Quantize the input tensor 'x' channel-wise using the given number of
-    bits.
-
-    Args:
-        x (torch.Tensor): The input tensor to be quantized. Must be a
-            2-dimensional tensor.
-        dtype (torch.dtype): The data type to which the quantized tensor should
-            be converted.
-
-    Returns:
-        tuple: A tuple containing two items -- the quantized tensor and
-            the scale used for quantization.
-    """
-    assert x.ndim == 2
-    x = x.to(torch.float32)
-    x_absmax = x.view(x.shape[0], -1).abs().max(dim=1, keepdim=True)[0]
-    qtype_info = torch.finfo(dtype) if dtype.is_floating_point else torch.iinfo(dtype)
-    q_max = qtype_info.max
-    q_min = qtype_info.min
-    scale = x_absmax / q_max
-    x_q = x / scale
-    if not dtype.is_floating_point:
-        x_q = torch.round(x_q)
-    x_q = x_q.clamp(q_min, q_max).to(dtype)
-    return x_q, scale
 
 
 @triton.autotune(
@@ -334,7 +307,7 @@ def per_token_quant_int8(x, eps, quant_dtype=torch.int8):
 
 @triton.jit
 def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
-    """compute rms norm."""
+    """Compute rms norm."""
     xf = x.to(tl.float32)
 
     var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
@@ -357,7 +330,7 @@ def rms_norm_quant_kernel(
     Q_MAX: tl.constexpr,
     IS_FLOATING_POINT: tl.constexpr,
 ):
-    """rms norm kernel."""
+    """Rms norm kernel."""
     prog_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
 
@@ -395,7 +368,7 @@ def add_rms_norm_quant_kernel(
     Q_MAX: tl.constexpr,
     IS_FLOATING_POINT: tl.constexpr,
 ):
-    """rms norm kernel."""
+    """Rms norm kernel."""
     prog_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
 
@@ -530,7 +503,7 @@ def test_per_token_quant(x, eps, quant_dtype=torch.int8):
 
 
 def bench_rms_and_linear(M: int, provider: str, dtype: torch.dtype = torch.float16, eps: float = 1e-5):
-    """benchmark rms and linear."""
+    """Benchmark rms and linear."""
 
     def rms_norm_torch(x, w, eps):
         variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)

@@ -10,6 +10,7 @@ add_library(gemm2
         cast.cu
         unpack.cu
         context.cu
+        tma.cu
         tuner/cache_utils.cu
         tuner/measurer.cu
         tuner/sampler.cu
@@ -25,12 +26,15 @@ add_library(gemm2
         kernel/sm75_s16816_dynamic.cu
         kernel/sm80_s16816_dynamic.cu
         kernel/sm90_s16816_dynamic.cu
+        kernel/sm90_q64n32.cu
         moe_utils_v2.cu
         test/test_utils.cu
 )
 
-target_link_libraries(gemm2 PRIVATE parser)
+target_link_libraries(gemm2 PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
 
+
+target_compile_definitions(gemm2 PRIVATE -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED)
 
 target_compile_options(gemm2 PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
@@ -44,13 +48,17 @@ set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 if (BUILD_TEST)
         add_executable(gemm_test
                 test/gemm_test.cu
-                # test/test_utils.cu
                 test/quantization.cu
                 test/reference.cu)
-        target_link_libraries(gemm_test PRIVATE gemm2 cublas)
+        target_link_libraries(gemm_test PRIVATE gemm2 core cublas)
+
+        add_executable(test_gemm
+                test/test_gemm.cu
+                test/reference.cu)
+        target_link_libraries(test_gemm PRIVATE gemm2 core cublas quantization_kernels)
 
         add_executable(test_moe_utils test/test_moe_utils.cu test/test_utils.cu)
-        target_link_libraries(test_moe_utils PRIVATE gemm2 cublas)
+        target_link_libraries(test_moe_utils PRIVATE gemm2 core cublas)
 
         if (NOT MSVC)
                 FetchContent_Declare(
@@ -60,6 +68,7 @@ if (BUILD_TEST)
                 )
 
                 set(NVBench_ENABLE_EXAMPLES OFF)
+                set(NVBench_ENABLE_TESTING OFF)
                 set(BUILD_SHARED_LIBS OFF)
 
                 FetchContent_MakeAvailable(repo-nvbench)
@@ -69,6 +78,6 @@ if (BUILD_TEST)
                         # test/test_utils.cu
                         test/quantization.cu
                         test/reference.cu)
-                target_link_libraries(gemm_bench PRIVATE gemm2 nvbench::nvbench cublas)
+                target_link_libraries(gemm_bench PRIVATE gemm2 core nvbench::nvbench cublas)
         endif ()
 endif ()

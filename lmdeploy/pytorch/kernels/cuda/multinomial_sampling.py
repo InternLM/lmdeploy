@@ -3,10 +3,7 @@ import torch
 import triton
 import triton.language as tl
 
-from .triton_utils import get_kernel_meta, wrap_jit_func
 
-
-@wrap_jit_func
 @triton.jit
 def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, stride_sb, stride_st, stride_ib, stride_it,
                                  num_batchs, num_tokens, BLOCK: tl.constexpr, BLOCK_N: tl.constexpr):
@@ -48,7 +45,7 @@ def multinomial_sampling(scores: torch.Tensor,
                          seeds: torch.LongTensor,
                          offsets: torch.LongTensor,
                          indices: torch.Tensor = None):
-    """multinomial sampling."""
+    """Multinomial sampling."""
 
     assert scores.dim() == 2
     batch_size, num_tokens = scores.size()
@@ -70,7 +67,6 @@ def multinomial_sampling(scores: torch.Tensor,
     BLOCK_N = 128
 
     grid = [triton.cdiv(batch_size, BLOCK)]
-    kernel_meta = get_kernel_meta(scores)
     _multinomial_sampling_kernel[grid](scores,
                                        seeds,
                                        offsets,
@@ -84,7 +80,6 @@ def multinomial_sampling(scores: torch.Tensor,
                                        num_tokens=num_tokens,
                                        BLOCK=BLOCK,
                                        BLOCK_N=BLOCK_N,
-                                       num_warps=8,
-                                       **kernel_meta)
+                                       num_warps=8)
 
     return outputs

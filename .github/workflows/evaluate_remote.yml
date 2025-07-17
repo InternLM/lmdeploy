@@ -1,0 +1,217 @@
+name: evaluate_remote
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is open-compass/opencompass'
+        type: string
+        default: 'open-compass/opencompass'
+      repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      build_lmdeploy:
+        required: false
+        description: 'whether to build lmdeploy'
+        type:  boolean
+        default: true
+      repo_org_lmdeploy:
+        required: false
+        description: 'Tested repository organization name. Default is internlm/lmdeploy'
+        type: string
+        default: 'InternLM/lmdeploy'
+      repo_ref_lmdeploy:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      regression_func_volc:
+        required: true
+        description: 'regression functions'
+        type: string
+        default: "['chat_models','base_models']"
+      backend:
+        required: true
+        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
+        type: string
+        default: "['turbomind', 'pytorch']"
+
+env:
+  HF_DATASETS_OFFLINE: 1
+  HF_EVALUATE_OFFLINE: 1
+  TRANSFORMERS_OFFLINE: 1
+  LMDEPLOY_USE_MODELSCOPE: false
+  HF_HUB_OFFLINE: 1
+  OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
+  CONDA_PATH: /fs-computility/llm/qa-llm-cicd/miniconda3
+  PIP_CACHE_PATH: /fs-computility/llm/qa-llm-cicd/.cache/pip
+  REPORT_ROOT: /fs-computility/llm/qa-llm-cicd/eval_report/lmdeploy_regression
+  COMPASS_DATA_CACHE: /fs-computility/llm/shared/llmeval/datasets/compass_data_cache
+  HUGGINGFACE_HUB_CACHE: /fs-computility/llm/shared/llmeval/models/opencompass_hf_hub
+  HF_HUB_CACHE: /fs-computility/llm/shared/llmeval/models/opencompass_hf_hub
+  CONDA_ENV: lmdeploy_test
+
+jobs:
+  build-pypi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'open-compass/opencompass' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Build Opencompass
+        run: |
+          pip install wheel setuptools
+          python setup.py sdist bdist_wheel
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          path: dist/*
+          retention-days: 1
+          name: my-artifact-${{ github.run_id }}
+
+  build-pypi-lmdeploy:
+    if: ${{!cancelled() && (github.event_name == 'schedule' || inputs.build_lmdeploy)}}
+    strategy:
+      matrix:
+        pyver: [py310]
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: ${{ matrix.pyver }}
+      PLAT_NAME: manylinux2014_x86_64
+      DOCKER_TAG: cuda12.4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org_lmdeploy || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref_lmdeploy || 'main'}}
+      - name: Build
+        run: |
+          echo ${PYTHON_VERSION}
+          echo ${PLAT_NAME}
+          echo ${DOCKER_TAG}
+          echo ${OUTPUT_FOLDER}
+          echo ${GITHUB_RUN_ID}
+          # remove -it
+          sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
+          bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          path: builder/manywheel/${{ env.OUTPUT_FOLDER }}
+          retention-days: 1
+          name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
+
+
+  prepare_env:
+    if: ${{!cancelled()}}
+    needs: ['build-pypi', 'build-pypi-lmdeploy']
+    runs-on: lmdeploy-volc
+    timeout-minutes: 120 #2hours
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'open-compass/opencompass' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}
+      - name:  Remove Conda Env
+        if: always()
+        run: |
+          . /fs-computility/llm/qa-llm-cicd/miniconda3/bin/activate
+          conda env remove -y --name ${{env.CONDA_ENV}}
+          conda info --envs
+      - name: Prepare - create conda env and install torch - cu12
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 1
+          timeout_minutes: 120
+          command: |
+            . ${{env.CONDA_PATH}}/bin/activate
+            conda create -y --name ${{env.CONDA_ENV}} python=3.10
+            conda activate ${{env.CONDA_ENV}}
+            unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
+            pip install -r /fs-computility/llm/qa-llm-cicd/config/requirements.txt --cache-dir ${{env.PIP_CACHE_PATH}}
+            pip install opencompass*.whl --cache-dir ${{env.PIP_CACHE_PATH}}
+            pip install opencompass[lmdeploy] --cache-dir ${{env.PIP_CACHE_PATH}}
+            pip install opencompass[full] --cache-dir ${{env.PIP_CACHE_PATH}}
+            pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --cache-dir ${{env.PIP_CACHE_PATH}}
+            FLASH_ATTENTION_FORCE_BUILD=TRUE pip install /fs-computility/llm/qa-llm-cicd/packages/flash_attn-2.7.0.post2+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+            cp -r /root/nltk_data ${{env.CONDA_PATH}}/envs/${{env.CONDA_ENV}}/nltk_data
+      - name: Prepare - download lmdeploy - cu12
+        if: ${{github.event_name == 'schedule' || inputs.build_lmdeploy}}
+        uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py310
+      - name: Prepare - reinstall lmdeploy - cu12
+        if: ${{github.event_name == 'schedule' || inputs.build_lmdeploy}}
+        run: |
+          . ${{env.CONDA_PATH}}/bin/activate
+          conda activate ${{env.CONDA_ENV}}
+          pip uninstall -y lmdeploy
+          pip install lmdeploy-*.whl --no-deps
+      - name: conda env
+        run: |
+          . ${{env.CONDA_PATH}}/bin/activate
+          conda activate ${{env.CONDA_ENV}}
+          conda info --envs
+          pip list
+
+  run_test_volc:
+    if: ${{!cancelled()}}
+    needs: prepare_env
+    strategy:
+      fail-fast: false
+      matrix:
+        regression_func: ${{fromJSON(github.event.inputs.regression_func_volc || '["chat_models","base_models"]')}}
+        backend: ${{ fromJSON(github.event.inputs.backend || '["turbomind", "pytorch"]')}}
+    runs-on: lmdeploy-volc
+    timeout-minutes: 480 #6hours
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org_lmdeploy || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref_lmdeploy || 'main'}}
+      - name:  modify config
+        run: |
+          mkdir opencompass
+          cp .github/scripts/eval_regression_${{matrix.regression_func}}.py opencompass/eval_regression_${{matrix.regression_func}}.py
+          cp -r /fs-computility/llm/qa-llm-cicd/ocplayground/template/configs_cluster/volc.py opencompass
+          cat /fs-computility/llm/qa-llm-cicd/config/lmdeploy_test_config.txt >> opencompass/eval_regression_${{matrix.regression_func}}.py
+      - name:  modify config - models filter
+        if: matrix.backend == 'turbomind'
+        run: |
+          echo "models = sum([v for k, v in locals().items() if  k.startswith('lmdeploy_')], [])" >> opencompass/eval_regression_${{matrix.regression_func}}.py
+      - name:  modify config - models filter
+        if: matrix.backend == 'pytorch'
+        run: |
+          echo "models = sum([v for k, v in locals().items() if  k.startswith('pytorch_')], [])" >> opencompass/eval_regression_${{matrix.regression_func}}.py
+      - name:  Run test
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 1
+          timeout_minutes: 180
+          command: |
+            . ${{env.CONDA_PATH}}/bin/activate
+            conda activate ${{env.CONDA_ENV}}
+            conda info --envs
+            unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
+            echo "models = sorted(models, key=lambda x: x['run_cfg']['num_gpus'])" >> opencompass/eval_regression_${{matrix.regression_func}}.py
+            cd opencompass
+            opencompass eval_regression_${{matrix.regression_func}}.py --work-dir ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}} --reuse --dump-eval-details
+            cd ..
+            python .github/scripts/action_tools.py generate_output_for_evaluation ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}}

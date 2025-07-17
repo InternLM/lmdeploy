@@ -15,9 +15,10 @@ MODULE_MAP.update({
     'LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
 })
 
-# Falcon Models in transformer / on hub
+# llama4
 MODULE_MAP.update({
-    'FalconForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.FalconForCausalLM',
+    'Llama4ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama4.Llama4ForConditionalGeneration',
 })
 
 # baichuan
@@ -61,6 +62,17 @@ MODULE_MAP.update({
     'Gemma2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
 })
 
+# gemma3 text
+MODULE_MAP.update({
+    'Gemma3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
+})
+
+# gemma3 VL
+MODULE_MAP.update({
+    'Gemma3ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma3_vl.Gemma3ForConditionalGeneration',
+})
+
 # deepseek
 MODULE_MAP.update({
     'DeepseekForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.DeepseekForCausalLM',
@@ -97,6 +109,16 @@ MODULE_MAP.update({
     'Qwen2MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_moe.Qwen2MoeForCausalLM',
 })
 
+# qwen3
+MODULE_MAP.update({
+    'Qwen3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3.Qwen3ForCausalLM',
+})
+
+# qwen3 moe
+MODULE_MAP.update({
+    'Qwen3MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_moe.Qwen3MoeForCausalLM',
+})
+
 # qwen2_vl
 MODULE_MAP.update({
     'Qwen2VLForConditionalGeneration':
@@ -107,11 +129,6 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'Qwen2_5_VLForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_5_vl.Qwen2_5_VLForConditionalGeneration',
-})
-
-# dbrx
-MODULE_MAP.update({
-    'DbrxForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.DbrxForCausalLM',
 })
 
 # starcoder2
@@ -131,6 +148,12 @@ MODULE_MAP.update({
 
 # internvl
 MODULE_MAP.update({'InternVLChatModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.InternVLChatModel'})
+
+# internvl3-hf
+MODULE_MAP.update({
+    'InternVLForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl3_hf.InternVLForConditionalGeneration'
+})
 
 # mono-internvl
 MODULE_MAP.update({

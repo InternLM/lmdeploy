@@ -10,14 +10,13 @@ from torch import nn
 
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, quant_weights, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.pytorch.check_env import try_import_deeplink
+from lmdeploy.utils import try_import_deeplink
 
 from .calibrate import LAYER_TYPE_MAP, calibrate
 
 
 def save_vl_model(vl_model, model_path, dst_path):
-    safe_serialization = type(vl_model).__name__ == 'MGMLlamaForCausalLM'
-    vl_model.save_pretrained(dst_path, max_shard_size='2GB', safe_serialization=safe_serialization)
+    vl_model.save_pretrained(dst_path, safe_serialization=True)
     candidate = [
         'preprocessor_config.json', 'processor_config.json', 'vit', 'generation_config.json', 'added_tokens.json'
     ]
@@ -124,7 +123,7 @@ def auto_awq(model: str,
     if vl_model:
         save_vl_model(vl_model, model_path, work_dir)
     else:
-        model.save_pretrained(work_dir, max_shard_size='2GB', safe_serialization=False)
+        model.save_pretrained(work_dir, safe_serialization=True)
     tokenizer.save_pretrained(work_dir)
 
 

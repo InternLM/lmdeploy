@@ -107,7 +107,6 @@ struct FastRoPE {
         if (param_.type == RopeType::kMultimodal) {
             return apply_mrope(x, timestep);
         }
-
         // Most models apply rotary embedding in half precision
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {

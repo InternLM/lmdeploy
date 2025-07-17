@@ -10,7 +10,7 @@ from ..check_env.transformers import TransformersChecker
 
 
 class EngineChecker(BaseChecker):
-    """check transformers is available."""
+    """Check transformers is available."""
 
     def __init__(self,
                  model_path: str,
@@ -30,9 +30,12 @@ class EngineChecker(BaseChecker):
 
         if device_type == 'cuda':
             # triton
+            from ..check_env.cuda import CudaChecker
             from ..check_env.triton import TritonChecker
+            cuda_checker = CudaChecker(model_format=engine_config.model_format, logger=logger)
+            cuda_checker.register_required_checker(torch_checker)
             triton_checker = TritonChecker(logger=logger)
-            triton_checker.register_required_checker(torch_checker)
+            triton_checker.register_required_checker(cuda_checker)
             self.register_required_checker(triton_checker)
         else:
             # deeplink
@@ -64,7 +67,8 @@ class EngineChecker(BaseChecker):
 
         # dist
         dist_checker = DistChecker(engine_config.tp,
-                                   1,
+                                   engine_config.dp,
+                                   engine_config.ep,
                                    engine_config.distributed_executor_backend,
                                    device_type=engine_config.device_type,
                                    logger=logger)

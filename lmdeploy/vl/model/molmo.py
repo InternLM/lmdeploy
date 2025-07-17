@@ -14,7 +14,7 @@ logger = get_logger('lmdeploy')
 
 @VISION_MODELS.register_module()
 class MolmoVisionModel(VisonModel):
-    """molmo's vision model."""
+    """Molmo's vision model."""
 
     _arch = 'MolmoForCausalLM'
 
@@ -25,7 +25,7 @@ class MolmoVisionModel(VisonModel):
                                                        device_map='auto')
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         with init_empty_weights():
@@ -51,12 +51,12 @@ class MolmoVisionModel(VisonModel):
         self.model = model.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to the `super.preprocess() for spec."""
+        """Refer to the `super.preprocess() for spec."""
         for i, message in enumerate(messages):
             if not isinstance(message['content'], List):
                 continue
             images = [x['image'] for x in message['content'] if x['type'] == 'image']
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
+            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             prompt = f' User: {content[0]}'
             tokens = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
             # preprocess images. The output is a dict, which is
@@ -76,7 +76,7 @@ class MolmoVisionModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:

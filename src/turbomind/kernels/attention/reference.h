@@ -2,11 +2,13 @@
 
 #pragma once
 
+#include <cublas_v2.h>
+#include <cuda_runtime.h>
+
+#include <thrust/universal_vector.h>
+
 #include "src/turbomind/kernels/flash_attention/flash_attention.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
-#include <cuda_runtime.h>
-#include <thrust/universal_vector.h>
 
 namespace turbomind {
 

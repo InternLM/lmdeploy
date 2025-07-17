@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import torch
 import torch.nn as nn
@@ -19,13 +19,15 @@ class QTensor:
     scale: torch.Tensor
     zero_point: torch.Tensor = None
 
+    def __post_init__(self):
+        self.fields = [field.name for field in fields(self)]
+
     def __getattr__(self, name: str):
         """Allows attribute access to be forwarded to the wrapped tensor when
         the attribute doesn't exist in QTensor."""
-        try:
+        if name in self.fields:
             return super().__getattr__(name)
-        except AttributeError:
-            return getattr(self.tensor, name)
+        return getattr(self.tensor, name)
 
 
 class QRMSNorm(nn.Module):
@@ -43,8 +45,7 @@ class QRMSNorm(nn.Module):
         """Class method to create a QRMSNorm instance from a floating-point
         module.
 
-        `initialization = True` for real init.
-        `initialization = False` for dummy init.
+        `initialization = True` for real init. `initialization = False` for dummy init.
         """
         hidden_size = mod.weight.shape[0]
         eps = mod.variance_epsilon
@@ -101,8 +102,7 @@ class QLinear(nn.Module):
         """Class method to create a QLinear instance from a floating-point
         module.
 
-        `initialization = True` for real init.
-        `initialization = False` for dummy init.
+        `initialization = True` for real init. `initialization = False` for dummy init.
         """
         q_mod = cls(mod.in_features,
                     mod.out_features,

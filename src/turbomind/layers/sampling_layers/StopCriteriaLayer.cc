@@ -16,88 +16,63 @@
 
 #include "src/turbomind/layers/sampling_layers/StopCriteriaLayer.h"
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
-#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/layers/sampling_layers/utils.h"
+#include "src/turbomind/macro.h"
 
 namespace turbomind {
 
 template<typename T>
-void StopCriteriaLayer<T>::allocateBuffer()
+StopCriteriaLayer<T>::StopCriteriaLayer(const BaseParam& param): BaseDynamicDecodeLayer{param}
 {
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    h_pinned_finished_sum_ = (int*)allocator_->reMalloc(h_pinned_finished_sum_, sizeof(int), true, true);
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    stop_words_     = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kCPUpinned};
+    stop_words_buf_ = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kDEVICE};
 }
 
 template<typename T>
-void StopCriteriaLayer<T>::freeBuffer()
+void StopCriteriaLayer<T>::Setup(const std::vector<const Request*>& rs, const TensorMap&)
 {
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    allocator_->free((void**)(&h_pinned_finished_sum_), true);
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    stop_words_ten_ = {};
+    init_stop_bad_words(&GenerationConfig::stop_ids,  //
+                        "stop_words",
+                        rs,
+                        stop_words_.data(),
+                        stop_words_buf_.data(),
+                        stop_words_ten_);
 }
 
 template<typename T>
-StopCriteriaLayer<T>::~StopCriteriaLayer()
+void StopCriteriaLayer<T>::Forward(TensorMap& args)
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    freeBuffer();
+    const int batch_size = args.at("logits").shape(0);
+    const int step       = *args.at("step").data<int>();
 
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
-}
-
-template<typename T>
-void StopCriteriaLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors)
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    const size_t batch_size = input_tensors->at("logits").shape[0];
-    const int    step       = input_tensors->at("step").getVal<int>();
-
-    if (input_tensors->isExist("stop_words_list")) {
-        const Tensor stop_words_list = input_tensors->at("stop_words_list");
-        FT_CHECK(stop_words_list.shape.size() == 3);  // [batch, 2, len]
-        size_t stop_words_len = stop_words_list.shape[2];
-        invokeStopWordsCriterion(output_tensors->at("output_ids").getPtr<const int>(),
+    if (auto& stop_words = stop_words_ten_) {
+        TM_CHECK_EQ(stop_words.ndim(), 3);  // [batch, 2, len]
+        size_t stop_words_len = stop_words.shape(2);
+        invokeStopWordsCriterion(args.at("output_ids").data<int>(),
                                  nullptr,
-                                 stop_words_list.getPtr<const int>(),
-                                 output_tensors->at("finished").getPtr<bool>(),
+                                 stop_words.data(),
+                                 args.at("finished").data<bool>(),
                                  0,
                                  stop_words_len,
                                  batch_size,
                                  1,
                                  step,
                                  stream_);
-
         sync_check_cuda_error();
     }
 
-    if (input_tensors->isExist("sequence_limit_length")) {
-        invokeLengthCriterion(output_tensors->at("finished").getPtr<bool>(),
-                              output_tensors->getPtr<bool>("should_stop", nullptr),
-                              h_pinned_finished_sum_,
-                              input_tensors->at("sequence_limit_length").getPtr<const uint32_t>(),
+    if (auto seq_lim_len = args.try_("sequence_limit_length")) {
+        invokeLengthCriterion(args.at("finished").data<bool>(),  //
+                              seq_lim_len->data<int>(),
                               batch_size,
                               1,
                               step,
                               stream_);
-
         sync_check_cuda_error();
     }
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
-}
-
-template<typename T>
-void StopCriteriaLayer<T>::setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args)
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    allocateBuffer();
 
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }

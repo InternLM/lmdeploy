@@ -1,5 +1,6 @@
 # yapf: disable
 from lmdeploy import TurbomindEngineConfig
+from lmdeploy.turbomind import update_parallel_config
 from lmdeploy.turbomind.deploy.converter import (get_input_model_registered_name,
                                                  get_output_model_registered_name_and_config)
 from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
@@ -27,7 +28,7 @@ def test_registered_models():
         ('liuhaotian/llava-v1.6-mistral-7b', 'hf', 0, 'bfloat16', 'tm'),
         ('liuhaotian/llava-v1.6-vicuna-13b', 'hf', 0, 'bfloat16', 'tm'),
         ('OpenGVLab/InternVL-Chat-V1-5', 'hf', 0, 'bfloat16', 'tm'),
-        ('deepseek-ai/deepseek-vl-7b-chat', 'hf', 0, 'float16', 'tm'), ('YanweiLi/MGM-7B', 'hf', 0, 'bfloat16', 'tm'),
+        ('deepseek-ai/deepseek-vl-7b-chat', 'hf', 0, 'float16', 'tm'),
         ('Qwen/Qwen1.5-4B-Chat-AWQ', 'awq', 128, 'int4', 'tm'),
         ('solidrust/Meta-Llama-3-8B-Instruct-hf-AWQ', 'awq', 128, 'int4', 'tm'),
         ('internlm/internlm2-chat-20b-4bits', 'awq', 128, 'int4', 'tm'),
@@ -58,13 +59,16 @@ def test_update_from_engine_config():
     assert (config == _config)
 
     config = copy.deepcopy(_config)
-    config.update_from_engine_config(TurbomindEngineConfig())
-    assert config.tensor_para_size == 1
+    engine_config = TurbomindEngineConfig()
+    update_parallel_config(engine_config)
+    config.update_from_engine_config(engine_config)
+    assert config.model_config.attn_tp_size == 1
     assert config.session_len == 32768
 
     config = copy.deepcopy(_config)
     engine_config = TurbomindEngineConfig(model_format='hf',
                                           tp=2,
+                                          device_num=2,
                                           session_len=4000,
                                           max_batch_size=100,
                                           cache_max_entry_count=0.5,
@@ -73,13 +77,13 @@ def test_update_from_engine_config():
                                           use_logn_attn=True,
                                           max_prefill_iters=64,
                                           num_tokens_per_iter=256)
-
+    update_parallel_config(engine_config)
     config.update_from_engine_config(engine_config)
 
-    assert (config.tensor_para_size == engine_config.tp)
+    assert (config.model_config.attn_tp_size == engine_config.attn_tp_size)
     assert (config.session_len == engine_config.session_len)
     assert (config.attention_config.rope_param.type == 'dynamic')
-    assert (config.attention_config.rope_param.param.factor == engine_config.rope_scaling_factor)
+    assert (config.attention_config.rope_param.factor == engine_config.rope_scaling_factor)
     assert (config.attention_config.use_logn_attn == engine_config.use_logn_attn)
 
 

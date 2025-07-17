@@ -20,6 +20,7 @@ def _make_A(M, K, group_size, out_dtype):
 
     A = A.reshape(M, K)
     quant_A = quant_A.reshape(M, K).to(out_dtype)
+    scale = scale.T.contiguous().T
     return A, quant_A, scale
 
 
@@ -54,6 +55,7 @@ def _make_B(K, N, group_size, out_dtype):
     B = B.reshape(K_aligned, N_aligned)[:K, :N]
     quant_B = quant_B.reshape(K_aligned, N_aligned).to(out_dtype)[:K, :N]
     scale = scale.reshape(K_aligned // group_size, N_aligned // group_size)
+    quant_B = quant_B.transpose(0, 1).contiguous().transpose(0, 1)
     return B, quant_B, scale
 
 
@@ -61,8 +63,8 @@ def _make_B(K, N, group_size, out_dtype):
 class TestQuantFP8:
 
     @pytest.fixture
-    def M(self):
-        yield 256
+    def M(self, request):
+        yield request.param
 
     @pytest.fixture
     def K(self):
@@ -96,6 +98,7 @@ class TestQuantFP8:
     def gt(self, quant_A, scale):
         yield quant_A, scale
 
+    @pytest.mark.parametrize('M', [65536, 256], indirect=True)
     def test_quant_fp8(self, A, group_size, out_dtype, gt):
         from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
         quant_A_gt, scale_gt = gt

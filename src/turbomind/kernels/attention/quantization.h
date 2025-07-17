@@ -694,6 +694,7 @@ struct ConvertKvCache<uint8_t, T> {
     }
 };
 
+#if 0
 inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_e4m3(const Array<fp8_e4m3, 4>& v)
 {
 #if TURBOMIND_ARCH_SM80
@@ -743,6 +744,7 @@ struct ConvertKvCache<fp8_e4m3, T> {
         }
     }
 };
+#endif
 
 template<class Q, class T>
 inline __device__ void StoreQuantParam(T* dst, Array<T, 2> src)

@@ -15,8 +15,6 @@
  */
 #pragma once
 
-#include "src/turbomind/utils/Tensor.h"
-
 namespace turbomind {
 
 template<typename T, typename T_IN>
@@ -141,8 +139,5 @@ void invokeMaskedSoftMaxWithRelPosBias(T*           qk_buf,
                                        const int    window_len,
                                        const float  qk_scale,
                                        cudaStream_t stream);
-
-template<typename T>
-void invokeTransposeAttentions(Tensor& attentions_out, const Tensor& attentions_in, cudaStream_t stream = 0);
 
 }  // namespace turbomind

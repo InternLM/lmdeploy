@@ -15,135 +15,35 @@
  */
 
 #include "src/turbomind/layers/sampling_layers/SamplingLayer.h"
+#include "src/turbomind/core/check.h"
+#include "src/turbomind/core/context.h"
+#include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
-#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
 
-void set_runtime_args(int    batch_size,
-                      int    top_k,
-                      int*   top_ks,
-                      int    top_ks_size,
-                      int*   runtime_top_k,
-                      float  top_p,
-                      float* top_ps,
-                      int    top_ps_size,
-                      float* runtime_top_p,
-                      float  min_p,
-                      float* min_ps,
-                      int    min_ps_size,
-                      float* runtime_min_p)
+template<typename T>
+SamplingLayer<T>::SamplingLayer(const BaseParam& param): BaseDynamicDecodeLayer{param}
 {
-    for (int i = 0; i < batch_size; i++) {
-        int   topk = top_ks_size > 1 ? top_ks[i] : top_k;
-        float topp = top_ps_size > 1 ? top_ps[i] : top_p;
-        float minp = min_ps_size > 1 ? min_ps[i] : min_p;
+    top_k_ = {max_batch_size_, kCPUpinned};
+    top_p_ = {max_batch_size_, kCPUpinned};
+    min_p_ = {max_batch_size_, kCPUpinned};
+    kept_  = {max_batch_size_, kCPUpinned};
 
-        if (topk == 0 && topp == 0.f) {
-            topk = 1;
-        }
+    // constant array
+    std::fill_n(kept_.data(), max_batch_size_, vocab_size_);
 
-        if (topk < 0 || topk > 1024) {
-            TM_LOG_WARNING("topk (%d) is out of range [0, 1024]", topk);
-            topk = std::max(0, std::min(topk, 1024));
-        }
-        if (topp < 0.f || topp > 1.f) {
-            TM_LOG_WARNING("topp (%f) is out of range [0.0, 1.0f]", topp);
-            topp = std::max(0.f, std::min(topp, 1.f));
-        }
-        if (minp < 0.f || minp > 1.f) {
-            TM_LOG_WARNING("minp (%f) is out of range [0.0, 1.0f]", minp);
-            minp = std::max(0.f, std::min(minp, 1.f));
-        }
-        runtime_top_k[i] = topk;
-        runtime_top_p[i] = topp;
-        runtime_min_p[i] = minp;
-    }
+    top_k_buf_ = {max_batch_size_, kDEVICE};
+    top_p_buf_ = {max_batch_size_, kDEVICE};
+    min_p_buf_ = {max_batch_size_, kDEVICE};
+    kept_buf_  = {max_batch_size_, kDEVICE};
 }
 
 template<typename T>
-void SamplingLayer<T>::allocateBuffer()
-{
-    FT_CHECK(false);
-}
-
-template<typename T>
-void SamplingLayer<T>::allocateBuffer(const size_t batch_size)
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    runtime_top_k_buf_ =
-        reinterpret_cast<int*>(allocator_->reMalloc(runtime_top_k_buf_, sizeof(int) * batch_size, false));
-    runtime_top_p_buf_ =
-        reinterpret_cast<float*>(allocator_->reMalloc(runtime_top_p_buf_, sizeof(float) * batch_size, false));
-    runtime_min_p_buf_ =
-        reinterpret_cast<float*>(allocator_->reMalloc(runtime_min_p_buf_, sizeof(float) * batch_size, false));
-
-    indices_ = reinterpret_cast<int*>(
-        allocator_->reMalloc(indices_, batch_size * sizeof(int) * args_.vocab_size_padded, false));
-    kept_ = reinterpret_cast<int*>(allocator_->reMalloc(kept_, batch_size * sizeof(int), false));
-
-    {
-        // topk buffer
-        TopKSortFilterParams params{};
-        params.batch_size = batch_size;
-        params.max_top_k  = max_topk_;
-        invokeTopKSortFilter<T>(params, stream_);
-        topk_ws_size_ = params.workspace_size;
-        topk_ws_      = allocator_->reMalloc(topk_ws_, topk_ws_size_, false);
-    }
-
-    {
-        // topp buffer
-        TopPSortParams params{};
-        params.batch_size        = batch_size;
-        params.vocab_size        = args_.vocab_size;
-        params.vocab_size_padded = args_.vocab_size_padded;
-        invokeTopPSort<T>(params, stream_);
-        topp_ws_size_ = params.workspace_size;
-        topp_ws_      = allocator_->reMalloc(topp_ws_, topp_ws_size_, false);
-    }
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
-}
-
-template<typename T>
-void SamplingLayer<T>::freeBuffer()
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    kept_n_        = {};
-    runtime_top_k_ = {};
-    runtime_top_p_ = {};
-    runtime_min_p_ = {};
-
-    allocator_->free((void**)&runtime_top_k_buf_);
-    allocator_->free((void**)&runtime_top_p_buf_);
-    allocator_->free((void**)&runtime_min_p_buf_);
-    allocator_->free((void**)&topk_ws_);
-    allocator_->free((void**)&topp_ws_);
-
-    allocator_->free((void**)&indices_);
-    allocator_->free((void**)&kept_);
-    logits_ = nullptr;
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
-}
-
-template<typename T>
-SamplingLayer<T>::~SamplingLayer()
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    freeBuffer();
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
-}
-
-template<typename T>
-void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors)
+void SamplingLayer<T>::Forward(TensorMap& args)
 {
     // step1:
     //  - use topk / topp_minp kernel to sort and filter the scores
@@ -153,82 +53,80 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
 
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    Tensor    logits     = input_tensors->at("logits");
-    const int batch_size = logits.shape[0];
-    const int step       = input_tensors->at("step").getVal<int>();
-    logits_              = logits.getPtr<T>();
+    Tensor_<T> logits = args.at("logits");
 
-    cudaAutoCpy(kept_, kept_n_.data(), batch_size, stream_);
+    const auto bsz = logits.shape(0);
+
+    const int step = *args.at("step").data<int>();
+
+    core::Copy(kept_.data(), bsz, kept_buf_.data());
+
+    Buffer_<int> indices(bsz * vocab_size_padded_, kDEVICE);
 
     // use topk sort if some request use topk filter
     if (max_topk_ > 0) {
         // TODO: top_k >= 64 is much slower than torch.topk()
         TopKSortFilterParams params{};
-        params.workspace         = topk_ws_;
-        params.workspace_size    = topk_ws_size_;
-        params.logits            = logits_;
-        params.sorted_logits     = logits_;
-        params.sorted_indices    = indices_;
-        params.kept              = kept_;
-        params.top_ks            = runtime_top_k_buf_;
+        params.logits            = logits.data();
+        params.sorted_logits     = logits.data();
+        params.sorted_indices    = indices.data();
+        params.kept              = kept_buf_.data();
+        params.top_ks            = top_k_buf_.data();
         params.max_top_k         = max_topk_;
-        params.batch_size        = batch_size;
-        params.vocab_size        = args_.vocab_size;
-        params.vocab_size_padded = args_.vocab_size_padded;
+        params.batch_size        = bsz;
+        params.vocab_size        = vocab_size_;
+        params.vocab_size_padded = vocab_size_padded_;
         invokeTopKSortFilter<T>(params, stream_);
     }
 
     // use topp sort if some request skip topk filter
     if (min_topk_ == 0) {
-        invokeSoftmax<T>(logits_, args_.vocab_size_padded, args_.vocab_size, batch_size, kept_, stream_);
+        invokeSoftmax<T>(logits.data(), vocab_size_padded_, vocab_size_, bsz, kept_buf_.data(), stream_);
 
         TopPSortParams params{};
-        params.workspace         = topp_ws_;
-        params.workspace_size    = topp_ws_size_;
-        params.logits            = logits_;
-        params.sorted_logits     = logits_;
-        params.sorted_indices    = indices_;
-        params.kept              = kept_;
-        params.top_ks            = runtime_top_k_buf_;
-        params.top_ps            = runtime_top_p_buf_;
-        params.batch_size        = batch_size;
-        params.vocab_size        = args_.vocab_size;
-        params.vocab_size_padded = args_.vocab_size_padded;
+        params.logits            = logits.data();
+        params.sorted_logits     = logits.data();
+        params.sorted_indices    = indices.data();
+        params.kept              = kept_buf_.data();
+        params.top_ks            = top_k_buf_.data();
+        params.top_ps            = top_p_buf_.data();
+        params.batch_size        = bsz;
+        params.vocab_size        = vocab_size_;
+        params.vocab_size_padded = vocab_size_padded_;
         invokeTopPSort<T>(params, stream_);
     }
 
     // apply topp minp filter
     if (max_minp_ != 0.f || min_topp_ != 1.f) {
         TopPMinPFilterParams params{};
-        params.sorted_logits     = logits_;
-        params.sorted_indices    = indices_;
-        params.kept              = kept_;
-        params.top_ps            = runtime_top_p_buf_;
-        params.min_ps            = runtime_min_p_buf_;
-        params.batch_size        = batch_size;
-        params.vocab_size        = args_.vocab_size;
-        params.vocab_size_padded = args_.vocab_size_padded;
+        params.sorted_logits     = logits.data();
+        params.sorted_indices    = indices.data();
+        params.kept              = kept_buf_.data();
+        params.top_ps            = top_p_buf_.data();
+        params.min_ps            = min_p_buf_.data();
+        params.batch_size        = bsz;
+        params.vocab_size        = vocab_size_;
+        params.vocab_size_padded = vocab_size_padded_;
         invokeTopPMinPFilter<T>(params, stream_);
     }
 
     // sample
     {
         SamplingParams params{};
-        params.logits      = logits.getPtr<T>();
-        params.stride      = args_.vocab_size_padded;
-        params.indices     = indices_;
-        params.kept        = kept_;
-        params.curandstate = output_tensors->at("curand_state").getPtr<curandState_t>();
-        params.batch_size  = batch_size;
-        params.output_ids  = output_tensors->at("output_ids").getPtrWithOffset<int>(step * batch_size);
-        params.sequence_length =
-            output_tensors->at("sequence_length", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
-        params.sampled_logprobs =
-            output_tensors->at("sampled_logprobs", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<float>();
-        params.sampled_indexes =
-            output_tensors->at("sampled_indexes", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<uint32_t>();
-        params.sampled_nums =
-            output_tensors->at("sampled_nums", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<uint32_t>();
+        params.logits          = logits.data();
+        params.stride          = vocab_size_padded_;
+        params.indices         = indices.data();
+        params.kept            = kept_buf_.data();
+        params.curandstate     = (curandState_t*)args.at("curand_state").raw_data();
+        params.batch_size      = bsz;
+        params.output_ids      = args.at("output_ids").data<int>() + step * bsz;
+        params.sequence_length = args.at("sequence_length").data<int>();
+
+        if (auto sampled_logprobs = args.try_("sampled_logprobs")) {
+            params.sampled_logprobs = sampled_logprobs->data<T>();
+            params.sampled_indexes  = args.at("sampled_indexes").data<uint32_t>();
+            params.sampled_nums     = args.at("sampled_nums").data<uint32_t>();
+        }
 
         invokeSampling<T>(params, stream_);
         sync_check_cuda_error();
@@ -238,51 +136,24 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
 }
 
 template<typename T>
-void SamplingLayer<T>::setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args)
+void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs, const TensorMap&)
 {
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    const auto bsz = rs.size();
 
-    const Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
-    const Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
-    const Tensor runtime_min_p = runtime_args->isExist("runtime_min_p") ? runtime_args->at("runtime_min_p") : Tensor();
+    for (int i = 0; i < bsz; ++i) {
+        top_k_[i] = rs[i]->gen_cfg.top_k;
+        top_p_[i] = rs[i]->gen_cfg.top_p;
+        min_p_[i] = rs[i]->gen_cfg.min_p;
+    }
 
-    kept_n_.resize(batch_size);
-    runtime_top_k_.resize(batch_size);
-    runtime_top_p_.resize(batch_size);
-    runtime_min_p_.resize(batch_size);
+    max_topk_ = *std::max_element(top_k_.begin(), top_k_.begin() + bsz);
+    min_topk_ = *std::min_element(top_k_.begin(), top_k_.begin() + bsz);
+    min_topp_ = *std::min_element(top_p_.begin(), top_p_.begin() + bsz);
+    max_minp_ = *std::max_element(min_p_.begin(), min_p_.begin() + bsz);
 
-    int   top_k = runtime_top_k.size() > 0 ? runtime_top_k.getVal<int>() : 0;
-    float top_p = runtime_top_p.size() > 0 ? runtime_top_p.getVal<float>() : 0.0f;
-    float min_p = runtime_min_p.size() > 0 ? runtime_min_p.getVal<float>() : 0.0f;
-    set_runtime_args(batch_size,
-                     top_k,
-                     runtime_top_k.getPtr<int>(),
-                     runtime_top_k.size(),
-                     runtime_top_k_.data(),
-                     top_p,
-                     runtime_top_p.getPtr<float>(),
-                     runtime_top_p.size(),
-                     runtime_top_p_.data(),
-                     min_p,
-                     runtime_min_p.getPtr<float>(),
-                     runtime_min_p.size(),
-                     runtime_min_p_.data());
-
-    max_topk_ = *std::max_element(runtime_top_k_.begin(), runtime_top_k_.end());
-    min_topk_ = *std::min_element(runtime_top_k_.begin(), runtime_top_k_.end());
-    min_topp_ = *std::min_element(runtime_top_p_.begin(), runtime_top_p_.end());
-    max_minp_ = *std::max_element(runtime_min_p_.begin(), runtime_min_p_.end());
-
-    allocateBuffer(batch_size);
-
-    // kept
-    std::fill_n(kept_n_.data(), batch_size, args_.vocab_size);
-
-    cudaAutoCpy(runtime_top_k_buf_, runtime_top_k_.data(), batch_size, stream_);
-    cudaAutoCpy(runtime_top_p_buf_, runtime_top_p_.data(), batch_size, stream_);
-    cudaAutoCpy(runtime_min_p_buf_, runtime_min_p_.data(), batch_size, stream_);
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
+    core::Copy(top_k_.data(), bsz, top_k_buf_.data());
+    core::Copy(top_p_.data(), bsz, top_p_buf_.data());
+    core::Copy(min_p_.data(), bsz, min_p_buf_.data());
 }
 
 template class SamplingLayer<float>;

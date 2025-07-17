@@ -3,7 +3,7 @@ from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 
 
 def _get_backend():
-    """get device backend implement."""
+    """Get device backend implement."""
     device_mgr = get_device_manager()
     device_ctx = device_mgr.current_context()
 
@@ -26,7 +26,7 @@ def _get_backend():
 
 
 def get_backend(backend_type: str = None):
-    """get device backend."""
+    """Get device backend."""
     if backend_type is None:
         return _get_backend()
     else:
@@ -34,3 +34,9 @@ def get_backend(backend_type: str = None):
         device_mgr = get_device_manager()
         with device_mgr.context(device_ctx):
             return _get_backend()
+
+
+def init_backend(backend_type: str):
+    """Init device backend."""
+    backend = get_backend(backend_type)
+    backend.init()

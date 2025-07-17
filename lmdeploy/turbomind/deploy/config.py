@@ -8,17 +8,28 @@ from typing import List, Union
 from pydantic.dataclasses import dataclass
 
 from lmdeploy.messages import TurbomindEngineConfig
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 def config_from_dict(cls, env):
-    """initiate an instance of a config class from a dict."""
+    """Initiate an instance of a config class from a dict."""
     params = inspect.signature(cls).parameters
     used = {k: v for k, v in env.items() if k in params and v is not None}
+
+    def _remove_none(d: dict):
+        for k, v in d.items():
+            if isinstance(v, dict):
+                d[k] = _remove_none(v)
+        return {k: v for k, v in d.items() if v is not None}
+
+    used = _remove_none(used)
     return cls(**used)
 
 
 def config_to_dict(config):
-    """export config to a dict."""
+    """Export config to a dict."""
     if not config:
         return dict()
     assert isinstance(config, (ModelConfig, AttentionConfig, LoraConfig)), \
@@ -43,15 +54,20 @@ class ModelConfig:
     # Therefore, we add a new attr "embedding_size" to represent the vocab dim
     # of token_embedding
     embedding_size: int = 0
+    # for some models like qwen2.5, the vocab size of the model is larger than
+    # the vocab size of the tokenizer.
+    tokenizer_size: int = None
     num_layer: int = None
     inter_size: List[int] = None
     norm_eps: float = None
     attn_bias: int = 0
+    qk_norm: bool = False
     size_per_head: int = 128
     group_size: int = 64
     weight_type: str = None
     session_len: int = None
-    tp: int = 1
+    attn_tp_size: int = 1
+    mlp_tp_size: int = 1
     model_format: str = 'hf'
     expert_num: List[int] = ()
     expert_inter_size: int = 0
@@ -79,61 +95,19 @@ class ModelConfig:
 
 
 @dataclass
-class DefaultRopeParam:
-    base: float
-    dim: int
-
-
-@dataclass
-class LinearRopeParam(DefaultRopeParam):
-    factor: float
-
-
-@dataclass
-class DynamicRopeParam(DefaultRopeParam):
-    max_position_embeddings: int
-    factor: float
-
-
-@dataclass
-class YarnRopeParam(DefaultRopeParam):
-    max_position_embeddings: int
-    factor: float
-    attention_factor: float
-    beta_fast: float
-    beta_slow: float
-
-
-@dataclass
-class Llama3RopeParam(DefaultRopeParam):
-    factor: float
-    low_freq_factor: float
-    high_freq_factor: float
-    original_max_position_embeddings: int
-
-
-@dataclass
-class MultimodalRopeParam(DefaultRopeParam):
-    mrope_section: List[int]
-
-
-@dataclass
 class RopeParam:
     type: str
-    param: Union[DefaultRopeParam, LinearRopeParam, DynamicRopeParam, YarnRopeParam, Llama3RopeParam]
-
-    @classmethod
-    def create(cls, type, *args, **kwargs):
-        assert type in ['default', 'linear', 'dynamic', 'yarn', 'llama3', 'multimodal']
-        cerator = {
-            'default': DefaultRopeParam,
-            'linear': LinearRopeParam,
-            'dynamic': DynamicRopeParam,
-            'yarn': YarnRopeParam,
-            'llama3': Llama3RopeParam,
-            'multimodal': MultimodalRopeParam
-        }
-        return cls(type=type, param=cerator[type](*args, **kwargs))
+    base: float
+    dim: int
+    factor: float = 1.0
+    max_position_embeddings: int = None
+    attention_factor: float = 1.0
+    beta_fast: float = 32
+    beta_slow: float = 1
+    low_freq_factor: float = None
+    high_freq_factor: float = None
+    original_max_position_embeddings: int = None
+    mrope_section: List[int] = None
 
 
 @dataclass
@@ -180,23 +154,36 @@ class TurbomindModelConfig:
             if hasattr(self.attention_config, key):
                 setattr(self.attention_config, key, value)
 
+        # update from hf_overrides
+        if hasattr(config, 'hf_overrides') and config.hf_overrides:
+            hf_overrides = config.hf_overrides
+
+            if hf_overrides.get('rope_scaling'):
+                override_params = hf_overrides.get('rope_scaling')
+
+                rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
+                rope_param.type = override_params.get('rope_type', '')
+                rope_param.factor = override_params.get('factor', 1.0)
+                rope_param.max_position_embeddings = override_params.get('original_max_position_embeddings', None)
+
+                self.attention_config.rope_param = rope_param
+            logger.warning(f'Overriding HF config with {hf_overrides}')
+
         # use dynamic ntk
         if config.rope_scaling_factor:
-            rope_param = self.attention_config.rope_param
-            rope_param = rope_param or RopeParam(type='default', param=DefaultRopeParam(0, 0))
-            if rope_param.type == 'dynamic':
-                rope_param.param.factor = config.rope_scaling_factor
-            else:
-                dynamic_rope_param = DynamicRopeParam(
-                    base=rope_param.param.base,
-                    dim=rope_param.param.dim,
-                    factor=config.rope_scaling_factor,
-                    max_position_embeddings=self.attention_config.max_position_embeddings)
-                self.attention_config.rope_param = RopeParam(type='dynamic', param=dynamic_rope_param)
+            # some ut will create empty RopeParam, will check base/dim in src code
+            rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
+            rope_param.type = 'dynamic'
+            rope_param.factor = config.rope_scaling_factor
+            rope_param.max_position_embeddings = self.attention_config.max_position_embeddings
+
+            self.attention_config.rope_param = rope_param
+            logger.warning(
+                '`--rope-scaling-factor` will be removed in a future release. Please instead use `--hf-overrides`.')
 
     @classmethod
     def from_dict(cls, config: dict = {}):
-        """construct TurbomindModelConfig instance from config in a dict."""
+        """Construct TurbomindModelConfig instance from config in a dict."""
         _cfg = {field.name: config.get(field.name, {}) for field in fields(TurbomindModelConfig)}
 
         return TurbomindModelConfig(model_config=config_from_dict(ModelConfig, _cfg['model_config']),
@@ -204,7 +191,7 @@ class TurbomindModelConfig:
                                     lora_config=config_from_dict(LoraConfig, _cfg['lora_config']))
 
     def to_dict(self):
-        """export to a dict."""
+        """Export to a dict."""
         return dict(model_config=config_to_dict(self.model_config),
                     attention_config=config_to_dict(self.attention_config),
                     lora_config=config_to_dict(self.lora_config))
@@ -212,10 +199,6 @@ class TurbomindModelConfig:
     @property
     def session_len(self):
         return self.model_config.session_len
-
-    @property
-    def tensor_para_size(self):
-        return self.model_config.tp
 
     @property
     def weight_type(self):

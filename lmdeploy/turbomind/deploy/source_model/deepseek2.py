@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import math
 
-from ..config import RopeParam, YarnRopeParam
+from ..config import RopeParam
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -112,13 +112,12 @@ class DeepSeek2Model(LlamaModel):
                     moe_group_num=cfg['n_group'],
                     tune_layer_num=2)
         rope_param: RopeParam = info['rope_param']
-        rope_param.param.dim = qk_rope_dim
+        rope_param.dim = qk_rope_dim
         rope_scaling = cfg.get('rope_scaling')
         if rope_scaling and rope_scaling['type'] == 'yarn':
             attention_factor, softmax_scale = get_yarn_params(rope_scaling)
             softmax_scale *= size_per_head**(-0.5)
-            yarn_rope_param: YarnRopeParam = rope_param.param
-            yarn_rope_param.param.max_position_embeddings = rope_scaling['original_max_position_embeddings']
-            yarn_rope_param.attention_factor = attention_factor
+            rope_param.max_position_embeddings = rope_scaling['original_max_position_embeddings']
+            rope_param.attention_factor = attention_factor
             info.update(rope_param=rope_param, softmax_scale=softmax_scale)
         return info

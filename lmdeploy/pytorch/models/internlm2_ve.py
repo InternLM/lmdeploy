@@ -15,7 +15,7 @@ from .utils.cudagraph import CudaGraphMixin
 
 
 class InternLM2VEDecoderLayer(nn.Module):
-    """decoder layer with visual expert."""
+    """Decoder layer with visual expert."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -91,7 +91,7 @@ class InternLM2VEDecoderLayer(nn.Module):
 
 
 class InternLM2VEModel(nn.Module):
-    """internlm2 model with visual expert."""
+    """Internlm2 model with visual expert."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -180,12 +180,12 @@ class InternLM2VEModel(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.tok_embeddings
 
 
 class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
-    """rewrote model of InternLM2ForCausalLM with visual expert."""
+    """Rewrote model of InternLM2ForCausalLM with visual expert."""
 
     packed_modules_mapping = {
         'gate_up_proj': [
@@ -222,7 +222,7 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         text_embedding_indexing: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -235,7 +235,7 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.output(hidden_states)
 
     def support_cuda_graph(
@@ -244,7 +244,7 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         attn_metadata: Any = None,
         **kwargs,
     ):
-        """support cudagraph."""
+        """Support cudagraph."""
         if not attn_metadata.is_decoding:
             return False
         seq_lens = input_ids.size(1)
@@ -253,7 +253,7 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         return False
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -262,7 +262,7 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -286,7 +286,7 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

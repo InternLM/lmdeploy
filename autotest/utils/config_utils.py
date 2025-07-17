@@ -1,5 +1,6 @@
 import copy
 import os
+from collections import OrderedDict
 
 import yaml
 from utils.get_run_config import get_tp_num
@@ -7,31 +8,16 @@ from utils.get_run_config import get_tp_num
 from lmdeploy.utils import is_bf16_supported
 
 
-def get_turbomind_model_list(tp_num: int = None,
-                             model_type: str = 'chat_model',
-                             quant_policy: int = None,
-                             is_converted: bool = False):
+def get_turbomind_model_list(tp_num: int = None, model_type: str = 'chat_model', quant_policy: int = None):
     config = get_config()
 
     if quant_policy is None:
-        if is_converted:
-            case_list = [
-                x for x in copy.deepcopy(config.get('turbomind_' + model_type))
-                if x not in config.get('turbomind_quatization').get('no_converted')
-            ]
-        else:
-            case_list = copy.deepcopy(config.get('turbomind_' + model_type))
+        case_list = copy.deepcopy(config.get('turbomind_' + model_type))
     else:
-        if is_converted:
-            case_list = [
-                x for x in config.get('turbomind_' + model_type) if x not in config.get('turbomind_quatization').get(
-                    'no_kvint' + str(quant_policy) and x not in config.get('turbomind_quatization').get('no_converted'))
-            ]
-        else:
-            case_list = [
-                x for x in config.get('turbomind_' + model_type)
-                if x not in config.get('turbomind_quatization').get('no_kvint' + str(quant_policy))
-            ]
+        case_list = [
+            x for x in config.get('turbomind_' + model_type)
+            if x not in config.get('turbomind_quatization').get('no_kvint' + str(quant_policy))
+        ]
 
     quatization_case_config = config.get('turbomind_quatization')
     for key in config.get('turbomind_' + model_type):
@@ -107,7 +93,8 @@ def get_quantization_model_list(type):
     config = get_config()
     if type == 'awq':
         case_list = [
-            x for x in config.get('turbomind_chat_model') + config.get('turbomind_base_model')
+            x
+            for x in list(OrderedDict.fromkeys(config.get('turbomind_chat_model') + config.get('turbomind_base_model')))
             if x not in config.get('turbomind_quatization').get('no_awq') and not is_quantization_model(x)
         ]
         for key in config.get('pytorch_quatization').get('awq'):

@@ -4,14 +4,14 @@ from typing import Any
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from ..backends import OpType, get_backend
 from .utils import chunk_aligned, get_distribute_size
 
 
 def _is_w8a8(quant_config: Any):
-    """is w8a8."""
+    """Is w8a8."""
     quant_dtype = None
     w8a8_flag = False
     if quant_config is not None:
@@ -38,13 +38,14 @@ class RMSNorm(nn.Module):
         backend = get_backend()
 
         w8a8_flag, quant_dtype = _is_w8a8(quant_config)
+
         if w8a8_flag:
             builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
         else:
             builder = backend.get_layer_impl_builder(OpType.RMSNorm)
 
         if tp:
-            world_size, rank = get_world_rank()
+            world_size, rank = get_tp_world_rank()
             hidden_size = get_distribute_size(hidden_size, world_size, rank, align=align)
 
         self.register_parameter('weight', self.create_weight(hidden_size, dtype, device))
@@ -58,14 +59,14 @@ class RMSNorm(nn.Module):
         self.align = align
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        """weight loader."""
-        world_size, rank = get_world_rank()
+        """Weight loader."""
+        world_size, rank = get_tp_world_rank()
         loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]
         param.copy_(loaded_weight)
 
     @staticmethod
     def create_weight(hidden_size: int, dtype: torch.dtype = None, device: torch.device = None):
-        """create weight."""
+        """Create weight."""
         if dtype is None:
             dtype = torch.float16
         if device is None:
@@ -97,7 +98,7 @@ class LayerNorm(nn.Module):
 
     @staticmethod
     def create_weight(hidden_size: int, bias: bool = True, dtype: torch.dtype = None, device: torch.device = None):
-        """create weight."""
+        """Create weight."""
         if dtype is None:
             dtype = torch.float16
         if device is None:

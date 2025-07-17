@@ -3,15 +3,12 @@
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/kernels/attention/block.h"
 #include "src/turbomind/models/llama/BlockManager.h"
-#include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include <cstddef>
 #include <cstdlib>
 #include <ctime>
 #include <numeric>
-#include <stdexcept>
-
 namespace turbomind {
 
 SequenceManager::SequenceManager(size_t             layer_num,
@@ -20,7 +17,7 @@ SequenceManager::SequenceManager(size_t             layer_num,
                                  int                chunk_size,
                                  bool               enable_prefix_caching,
                                  int                rank,
-                                 IAllocator*        allocator,
+                                 core::Allocator    allocator,
                                  GetFreeMemSize     get_free_size):
     block_seq_len_(block_config.block_len_), rank_(rank)
 {
@@ -453,6 +450,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     // release preempted blocks -> cached
     if (!schedule.victims.empty()) {
+        TM_LOG_WARNING("[SeqMgr] #victim: %d", (int)schedule.victims.size());
         for (const auto& p : schedule.victims) {
             UpdateAndSetUnlock(*p);
         }

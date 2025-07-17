@@ -18,6 +18,7 @@ LAYER_TYPE_MAP = {
     'InternLM3ForCausalLM': 'InternLM3DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
+    'Qwen3ForCausalLM': 'Qwen3DecoderLayer',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
     'BaichuanForCausalLM': 'DecoderLayer',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaDecoderLayer',
@@ -38,6 +39,7 @@ NORM_TYPE_MAP = {
     'InternLM3ForCausalLM': 'InternLM3RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'Qwen2ForCausalLM': 'Qwen2RMSNorm',
+    'Qwen3ForCausalLM': 'Qwen3RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
     'BaichuanForCausalLM': 'RMSNorm',  # Baichuan2 7B
     'LlamaForCausalLM': 'LlamaRMSNorm',
@@ -58,6 +60,7 @@ HEAD_NAME_MAP = {
     'InternLM3ForCausalLM': 'output',
     'QWenLMHeadModel': 'lm_head',
     'Qwen2ForCausalLM': 'lm_head',
+    'Qwen3ForCausalLM': 'lm_head',
     'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
     'BaichuanForCausalLM': 'lm_head',  # Baichuan2 7B
     'LlamaForCausalLM': 'lm_head',

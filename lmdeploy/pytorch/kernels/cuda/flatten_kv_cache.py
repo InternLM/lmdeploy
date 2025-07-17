@@ -38,7 +38,7 @@ def _flatten_kv_cache(
     BLOCK_DK: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """flatten kv cache."""
+    """Flatten kv cache."""
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
@@ -75,13 +75,14 @@ def _flatten_kv_cache(
 
     kc = tl.load(kc_ptrs)
     tl.store(ko_ptrs, kc, mask=mask_bs[:, None] and mask_dk[None, :])
-    vc = tl.load(vc_ptrs)
-    tl.store(vo_ptrs, vc, mask=mask_bs[:, None] and mask_dv[None, :])
+    if HEAD_DIM_V > 0:
+        vc = tl.load(vc_ptrs)
+        tl.store(vo_ptrs, vc, mask=mask_bs[:, None] and mask_dv[None, :])
 
 
 @triton.jit
 def _dequant_int4(val, HEAD_DIM: tl.constexpr, BLOCK: tl.constexpr):
-    """dequant int4."""
+    """Dequant int4."""
     offs = tl.arange(0, BLOCK) // (HEAD_DIM // 2)
     shift = (offs % 2) * 4
     return (val >> shift) & 0xf
@@ -129,7 +130,7 @@ def _flatten_kv_cache_quant(
     BLOCK_DK: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """flatten kv cache."""
+    """Flatten kv cache."""
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
@@ -201,8 +202,9 @@ def flatten_kv_cache(k_caches: Tensor,
                      k_scales_zeros: Tensor = None,
                      v_scales_zeros: Tensor = None,
                      quant_policy: Literal[0, 4, 8] = 0,
-                     kv_layout: str = 'bshd'):
-    """recovery paged kv cache to normal kv cache."""
+                     kv_layout: str = 'bshd',
+                     flatten_kv_layout: str = 'hsd'):
+    """Recovery paged kv cache to normal kv cache."""
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
     elif kv_layout == 'bhsd':
@@ -229,9 +231,31 @@ def flatten_kv_cache(k_caches: Tensor,
     BLOCK_DK = triton.next_power_of_2(k_head_dim)
     BLOCK_DV = triton.next_power_of_2(v_head_dim)
     BLOCK_BS = k_caches.size(s_dim)
-
-    k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
-    v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
+    shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
+    if flatten_kv_layout == 'hsd':
+        k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
+        if quant_policy == 0 and shared_kv:
+            v_states = k_states[..., :v_head_dim]
+            v_head_dim = 0
+        else:
+            v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
+        stride_koh = k_states.stride(0)
+        stride_kos = k_states.stride(1)
+        stride_voh = v_states.stride(0)
+        stride_vos = v_states.stride(1)
+    elif flatten_kv_layout == 'shd':
+        k_states = k_caches.new_empty(out_size, num_heads, k_head_dim, dtype=out_dtype)
+        if quant_policy == 0 and shared_kv:
+            v_states = k_states[..., :v_head_dim]
+            v_head_dim = 0
+        else:
+            v_states = v_caches.new_empty(out_size, num_heads, v_head_dim, dtype=out_dtype)
+        stride_koh = k_states.stride(1)
+        stride_kos = k_states.stride(0)
+        stride_voh = v_states.stride(1)
+        stride_vos = v_states.stride(0)
+    else:
+        raise RuntimeError('Unsupported layout.')
 
     grid = (num_blocks, batch_size, num_heads)
     if quant_policy == 0:
@@ -251,11 +275,11 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vcs=v_caches.stride(s_dim),
             stride_vch=v_caches.stride(h_dim),
             stride_vcd=v_caches.stride(d_dim),
-            stride_koh=k_states.stride(0),
-            stride_kos=k_states.stride(1),
+            stride_koh=stride_koh,
+            stride_kos=stride_kos,
             stride_kod=k_states.stride(2),
-            stride_voh=v_states.stride(0),
-            stride_vos=v_states.stride(1),
+            stride_voh=stride_voh,
+            stride_vos=stride_vos,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
             OUT_SIZE=out_size,
@@ -292,11 +316,11 @@ def flatten_kv_cache(k_caches: Tensor,
             stride_vszs=v_scales_zeros.stride(s_dim),
             stride_vszh=v_scales_zeros.stride(h_dim),
             stride_vszd=v_scales_zeros.stride(d_dim),
-            stride_koh=k_states.stride(0),
-            stride_kos=k_states.stride(1),
+            stride_koh=stride_koh,
+            stride_kos=stride_kos,
             stride_kod=k_states.stride(2),
-            stride_voh=v_states.stride(0),
-            stride_vos=v_states.stride(1),
+            stride_voh=stride_voh,
+            stride_vos=stride_vos,
             stride_vod=v_states.stride(2),
             stride_boff=block_offsets.stride(0),
             quant_policy=quant_policy,

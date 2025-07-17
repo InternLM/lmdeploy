@@ -20,7 +20,7 @@ def init_pipeline(model_path, backend_config):
     return pipeline(model_path, backend_config=backend_config)
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_prompt(config, model, backend, worker_id):
 
@@ -47,7 +47,7 @@ def test_return_with_prompt(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_prompt_stream(config, model, backend, worker_id):
 
@@ -76,7 +76,7 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_multi_prompt(config, model, backend, worker_id):
 
@@ -103,7 +103,7 @@ def test_return_with_multi_prompt(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
 
@@ -132,7 +132,7 @@ def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message(config, model, backend, worker_id):
 
@@ -160,7 +160,7 @@ def test_return_with_message(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_stream(config, model, backend, worker_id):
 
@@ -189,7 +189,7 @@ def test_return_with_message_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_batch(config, model, backend, worker_id):
 
@@ -223,7 +223,7 @@ def test_return_with_message_batch(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_batch_stream(config, model, backend, worker_id):
 
@@ -258,7 +258,7 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_return_check_logprobs(config, model, backend, worker_id):
 
@@ -286,7 +286,7 @@ def test_return_check_logprobs(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_return_check_logprobs_stream(config, model, backend, worker_id):
 
@@ -316,7 +316,7 @@ def test_return_check_logprobs_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_backend_config_session_len(config, model, backend, worker_id):
 
@@ -347,7 +347,7 @@ def test_backend_config_session_len(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_min_new_tokens(config, model, backend, worker_id):
 
@@ -379,7 +379,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_stop_words(config, model, backend, worker_id):
 
@@ -412,7 +412,7 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_bad_words(config, model, backend, worker_id):
 
@@ -424,7 +424,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
         # test bad_words
         gen_config = GenerationConfig(bad_words=[' and', '浦', ' to'])
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'], gen_config=gen_config)
-        result = '蒲' in response[0].text
+        result = '蒲' in response[0].text or 'SenseTime' in response[0].text
         for i in range(2):
             result &= '浦' not in response[i].text and ' and' not in response[i].text and ' to ' not in response[i].text
         save_pipeline_common_log(config, file_name, result, response)
@@ -481,7 +481,7 @@ def test_gen_config_special_words_false(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_special_words_true(config, model, backend, worker_id):
 
@@ -549,7 +549,7 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend, worker_id):
 
@@ -578,7 +578,7 @@ def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend, wor
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimun_topp(config, model, backend, worker_id):
 
@@ -607,7 +607,7 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimun_topk(config, model, backend, worker_id):
 
@@ -638,7 +638,7 @@ def test_gen_config_minimun_topk(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_diff_random_seed(config, model, backend, worker_id):
 
@@ -668,7 +668,7 @@ def test_gen_config_diff_random_seed(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_same_random_seed(config, model, backend, worker_id):
 
@@ -698,7 +698,7 @@ def test_gen_config_same_random_seed(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_do_sample_batch(config, model, backend, worker_id):
 
@@ -726,7 +726,7 @@ def test_gen_config_do_sample_batch(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_max_new_tokens(config, model, backend, worker_id):
 
@@ -758,7 +758,7 @@ def test_gen_config_max_new_tokens(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_ignore_eos(config, model, backend, worker_id):
 
@@ -790,7 +790,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_backend_config_input_validation(config, model, backend, worker_id):
     if 'gw' in worker_id:
@@ -828,7 +828,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_backend_config_validate_turbomind(config, model, backend, worker_id):
     if 'gw' in worker_id:
@@ -866,7 +866,7 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
 @pytest.mark.parametrize('backend', [PytorchEngineConfig])
 def test_backend_config_validate_pytorch(config, model, backend, worker_id):
     if 'gw' in worker_id:

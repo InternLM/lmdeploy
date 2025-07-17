@@ -1,7 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import argparse
-from typing import List
+import json
+import re
+import sys
+from collections import defaultdict
+from typing import Any, List
 
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
@@ -14,9 +18,13 @@ class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
             if action.default is not argparse.SUPPRESS:
                 defaulting_nargs = [argparse.OPTIONAL, argparse.ZERO_OR_MORE]
                 if (action.option_strings or action.nargs in defaulting_nargs) and 'default' not in help.lower():
-                    help += '. Default: %(default)s'
+                    if not help.endswith('.'):
+                        help += '.'
+                    help += ' Default: %(default)s'
                 if action.type:
-                    help += '. Type: %(type)s'
+                    if not help.endswith('.'):
+                        help += '.'
+                    help += ' Type: %(type)s'
         return help
 
 
@@ -51,18 +59,15 @@ def get_lora_adapters(adapters: List[str]):
             assert '=' in pair, f'Multiple lora paths must in format of ' \
                                  f'xxx=yyy. But given: {pair}'
             name, path = pair.strip().split('=', 1)
-            assert name not in output, f'Multiple lora paths with ' \
-                                       f'repeated lora name: {name}'
+            assert name not in output, f'Multiple lora paths with repeated lora name: {name}'
             output[name] = path
     return output
 
 
 def get_chat_template(chat_template: str):
-    """get chat template config.
+    """Get chat template config.
 
-    Args
-        chat_template(str): it could be a builtin chat template name,
-        or a chat template json file
+    Args     chat_template(str): it could be a builtin chat template name,     or a chat template json file
     """
     import os
 
@@ -121,7 +126,7 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'awq', 'gptq'],
+                                   choices=['hf', 'awq', 'gptq', 'fp8'],
                                    help='The format of input model. `hf` means `hf_llama`, '
                                    '`awq` represents the quantized model by AWQ,'
                                    ' and `gptq` refers to the quantized model by GPTQ')
@@ -151,6 +156,45 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='GPU number used in tensor parallelism. Should be 2^n')
+
+    @staticmethod
+    def dp(parser):
+        """Add argument dp to parser."""
+
+        return parser.add_argument('--dp',
+                                   type=int,
+                                   default=1,
+                                   help='data parallelism. dp_rank is required when pytorch engine is used.')
+
+    @staticmethod
+    def ep(parser):
+        """Add argument ep to parser."""
+
+        return parser.add_argument('--ep',
+                                   type=int,
+                                   default=1,
+                                   help='expert parallelism. dp is required when pytorch engine is used.')
+
+    @staticmethod
+    def dp_rank(parser):
+        """Add argument dp_rank to parser."""
+
+        return parser.add_argument('--dp-rank',
+                                   type=int,
+                                   default=0,
+                                   help='data parallelism rank, all ranks between 0 ~ dp should be created.')
+
+    @staticmethod
+    def node_rank(parser):
+        """Add argument node_rank to parser."""
+
+        return parser.add_argument('--node-rank', type=int, default=0, help='The current node rank.')
+
+    @staticmethod
+    def num_nodes(parser):
+        """Add argument num_nodes to parser."""
+
+        return parser.add_argument('--nnodes', type=int, default=1, help='The total node nums')
 
     @staticmethod
     def session_id(parser):
@@ -190,6 +234,14 @@ class ArgumentHelper:
         """Add argument rope_scaling_factor to parser."""
 
         return parser.add_argument('--rope-scaling-factor', type=float, default=0.0, help='Rope scaling factor')
+
+    @staticmethod
+    def hf_overrides(parser):
+        """Add argument hf_overrides to parser."""
+        return parser.add_argument('--hf-overrides',
+                                   type=json.loads,
+                                   default=None,
+                                   help='Extra arguments to be forwarded to the HuggingFace config.')
 
     @staticmethod
     def use_logn_attn(parser):
@@ -359,6 +411,37 @@ class ArgumentHelper:
         )
 
     @staticmethod
+    def reasoning_parser(parser):
+        """Add reasoning parser to parser."""
+        from lmdeploy.serve.openai.reasoning_parser import ReasoningParserManager
+        return parser.add_argument(
+            '--reasoning-parser',
+            type=str,
+            default=None,
+            help=f'The registered reasoning parser name from {ReasoningParserManager.module_dict.keys()}. '
+            'Default to None.')
+
+    @staticmethod
+    def tool_call_parser(parser):
+        """Add tool call parser to parser."""
+        from lmdeploy.serve.openai.tool_parser import ToolParserManager
+
+        return parser.add_argument(
+            '--tool-call-parser',
+            type=str,
+            default=None,
+            help=f'The registered tool parser name {ToolParserManager.module_dict.keys()}. Default to None.')
+
+    @staticmethod
+    def allow_terminate_by_client(parser):
+        """Add argument allow_terminate_by_client to parser."""
+
+        return parser.add_argument('--allow-terminate-by-client',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable server to be terminated by request from client')
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
@@ -471,3 +554,131 @@ class ArgumentHelper:
                                    default='nccl',
                                    choices=['nccl', 'native'],
                                    help='Communication backend for multi-GPU inference')
+
+    @staticmethod
+    def enable_microbatch(parser):
+        """Add argument enable_microbatch to parser."""
+
+        return parser.add_argument('--enable-microbatch',
+                                   action='store_true',
+                                   help='enable microbatch for specified model')
+
+    @staticmethod
+    def enable_eplb(parser):
+        """Add argument enable_eplb to parser."""
+
+        return parser.add_argument('--enable-eplb', action='store_true', help='enable eplb for specified model')
+
+    @staticmethod
+    def enable_metrics(parser):
+        """Add argument enable_metrics to parser."""
+        parser.add_argument('--enable-metrics', action='store_true', default=False, help='enable metrics system')
+
+    # For Disaggregation
+    @staticmethod
+    def role(parser):
+        return parser.add_argument('--role',
+                                   type=str,
+                                   default='Hybrid',
+                                   choices=['Hybrid', 'Prefill', 'Decode'],
+                                   help='Hybrid for Non-Disaggregated Engine;'
+                                   'Prefill for Disaggregated Prefill Engine;'
+                                   'Decode for Disaggregated Decode Engine;')
+
+    @staticmethod
+    def migration_backend(parser):
+        return parser.add_argument('--migration-backend',
+                                   type=str,
+                                   default='DLSlime',
+                                   choices=['DLSlime', 'Mooncake'],
+                                   help='kvcache migration management backend when PD disaggregation')
+
+
+# adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
+class FlexibleArgumentParser(argparse.ArgumentParser):
+    """"More flexible argument parser."""
+
+    def parse_args(self, args=None, namespace=None):
+        # If args is not provided, use arguments from the command line
+        if args is None:
+            args = sys.argv[1:]
+
+        def repl(match: re.Match) -> str:
+            """Replaces underscores with dashes in the matched string."""
+            return match.group(0).replace('_', '-')
+
+        # Everything between the first -- and the first .
+        pattern = re.compile(r'(?<=--)[^\.]*')
+
+        # Convert underscores to dashes and vice versa in argument names
+        processed_args = []
+        for arg in args:
+            if arg.startswith('--'):
+                if '=' in arg:
+                    key, value = arg.split('=', 1)
+                    key = pattern.sub(repl, key, count=1)
+                    processed_args.append(f'{key}={value}')
+                else:
+                    key = pattern.sub(repl, arg, count=1)
+                    processed_args.append(key)
+            elif arg.startswith('-O') and arg != '-O' and len(arg) == 2:
+                # allow -O flag to be used without space, e.g. -O3
+                processed_args.append('-O')
+                processed_args.append(arg[2:])
+            else:
+                processed_args.append(arg)
+
+        def _try_convert(value: str):
+            """Try to convert string to float or int."""
+            if not isinstance(value, str):
+                return value
+            # try loads from json
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                pass
+            return value
+
+        def create_nested_dict(keys: list[str], value: str):
+            """Creates a nested dictionary from a list of keys and a value.
+
+            For example, `keys = ["a", "b", "c"]` and `value = 1` will create: `{"a": {"b": {"c": 1}}}`
+            """
+            nested_dict: Any = _try_convert(value)
+            for key in reversed(keys):
+                nested_dict = {key: nested_dict}
+            return nested_dict
+
+        def recursive_dict_update(original: dict, update: dict):
+            """Recursively updates a dictionary with another dictionary."""
+            for k, v in update.items():
+                if isinstance(v, dict) and isinstance(original.get(k), dict):
+                    recursive_dict_update(original[k], v)
+                else:
+                    original[k] = v
+
+        delete = set()
+        dict_args: dict[str, dict] = defaultdict(dict)
+        for i, processed_arg in enumerate(processed_args):
+            if processed_arg.startswith('--') and '.' in processed_arg:
+                if '=' in processed_arg:
+                    processed_arg, value = processed_arg.split('=', 1)
+                    if '.' not in processed_arg:
+                        # False positive, . was only in the value
+                        continue
+                else:
+                    value = processed_args[i + 1]
+                    delete.add(i + 1)
+                key, *keys = processed_arg.split('.')
+                # Merge all values with the same key into a single dict
+                arg_dict = create_nested_dict(keys, value)
+                recursive_dict_update(dict_args[key], arg_dict)
+                delete.add(i)
+        # Filter out the dict args we set to None
+        processed_args = [a for i, a in enumerate(processed_args) if i not in delete]
+        # Add the dict args back as if they were originally passed as JSON
+        for dict_arg, dict_value in dict_args.items():
+            processed_args.append(dict_arg)
+            processed_args.append(json.dumps(dict_value))
+
+        return super().parse_args(processed_args, namespace)

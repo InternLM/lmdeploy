@@ -7,6 +7,12 @@ pip install lmdeploy
 # 下载 lmdeploy 源码，获取其中的性能测试脚本
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy
+# 切换到与已安装 lmdeploy 版本对应的 tag：
+git fetch --tags
+# 查看已安装 lmdeploy 的版本：
+pip show lmdeploy | grep Version
+# 切换到对应的 tag（将 <version> 替换为实际的版本号）：
+git checkout <version>
 # 下载测试数据
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```

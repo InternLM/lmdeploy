@@ -1,242 +1,21 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/core/array_ops.h"
-#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
-#include "src/turbomind/macro.h"
-#include "src/turbomind/models/llama/llama_kernels.h"
-#include "src/turbomind/models/llama/llama_utils.h"
-#include "src/turbomind/utils/cuda_type_utils.cuh"
-#include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/dispatch.h"
-#include "src/turbomind/utils/logger.h"
 #include <algorithm>
 #include <cstdint>
-#include <cub/block/block_reduce.cuh>
+#include <numeric>
 #include <type_traits>
 #include <utility>
 
+#include <cub/block/block_reduce.cuh>
+
+#include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/macro.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/dispatch.h"
+
 namespace turbomind {
-
-// fp16, bf16
-// n is divided by 2 for this impl
-template<typename T>
-__global__ void rootMeanSquareNorm(T* out, const T* input, const T* scale, float eps, int m, int n)
-{
-    using T2 = typename TypeConverter<T>::Type;
-    __shared__ float s_inv_mean;
-    float            mean = 0.f;
-
-    T2*       out_ptr   = (T2*)out;
-    const T2* input_ptr = (const T2*)input;
-    const T2* scale_ptr = (const T2*)scale;
-
-    for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
-        float2 tmp2 = cuda_cast<float2>(input_ptr[blockIdx.x * n + idx]);
-        mean += tmp2.x * tmp2.x;
-        mean += tmp2.y * tmp2.y;
-    }
-
-    mean = blockReduceSum<float>(mean);
-    if (threadIdx.x == 0) {
-        s_inv_mean = rsqrt(.5f * mean / (float)n + eps);
-    }
-    __syncthreads();
-
-    for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
-        float2 tmp2                   = cuda_cast<float2>(input_ptr[blockIdx.x * n + idx]);
-        float2 sca2                   = cuda_cast<float2>(scale_ptr[idx]);
-        tmp2.x                        = tmp2.x * s_inv_mean * sca2.x;
-        tmp2.y                        = tmp2.y * s_inv_mean * sca2.y;
-        out_ptr[blockIdx.x * n + idx] = cuda_cast<T2>(tmp2);
-    }
-}
-
-template<>
-__global__ void rootMeanSquareNorm(float* out, const float* input, const float* scale, float eps, int m, int n)
-{
-    __shared__ float s_inv_mean;
-    float            mean = 0.f;
-
-    for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
-        float tmp = input[blockIdx.x * n + idx];
-        mean += tmp * tmp;
-    }
-
-    mean = blockReduceSum<float>(mean);
-    if (threadIdx.x == 0) {
-        s_inv_mean = rsqrt(mean / static_cast<float>(n) + eps);
-    }
-    __syncthreads();
-
-    for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
-        float tmp                 = input[blockIdx.x * n + idx];
-        out[blockIdx.x * n + idx] = tmp * s_inv_mean * scale[idx];
-    }
-}
-
-template<typename T>
-void invokeRootMeanSquareNorm(T* out, const T* input, const T* scale, float eps, int m, int n, cudaStream_t stream)
-{
-    if (sizeof(T) == 2) {
-        FT_CHECK(n % 2 == 0);
-        n /= 2;
-    }
-    dim3 grid(m);
-    dim3 block(std::min(n, 1024));
-    rootMeanSquareNorm<<<grid, block, 0, stream>>>(out, input, scale, eps, m, n);
-}
-
-template void invokeRootMeanSquareNorm(float*, const float*, const float*, float, int, int, cudaStream_t);
-template void invokeRootMeanSquareNorm(half*, const half*, const half*, float, int, int, cudaStream_t);
-#ifdef ENABLE_BF16
-template void
-invokeRootMeanSquareNorm(__nv_bfloat16*, const __nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
-#endif
-
-// #ifdef ENABLE_BF16
-
-// template void invokeRootMeanSquareNorm(__nv_bfloat16*, const __nv_bfloat16*, float, int, int, cudaStream_t);
-
-// #endif
-
-template<typename T, typename T0>
-__device__ T saturate_cast(T0 x)
-{
-    return x;
-}
-
-template<>
-__device__ half saturate_cast<half, float>(float x)
-{
-    return (x > 64512.f || x < -64512.f) ? (x > 0.f ? 64512.f : -64512.f) : x;
-}
-
-template<typename T>
-__global__ void addResidual(T* out, const T* in, size_t n)
-{
-    auto idx = threadIdx.x + (size_t)blockIdx.x * blockDim.x;
-    if (idx < n) {
-        out[idx] = static_cast<T>(static_cast<float>(out[idx]) + static_cast<float>(in[idx]));
-    }
-}
-
-template<typename T>
-void invokeAddResidual(T* out, const T* in, int m, int n, cudaStream_t stream)
-{
-    auto total = static_cast<size_t>(m) * n;
-    dim3 block(std::min((unsigned long)total, 1024UL));
-    dim3 grid((total + block.x - 1) / block.x);
-
-    addResidual<<<grid, block, 0, stream>>>(out, in, total);
-}
-
-template void invokeAddResidual(float*, const float*, int, int, cudaStream_t);
-template void invokeAddResidual(half*, const half*, int, int, cudaStream_t);
-
-// ids [seq_len, batch_size]
-// input_ids [batch_size, max_input_len]
-__global__ void
-fixInputIds(int* ids, const int* input_ids, const int* input_lengths, int batch_size, int seq_len, int max_input_len)
-{
-    int seq_id   = threadIdx.x;
-    int batch_id = blockIdx.x;
-    for (; seq_id < input_lengths[batch_id]; seq_id += blockDim.x) {
-        ids[seq_id * batch_size + batch_id] = input_ids[batch_id * max_input_len + seq_id];
-    }
-}
-
-void invokeFixInputIds(int*         ids,
-                       const int*   input_ids,
-                       const int*   input_lengths,
-                       int          batch_size,
-                       int          seq_len,
-                       int          max_input_len,
-                       cudaStream_t st)
-{
-    dim3 block(std::min(1024, max_input_len));
-    dim3 grid(batch_size);
-    fixInputIds<<<grid, block, 0, st>>>(ids, input_ids, input_lengths, batch_size, seq_len, max_input_len);
-}
-
-template<typename T>
-__global__ void sliceCausalMask(T* mask, int seq_len, int key_len, int step)
-{
-    mask += (size_t)blockIdx.x * seq_len * key_len;
-    for (int i = threadIdx.x; i < seq_len * key_len; i += blockDim.x) {
-        int row = i / key_len;
-        int col = i % key_len;
-        if (col <= row + step) {
-            mask[i] = static_cast<T>(1.f);
-        }
-        else {
-            mask[i] = static_cast<T>(0.f);
-        }
-    }
-}
-
-// [step: step+Q, :] of the K*K causal mask
-template<typename T>
-void invokeSliceCausalMask(T* mask, int seq_len, int key_len, int step, int batch_size, cudaStream_t stream)
-{
-    FT_CHECK(step == key_len - seq_len);
-    sliceCausalMask<<<batch_size, 256, 0, stream>>>(mask, seq_len, key_len, step);
-}
-
-template void invokeSliceCausalMask(half*, int, int, int, int, cudaStream_t);
-template void invokeSliceCausalMask(float*, int, int, int, int, cudaStream_t);
-
-// mask [bsz, max_q_len, max_k_len]
-
-template<typename T>
-__global__ void createCausalMasks(T* mask, const int* q_lens, const int* k_lens, int max_q_len, int max_k_len)
-{
-    const auto q_len = q_lens ? q_lens[blockIdx.x] : max_q_len;
-    const auto k_len = k_lens ? k_lens[blockIdx.x] : max_k_len;
-    mask += blockIdx.x * max_q_len * max_k_len;
-    for (int i = threadIdx.x; i < max_q_len * max_k_len; i += blockDim.x) {
-        const int q        = i / max_k_len;  // [0, max_q_len)
-        const int k        = i % max_k_len;  // [0, max_k_len)
-        bool      is_valid = q < q_len && k < k_len && k <= q + (k_len - q_len);
-        mask[i]            = static_cast<T>(is_valid);
-    }
-}
-
-template<typename T>
-void invokeCreateCausalMasks(
-    T* mask, const int* q_lens, const int* k_lens, int max_q_len, int max_k_len, int batch_size, cudaStream_t stream)
-{
-    createCausalMasks<<<batch_size, 512, 0, stream>>>(mask, q_lens, k_lens, max_q_len, max_k_len);
-}
-
-template void invokeCreateCausalMasks(float* mask, const int*, const int*, int, int, int, cudaStream_t);
-template void invokeCreateCausalMasks(half* mask, const int*, const int*, int, int, int, cudaStream_t);
-#ifdef ENABLE_BF16
-template<>
-__global__ void createCausalMasks<__nv_bfloat16>(
-    __nv_bfloat16* mask, const int* q_lens, const int* k_lens, int max_q_len, int max_k_len)
-{
-    const auto q_len = q_lens[blockIdx.x];
-    const auto k_len = k_lens[blockIdx.x];
-    mask += blockIdx.x * max_q_len * max_k_len;
-    for (int i = threadIdx.x; i < max_q_len * max_k_len; i += blockDim.x) {
-        const int q        = i / max_k_len;  // [0, max_q_len)
-        const int k        = i % max_k_len;  // [0, max_k_len)
-        bool      is_valid = q < q_len && k < k_len && k <= q + (k_len - q_len);
-        mask[i]            = static_cast<__nv_bfloat16>(float(is_valid));
-    }
-}
-template void invokeCreateCausalMasks(__nv_bfloat16* mask, const int*, const int*, int, int, int, cudaStream_t);
-#endif
-
-namespace {
-
-template<class Kernel, class Params>
-__global__ void KernelWrapper(Params params)
-{
-    Kernel{}(params);
-};
-
-}  // namespace
 
 __global__ void gatherOutput(int*       output_ids,
                              const int* ids,
@@ -477,18 +256,11 @@ __global__ void getFeatureOfLastToken(T* output, const T* input, const int* cu_s
     }
 }
 
-template<typename T>
 void invokeGetFeatureOfLastToken(
-    T* output, const T* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream)
+    uint16_t* output, const uint16_t* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream)
 {
     getFeatureOfLastToken<<<batch_size, 256, 0, stream>>>(output, input, cu_seqlens, dims);
 }
-
-template void invokeGetFeatureOfLastToken(half*, const half*, const int*, int, int, cudaStream_t);
-template void invokeGetFeatureOfLastToken(float*, const float*, const int*, int, int, cudaStream_t);
-#ifdef ENABLE_BF16
-template void invokeGetFeatureOfLastToken(__nv_bfloat16*, const __nv_bfloat16*, const int*, int, int, cudaStream_t);
-#endif  // ENABLE_BF16
 
 template<class T, int C>
 struct BatchedCopyParam {
@@ -558,6 +330,110 @@ void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cud
                     BatchedCopyLauncher<BatchedCopyParam<T, C>>{max_size, count, &params, st});
             }
         });
+}
+
+template<typename T>
+__global__ void maskOutput(T* output, const int* mask, int dim)
+{
+    int batch_idx = blockIdx.x;
+    output += dim * batch_idx;
+    int masked = mask[batch_idx];
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) {
+        output[i] = (masked) ? output[i] : T();
+    }
+}
+
+template<typename T>
+void invokeMask(T* output, const int* mask, int batch_size, int dim, cudaStream_t stream)
+{
+    maskOutput<<<batch_size, 1024, 0, stream>>>(output, mask, dim);
+}
+
+#ifdef ENABLE_FP32
+template void invokeMask(float* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
+#endif
+template void invokeMask(half* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeMask(__nv_bfloat16* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
+#endif
+
+template<typename T, int vec_size>
+__global__ void castFloat2D(const T* input, float* output, int channels)
+{
+    const int vi = blockIdx.x * blockDim.x + threadIdx.x;
+    const int bi = blockIdx.y;
+    input += (size_t)bi * channels;
+    output += (size_t)bi * channels;
+
+    const int step = gridDim.x * blockDim.x * vec_size;
+
+    for (int i = vi * vec_size; i < channels; i += step) {
+        Array<T, vec_size> src;
+
+        if constexpr (sizeof(src) >= sizeof(uint)) {
+            Load(src, input + i);
+        }
+        else {
+            PRAGMA_UNROLL
+            for (int j = 0; j < vec_size; ++j) {
+                src[j] = input[i + j];
+            }
+        }
+
+        auto dst = cast<float>(src);
+
+        // store
+        Store(output + i, dst);
+    }
+}
+
+void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t stream)
+{
+    TM_CHECK(src.is_contiguous());
+    TM_CHECK(dst.is_contiguous());
+    TM_CHECK(src.shape() == dst.shape());
+
+    auto batch_size = src.shape(0);
+    auto channels   = src.shape(1);
+
+    auto invoke = [&](auto t, auto vec_size) {
+        using T                      = decltype(t);
+        constexpr int threads        = 256;
+        const int     blocks_per_tok = (channels + threads * vec_size - 1) / (threads * vec_size);
+        const dim3    blocks(blocks_per_tok, batch_size);
+        castFloat2D<T, vec_size.value><<<blocks, threads, 0, stream>>>(  //
+            src.data<T>(),
+            dst.data<float>(),
+            channels);
+    };
+
+    auto dispatch_t = [&](auto vec_size) {
+        switch (src.dtype()) {
+            case kFloat32:
+                return invoke(float{}, vec_size);
+                break;
+            case kFloat16:
+                return invoke(half{}, vec_size);
+                break;
+#ifdef ENABLE_BF16
+            case kBfloat16:
+                return invoke(__nv_bfloat16{}, vec_size);
+                break;
+#endif
+            default:
+                TM_UNREACHABLE;
+        }
+    };
+
+    if (channels % 4 == 0) {
+        return dispatch_t(std::integral_constant<int, 4>{});
+    }
+    else if (channels % 2 == 0) {
+        return dispatch_t(std::integral_constant<int, 2>{});
+    }
+    else {
+        return dispatch_t(std::integral_constant<int, 1>{});
+    }
 }
 
 }  // namespace turbomind

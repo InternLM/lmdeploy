@@ -19,50 +19,35 @@
 
 #pragma once
 
+#include "src/turbomind/core/core.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
-template<typename T>
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(const ModelParam& model, const Context<T>& ctx):
-        hidden_units_(model.hidden_units),
-        stream_(ctx.stream),
-        linear_(ctx.linear.get()),
-        allocator_(ctx.allocator.get())
+    LlamaFfnLayer(const ModelParam& model, const Context& ctx): hidden_units_(model.hidden_units), linear_(*ctx.linear)
     {
     }
 
-    ~LlamaFfnLayer()
-    {
-        freeBuffer();
-    }
+    struct ForwardParam {
+        Tensor                input;
+        Tensor                output;
+        const LlamaFfnWeight* weights;
+        int                   layer_id;
+    };
 
-    void forward(TensorMap* output_tensors, const TensorMap* input_tensors, const LlamaFfnWeight<T>* weights);
+    void forward(ForwardParam param);
 
 private:
-    void allocateBuffer(
-        size_t token_num, int inter_size, size_t inter_buf_factor, size_t gating_lora_r, size_t inter_lora_r);
+    void activation(Tensor& gating, Tensor& inter, cudaStream_t stream);
 
-    void freeBuffer();
-
-    void activation(int token_num, int inter_size, bool is_chunked);
-
-    const size_t          hidden_units_;
-    cudaStream_t const    stream_;
-    LlamaLinear<T>* const linear_;
-    IAllocator* const     allocator_;
-    bool                  is_free_buffer_after_forward_{};
-
-    T* gating_buf_{};
-    T* inter_buf_{};
-    T* lora_buf_{};
-
-    bool is_allocate_buffer_{};
+private:
+    const size_t hidden_units_;
+    LlamaLinear& linear_;
 };
 
 }  // namespace turbomind

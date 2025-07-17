@@ -12,7 +12,7 @@ from triton import JITFunction
 if version.parse(triton.__version__) <= version.parse('2.2.0'):
 
     def get_kernel_meta(tensor: torch.Tensor):
-        """kernel meta."""
+        """Kernel meta."""
         from triton.runtime.jit import get_cuda_stream
 
         device = tensor.device
@@ -25,7 +25,7 @@ else:
     KERNEL_META = dict()
 
     def get_kernel_meta(tensor: torch.Tensor):
-        """kernel meta."""
+        """Kernel meta."""
         return KERNEL_META
 
 
@@ -36,7 +36,7 @@ TypeHintType = Union[Dict[str, type], Sequence[type], None]
 
 
 def _check_type_hint(jit_func: JITFunction, type_hint: TypeHintType):
-    """check type hint."""
+    """Check type hint."""
     params = jit_func.params
     arg_key = tuple(p.name for p in params)
 
@@ -57,7 +57,7 @@ def _check_type_hint(jit_func: JITFunction, type_hint: TypeHintType):
 class JitFunction220Wrapper:
 
     def __init__(self, jit_func: JITFunction, type_hint: TypeHintType = None):
-        """jit func."""
+        """Jit func."""
         self.jit_func = jit_func
         self.type_hint = _check_type_hint(jit_func, type_hint)
         self.run = self._make_launcher(jit_func)
@@ -84,7 +84,7 @@ class JitFunction220Wrapper:
         return (False, )
 
     def _make_launcher(self, jit_func: triton.JITFunction):
-        """make input builder."""
+        """Make input builder."""
 
         from triton.common.backend import get_backend, get_cuda_version_key
         from triton.compiler import CompiledKernel, get_arch_default_num_stages, get_arch_default_num_warps
@@ -252,14 +252,14 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
         return scope[f'_{fn.__name__}_launcher']
 
     def __getitem__(self, grid):
-        """get item."""
+        """Get item."""
         return functools.partial(cast(Callable, self.run), grid=grid)
 
 
 class JitFunction230Wrapper:
 
     def __init__(self, jit_func: JITFunction, type_hint: TypeHintType = None):
-        """jit func."""
+        """Jit func."""
         self.jit_func = jit_func
         self.type_hint = _check_type_hint(jit_func, type_hint)
         self.run = self._make_launcher(jit_func)
@@ -292,7 +292,7 @@ class JitFunction230Wrapper:
         return (False, )
 
     def _make_launcher(self, jit_func: JITFunction):
-        """make input builder."""
+        """Make input builder."""
         from dataclasses import fields
 
         from triton.common.backend import get_cuda_version_key
@@ -420,7 +420,7 @@ def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, w
         return scope[f'_{fn.__name__}_launcher']
 
     def __getitem__(self, grid):
-        """get item."""
+        """Get item."""
         return functools.partial(cast(Callable, self.run), grid=grid)
 
 
@@ -442,7 +442,7 @@ def wrap_jit_func(
     *,
     type_hint: TypeHintType = None,
 ):
-    """wrap jit func."""
+    """Wrap jit func."""
 
     def decorator(func: JITFunction):
         triton_version = version.parse(triton.__version__)

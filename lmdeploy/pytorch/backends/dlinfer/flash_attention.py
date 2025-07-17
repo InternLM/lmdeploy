@@ -5,7 +5,7 @@ from ..flash_attention import FlashAttentionBuilder, FlashAttentionImpl
 
 
 class DlinferFlashAttentionImpl(FlashAttentionImpl):
-    """dlinfer flash attention implementation."""
+    """Dlinfer flash attention implementation."""
 
     def __init__(
         self,
@@ -57,6 +57,8 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
             q_seqlens=q_seqlens,
             kv_start_loc=kv_start_loc,
             kv_seqlens=kv_seqlens,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
             max_q_seqlen=max_q_seqlen,
             window_size=self.sliding_window,
             sm_scale=self.scale,
@@ -67,7 +69,7 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
 
 
 class DlinferFlashAttentionBuilder(FlashAttentionBuilder):
-    """dlinfer attention builder."""
+    """Dlinfer attention builder."""
 
     @staticmethod
     def build(

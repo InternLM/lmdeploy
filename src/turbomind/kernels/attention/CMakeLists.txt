@@ -59,11 +59,10 @@ if (BUILD_TEST)
         --generate-line-info -O3 -use_fast_math --expt-relaxed-constexpr)
     target_link_libraries(test_attention PRIVATE
         attention
-        flash_attention
+        # flash_attention
         Llama
         unfused_attention_kernels
         logger
-        tensor
         cublas)
 
     add_executable(test_quant test_quant.cu test_utils.cu)

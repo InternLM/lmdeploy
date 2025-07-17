@@ -15,9 +15,39 @@
  */
 
 #include "src/turbomind/kernels/ban_bad_words.h"
-#include "src/turbomind/utils/cuda_utils.h"
+#include <cfloat>
+// #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+// #include "src/turbomind/utils/cuda_utils.h"
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 
 namespace turbomind {
+
+template<typename T>
+__device__ inline T getMaxValue();
+
+template<>
+__device__ inline float getMaxValue<float>()
+{
+    return FLT_MAX;
+}
+
+template<>
+__device__ inline half getMaxValue<half>()
+{
+    return __ushort_as_half((unsigned short)0x7BFFU);
+}
+
+#ifdef ENABLE_BF16
+template<>
+__device__ inline __nv_bfloat16 getMaxValue<__nv_bfloat16>()
+{
+#if __CUDA_ARCH__ >= 800
+    return __ushort_as_bfloat16((unsigned short)0x7F7FU);
+#endif
+    return {};
+}
+#endif
 
 template<typename T>
 __global__ void ban_bad_words(T*         logits,
@@ -80,7 +110,7 @@ __global__ void ban_bad_words(T*         logits,
         int banned_token = base_bad_words[item_end - 1];
         if (0 < banned_token && banned_token < vocab_size_padded) {
             logits[batch_idx * beam_width * vocab_size_padded + beam_idx * vocab_size_padded + banned_token] =
-                static_cast<T>(-INFINITY);
+                -getMaxValue<T>();
         }
     }
 }
@@ -116,51 +146,23 @@ void invokeBanBadWords(T*           logits,
                                               id_offset,
                                               vocab_size_padded,
                                               step);
-    sync_check_cuda_error();
 }
 
-#if 0
-template void invokeBanBadWords(half*        logits,
-                                const int*   output_ids_buf,
-                                const int*   parent_ids_buf,
-                                int          batch_size,
-                                int          local_batch_size,
-                                int          beam_width,
-                                const int*   bad_words,
-                                bool         share_words,
-                                size_t       bad_words_len,
-                                int          id_offset,
-                                int          vocab_size_padded,
-                                size_t       step,
-                                cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeBanBadWords(__nv_bfloat16* logits,
-                                const int*     output_ids_buf,
-                                const int*     parent_ids_buf,
-                                int            batch_size,
-                                int            local_batch_size,
-                                int            beam_width,
-                                const int*     bad_words,
-                                bool           share_words,
-                                size_t         bad_words_len,
-                                int            id_offset,
-                                int            vocab_size_padded,
-                                size_t         step,
-                                cudaStream_t   stream);
-#endif
-#endif
-template void invokeBanBadWords(float*       logits,
-                                const int*   output_ids_buf,
-                                const int*   parent_ids_buf,
-                                int          batch_size,
-                                int          local_batch_size,
-                                int          beam_width,
-                                const int*   bad_words,
-                                bool         share_words,
-                                size_t       bad_words_len,
-                                int          id_offset,
-                                int          vocab_size_padded,
-                                size_t       step,
-                                cudaStream_t stream);
+#define INSTANTIATE_INVOKE_BAN_BAD_WORDS(T)                                                                            \
+    template void invokeBanBadWords<T>(T * logits,                                                                     \
+                                       const int*   output_ids_buf,                                                    \
+                                       const int*   parent_ids_buf,                                                    \
+                                       int          batch_size,                                                        \
+                                       int          local_batch_size,                                                  \
+                                       int          beam_width,                                                        \
+                                       const int*   bad_words,                                                         \
+                                       bool         share_words,                                                       \
+                                       size_t       bad_words_len,                                                     \
+                                       int          id_offset,                                                         \
+                                       int          vocab_size_padded,                                                 \
+                                       size_t       step,                                                              \
+                                       cudaStream_t stream);
+
+INSTANTIATE_INVOKE_BAN_BAD_WORDS(float);
 
 }  // namespace turbomind

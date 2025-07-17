@@ -24,8 +24,11 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
+#include "src/turbomind/core/core.h"
+
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
+
 #include "src/turbomind/utils/constant.h"
 
 namespace turbomind {
@@ -55,14 +58,15 @@ __global__ void curandBatchInitialize(curandState_t* states, const int size, con
     }
 }
 
-void invokeCurandBatchInitialize(curandState_t*            states,
-                                 const size_t              batch_size,
-                                 const unsigned long long* random_seeds,
-                                 cudaStream_t              stream)
+void invokeCurandBatchInitialize(curandState_t*  states,
+                                 const size_t    batch_size,
+                                 const uint64_t* random_seeds,
+                                 cudaStream_t    stream)
 {
     dim3 block(256);
     dim3 grid((int)(ceil(batch_size * 1.0 / 256)));
-    curandBatchInitialize<<<grid, block, 0, stream>>>(states, batch_size, random_seeds);
+    static_assert(sizeof(uint64_t) == sizeof(unsigned long long));
+    curandBatchInitialize<<<grid, block, 0, stream>>>(states, batch_size, (unsigned long long*)random_seeds);
 }
 
 template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>
@@ -91,9 +95,8 @@ __global__ void topKSortStage1(T*         logits,
     topk_tmp_id_buf += batch_id * BLOCKS_PER_BEAM * max_top_k + block_lane * k;
     topk_tmp_val_buf += batch_id * BLOCKS_PER_BEAM * max_top_k + block_lane * k;
 
-    TopK_2<T>  partial;
-    const bool IS_FP16   = std::is_same<T, half>::value;
-    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    TopK_2<T> partial;
+    const T   MAX_T_VAL = getMaxValue<T>();
 
     for (int ite = 0; ite < k; ite++) {
         partial.init();
@@ -108,7 +111,9 @@ __global__ void topKSortStage1(T*         logits,
         if (tid == 0) {
             topk_tmp_id_buf[ite]  = total.p;
             topk_tmp_val_buf[ite] = total.u;
-            logits[total.p]       = -MAX_T_VAL;
+            if (total.u != -getInfValue<T>()) {
+                logits[total.p] = -MAX_T_VAL;
+            }
         }
         __syncthreads();
     }
@@ -124,8 +129,7 @@ __global__ void topKSortStage2(const int* top_ks,
                                int*       sorted_indices,
                                int*       kept)
 {
-    const bool IS_FP16   = std::is_same<T, half>::value;
-    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const T MAX_T_VAL = getMaxValue<T>();
 
     const int tid      = threadIdx.x;
     const int batch_id = blockIdx.x;
@@ -181,7 +185,7 @@ __global__ void topKSortStage2(const int* top_ks,
     float thread_sum = s_sum;
     topk_tmp_id_buf += batch_id * stride;
     for (int i = tid; i < k; i += BLOCK_SIZE) {
-        sorted_logits[i]  = s_val2[i] / thread_sum;
+        sorted_logits[i]  = (T)(s_val2[i] / thread_sum);
         sorted_indices[i] = topk_tmp_id_buf[s_id[i]];
     }
 }
@@ -189,7 +193,7 @@ __global__ void topKSortStage2(const int* top_ks,
 #define CASE_K(K_MAX, BLOCK_SIZE_1, BLOCK_SIZE_2, BLOCKS_PER_BEAM)                                                     \
     topKSortStage1<T, BLOCK_SIZE_1, BLOCKS_PER_BEAM>                                                                   \
         <<<batch_size * BLOCKS_PER_BEAM, BLOCK_SIZE_1, 0, stream>>>((T*)params.logits,                                 \
-                                                                    topk_tmp_id_buf,                                   \
+                                                                    topk_tmp_ids_buf,                                  \
                                                                     topk_tmp_val_buf,                                  \
                                                                     max_top_k,                                         \
                                                                     params.top_ks,                                     \
@@ -198,7 +202,7 @@ __global__ void topKSortStage2(const int* top_ks,
     topKSortStage2<T, BLOCK_SIZE_2, BLOCKS_PER_BEAM>                                                                   \
         <<<batch_size, BLOCK_SIZE_2, K_MAX * sizeof(int) + K_MAX * sizeof(float), stream>>>(params.top_ks,             \
                                                                                             params.max_top_k,          \
-                                                                                            topk_tmp_id_buf,           \
+                                                                                            topk_tmp_ids_buf,          \
                                                                                             topk_tmp_val_buf,          \
                                                                                             params.vocab_size_padded,  \
                                                                                             (T*)params.sorted_logits,  \
@@ -214,17 +218,13 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     int       topk_tmp_ids_buf_size = batch_size * max_top_k * max_block_per_beam;  // type int
     int       topk_tmp_val_buf_size = batch_size * max_top_k * max_block_per_beam;  // type T
 
-    // prevent memory misaligned address
-    topk_tmp_ids_buf_size = (int)(ceil(topk_tmp_ids_buf_size / 4.)) * 4;
-    topk_tmp_val_buf_size = (int)(ceil(topk_tmp_val_buf_size / 4.)) * 4;
+    TM_CHECK(core::Context::stream().handle() == stream);
 
-    if (params.workspace == nullptr) {
-        params.workspace_size = sizeof(int) * topk_tmp_ids_buf_size + sizeof(T) * topk_tmp_val_buf_size;
-        return;
-    }
+    Buffer_<int> topk_tmp_ids(round_up(topk_tmp_ids_buf_size, 32), kDEVICE);
+    Buffer_<T>   topk_tmp_val(round_up(topk_tmp_val_buf_size, 32), kDEVICE);
 
-    int* topk_tmp_id_buf  = (int*)params.workspace;
-    T*   topk_tmp_val_buf = (T*)(topk_tmp_id_buf + topk_tmp_ids_buf_size);
+    auto topk_tmp_ids_buf = topk_tmp_ids.data();
+    auto topk_tmp_val_buf = topk_tmp_val.data();
 
     if (max_top_k <= 16) {
         CASE_K(16, 128, 128, 8);

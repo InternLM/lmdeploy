@@ -4,11 +4,11 @@ from packaging import version
 from .base import BaseChecker
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
-MAX_TRANSFORMERS_VERSION = '4.46.1'
+MAX_TRANSFORMERS_VERSION = '4.51.0'
 
 
 class TransformersChecker(BaseChecker):
-    """check transformers is available."""
+    """Check transformers is available."""
 
     def check(self):
         """check."""

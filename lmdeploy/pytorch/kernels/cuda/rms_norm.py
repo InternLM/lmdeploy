@@ -7,7 +7,7 @@ from torch import Tensor
 
 @triton.jit
 def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
-    """compute rms norm."""
+    """Compute rms norm."""
     xf = x.to(tl.float32)
 
     var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
@@ -19,7 +19,7 @@ def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
 @triton.jit
 def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr, eps: tl.constexpr, N_COLS: tl.constexpr,
                     BLOCK_N: tl.constexpr):
-    """rms norm kernel."""
+    """Rms norm kernel."""
     prog_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
 
@@ -37,7 +37,7 @@ def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr, eps: 
 def add_rms_norm_kernel(input, weight, residual, output, out_residual, input_row_stride: tl.constexpr,
                         residual_row_stride: tl.constexpr, eps: tl.constexpr, N_COLS: tl.constexpr,
                         BLOCK_N: tl.constexpr):
-    """rms norm kernel."""
+    """Rms norm kernel."""
     prog_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
 
@@ -65,7 +65,7 @@ def rms_norm(hidden_states: Tensor,
              residual: Tensor = None,
              out: Tensor = None,
              out_residual: Tensor = None):
-    """rms norm."""
+    """Rms norm."""
     if not hidden_states.is_contiguous():
         hidden_states = hidden_states.contiguous()
 
@@ -120,7 +120,7 @@ if __name__ == '__main__':
     import time
 
     def torch_forward(hidden_states, weight, variance_epsilon=1e-6):
-        """pytorch forward."""
+        """Pytorch forward."""
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
@@ -128,7 +128,7 @@ if __name__ == '__main__':
         return weight * hidden_states.to(input_dtype)
 
     def test_rms_norm(bsz, ctx_len, feat_len, dtype):
-        """test rms norm."""
+        """Test rms norm."""
         input = torch.empty((bsz, ctx_len, feat_len), dtype=dtype, device='cuda').normal_(mean=0., std=0.5).contiguous()
         weight = torch.empty((feat_len), dtype=dtype, device='cuda').normal_(mean=0., std=0.5).contiguous()
         triton_output = rms_norm(hidden_states=input, weight=weight)

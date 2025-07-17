@@ -16,3 +16,4 @@
    qwen2_vl.md
    qwen2_5_vl.md
    molmo.md
+   gemma3.md

@@ -84,7 +84,7 @@ class Glm4Model(LlamaModel):
         if config['multi_query_attention']:
             kv_head_num = config['multi_query_group_num']
         seq_length = config['seq_length']
-        rope_param = RopeParam.create('default', base=rope_theta, dim=64)
+        rope_param = RopeParam(type='default', base=rope_theta, dim=64)
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
                     head_num=attn_head_num,

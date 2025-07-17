@@ -11,6 +11,8 @@
 #include <cub/block/block_scan.cuh>
 #include <cub/warp/warp_scan.cuh>
 
+#include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
@@ -611,49 +613,49 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
                 softmax,
                 norm_topk,
                 routed_scale);
-    };
 
-    auto fail = [&] {
-        std::cerr << __FILE__ << "(" << __LINE__ << "): unsupported moe config: expert_num=" << experts
-                  << ", top_k=" << experts_per_token << ", softmax=" << softmax << ", norm_topk=" << norm_topk << "\n";
-        std::abort();
+        return true;
     };
 
     if (!softmax && norm_topk) {
         // norm top-k is part of softmax impl
-        fail();
+        TM_CHECK(0) << softmax << " " << norm_topk;
     }
 
-    if (experts <= 8) {
-        if (experts_per_token <= 2) {
-            invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>);
+    auto dispatch = [&] {
+        if (experts <= 8) {
+            if (experts_per_token <= 2) {
+                return invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>);
+            }
+            else {
+                return invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>);
+            }
         }
-        else {
-            invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>);
+        else if (experts <= 64) {
+            if (experts_per_token <= 4) {
+                return invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>);
+            }
+            else if (experts_per_token <= 8) {
+                return invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>);
+            }
         }
-    }
-    else if (experts <= 64) {
-        if (experts_per_token <= 4) {
-            invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>);
+        else if (experts <= 128) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<128>, _Int<8>, _Int<16>, _Int<4>);
+            }
         }
-        else if (experts_per_token <= 8) {
-            invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>);
+        else if (experts <= 160) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
+            }
         }
-        else {
-            fail();
-        }
-    }
-    else if (experts <= 160) {
-        if (experts_per_token <= 8) {
-            invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
-        }
-        else {
-            fail();
-        }
-    }
-    else {
-        fail();
-    }
+        return false;
+    };
+
+    auto success = dispatch();
+
+    TM_CHECK(success) << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token
+                      << ", softmax=" << softmax << ", norm_topk=" << norm_topk;
 
     {
         constexpr int threads = (1 << base_log_tile) / kMoeGateVecSize;
@@ -690,19 +692,107 @@ __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
     }
 }
 
-template<class T>
-void invokeMoeGather(T* dst, const T* src, const int* f2n, int tokens, int experts_per_token, int dims, cudaStream_t st)
+void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
 {
-    constexpr int threads  = 256;
-    constexpr int vec_size = 16 / sizeof(T);
-    MoeGatherKernel<vec_size, threads><<<tokens * experts_per_token, threads, 0, st>>>(  //
-        dst,
-        src,
-        f2n,
-        dims / vec_size);
+    auto& out    = out_.get();
+    auto  invoke = [&](auto t) {
+        using T                = decltype(t);
+        auto [num, dim]        = src.shapes(0, 1);
+        constexpr int threads  = 256;
+        constexpr int vec_size = 16 / sizeof(T);
+        // std::cout << num * expert_per_token << " " << dim << "\n";
+        MoeGatherKernel<vec_size, threads><<<num * expert_per_token, threads, 0, st>>>(  //
+            (T*)out.raw_data(),
+            (const T*)src.raw_data(),
+            f2n,
+            dim / vec_size);
+    };
+    TM_CHECK_EQ(src.dtype(), out.dtype());
+    const auto elem_size = byte_size(src.dtype());
+    if (elem_size == sizeof(uint16_t)) {
+        return invoke(uint16_t{});
+    }
+    else if (elem_size == sizeof(uint8_t)) {
+        return invoke(uint8_t{});
+    }
+    TM_CHECK(0) << "unsupported data type: " << src.dtype();
 }
 
-template void invokeMoeGather(uint16_t*, const uint16_t*, const int*, int, int, int, cudaStream_t);
+template<int alignment, int block_dim, class T>
+__global__ void MoeDispatchScales(
+    T* dst, int* dst_offsets, const T* src, const int* f2n, const int* offsets, int dim, int expert_num, int stride)
+{
+    int bi = blockIdx.x;
+
+    __shared__ int shared_g;
+
+    for (int g = threadIdx.x; g < expert_num; ++g) {
+        if (offsets[g] <= bi && bi < offsets[g + 1]) {
+            shared_g = g;
+        }
+    }
+
+    __syncthreads();
+
+    int g = shared_g;
+
+    const int base = (offsets[g - 1] + alignment * (g - 1)) / alignment * alignment;
+    const int ti   = base + bi - offsets[g];
+
+    bi = f2n[bi];
+
+    // ! strided access
+    for (int di = threadIdx.x; di < dim; di += block_dim) {
+        dst[di * stride + ti] = src[di * stride + bi];
+    }
+}
+
+template<class T>
+__global__ void
+MoeDispatchScalesNonaligned(T* dst, const T* src, int dst_stride, int src_stride, const int* f2n, int dim)
+{
+    const int bi = blockIdx.x;
+    const int ti = f2n[bi];
+
+    if (threadIdx.x < dim) {
+        dst[threadIdx.x * dst_stride + bi] = src[threadIdx.x * src_stride + ti];
+    }
+}
+
+void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+{
+    using T                 = float;
+    constexpr int alignment = 16 / sizeof(T);
+
+    auto [dim, num] = src.shapes(0, 1);
+
+    const int size         = num * expert_per_token;
+    const int aligned_size = round_up<int>(size, alignment);
+
+    auto& out = out_.get();
+
+    if (!out) {
+        out = Tensor_<T>{{{dim, size}, {aligned_size, 1}}, kDEVICE};
+    }
+    else {
+        TM_CHECK(std::make_tuple(dim, size) == out.shapes(0, 1));
+        TM_CHECK(out.stride(1) == 1);
+        TM_CHECK(out.stride(0) % alignment == 0);
+    }
+
+    TM_CHECK_LE(dim, 1024);
+    const int threads = round_up<int>(dim, WARP_SIZE);
+    const int blocks  = size;
+
+    // std::cout << src << " " << out << "\n";
+
+    MoeDispatchScalesNonaligned<<<blocks, threads, 0, st>>>((T*)out.raw_data(),  //
+                                                            (const T*)src.raw_data(),
+                                                            out.stride(0),
+                                                            src.stride(0),
+                                                            f2n,
+                                                            dim);
+}
 
 template<int vec_size, int exp_k, int block_dim, class T>
 __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
@@ -819,12 +909,36 @@ void invokeMoeReduce(T*           dst,
     }
 }
 
-template void
-invokeMoeReduce(half*, const half*, const float*, const int*, const float*, int, int, int, float, cudaStream_t);
-#ifdef ENABLE_BF16
-template void invokeMoeReduce(
-    nv_bfloat16*, const nv_bfloat16*, const float*, const int*, const float*, int, int, int, float, cudaStream_t);
-#endif
+void invokeMoeCombine(Ref<Tensor>   out_,
+                      const Tensor& src,
+                      const float*  scales,
+                      const int*    en2f,
+                      const float*  dst_scales,
+                      int           experts_per_token,
+                      float         dst_scale,
+                      cudaStream_t  st)
+{
+    auto& out = out_.get();
+
+    const int tokens = out.shape(0);
+    TM_CHECK_EQ(src.shape(0), tokens * experts_per_token);
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        return invokeMoeReduce(out.data<T>(),
+                               src.data<T>(),
+                               scales,
+                               en2f,
+                               dst_scales,
+                               tokens,
+                               experts_per_token,
+                               src.shape(1),
+                               dst_scale,
+                               st);
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), invoke);
+}
 
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)
 {

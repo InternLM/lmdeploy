@@ -9,7 +9,7 @@ from lmdeploy.model import MODELS
 def get_conda_allcate_prefix(config, model):
     cuda_prefix = ''
     tp_num = get_tp_num(config, model)
-    if tp_num is None:
+    if tp_num is None or tp_num == 8:
         return cuda_prefix
     available_cuda = _get_available_cude()
     if len(available_cuda) < tp_num:
@@ -65,9 +65,7 @@ def get_command_with_extra(cmd,
 
 
 def get_model_name(model):
-    model_names = [
-        'llama', 'llama2', 'llama3', 'internlm', 'internlm2', 'baichuan2', 'chatglm2', 'falcon', 'yi', 'qwen'
-    ]
+    model_names = ['llama', 'llama2', 'llama3', 'internlm', 'internlm2', 'baichuan2', 'chatglm2', 'yi', 'qwen']
     model_names += list(MODELS.module_dict.keys())
     model_names.sort()
     model_name = _simple_model_name(model)

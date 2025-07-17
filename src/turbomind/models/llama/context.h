@@ -9,84 +9,37 @@
 #include <cublasLt.h>
 #include <cublas_v2.h>
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/utils/allocator.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 
 namespace turbomind {
 
+struct Communicators {
+    comm::HostComm h_comm;
+    comm::HostComm h_tp_group;
+    comm::HostComm h_dp_group;
+
+    comm::DeviceComm d_comm;
+    int              d_tp_group;
+};
+
 // Execution context for the model
-template<class T>
 struct Context {
-    cudaStream_t                                    stream;
-    std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator;
-    cublasHandle_t                                  cublas_handle;
-    cublasLtHandle_t                                cublasLt_handle;
-    std::unique_ptr<cublasAlgoMap>                  cublas_algo_map;
-    std::unique_ptr<std::mutex>                     cublas_wrapper_mutex;
-    std::unique_ptr<cublasMMWrapper>                cublas_wrapper;
-    std::unique_ptr<LlamaLinear<T>>                 linear;
-    comm::Splits                                    comm;
-    cudaDeviceProp                                  cuda_device_prop;
+    core::Stream                 core_stream;
+    core::Allocator              allocator;
+    cudaStream_t                 stream;
+    std::unique_ptr<LlamaLinear> linear;
+    cudaDeviceProp               device_prop;
+    Communicators                comm;  // initialize later
 
-    Context(int device_id)
+    Context(int device_id):
+        core_stream{core::Stream::create()},
+        allocator{core::Allocator(core_stream, false)},
+        stream{core_stream.handle()},
+        linear{std::make_unique<LlamaLinear>(stream)}
     {
-        check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-
-        allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
-        allocator->setStream(stream);
-
-        cublasCreate(&cublas_handle);
-        cublasLtCreate(&cublasLt_handle);
-        cublasSetStream(cublas_handle, stream);
-
-        if (0) {
-            cublasSetWorkspace(cublas_handle, nullptr, 0);
-            cublasSetMathMode(cublas_handle, CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
-        }
-
-        cublas_algo_map      = std::make_unique<cublasAlgoMap>("gemm_config.in");
-        cublas_wrapper_mutex = std::make_unique<std::mutex>();
-        cublas_wrapper       = std::make_unique<cublasMMWrapper>(
-            cublas_handle, cublasLt_handle, stream, cublas_algo_map.get(), cublas_wrapper_mutex.get(), allocator.get());
-        linear = std::make_unique<LlamaLinear<T>>(cublas_wrapper.get(), stream);
-
-        check_cuda_error(cudaGetDeviceProperties(&cuda_device_prop, device_id));
-
-        if (std::is_same<T, half>::value) {
-            cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
-        }
-#ifdef ENABLE_FP32
-        else if (std::is_same<T, float>::value) {
-            cublas_wrapper->setFP32GemmConfig();
-        }
-#endif
-#ifdef ENABLE_BF16
-        else if (std::is_same<T, __nv_bfloat16>::value) {
-            cublas_wrapper->setBF16GemmConfig();
-        }
-#endif
-    }
-
-    ~Context()
-    {
-        linear.reset();
-        cublas_wrapper.reset();
-        cublas_algo_map.reset();
-
-        cublasDestroy(cublas_handle);
-        cublas_handle = {};
-
-        cublasLtDestroy(cublasLt_handle);
-        cublasLt_handle = {};
-
-        allocator.reset();
-
-        // `comm` destroyed by infer threads collectively
-
-        cudaStreamDestroy(stream);
-        stream = {};
+        check_cuda_error(cudaGetDeviceProperties(&device_prop, device_id));
     }
 };
 

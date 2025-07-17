@@ -4,46 +4,40 @@
 
 #include <curand_kernel.h>
 
+#include "src/turbomind/core/core.h"
+
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/request.h"
 
-#include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
-#include "src/turbomind/utils/allocator.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
-struct SharedState {
-    std::vector<std::shared_ptr<Request>> infer_reqs;
-    std::vector<std::shared_ptr<Request>> kill_reqs;
-    std::shared_ptr<Barrier>              barrier;
-    bool                                  abort;
-    std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
-};
-
 struct MultimodalRope {
-    int  session_len;
-    int* position_ids{};
-    int* position_delta{};
-    int* length{};
+    int          session_len;
+    Tensor_<int> position_ids;
+    Buffer_<int> position_delta;
+    Buffer_<int> length;
 };
 
 struct BatchState {
-    int*  h_prompt_length;  // history + input, ignore generated
-    int*  h_context_length;
-    bool* h_finished;
 
-    curandState_t* curand_state;
-    int*           output_ids;  // output ids in [B, S]
+    Buffer_<int>  h_prompt_length;  // history + input, ignore generated
+    Buffer_<int>  h_context_length;
+    Buffer_<bool> h_finished;
 
-    float*         h_rope_theta;
     MultimodalRope mrope;
+
+    Tensor_<uint8_t> curand_state;  // [n, sizeof(curandState_t)]
+
+    Tensor_<int> output_ids;  // output ids in [B, S]
+
+    Buffer_<float> h_rope_theta;
 
     std::vector<int> seq_len_limit;
 
@@ -58,7 +52,6 @@ struct BatchState {
     int size;
 };
 
-template<typename T>
 class LlamaV2;
 
 struct GenerationState {
@@ -78,21 +71,19 @@ struct GenerationState {
     int finished_count;
 };
 
-template<typename T>
 class LlamaBatch {
 public:
-    void AllocateBuffer(size_t batch_size, size_t session_len, int cache_block_seq_len);
-    void AllocatePersistantBuffer(size_t max_batch_size, int cache_block_seq_len);
+    void AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cache_block_seq_len);
 
-    void AllocCommBuffers();
-    void FreeCommBuffers();
+    void AllocSymmBuffers();
+    void FreeSymmBuffers();
 
     void FreeBuffer();
 
     using Requests = std::vector<std::shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
-    void DisableConflictRequests(Requests& infer_reqs, Requests& kill_reqs);
+    void DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs);
 
     void ProcessKillRequests(const Requests& reqs, std::vector<Signal>& signals);
 
@@ -112,24 +103,25 @@ public:
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 
-    void ComputeAndOutputLogits(T* hidden_states, int first, int last);
+    void ComputeAndOutputLogits(const Tensor& hidden_states, int first, int last);
 
-    void OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type);
+    void OutputLogits(const Tensor& logits, int first, int last, GenerationConfig::OutType out_type);
 
-    void OutputLastHiddenState(const T* hidden_states, int first, int last);
+    void OutputLastHiddenState(const Tensor& hidden_states, int first, int last);
 
-    explicit LlamaBatch(const EngineParam&           param,
-                        std::unique_ptr<LlamaV2<T>>  model,
-                        std::unique_ptr<Context<T>>  ctx,
-                        std::shared_ptr<SharedState> state,
-                        std::shared_ptr<Gateway>     gateway,
-                        int                          device_id);
+    explicit LlamaBatch(DataType                 data_type,
+                        const EngineParam&       param,
+                        std::unique_ptr<LlamaV2> model,
+                        std::unique_ptr<Context> ctx,
+                        std::shared_ptr<Gateway> gateway,
+                        int                      device_id,
+                        int                      dp_rank);
 
     ~LlamaBatch();
 
     void Start();
 
-    LlamaV2<T>& model() noexcept
+    LlamaV2& model() noexcept
     {
         return *model_;
     }
@@ -142,30 +134,15 @@ public:
     void Warmup();
 
 private:
-    void BroadcastCancelFlags();
+    void FindCanceledIndices(std::vector<int>& indices);
 
-    void ProcessCancelRequests(std::vector<Signal>& signals);
+    void ProcessCancelRequests(std::vector<int>& indices, std::vector<Signal>& signals);
 
     void InternalThreadEntry();
 
     void OutputThreadEntry();
 
     void CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc);
-
-    // analogs to `std::copy_n`
-    template<typename U>
-    U* Copy(const U* src, size_t count, U* dst)
-    {
-        check_cuda_error(cudaMemcpyAsync(dst, src, sizeof(U) * count, cudaMemcpyDefault, stream_));
-        return dst += count;
-    }
-
-    template<typename U>
-    U* Clear(U* data, size_t count)
-    {
-        check_cuda_error(cudaMemsetAsync(data, 0, sizeof(U) * count, stream_));
-        return data += count;
-    }
 
     template<class... Ts>
     void IndexedCopyImpl(const int* src_idx, const int* dst_idx, int count, const std::tuple<Ts*, Ts*, int>&... cpys)
@@ -208,17 +185,16 @@ private:
         IndexedCopyImpl(nullptr, nullptr, count, cpys...);
     }
 
-    void* CommBufAlloc(size_t size, bool register_);
+    void* SymmAlloc(size_t size, bool register_);
 
-    void CommBufFree(void** ptr, bool deregister);
+    void SymmFree(void* ptr, size_t size, bool deregister);
 
     void DestroyCommunicators();
 
 private:
     const EngineParam param_;
 
-    const std::shared_ptr<Gateway>     gateway_;
-    const std::shared_ptr<SharedState> shared_state_;
+    const std::shared_ptr<Gateway> gateway_;
 
     const int      max_batch_size_;
     const int      max_forward_token_num_;
@@ -226,90 +202,77 @@ private:
     const int      num_tokens_per_iter_;
     const int      max_prefill_iters_;
     const int      device_id_;
+    const int      dp_rank_;
     const int      tp_size_;
-    const int      rank_;  //  tp rank
+    const int      tp_rank_;
     const DataType data_type_;
     const bool     debug_;
 
     // Refs into `Context<T>`
-    cudaStream_t const     stream_{};
-    cublasMMWrapper* const cublas_wrapper_{};
-    IAllocator* const      allocator_{};
+    cudaStream_t const stream_{};
 
     int session_len_;  // May be truncated in ctor
 
-    std::unique_ptr<Context<T>>      context_;
-    std::unique_ptr<LlamaV2<T>>      model_;
+    std::unique_ptr<Context>         context_;
+    std::unique_ptr<LlamaV2>         model_;
     std::unique_ptr<SequenceManager> sequence_manager_;
+
+    Communicators& comm_;
+
+    Allocator symm_alloc_;
 
     ///////////////////////////////////////////////////////////////////
     // k/v cache block buffers
-    int*       cu_block_counts_{};
-    uintptr_t* block_ptrs_{};
+    Buffer_<int>       cu_block_counts_;
+    Buffer_<uintptr_t> block_ptrs_;
 
     ////////////////////////////////////////////////////////////////////
     // context decoding temp buffers
-    T*   context_decoder_input_buf_{};
-    T*   context_decoder_output_buf_{};
-    int* context_decoder_ids_buf_{};
-    int* input_ids_buf_{};
+    Tensor symm_hidden_states_buf_;
+    Tensor symm_logits_buf_;
+
+    Tensor decoder_output_buf_;
+
+    Tensor_<float> sampling_logits_;
+
+    Buffer_<int> input_ids_buf_;
+
     // lengths
-    int* input_length_buf_{};    // input + cache missed length
-    int* context_length_buf_{};  // history length + input_length
-    int* init_context_length_{};
+    Buffer_<int> input_length_buf_;    // input + cache missed length
+    Buffer_<int> context_length_buf_;  // history length + input_length
+    Buffer_<int> init_context_length_;
 
-    T*   decoder_input_buf_{};
-    T*   decoder_output_buf_{};
-    int* sequence_lengths_{};  // current sequence length
-    int* init_ctx_lens_{};
-    int* lora_mask_buf_{};  // lora
+    Buffer_<int> sequence_lengths_;  // current sequence length
+    Buffer_<int> init_ctx_lens_;
+    Buffer_<int> lora_mask_buf_;  // lora
 
-    float* logits_buf_{};        // combined logits
-    float* local_logits_buf_{};  // tensor parallel local logits
-    float* context_logits_buf_{};
-    float* local_context_logits_buf_{};
+    Buffer_<float>    sampled_logprobs_;
+    Buffer_<uint32_t> sampled_indexes_;
+    Buffer_<uint32_t> sampled_nums_;
+    Buffer_<float>    h_sampled_logprobs_;
+    Buffer_<uint32_t> h_sampled_indexes_;
+    Buffer_<uint32_t> h_sampled_nums_;
 
-    size_t local_context_logits_buf_size_{};
-
-    float*    sampled_logprobs_{};
-    uint32_t* sampled_indexes_{};
-    uint32_t* sampled_nums_{};
-    float*    h_sampled_logprobs_{};
-    uint32_t* h_sampled_indexes_{};
-    uint32_t* h_sampled_nums_{};
-
-    float* rope_theta_{};
+    Buffer_<float> rope_theta_;
 
     // used by dynamic decoder
-    int*      token_ids_buf_{};  // all token IDs in [S, B], indexed using `step`
-    bool*     finished_buf_{};
-    uint32_t* seq_limit_len_{};
-    int*      h_end_ids_buf_{};
-    int*      d_end_ids_buf_{};
+    Buffer_<int>  token_ids_buf_;  // all token IDs in [S, B], indexed using `step`
+    Buffer_<bool> finished_buf_;
+    Buffer_<int>  seq_limit_len_;
 
     // pinned buffers
-    int*       h_input_ids_buf_{};
-    int*       h_input_length_buf_{};
-    uint32_t*  h_seq_limit_len_{};
-    int*       h_cu_block_counts_{};
-    uintptr_t* h_block_ptrs_{};
+    Buffer_<int> h_output_ids_;
+    Buffer_<int> h_input_length_buf_;
+    Buffer_<int> h_seq_limit_len_;
 
-    int*   h_min_length_{};
-    int*   h_runtime_top_k_{};
-    float* h_runtime_top_p_{};
-    float* h_runtime_min_p_{};
-    float* h_temperature_{};
-    float* h_repetition_penalty_{};
-    int*   h_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]
-    int*   h_bad_words_{};
-    int*   d_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]
-    int*   d_bad_words_{};
+    Buffer_<int>       h_cu_block_counts_;
+    Buffer_<uintptr_t> h_block_ptrs_;
 
-    unsigned long long* h_random_seed_{};
-    unsigned long long* d_random_seed_{};
+    Buffer_<uint64_t> h_random_seed_;
+    Buffer_<uint64_t> d_random_seed_;
 
-    curandState_t* h_curand_state_{};
-    curandState_t* d_curand_state_{};
+    Tensor_<uint8_t> h_curand_state_;  // [n, sizeof(curandState_t)]
+    Tensor_<uint8_t> d_curand_state_;
 
     std::array<BatchState, 3> states_{};
 
@@ -317,24 +280,13 @@ private:
     BatchState* back_{};
     BatchState* incoming_{};
 
-    uint64_t request_count_{0};
-
     // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;
     static constexpr int kMaxEndIdsSize      = 32;
 
-    bool is_allocate_persistant_buffer_ = false;
-    bool is_allocate_buffer_            = false;
-
-    TensorMap inputs_;
-    TensorMap outputs_;
-
     std::thread internal_thread_;
-
-    int* h_output_ids_{};
 };
 
-template<class T>
-using Engine = LlamaBatch<T>;
+using Engine = LlamaBatch;
 
 }  // namespace turbomind

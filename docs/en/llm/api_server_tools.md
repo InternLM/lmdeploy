@@ -1,6 +1,11 @@
 # Tools Calling
 
-LMDeploy supports tools for InternLM2, InternLM2.5, llama3.1 and Qwen2.5 models.
+LMDeploy supports tools for InternLM2, InternLM2.5, llama3.1 and Qwen2.5 models. Please use `--tool-call-parser` to specify
+which parser to use when launching the api_server. Supported names are:
+
+1. internlm
+2. qwen
+3. llama3
 
 ## Single Round Invocation
 

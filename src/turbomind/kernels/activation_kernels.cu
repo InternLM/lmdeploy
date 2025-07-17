@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "src/turbomind/core/core.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -171,163 +173,12 @@ struct IdentityActivation {
     }
 };
 
-// clang-format off
-template<template<typename T> class Activation, typename T, typename BT>
-__global__ void generic_activation(T*                      out,
-                                   const BT*  __restrict   bias,
-                                   const T*   __restrict   gated_weights,
-                                   const BT*  __restrict   gated_bias,
-                                   const int* __restrict   ia3_tasks,
-                                   const T*   __restrict   ia3_weights,
-                                   const int               int8_mode,
-                                   const float* __restrict activation_in,
-                                   const float* __restrict activation_out,
-                                   const int* __restrict padding_offset,
-                                   const int seq_len,
-                                   int m,
-                                   int n)
-{
-    constexpr size_t packed_elems = num_elems<T>::value;
-
-    const bool with_bias = bias != nullptr;
-    const bool with_gate = gated_weights != nullptr;
-    // const bool with_ia3  = ia3_tasks != nullptr;
-
-    using Act_T         = typename Activation<T>::return_type;
-    using Float_T       = typename packed_as<float, packed_elems>::type;
-    using Packed_Int8_t = typename packed_as<int8_t, packed_elems>::type;
-
-    for (int64_t id = blockIdx.x * blockDim.x + threadIdx.x; id < 1LL * m * n; id += blockDim.x * gridDim.x) {
-        T val;
-        if (int8_mode == 2) {
-            // val = cuda_cast<T>(cuda_cast<Float_T>(reinterpret_cast<Packed_Int8_t*>(out)[id]) * activation_in[0]);
-        }
-        else {
-            val = out[id];
-        }
-
-        T gated_val;
-        if (with_gate) {
-            gated_val = gated_weights[id];
-        }
-
-        // if (with_bias) {
-        //     const T reg_bias = static_cast<T>(bias[id % n]);
-        //     val              = val + reg_bias;
-
-        //     if (with_gate) {
-        //         const T reg_gated_bias = static_cast<T>(gated_bias[id % n]);
-        //         gated_val              = gated_val + reg_gated_bias;
-        //     }
-        // }
-
-        if (with_gate) {
-            val = cuda_cast<T>(Activation<T>::apply(val) * cuda_cast<Act_T>(gated_val));
-        }
-        else {
-            // val = cuda_cast<T>(Activation<T>::apply(val));
-        }
-
-        // if (with_ia3) {
-        //     const int word_id = id / n;
-        //     const int offset = padding_offset == nullptr ? 0 : padding_offset[word_id];
-        //     const int batch_id = (word_id + offset) / seq_len;
-        //     const int task = ia3_tasks[batch_id];
-        //     val            = val * ia3_weights[task * n + (id % n)];
-        // }
-
-        if (int8_mode != 2) {
-            out[id] = val;
-        }
-        else {
-            // reinterpret_cast<Packed_Int8_t*>(out)[id] =
-            //     cuda_cast<Packed_Int8_t>(cuda_cast<Float_T>(val) * activation_out[0]);
-        }
-    }
-}
-// clang-format on
-
-template<template<typename T> class Activation, typename T, typename BT>
-void invokeGenericActivation(T*           out,
-                             const BT*    bias,
-                             const T*     gated_weights,
-                             const BT*    gated_bias,
-                             const int*   ia3_tasks,
-                             const T*     ia3_weights,
-                             const int    m,
-                             const int    n,
-                             const int    int8_mode,
-                             const float* activation_in,
-                             const float* activation_out,
-                             const int*   padding_offset,
-                             const int    seq_len,
-                             cudaStream_t stream)
-{
-    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    TM_LOG_DEBUG("invokeGenericActivation %d %d %d", m, n, seq_len);
-    using PT                   = typename packed_type<T>::type;
-    constexpr int packed_elems = num_elems<PT>::value;
-    using PBT                  = typename packed_as<BT, packed_elems>::type;
-
-    const int n_threads = 512;
-
-    dim3 block, grid;
-    if (n / 4 / packed_elems <= n_threads) {
-        block.x = n / 4 / packed_elems;
-        grid.x  = m;
-    }
-    else {
-        block.x = n_threads;
-        grid.x  = ceil(1LL * m * n / double(n_threads));
-    }
-    TM_LOG_DEBUG("%d %d", grid.x, block.x);
-    sync_check_cuda_error();
-    generic_activation<Activation><<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out),
-                                                               reinterpret_cast<const PBT*>(bias),
-                                                               reinterpret_cast<const PT*>(gated_weights),
-                                                               reinterpret_cast<const PBT*>(gated_bias),
-                                                               ia3_tasks,
-                                                               reinterpret_cast<const PT*>(ia3_weights),
-                                                               int8_mode,
-                                                               activation_in,
-                                                               activation_out,
-                                                               padding_offset,
-                                                               seq_len,
-                                                               m,
-                                                               n / packed_elems);
-    sync_check_cuda_error();
-}
-
-#define INSTANTIATE_GENERIC_ACTIVATION(Activation, T, BT)                                                              \
-    template void invokeGenericActivation<Activation, T, BT>(T * out,                                                  \
-                                                             const BT*    bias,                                        \
-                                                             const T*     gated_weights,                               \
-                                                             const BT*    gated_bias,                                  \
-                                                             const int*   ia3_tasks,                                   \
-                                                             const T*     ia3_weights,                                 \
-                                                             const int    m,                                           \
-                                                             const int    n,                                           \
-                                                             const int    int8_mode,                                   \
-                                                             const float* activation_in,                               \
-                                                             const float* activation_out,                              \
-                                                             const int*   padding_offset,                              \
-                                                             const int    seq_len,                                     \
-                                                             cudaStream_t stream);
-
-INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, half, half);
-#ifdef ENABLE_FP32
-INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, float, float);
-#endif
-#ifdef ENABLE_BF16
-INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
-#endif
-
 // `output` may be an alias of `inter_buf`
 template<int VecSize, template<typename T> class Activation, typename T>
 __global__ void activation_kernel(T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims)
 {
-    const int di = threadIdx.x + blockIdx.x * blockDim.x;
-    const int ti = blockIdx.y;
+    const int di = threadIdx.x + blockIdx.y * blockDim.x;
+    const int ti = blockIdx.x;
 
     dims /= VecSize;
 
@@ -360,23 +211,40 @@ void invokeGenericActivation_v2(
 {
     constexpr int kVecSize = 4;
 
-    constexpr int block = 256;
-    const dim3    grid(ceil_div(dims, block * kVecSize), token_num);
+    constexpr int block = 512;
+    const dim3    grid(token_num, ceil_div(dims, block * kVecSize));
 
     activation_kernel<kVecSize, Activation, T>
         <<<grid, block, 0, stream>>>(inter_buf, gate_buf, stride, token_num, dims);
 }
 
-#define INSTANTIATE_ACTIVATION(Activation, T)                                                                          \
-    template void invokeGenericActivation_v2<SiluActivation>(                                                          \
-        T * inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims, cudaStream_t stream)
+template<template<typename T> class Activation>
+void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream)
+{
+    auto& inter = inter_.get();
+    TM_CHECK_EQ(inter.ndim(), 2);
+    TM_CHECK_EQ(gate.ndim(), 2);
+    TM_CHECK_EQ(inter.stride(0), gate.stride(0));
 
-INSTANTIATE_ACTIVATION(SiluActivation, half);
-#ifdef ENABLE_FP32
-INSTANTIATE_ACTIVATION(SiluActivation, float);
-#endif
-#ifdef ENABLE_BF16
-INSTANTIATE_ACTIVATION(SiluActivation, __nv_bfloat16);
-#endif
+    TM_CHECK(inter.shape() == gate.shape());
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+
+        const auto [num, dim] = inter.shapes(0, 1);
+
+        constexpr int kVecSize = 4;
+        constexpr int block    = 512;
+
+        const dim3 grid(num, cdiv((int)dim, block * kVecSize));
+
+        activation_kernel<kVecSize, Activation, T>
+            <<<grid, block, 0, stream>>>(inter.data<T>(), gate.data<T>(), inter.stride(0), num, dim);
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(inter.dtype(), invoke);
+}
+
+template void invokeGenericActivation_v3<SiluActivation>(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
 
 }  // namespace turbomind

@@ -13,20 +13,14 @@ def get_cuda_autotune_config():
     return [
         triton.Config({
             'BLOCK_SIZE_M': 128,
-            'BLOCK_SIZE_N': 64,
-        }, num_stages=4, num_warps=4),
-        triton.Config({
-            'BLOCK_SIZE_M': 64,
             'BLOCK_SIZE_N': 128,
-        }, num_stages=4, num_warps=4),
+        }, num_stages=3, num_warps=4),
     ]
 
 
 @triton.autotune(
     configs=get_cuda_autotune_config(),
     key=['N', 'K', 'M_NP2'],
-    warmup=10,
-    rep=25,
 )
 @triton.jit
 def fused_moe_blocked_f8_kernel(
@@ -67,7 +61,7 @@ def fused_moe_blocked_f8_kernel(
     reindex_a: tl.constexpr,
     reindex_c: tl.constexpr,
 ):
-    """fused moe kernel."""
+    """Fused moe kernel."""
     exp_id = tl.program_id(1)
     pid = tl.program_id(0)
 
@@ -116,15 +110,28 @@ def fused_moe_blocked_f8_kernel(
     as_ptrs = A_scale + offs_am * stride_asm
     bs_ptrs = B_scale + stride_bse * exp_id + offs_bsn * stride_bsn
 
-    acc_scale = tl.load(as_ptrs) * tl.load(bs_ptrs)
-    acc_ratio = 1 / acc_scale
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    # initialize acc_ratio and acc_scale
+    a_scale = tl.load(as_ptrs, mask=mask_sid, other=1.0)
+    b_scale = tl.load(bs_ptrs)
+    acc_scale0 = a_scale * b_scale
+
+    k_start = BLOCK_SIZE_K
+    offs_ksa = k_start // group_ak
+    offs_ksb = k_start // group_bk
+    a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid and k_start < K, other=1.0)
+    b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
+    acc_scale1 = tl.maximum(a_scale * b_scale, 1e-12)
+    acc_ratio = acc_scale0 / acc_scale1
+    acc_scale = acc_scale1
+
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # load scales
-        k_start = (k + 1) * BLOCK_SIZE_K
+        k_start = (k + 2) * BLOCK_SIZE_K
         offs_ksa = k_start // group_ak
         offs_ksb = k_start // group_bk
-        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=k_start < K, other=1.0)
+        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid and k_start < K, other=1.0)
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
         # load ab
@@ -132,10 +139,11 @@ def fused_moe_blocked_f8_kernel(
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
 
         # mma
-        accumulator = tl.dot(a, b, acc=accumulator * acc_ratio[:, None])
+        accumulator = tl.dot(a, b, acc=accumulator)
+        accumulator *= acc_ratio[:, None]
 
         # update scales and ratio
-        new_acc_scale = a_scale * b_scale
+        new_acc_scale = tl.maximum(a_scale * b_scale, 1e-12)
         acc_ratio = acc_scale / new_acc_scale
         acc_scale = new_acc_scale
 
@@ -175,7 +183,7 @@ def fused_moe_blocked_fp8_kernel_launcher(
     reindex_a: bool = True,
     reindex_c: bool = True,
 ):
-    """fused moe kernel launcher."""
+    """Fused moe kernel launcher."""
 
     if num_tokens is None:
         num_tokens = A.size(0)
@@ -204,7 +212,7 @@ def fused_moe_blocked_fp8_kernel_launcher(
     C = C.flatten(0, -2)
 
     BLOCK_SIZE_K = group_bk
-    GROUP_SIZE_M = 8
+    GROUP_SIZE_M = 1
     grid = _grid_fn
     fused_moe_blocked_f8_kernel[grid](
         A,
@@ -257,7 +265,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
                           expert_offset: int = 0,
                           num_experts: int = None,
                           renormalize: bool = False) -> torch.Tensor:
-    """fused moe."""
+    """Fused moe."""
     device = input.device
     M = input.size(0)
     E, N, _ = w1.shape

@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
+from typing import List
 
 
 class Timer:
-    """debug timer."""
+    """Debug timer."""
 
     def __init__(self):
         self.duration = None
@@ -62,7 +63,7 @@ class Timer:
 
     @staticmethod
     def format_duration(duration: float, acc: int = 3):
-        """format duration."""
+        """Format duration."""
         unit = 'ms'
         if duration < 1:
             duration *= 1000
@@ -75,7 +76,7 @@ class Timer:
 
     @staticmethod
     def format_flops(flops: float, acc: int = 3):
-        """compute flops."""
+        """Compute flops."""
         unit = ''
         if flops > (1 << 40):
             flops /= (1 << 40)
@@ -93,7 +94,7 @@ class Timer:
 
     @staticmethod
     def formatted_print(out_info: dict, title: str = None):
-        """formatted print."""
+        """Formatted print."""
         max_key_len = max(len(k) for k in out_info.keys())
         max_key_len = min(10, max_key_len)
         max_val_len = max(len(k) for k in out_info.values())
@@ -124,3 +125,38 @@ class Timer:
 
     def toc_print(self, flop: int = None, title: str = None):
         return self.toc().print(flop=flop, title=title)
+
+
+def visualize_pipe_out(outputs, enable_meta: bool = True):
+    import os
+
+    from lmdeploy.messages import Response
+
+    if isinstance(outputs, Response):
+        outputs = [outputs]
+    try:
+        term_size = os.get_terminal_size().columns
+    except Exception:
+        term_size = 100
+
+    def _lined_print(msg: str, line_format: str = '-', full_line: bool = False):
+        print(msg)
+        if full_line:
+            columns = term_size
+        else:
+            columns = max(len(m) for m in msg.split('\n'))
+        print(line_format * columns)
+
+    outputs: List[Response] = outputs
+    term_line = '—' * term_size
+    print(term_line)
+    for idx, out in enumerate(outputs):
+        _lined_print(f'output[{idx}]', '=')
+        if enable_meta:
+            _lined_print('meta', '-')
+            _lined_print(
+                f'input_token_len={out.input_token_len}\n'
+                f'generate_token_len={out.generate_token_len}\n'
+                f'finish_reason="{out.finish_reason}"', '—')
+        _lined_print('text', '-')
+        _lined_print(f'{out.text}', '—', full_line=True)

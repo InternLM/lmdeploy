@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
 from torch import Tensor
 
 from lmdeploy.pytorch.kernels.dlinfer import apply_rotary_pos_emb
@@ -16,8 +15,8 @@ class DlinferApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
             q_embed = None
             k_embed = None
         else:
-            q_embed = torch.empty_like(query)
-            k_embed = torch.empty_like(key)
+            q_embed = query.new_empty(query.shape)
+            k_embed = key.new_empty(key.shape)
         return apply_rotary_pos_emb(query, key, cos, sin, q_embed, k_embed)
 
 
@@ -26,5 +25,5 @@ class DlinferApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
 
     @staticmethod
     def build():
-        """build implementation."""
+        """Build implementation."""
         return DlinferApplyRotaryEmbImpl()

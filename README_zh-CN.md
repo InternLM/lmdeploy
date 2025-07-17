@@ -126,13 +126,13 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Qwen2 (0.5B - 72B)</li>
   <li>Qwen2-MoE (57BA14B)</li>
   <li>Qwen2.5 (0.5B - 32B)</li>
+  <li>Qwen3, Qwen3-MoE</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
   <li>GLM4 (9B)</li>
   <li>CodeGeeX4 (9B)</li>
-  <li>Falcon (7B - 180B)</li>
   <li>YI (6B-34B)</li>
   <li>Mistral (7B)</li>
   <li>DeepSeek-MoE (16B)</li>
@@ -140,11 +140,11 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>DeepSeek-V2.5 (236B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
-  <li>Dbrx (132B)</li>
   <li>StarCoder2 (3B - 15B)</li>
   <li>Phi-3-mini (3.8B)</li>
   <li>Phi-3.5-mini (3.8B)</li>
   <li>Phi-3.5-MoE (16x3.8B)</li>
+  <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
 </ul>
 </td>
@@ -161,9 +161,9 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
+  <li>InternVL3 (1B-78B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
-  <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
   <li>MiniCPM-Llama3-V-2_5</li>
@@ -173,6 +173,8 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>GLM-4V (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
+  <li>Gemma3 (1B - 27B)</li>
+  <li>Llama4 (Scout, Maverick)</li>
 </ul>
 </td>
 </tr>
@@ -187,10 +189,10 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 
 ## 安装
 
-我们推荐在一个干净的conda环境下（python3.8 - 3.12），安装 lmdeploy：
+我们推荐在一个干净的conda环境下（python3.9 - 3.12），安装 lmdeploy：
 
 ```shell
-conda create -n lmdeploy python=3.8 -y
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```

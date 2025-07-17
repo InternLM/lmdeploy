@@ -14,7 +14,7 @@ class DefaultOpsBackend(OpsBackend):
 
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
-        """get builder of given layer type."""
+        """Get builder of given layer type."""
         if layer_type == OpType.Linear:
             from .linear import DefaultLinearBuilder
             return DefaultLinearBuilder
@@ -55,7 +55,7 @@ class DefaultOpsBackend(OpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        """get block shape of k."""
+        """Get block shape of k."""
         return (
             block_size,
             num_heads,
@@ -69,9 +69,17 @@ class DefaultOpsBackend(OpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        """get block shape of v."""
+        """Get block shape of v."""
         return (
             block_size,
             num_heads,
             head_size,
         )
+
+    @staticmethod
+    def init():
+        pass
+
+    @staticmethod
+    def ccl_backend() -> str:
+        return 'nccl'

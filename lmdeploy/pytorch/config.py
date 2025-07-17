@@ -4,6 +4,9 @@ from typing import Any, Dict, List, Literal
 
 import torch
 
+from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
+
 
 def _update_torch_dtype(config: 'ModelConfig', dtype: str):
     """Update the torch dtype from the model config.
@@ -48,7 +51,7 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
 
 @dataclass
 class BackendConfig:
-    """backend config."""
+    """Backend config."""
     eager_mode: bool = True
     device_type: str = 'cuda'
 
@@ -80,13 +83,48 @@ class CacheConfig:
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
 
+    # For PD Disaggregation
+    role: EngineRole = EngineRole.Hybrid
+    migration_backend: MigrationBackend = MigrationBackend.DLSlime
+
     def __post_init__(self):
-        """post init."""
+        """Post init."""
         from lmdeploy.utils import get_logger
         logger = get_logger('lmdeploy')
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
+
+
+@dataclass
+class DistConfig:
+    dp: int = 1
+    tp: int = 1
+    ep: int = 1
+    dp_rank: int = 0
+    enable_microbatch: bool = False
+    enable_eplb: bool = False
+    world_size: int = None
+    attn_config: 'DistConfig' = None
+
+    def __post_init__(self):
+        """Post init."""
+        assert self.dp_rank < self.dp
+        assert self.dp >= 1
+        if self.dp == 1:
+            world_size = max(self.tp, self.ep)
+            attn_config = self
+        else:
+            world_size = self.dp
+            attn_config = DistConfig(dp=1, tp=1, ep=1, dp_rank=0)
+        self.world_size = world_size
+        self.attn_config = attn_config
+
+    def need_dummy_batch(self):
+        """Need dummy batch."""
+        if self.dp == 1:
+            return False
+        return self.tp > 1 or self.ep > 1
 
 
 @dataclass
@@ -106,11 +144,13 @@ class ModelConfig:
     dtype: torch.dtype = torch.float16
     vocab_size: int = 40000
     hf_config: Any = None
+    llm_config: Any = None
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
+    use_flash_mla: bool = False
 
     def get_head_size(self):
-        """get head size."""
+        """Get head size."""
         return self.head_dim
 
     @classmethod
@@ -118,7 +158,8 @@ class ModelConfig:
                         pretrained_model_name_or_path: str,
                         trust_remote_code: bool = True,
                         dtype: str = 'auto',
-                        tp: int = 1):
+                        dist_config: DistConfig = None,
+                        hf_overrides: Dict[str, Any] = None):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -128,18 +169,43 @@ class ModelConfig:
                 models defined on the Hub in their own modeling files.
             dtype (str): user specified data type for model weights and
                 activations. Refer to `PyTorchEngineConfig` for details
+            hf_overrides (Dict[str, Any]): overrides for the HF config.
         """
         from transformers import AutoConfig
+
+        from lmdeploy.utils import get_logger
+
         hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
-        return cls.from_hf_config(hf_config, pretrained_model_name_or_path, dtype=dtype, tp=tp)
+
+        model_config = cls.from_hf_config(hf_config,
+                                          pretrained_model_name_or_path,
+                                          dtype=dtype,
+                                          dist_config=dist_config)
+
+        if hf_overrides is not None:
+            logger = get_logger('lmdeploy')
+            logger.warning(f'Overriding HF config with {hf_overrides}')
+            model_config.hf_config.update(hf_overrides)
+
+        return model_config
 
     @classmethod
-    def from_hf_config(cls, hf_config: Any, model_path: str = None, dtype: str = 'auto', tp: int = 1):
-        """from huggingface config."""
+    def from_hf_config(cls,
+                       hf_config: Any,
+                       model_path: str = None,
+                       dtype: str = 'auto',
+                       dist_config: DistConfig = None):
+        """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
+        if dist_config is None:
+            dist_config = DistConfig()
+        if dist_config.dp == 1:
+            tp = dist_config.tp
+        else:
+            tp = 1
 
         model_config = AutoModelConfigBuilder.build(hf_config, model_path, tp=tp)
 
@@ -165,3 +231,22 @@ class ModelConfig:
             model_config.eos_token_id = [model_config.eos_token_id]
 
         return model_config
+
+
+@dataclass
+class MiscConfig:
+    prefill_interval: int = 16
+    custom_module_map: str = None
+    empty_init: bool = False
+    model_format: str = None
+    hf_overrides: Dict[str, Any] = None
+
+    @classmethod
+    def from_engine_config(cls, engine_config: PytorchEngineConfig):
+        """From engine config."""
+        misc_config = cls(custom_module_map=engine_config.custom_module_map,
+                          empty_init=engine_config.empty_init,
+                          prefill_interval=engine_config.prefill_interval,
+                          model_format=engine_config.model_format,
+                          hf_overrides=engine_config.hf_overrides)
+        return misc_config

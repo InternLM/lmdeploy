@@ -8,7 +8,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -53,13 +54,13 @@ class QWenAttention(torch.nn.Module):
         )
 
         # o_proj
-        self.c_proj = build_rowwise_linear(self.projection_size,
-                                           config.hidden_size,
-                                           bias=not config.no_bias,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        self.c_proj = build_o_proj(self.projection_size,
+                                   config.hidden_size,
+                                   bias=not config.no_bias,
+                                   quant_config=quantization_config,
+                                   dtype=dtype,
+                                   device=device,
+                                   is_tp=True)
 
     def forward(
         self,
@@ -112,7 +113,7 @@ class QWenMLP(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
         ff_dim_in = config.intermediate_size // 2
         # gate up
-        self.gate_up_proj = build_merged_colwise_linear(
+        self.gate_up_proj = build_gateup_linear(
             config.hidden_size,
             [ff_dim_in, ff_dim_in],
             bias=not config.no_bias,
@@ -126,13 +127,13 @@ class QWenMLP(nn.Module):
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.c_proj = build_rowwise_linear(ff_dim_in,
-                                           config.hidden_size,
-                                           bias=not config.no_bias,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        self.c_proj = build_down_linear(ff_dim_in,
+                                        config.hidden_size,
+                                        bias=not config.no_bias,
+                                        quant_config=quantization_config,
+                                        dtype=dtype,
+                                        device=device,
+                                        is_tp=True)
 
     def forward(self, x):
         """forward."""
@@ -280,12 +281,12 @@ class QWenModel(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.wte
 
 
 class QWenLMHeadModel(nn.Module, CudaGraphMixin):
-    """rewrote model."""
+    """Rewrote model."""
 
     packed_modules_mapping = {
         'gate_up_proj': [
@@ -321,7 +322,7 @@ class QWenLMHeadModel(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.transformer(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -332,11 +333,11 @@ class QWenLMHeadModel(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.transformer.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -345,7 +346,7 @@ class QWenLMHeadModel(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -369,7 +370,7 @@ class QWenLMHeadModel(nn.Module, CudaGraphMixin):
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

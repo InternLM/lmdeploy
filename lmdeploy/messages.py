@@ -1,10 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
+
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
+from lmdeploy.pytorch.disagg.request import MigrationRequest
 
 from .tokenizer import Tokenizer
 from .utils import get_logger
@@ -13,13 +17,13 @@ logger = get_logger('lmdeploy')
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
-tensor for the next token, and returns a modified tensor of logits
-to sample from."""
+tensor for the next token, and returns a modified tensor of logits to sample
+from."""
 
 
 @dataclass
 class GenerationConfig:
-    """generation parameters used by inference engines.
+    """Generation parameters used by inference engines.
 
     Args:
         n (int): Define how many chat completion choices to generate for each
@@ -107,8 +111,13 @@ class GenerationConfig:
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
 
+    # for disaggregation
+    with_cache: bool = False
+    preserve_cache: bool = False
+    migration_request: Optional[MigrationRequest] = None
+
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
-        """convert stop_words/bad_sords to ids and append the ids to
+        """Convert stop_words/bad_sords to ids and append the ids to
         stop_token_ids/bad_token_ids."""
 
         def special_word_token_ids(words):
@@ -130,16 +139,23 @@ class GenerationConfig:
         self.bad_token_ids = list(set(bad_token_ids)) or None
 
     def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
-        """update the stop_token_ids."""
-        stop_token_ids = self.stop_token_ids or []
+        """Update the stop_token_ids."""
+        stop_token_ids = set(self.stop_token_ids or [])
+
+        # add tokenizer's eos_token_id
         if tokenizer_eos_token_id is not None:
-            stop_token_ids.append(tokenizer_eos_token_id)
+            stop_token_ids.add(tokenizer_eos_token_id)
+
+        # add eos_token_id from model's generation_config.json file if there
+        # is any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
-            eos_token_id = {eos_token_id} if isinstance(eos_token_id, int) else set(eos_token_id)
-            if stop_token_ids:
-                eos_token_id.update(stop_token_ids)
-            self.stop_token_ids = list(eos_token_id)
+            if isinstance(eos_token_id, int):
+                stop_token_ids.add(eos_token_id)
+            else:
+                stop_token_ids.update(eos_token_id)
+
+        self.stop_token_ids = list(stop_token_ids)
 
     def __post_init__(self):
         """Check input validation."""
@@ -204,11 +220,23 @@ class TurbomindEngineConfig:
             "Dynamic SplitFuse"-like scheduling
         max_prefill_iters(int): the max number of forward pass during prefill
             stage
+        devices(List[int]): the used devices
+        empty_init (bool): Whether to load the model weights, you should set
+            it to True if you want to update weights after create the pipeline
+        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+            It can be used to override the default config of the model,
     """
 
     dtype: str = 'auto'
     model_format: Optional[str] = None
     tp: int = 1
+    dp: int = 1
+    device_num: int = None
+    attn_tp_size: int = None
+    attn_dp_size: int = None
+    mlp_tp_size: int = None
+    mlp_dp_size: int = None
+    outer_dp_size: int = None
     session_len: Optional[int] = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
@@ -223,7 +251,10 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    devices: Optional[List[int]] = None
+    empty_init: bool = False
     communicator: str = 'nccl'
+    hf_overrides: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -248,6 +279,9 @@ class PytorchEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         tp (int): Tensor Parallelism. default 1.
+        dp (int): Data Parallelism. default 1.
+        dp_rank (int): rank of dp.
+        ep (int): Expert Parallelism. default 1.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
@@ -280,9 +314,25 @@ class PytorchEngineConfig:
             bit, set it to 4 or 8, respectively
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
+        empty_init (bool): Whether to load the model weights, you should set
+            it to True if you want to update weights after create the pipeline
+        enable_microbatch (bool): enable microbatch for specified model
+        enable_eplb (bool): enable eplb for specified model
+        enable_metrics (bool): enable metrics system
+        role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
+            'Decode']. Default to `EngineRole.Hybrid`.
+        migration_backend: migration backend. options: ['DLSlime'].
+            Default to `MigrationBackend.DLSlime`.
+        enable_mp_engine (bool): run engine in multi-process mode.
+        model_format (str): weight quantization policy, options: ['fp8'].
+        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+            It can be used to override the default config of the model,
     """
     dtype: str = 'auto'
     tp: int = 1
+    dp: int = 1
+    dp_rank: int = 0
+    ep: int = 1
     session_len: int = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
@@ -301,11 +351,23 @@ class PytorchEngineConfig:
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
+    empty_init: bool = False
+    enable_microbatch: bool = False
+    enable_eplb: bool = False
+    enable_mp_engine: bool = False
+    model_format: str = None
+    enable_metrics: bool = False
+    hf_overrides: Optional[Dict[str, Any]] = None
+
+    role: EngineRole = EngineRole.Hybrid
+    migration_backend: MigrationBackend = MigrationBackend.DLSlime
 
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
+        assert self.dp >= 1, 'invalid dp'
+        assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \
             'invalid cache_max_entry_count'
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
@@ -369,6 +431,45 @@ class Response:
     index: int = 0
 
 
+# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+class EngineCoreEventType(enum.IntEnum):
+    """The type of engine core request event.
+
+    QUEUED - when the request was received by the engine core and added to the scheduler queue
+    SCHEDULED - when the request was first scheduled for execution
+    PREEMPTED - the request has been put back in the waiting queue in order to make room for other requests to complete.
+                It will be re-scheduled in future and re-start its prefill phase
+    """
+    QUEUED = 1
+    SCHEDULED = 2
+    PREEMPTED = 3  # FIXME, currently ignored for simplicity
+
+
+# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+@dataclass
+class EngineCoreEvent():
+    """A timestamped engine core event associated with a request.
+
+    The timestamp is a monotonic timestamps and is used for by the engine frontend to calculate intervals between engine
+    core events. These timestamps should not be compared with timestamps from other processes.
+    """
+    type: EngineCoreEventType
+    timestamp: float
+
+    @classmethod
+    def new_event(cls, event_type: EngineCoreEventType, timestamp: Optional[float] = None) -> 'EngineCoreEvent':
+        timestamp = time.perf_counter() if timestamp is None else timestamp
+        return cls(event_type, timestamp)
+
+
+@dataclass
+class MetricsInfo:
+    """Metrics info from the inference engine."""
+    engine_core_timestamp: float = 0.0
+    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
+    scheduler_raw_info: dict = field(default_factory=dict)
+
+
 @dataclass
 class EngineOutput:
     """Engine output for turbomind/pytorch engine.
@@ -380,6 +481,9 @@ class EngineOutput:
             may not equal to the length of token_ids
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
+        cache_block_ids (List[int]): send cache blocks back for migration in
+            Disaggregated LLM Serving when Prefill Engine is Done.
+        metrics_info (MetricsInfo): metrics info from the inference engine.
     """
     status: ResponseType
     token_ids: List[int]
@@ -387,6 +491,9 @@ class EngineOutput:
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
+
+    cache_block_ids: Optional[List[int]] = None
+    metrics_info: Optional[MetricsInfo] = None
 
 
 @dataclass

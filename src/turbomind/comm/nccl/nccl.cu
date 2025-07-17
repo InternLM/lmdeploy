@@ -2,12 +2,15 @@
 
 #include <cstdint>
 #include <memory>
+#include <numeric>
+#include <type_traits>
 #include <unordered_map>
 
 #include <nccl.h>
 
-#include "src/turbomind/comm/comm.h"
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/comm/host_comm.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/string_utils.h"
 
@@ -21,49 +24,66 @@
 
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2, 19, 0)
 #define NCCL_BUFF_REG 1
-#else
-#define NCCL_BUFF_REG 0
+#endif
+
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 18, 0)
+#define NCCL_COMM_SPLIT 1
 #endif
 
 namespace turbomind::comm {
 
-static inline ncclDataType_t getNcclDataType(DataType type)
+static inline ncclDataType_t to_nccl_dtype(DataType type)
 {
     switch (type) {
-        case DataType::TYPE_FP32:
+        case kFloat32:
             return ncclFloat;
-        case DataType::TYPE_FP16:
+        case kFloat16:
             return ncclHalf;
-        case DataType::TYPE_BF16:
+        case kBfloat16:
             return ncclBfloat16;
-        case DataType::TYPE_UINT8:
+        case kUint8:
             return ncclUint8;
         default:
             throw std::runtime_error("not supported");
     }
 }
 
-class NcclComm: public Comm {
+class NcclCommImpl: public DeviceCommImpl {
 public:
-    NcclComm(ncclComm_t comm, int world_size, int rank): Comm(world_size, rank), comm_{comm} {}
+    NcclCommImpl(ncclComm_t comm, int n_ranks, int rank, HostComm h_comm):
+        h_comm_{h_comm}, global_n_ranks_{n_ranks}, global_rank_{rank}, groups_{comm}
+    {
+    }
 
-    ~NcclComm()
+    ~NcclCommImpl()
     {
         for (const auto& [ptr, _] : handles_) {
-            TM_LOG_WARNING("[TM][NCCL][%d] Buffer %p is not deregistered", rank_, ptr);
+            TM_LOG_WARNING("[NCCL][%d] Buffer %p is not deregistered", global_rank_, ptr);
         }
 
         for (const auto& [ptr, size] : buffers_) {
-            TM_LOG_WARNING("[TM][NCCL][%d] Allocation (%p, %lu) is not freed", rank_, ptr, size);
+            TM_LOG_WARNING("[NCCL][%d] Allocation (%p, %lu) is not freed", global_rank_, ptr, size);
         }
 
-        if (auto ec = ncclCommFinalize(comm_); ec != ncclSuccess) {
-            TM_LOG_ERROR("[TM][NCCL][%d] Failed to finalize communicator: %s", rank_, ncclGetErrorString(ec));
+        for (auto& c : groups_) {
+            if (auto ec = ncclCommDestroy(c); ec != ncclSuccess) {
+                TM_LOG_ERROR("[NCCL][%d] Failed to destroy communicator: %s", global_rank_, ncclGetErrorString(ec));
+            }
         }
+    }
 
-        if (auto ec = ncclCommDestroy(comm_); ec != ncclSuccess) {
-            TM_LOG_ERROR("[TM][NCCL][%d] Failed to destroy communicator: %s", rank_, ncclGetErrorString(ec));
-        }
+    int rank(int group) const override
+    {
+        int rank{};
+        NCCLCHECK(ncclCommUserRank(groups_.at(group), &rank));
+        return rank;
+    }
+
+    int n_ranks(int group) const override
+    {
+        int n_ranks{};
+        NCCLCHECK(ncclCommCount(groups_.at(group), &n_ranks));
+        return n_ranks;
     }
 
     void* Allocate(size_t size) override
@@ -90,7 +110,7 @@ public:
             buffers_.erase(ptr);
         }
         else {
-            TM_LOG_WARNING("[TM][NCCL][%d] Freeing %p which is not allocated by NcclComm", rank_, ptr);
+            TM_LOG_WARNING("[NCCL][%d] Freeing %p which is not allocated by NcclComm", global_rank_, ptr);
         }
     }
 
@@ -99,11 +119,11 @@ public:
 #if NCCL_BUFF_REG
         if (!handles_.count(ptr)) {
             void* handle{};
-            NCCLCHECK(ncclCommRegister(comm_, ptr, size, &handle));
+            NCCLCHECK(ncclCommRegister(groups_.at(0), ptr, size, &handle));
             handles_.emplace(ptr, handle);
         }
         else {
-            TM_LOG_WARNING("[TM][NCCL][%d] Duplicated registration on (%p, %lu)", rank_, ptr, size);
+            TM_LOG_WARNING("[NCCL][%d] Duplicated registration on (%p, %lu)", global_rank_, ptr, size);
         }
 #endif
     }
@@ -112,12 +132,27 @@ public:
     {
 #if NCCL_BUFF_REG
         if (auto it = handles_.find(ptr); it != handles_.end()) {
-            NCCLCHECK(ncclCommDeregister(comm_, it->second));
+            NCCLCHECK(ncclCommDeregister(groups_.at(0), it->second));
             handles_.erase(it);
         }
         else {
-            TM_LOG_WARNING("[TM][NCCL][%d] Deregistering non-registered address %p", rank_, ptr);
+            TM_LOG_WARNING("[NCCL][%d] Deregistering non-registered address %p", global_rank_, ptr);
         }
+#endif
+    }
+
+    int Split(int color, int key, int group) override
+    {
+#if NCCL_COMM_SPLIT
+        ncclComm_t comm{};
+        NCCLCHECK(ncclCommSplit(groups_.at(group), color, key, &comm, nullptr));
+        int index = groups_.size();
+        groups_.push_back(comm);
+        return index;
+#else
+        TM_LOG_ERROR("[NCCL] This binary is compiled with NCCL version < 2.18 that has no `ncclCommSplit` support");
+        FT_CHECK(0);
+        return {};
 #endif
     }
 
@@ -126,25 +161,28 @@ public:
         return 0;
     }
 
-    void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override
+    void AllReduceSum(
+        const void* sendbuff, void* recvbuff, size_t count, DataType type, int group, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());
-        NCCLCHECK(ncclAllReduce(sendbuff, recvbuff, count, getNcclDataType(type), ncclSum, comm_, stream));
+        NCCLCHECK(ncclAllReduce(sendbuff, recvbuff, count, to_nccl_dtype(type), ncclSum, groups_.at(group), stream));
         NCCLCHECK(ncclGroupEnd());
     }
 
-    void AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, cudaStream_t stream) override
+    void AllGather(
+        const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());
-        NCCLCHECK(ncclAllGather(sendbuff, recvbuff, sendcount, getNcclDataType(type), comm_, stream));
+        NCCLCHECK(ncclAllGather(sendbuff, recvbuff, sendcount, to_nccl_dtype(type), groups_.at(group), stream));
         NCCLCHECK(ncclGroupEnd());
     }
 
-    void
-    ReduceScatter(const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, cudaStream_t stream) override
+    void ReduceScatter(
+        const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, int group, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());
-        NCCLCHECK(ncclReduceScatter(sendbuff, recvbuff, recvcount, getNcclDataType(type), ncclSum, comm_, stream));
+        NCCLCHECK(
+            ncclReduceScatter(sendbuff, recvbuff, recvcount, to_nccl_dtype(type), ncclSum, groups_.at(group), stream));
         NCCLCHECK(ncclGroupEnd());
     }
 
@@ -156,9 +194,10 @@ public:
                                       int          dim,
                                       int          token_num,
                                       DataType     dtype,
+                                      int          group,
                                       cudaStream_t stream) override
     {
-        const auto elem_size = get_elem_size(dtype);
+        const auto elem_size = byte_size(dtype);
 
         auto rms_norm = [&](int64_t first, int64_t count) {
             invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
@@ -173,58 +212,122 @@ public:
         };
 
         if (1) {
-            AllReduceSum(hidden, hidden, token_num * dim, dtype, stream);
+            AllReduceSum(hidden, hidden, token_num * dim, dtype, group, stream);
             rms_norm(0, token_num);
         }
         else {  // Only useful for large input size
-            const int    slice     = (token_num + world_size_ - 1) / world_size_;
+            const int    n_ranks   = this->n_ranks(group);
+            const int    rank      = this->rank(group);
+            const int    slice     = (token_num + n_ranks - 1) / n_ranks;
             const size_t recvcount = slice * dim;
             auto         sendbuff  = hidden;
-            auto         recvbuff  = (char*)hidden + elem_size * rank() * recvcount;
-            ReduceScatter(sendbuff, recvbuff, recvcount, dtype, stream);
-            rms_norm(rank_ * slice, slice);
-            AllGather(recvbuff, sendbuff, recvcount, dtype, stream);
+            auto         recvbuff  = (char*)hidden + elem_size * rank * recvcount;
+            ReduceScatter(sendbuff, recvbuff, recvcount, dtype, group, stream);
+            rms_norm(rank * slice, slice);
+            AllGather(recvbuff, sendbuff, recvcount, dtype, group, stream);
+        }
+    }
+
+    void AllreduceResidualBiasRMSnormEx(void*        hidden,
+                                        void*        residual,
+                                        const void*  bias,
+                                        const void*  weights,
+                                        float        eps,
+                                        int          dim,
+                                        DataType     type,
+                                        int          group0,
+                                        int          group1,
+                                        const int*   local_token_nums,
+                                        cudaStream_t stream) override
+    {
+        const size_t         elem_size = byte_size(type);
+        const ncclDataType_t nccl_type = to_nccl_dtype(type);
+
+        FT_CHECK(group0 == 0 || group1 == 0);
+
+        ncclComm_t comm0 = groups_.at(group0);
+        ncclComm_t comm1 = groups_.at(group1);
+
+        int tp0{}, tp1{};
+        NCCLCHECK(ncclCommCount(comm0, &tp0));
+        NCCLCHECK(ncclCommCount(comm1, &tp1));
+
+        const int inner_tp = std::min(tp0, tp1);
+
+        FT_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+
+        std::vector<std::tuple<int, int, int>> tasks;
+        tasks.reserve(global_n_ranks_);
+
+        for (int i = 0, offset = 0; i < global_n_ranks_; ++i) {
+            const int num   = local_token_nums[i / inner_tp];
+            const int slice = (num + inner_tp - 1) / inner_tp;
+            const int first = std::min(num, i % inner_tp * slice);
+            const int last  = std::min(num, first + slice);
+            tasks.emplace_back(offset, first, last - first);
+            if ((i + 1) % inner_tp == 0) {
+                offset += num;
+            }
+        }
+
+        if (tp0 > 1) {
+            NCCLCHECK(ncclGroupStart());
+            for (int i = 0; i < global_n_ranks_; ++i) {
+                if (auto& [offset, first, num] = tasks[i]; num > 0) {
+                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, i % tp0, comm0, stream));
+                }
+            }
+            NCCLCHECK(ncclGroupEnd());
+            sync_check_cuda_error();
+        }
+
+        if (auto& [offset, first, num] = tasks[global_rank_]; num > 0) {
+            char* buff = (char*)hidden + elem_size * (offset + first) * dim;
+            invokeResidualBiasRMSNorm(
+                buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream);
+            sync_check_cuda_error();
+        }
+
+        if (tp1 > 1) {
+            NCCLCHECK(ncclGroupStart());
+            for (int i = 0; i < global_n_ranks_; ++i) {
+                if (auto& [offset, first, num] = tasks[i]; num > 0) {
+                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, i % tp1, comm1, stream));
+                }
+            }
+            NCCLCHECK(ncclGroupEnd());
+            sync_check_cuda_error();
         }
     }
 
 private:
-    ncclComm_t comm_;
+    HostComm h_comm_;
+
+    int global_n_ranks_;
+    int global_rank_;
+
+    std::vector<ncclComm_t> groups_;
 
     std::unordered_map<void*, void*>  handles_;
     std::unordered_map<void*, size_t> buffers_;
 };
 
-class NcclGroupId: public GroupId {
-public:
-    void Initialize() override
-    {
-        NCCLCHECK(ncclGetUniqueId(&uid_));
-    }
-
-    void Export(std::ostream& os) override
-    {
-        os.write((const char*)&uid_, sizeof(uid_));
-    }
-
-    void Import(std::istream& is) override
-    {
-        is.read((char*)&uid_, sizeof(uid_));
-    }
-
-    std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size) override
-    {
-        ncclComm_t comm{};
-        NCCLCHECK(ncclCommInitRank(&comm, world_size, uid_, rank));
-        return std::make_unique<NcclComm>(comm, world_size, rank);
-    }
-
-private:
-    ncclUniqueId uid_{};
-};
-
-std::unique_ptr<GroupId> CreateNcclGroupId()
+DeviceComm CreateNcclCommunicator(int n_ranks, int rank, HostComm h_comm)
 {
-    return std::make_unique<NcclGroupId>();
+    ncclUniqueId uid{};
+    if (rank == 0) {
+        NCCLCHECK(ncclGetUniqueId(&uid));
+    }
+
+    static_assert(std::is_trivially_copyable_v<ncclUniqueId>);
+    Broadcast(h_comm, uid, 0);
+
+    ncclComm_t comm{};
+    NCCLCHECK(ncclCommInitRank(&comm, n_ranks, uid, rank));
+
+    return DeviceComm{std::make_unique<NcclCommImpl>(comm, n_ranks, rank, h_comm)};
 }
 
 }  // namespace turbomind::comm

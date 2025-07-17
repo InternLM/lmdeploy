@@ -5,8 +5,6 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .triton_utils import get_kernel_meta
-
 
 @triton.jit
 def _div_up(val, other):
@@ -69,7 +67,7 @@ def _fill_kv_cache_kernel(
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """fill kv cache kernel."""
+    """Fill kv cache kernel."""
     batch_id = tl.program_id(2)
     head_id = tl.program_id(0)
     block_id = tl.program_id(1)
@@ -172,7 +170,7 @@ def _fill_kv_cache_quant_kernel(
     BLOCK_DV: tl.constexpr,
     BLOCK_H: tl.constexpr,
 ):
-    """fill kv cache kernel with int4 and int8 quant fuzed.
+    """Fill kv cache kernel with int4 and int8 quant fuzed.
 
     Args:
         stride_xss: stride of sequence length dim of key or value states
@@ -280,7 +278,7 @@ def fill_kv_cache(k_states: Tensor,
                   v_scales_zeros: Tensor = None,
                   quant_policy: Literal[0, 4, 8] = 0,
                   kv_layout: str = 'bshd'):
-    """fill key/value state to cache for paged attention."""
+    """Fill key/value state to cache for paged attention."""
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
     elif kv_layout == 'bhsd':
@@ -303,9 +301,10 @@ def fill_kv_cache(k_states: Tensor,
     BLOCK_H = triton.next_power_of_2(num_heads)
     BLOCK_D = triton.next_power_of_2(head_dim)
     BLOCK_DV = triton.next_power_of_2(head_dim_v)
-    kernel_meta = get_kernel_meta(k_states)
+    if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
+        BLOCK_DV = 0
     if quant_policy == 0:
-        grid = [num_heads, max_num_blocks, batch_size]
+        grid = (num_heads, max_num_blocks, batch_size)
         is_decoding = max_num_blocks == 1
         _fill_kv_cache_kernel[grid](
             k_states,
@@ -339,10 +338,9 @@ def fill_kv_cache(k_states: Tensor,
             BLOCK_DV=BLOCK_DV,
             num_warps=4,
             num_stages=3,
-            **kernel_meta,
         )
     else:
-        grid = [batch_size, max_num_blocks]
+        grid = (batch_size, max_num_blocks)
         _fill_kv_cache_quant_kernel[grid](
             k_states,
             v_states,
@@ -387,5 +385,4 @@ def fill_kv_cache(k_states: Tensor,
             BLOCK_H=BLOCK_H,
             num_warps=4,
             num_stages=3,
-            **kernel_meta,
         )

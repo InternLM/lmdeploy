@@ -13,7 +13,7 @@ logger = get_logger('lmdeploy')
 
 
 def check_deepseek_vl_install():
-    """check deepseek_vl install."""
+    """Check deepseek_vl install."""
     try:
         import deepseek_vl  # noqa: F401
     except ImportError:
@@ -31,10 +31,13 @@ class DeepSeekVisionModel(VisonModel):
     def build_preprocessor(self):
         check_deepseek_vl_install()
         from deepseek_vl.models import VLChatProcessor
-        self.image_processor = VLChatProcessor.from_pretrained(self.model_path).image_processor
+        vl_chat_processor = VLChatProcessor.from_pretrained(self.model_path)
+        tokenizer = vl_chat_processor.tokenizer
+        self.image_token_id = tokenizer.vocab.get(vl_chat_processor.image_tag)
+        self.image_processor = vl_chat_processor.image_processor
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
@@ -84,7 +87,7 @@ class DeepSeekVisionModel(VisonModel):
         self.aligner = model.aligner.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refers to the spec of `super.preprocess()"""
+        """Refers to the spec of `super.preprocess()"""
         images = self.collect_images(messages)
         outputs = []
         for image, _ in images:
@@ -103,7 +106,7 @@ class DeepSeekVisionModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
@@ -139,7 +142,7 @@ class DeepSeekVisionModel(VisonModel):
                 continue
             elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
+            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             content = content[0]
             n_image = sum([1 for x in message['content'] if x['type'] == 'image'])
             n_placeholder = content.count(IMAGE_TOKEN)

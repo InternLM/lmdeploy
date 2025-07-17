@@ -19,7 +19,7 @@ __global__ void sampling(const T*       logits,
                          curandState_t* curandstate,
                          int*           output_ids,
                          int*           sequence_length,
-                         float*         sampled_logprobs,
+                         T*             sampled_logprobs,
                          uint32_t*      sampled_indexes,
                          uint32_t*      sampled_nums)
 {
@@ -92,7 +92,7 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    params.curandstate,
                                                    params.output_ids,
                                                    params.sequence_length,
-                                                   params.sampled_logprobs,
+                                                   (T*)params.sampled_logprobs,
                                                    params.sampled_indexes,
                                                    params.sampled_nums);
 }

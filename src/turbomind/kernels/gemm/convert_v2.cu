@@ -157,12 +157,12 @@ int Convert(const void*         S,  //
     auto dispatch_3 = [&](auto mma, auto operand, auto order) -> bool {
         if constexpr (is_AB(operand)) {
             switch (Ddesc.type) {
-                case DataType::F16:
-                case DataType::BF16:
+                case kFloat16:
+                case kBfloat16:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint16_t>);
-                case DataType::U8:
+                case kUint8:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint8_t>);
-                case DataType::U4:
+                case kUint4:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint4_t>);
                 default:
                     return false;
@@ -170,7 +170,7 @@ int Convert(const void*         S,  //
         }
         else {  // UV: U16, U32
             switch (Ddesc.type) {
-                case DataType::U32:
+                case kUint32:
                     return dispatch_4(mma, operand, order, type_c<uint32_t>, type_c<uint32_t>);
                 default:
                     return false;
@@ -228,11 +228,11 @@ std::tuple<Order, Pack, Order, Pack>
 get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool force_simt)
 {
     if (is_fused_moe) {
-        if (dtype == DataType::BF16 && sm >= 80) {
+        if (dtype == kBfloat16 && sm >= 80) {
             return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
         }
 
-        if (dtype == DataType::F16) {
+        if (dtype == kFloat16) {
             if (sm >= 80) {
                 return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
             }
@@ -243,7 +243,7 @@ get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool for
                 return {kColMajor, HMMA_884 | OPERAND_B | 1, {}, {}};
             }
         }
-        else if (dtype == DataType::U4) {
+        else if (dtype == kUint4) {
             if (sm >= 80) {
                 return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
             }
@@ -256,7 +256,7 @@ get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool for
         }
     }
     else {
-        if (dtype == DataType::U4) {
+        if (dtype == kUint4) {
             if (force_simt) {
                 return {kColMajor, HMMA_SIMT | OPERAND_B | 1, kRowMajor, HMMA_SIMT | OPERAND_V | 1};
             }
@@ -299,7 +299,7 @@ __global__ void fill_strided_ptrs(Param<N> param)
 
 }  // namespace
 
-void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
+void* make_strided_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
 {
     constexpr int N = 64;
     Param<N>      param{};
@@ -318,6 +318,38 @@ void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStre
         param.ptr += N;
     }
     return ptr;
+}
+
+namespace {
+
+template<int N>
+__global__ void fill_blocked_ptrs(Array<void*, N> src, void** dst, int n)
+{
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < n) {
+        dst[idx] = src[idx];
+    }
+}
+
+}  // namespace
+
+void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
+{
+    constexpr int   N = 64;
+    Array<void*, N> src{};
+    static_assert(sizeof(src) <= 4096);  // max parameter size for cuda11
+    void** dst{};
+    cudaMallocAsync(&dst, sizeof(void*) * ptrs.size(), stream);
+    for (int i = 0; i < (int)ptrs.size(); i += N) {
+        const int n = std::min<int>(ptrs.size() - i, N);
+        for (int j = 0; j < n; ++j) {
+            auto& [p, s] = ptrs[i + j];
+            src[j]       = p;
+        }
+        fill_blocked_ptrs<<<1, N, 0, stream>>>(src, dst, n);
+        dst += n;
+    }
+    return dst - ptrs.size();
 }
 
 }  // namespace turbomind::gemm

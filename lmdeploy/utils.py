@@ -2,6 +2,7 @@
 import asyncio
 import functools
 import logging
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -80,7 +81,7 @@ _FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d' \
 def get_logger(name: Optional[str] = None,
                log_file: Optional[str] = None,
                log_level: int = logging.INFO,
-               file_mode: str = 'w',
+               file_mode: str = 'a',
                log_formatter: str = _FORMAT) -> Logger:
     """Initialize and get a logger by name.
 
@@ -94,7 +95,7 @@ def get_logger(name: Optional[str] = None,
             will be added to the logger.
         log_level (int): The logger level.
         file_mode (str): The file mode used in opening log file.
-            Defaults to 'w'.
+            Defaults to 'a'.
         log_formatter (str): The logger output format.
     Returns:
         logging.Logger: The expected logger.
@@ -117,7 +118,14 @@ def get_logger(name: Optional[str] = None,
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     handlers = [stream_handler]
 
+    # set log_file from env
+    log_file = log_file or os.getenv('LMDEPLOY_LOG_FILE')
+
     if log_file is not None:
+        log_file = os.path.expanduser(log_file)
+        log_dir = os.path.dirname(log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         # Here, the default behaviour of the official logger is 'a'. Thus, we
         # provide an interface to change the file mode to the default
         # behaviour.
@@ -158,7 +166,7 @@ def filter_suffix(response: str, suffixes: Optional[List[str]] = None) -> str:
 
 # TODO remove stop_word_offsets stuff and make it clean
 def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
-    """return list of stop-words to numpy.ndarray."""
+    """Return list of stop-words to numpy.ndarray."""
     import numpy as np
     if stop_words is None:
         return None
@@ -212,7 +220,7 @@ def get_model(pretrained_model_name_or_path: str, download_dir: str = None, revi
 
 
 def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
-    """logging timer."""
+    """Logging timer."""
 
     @contextmanager
     def __timer():
@@ -228,7 +236,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
 
         @functools.wraps(func)
         def __func_warpper(*args, **kwargs):
-            """func warpper."""
+            """Func warpper."""
             if logger.level > level:
                 return func(*args, **kwargs)
             with __timer():
@@ -236,7 +244,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
 
         @functools.wraps(func)
         def __async_warpper(*args, **kwargs):
-            """async warpper."""
+            """Async warpper."""
 
             async def __tmp():
                 if logger.level > level:
@@ -343,11 +351,11 @@ def get_max_batch_size(device_type: str):
         # the max_batch_size 128
         return 128
     elif device_type == 'ascend':
-        return 16
+        return 256
     elif device_type == 'maca':
         return 256
     elif device_type == 'camb':
-        return 128
+        return 256
 
 
 def is_bf16_supported(device_type: str = 'cuda'):
@@ -387,3 +395,53 @@ def is_bf16_supported(device_type: str = 'cuda'):
         return True
     else:
         return False
+
+
+def try_import_deeplink(device_type: str):
+    deeplink_device_type_list = [
+        'ascend',
+        'npu',
+        'maca',
+        'camb',
+    ]
+    if device_type in deeplink_device_type_list:
+        try:
+            import dlinfer.framework.lmdeploy_ext  # noqa: F401
+        except Exception as e:
+            logger = get_logger('lmdeploy')
+            logger.error(f'{type(e).__name__}: {e}')
+            exit(1)
+
+
+def serialize_state_dict(state_dict: dict) -> str:
+    """Serialize state dict to str.
+
+    The consumer should use it on same node. As the producer and consumer may
+    have different GPU visibility, we use reduce_tensor instead of ForkingPickler.dumps
+    to fix the device_id when loading the serialized tensor.
+
+    Args:
+        state_dict (dict[str, torch.Tensor]): state dict to serialize.
+    Returns:
+        str: serialized state dict.
+    """
+    import base64
+    from io import BytesIO
+    from multiprocessing.reduction import ForkingPickler
+
+    from torch.multiprocessing.reductions import reduce_tensor
+    assert all(v.device.type == 'cuda' for v in state_dict.values())
+    data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
+    buf = BytesIO()
+    ForkingPickler(buf).dump(data)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode('utf-8')
+
+
+def is_dlblas_installed():
+    is_dlblas_installed = True
+    try:
+        import dlblas  # noqa: F401
+    except Exception:
+        is_dlblas_installed = False
+    return is_dlblas_installed

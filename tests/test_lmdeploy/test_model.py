@@ -3,25 +3,33 @@ import pytest
 from lmdeploy.model import MODELS, best_match_model
 
 
-@pytest.mark.parametrize('model_path_and_name', [('internlm/internlm-chat-7b', ['internlm']),
-                                                 ('internlm/internlm2-1_8b', ['base']),
-                                                 ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
-                                                 ('Qwen/Qwen-7B-Chat', ['qwen']),
-                                                 ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
-                                                 ('codellama/CodeLlama-7b-hf', ['codellama']),
-                                                 ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
-                                                 ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
-                                                 ('THUDM/chatglm2-6b', ['chatglm']),
-                                                 ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']), ('01-ai/Yi-34B-Chat', ['yi']),
-                                                 ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
-                                                 ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
-                                                 ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
-                                                 ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
-                                                 ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
-                                                 ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
-                                                 ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
-                                                 ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
-                                                 ('tiiuae/falcon-7b', ['falcon']), ('workspace', ['base'])])
+@pytest.mark.parametrize('model_path_and_name', [
+    ('internlm/internlm-chat-7b', ['internlm']),
+    ('internlm/internlm2-1_8b', ['base']),
+    ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
+    ('Qwen/Qwen-7B-Chat', ['qwen']),
+    ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
+    ('Qwen/Qwen2.5-VL-7B-Instruct', ['qwen2d5-vl']),
+    ('Qwen/Qwen3-32B', ['qwen3']),
+    ('Qwen/Qwen3-235B-A22B', ['qwen3']),
+    ('codellama/CodeLlama-7b-hf', ['codellama']),
+    ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
+    ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
+    ('THUDM/chatglm2-6b', ['chatglm']),
+    ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']),
+    ('01-ai/Yi-34B-Chat', ['yi']),
+    ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
+    ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
+    ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
+    ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
+    ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
+    ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
+    ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
+    ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
+    ('workspace', ['base']),
+    ('OpenGVLab/InternVL2_5-1B', ['internvl2_5']),
+    ('OpenGVLab/InternVL3-1B', ['internvl2_5']),
+])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
     if model_path_and_name[0] == 'internlm/internlm2-1_8b' and suffix:
@@ -578,6 +586,30 @@ def test_qwen2d5():
     assert model.messages2prompt(messages, tools=tools) == tool_prompt
 
 
+def test_qwen2d5_vl():
+    prompt = 'hello, can u introduce yourself'
+    model = MODELS.get('qwen2d5-vl')(capability='completion')
+    assert model.get_prompt(prompt, sequence_start=True) == prompt
+    assert model.get_prompt(prompt, sequence_start=False) == prompt
+
+    model = MODELS.get('qwen2d5-vl')(capability='chat')
+
+    messages = [dict(role='user', content='What\'s the temperature in San Francisco now?')]
+    res = ('<|im_start|>system\nYou are a helpful '
+           "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
+           'temperature in San Francisco '
+           'now?<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages) == res
+
+    messages.append({'role': 'assistant', 'content': 'I don\'t know.'})
+    res = ('<|im_start|>system\nYou are a helpful '
+           "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
+           'temperature in San Francisco '
+           "now?<|im_end|>\n<|im_start|>assistant\nI don't "
+           'know.<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages) == res
+
+
 def test_codellama_completion():
     model = MODELS.get('codellama')(capability='completion')
     prompt = """\
@@ -880,8 +912,6 @@ def test_deepseek_r1(model_path_or_name):
     }]
     ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     lm_res = chat_template.messages2prompt(messages)
-    if model_path_or_name != 'deepseek-ai/DeepSeek-V3':
-        lm_res += '<think>\n'
     assert ref == lm_res
 
 
@@ -911,4 +941,67 @@ def test_deepseek_vl2(model_path_or_name):
     ref = '<|User|>: This is image_1: <image>\nThis is image_2: <image>\nThis is image_3: <image>' + \
           '\n Can you tell me what are in the images?\n\n<|Assistant|>:'
     lm_res = chat_template.messages2prompt(messages)
+    assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path_or_name', [
+    'Qwen/QwQ-32B',
+    'Qwen/QwQ-32B-Preview',
+    'Qwen/QwQ-32B-AWQ',
+])
+def test_qwq(model_path_or_name):
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_name, trust_remote_code=True)
+    deduced_name = best_match_model(model_path_or_name)
+    chat_template = MODELS.get(deduced_name)()
+
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    lm_res = chat_template.messages2prompt(messages)
+    assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct'])
+@pytest.mark.parametrize('enable_thinking', [True, False, None])
+def test_qwen3(model_path, enable_thinking):
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    chat_template_name = best_match_model(model_path)
+    chat_template = MODELS.get(chat_template_name)()
+
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    if enable_thinking is None:
+        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    else:
+        ref = tokenizer.apply_chat_template(messages,
+                                            tokenize=False,
+                                            add_generation_prompt=True,
+                                            enable_thinking=enable_thinking)
+    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
     assert ref == lm_res

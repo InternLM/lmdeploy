@@ -28,7 +28,7 @@ size_t GetSyncFreeMemSize(Barrier& barrier, std::atomic<size_t>& value)
 }
 
 BlockManager::BlockManager(
-    size_t block_size, double block_count, int chunk_size, IAllocator* allocator, GetFreeMemSize get_free_size):
+    size_t block_size, double block_count, int chunk_size, core::Allocator allocator, GetFreeMemSize get_free_size):
     block_size_(block_size), allocator_(allocator)
 {
     if (block_count < 1.) {
@@ -48,7 +48,7 @@ BlockManager::BlockManager(
         chunk_size_ = chunk_size;
     }
 
-    TM_LOG_INFO("[BlockManager] block_size = %lu MB", (unsigned long)block_size_ >> 20);
+    TM_LOG_INFO("[BlockManager] block_size = %.3f MB", (float)block_size_ / (1 << 20));
     TM_LOG_INFO("[BlockManager] max_block_count = %d", max_block_count_);
     TM_LOG_INFO("[BlockManager] chunk_size = %d", chunk_size_);
 
@@ -66,7 +66,7 @@ BlockManager::BlockManager(
 BlockManager::~BlockManager()
 {
     for (auto& chunk : chunks_) {
-        allocator_->free(&chunk);
+        allocator_->deallocate(chunk, block_size_);
     }
 }
 
@@ -78,7 +78,7 @@ bool BlockManager::Malloc()
         return false;
     }
 
-    auto ptr = (std::byte*)allocator_->malloc(block_size_ * chunk_size);
+    auto ptr = (std::byte*)allocator_->allocate(block_size_ * chunk_size);
     if (!ptr) {
         return false;
     }
@@ -285,8 +285,7 @@ std::ostream& operator<<(std::ostream& os, const BlockManager& manager)
     os << "free_ids: " << manager.free_ids_.size() << ", ";
     os << "blocks: " << manager.blocks_.size() << ", ";
     os << "unique_id: " << manager.unique_id_ << ", ";
-    os << "timestamp: " << manager.timestamp_ << ", ";
-    os << "allocator: " << manager.allocator_;
+    os << "timestamp: " << manager.timestamp_;
     return os;
 }
 

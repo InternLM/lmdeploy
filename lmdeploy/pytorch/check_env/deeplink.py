@@ -1,16 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .base import BaseChecker
+from lmdeploy.utils import try_import_deeplink
 
-deeplink_device_type_list = [
-    'ascend',
-    'npu',
-    'maca',
-    'camb',
-]
+from .base import BaseChecker
 
 
 class DeeplinkChecker(BaseChecker):
-    """check pytorch is available."""
+    """Check pytorch is available."""
 
     def __init__(self, device_type: str, logger=None) -> None:
         super().__init__(logger=logger)
@@ -18,9 +13,4 @@ class DeeplinkChecker(BaseChecker):
 
     def check(self):
         """check."""
-        device_type = self.device_type
-        if device_type in deeplink_device_type_list:
-            try:
-                import dlinfer.framework.lmdeploy_ext  # noqa: F401
-            except Exception as e:
-                self.log_and_exit(e, 'dlinfer', 'dlinfer is not available.')
+        try_import_deeplink(self.device_type)

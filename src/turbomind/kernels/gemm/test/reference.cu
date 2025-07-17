@@ -25,9 +25,9 @@ MatrixLayout transpose(MatrixLayout x)
 cudaDataType to_cuda_dtype(DataType dtype)
 {
     switch (dtype) {
-        case DataType::F16:
+        case DataType::kFloat16:
             return CUDA_R_16F;
-        case DataType::BF16:
+        case DataType::kBfloat16:
             return CUDA_R_16BF;
         default:
             CHECK("unsupported data type" && 0);
@@ -106,7 +106,7 @@ void Reference::gemm(const void* A, MatrixLayout Adesc, const void* B, MatrixLay
                                CUBLAS_COMPUTE_32F,
                                CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 
-    CHECK(status == CUBLAS_STATUS_SUCCESS);
+    TM_CHECK_EQ(status, CUBLAS_STATUS_SUCCESS);
 }
 
 }  // namespace turbomind::gemm

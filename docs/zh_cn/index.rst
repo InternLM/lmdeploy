@@ -51,6 +51,7 @@ LMDeploy 工具箱提供以下核心功能：
    :caption: 模型列表
 
    supported_models/supported_models.md
+   supported_models/reward_models.md
 
 .. _llm_部署:
 .. toctree::
@@ -60,6 +61,7 @@ LMDeploy 工具箱提供以下核心功能：
    llm/pipeline.md
    llm/api_server.md
    llm/api_server_tools.md
+   llm/api_server_reasoning.md
    llm/api_server_lora.md
    llm/gradio.md
    llm/proxy_server.md
@@ -103,6 +105,8 @@ LMDeploy 工具箱提供以下核心功能：
    advance/debug_turbomind.md
    advance/structed_output.md
    advance/pytorch_multinodes.md
+   advance/pytorch_profiling.md
+   advance/metrics.md
 
 .. toctree::
    :maxdepth: 1

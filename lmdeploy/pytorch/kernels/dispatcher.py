@@ -11,7 +11,7 @@ logger = get_logger('lmdeploy')
 
 
 def _default_api(*args, **kwargs):
-    """default api."""
+    """Default api."""
     ...
 
 
@@ -25,7 +25,7 @@ class ParamParser:
         return self.param.name
 
     def func_arg(self):
-        """func arg."""
+        """Func arg."""
         param = self.param
         name = self.name()
         kind = param.kind
@@ -42,7 +42,7 @@ class ParamParser:
         return ret
 
     def func_input(self):
-        """func input."""
+        """Func input."""
         param = self.param
         name = self.name()
         kind = param.kind
@@ -64,13 +64,14 @@ class FunctionDispatcher:
         self.func_name = func_name
         self.dispatched_func = self.load_and_call
         self.device_manager.register_context_callback(self.device_callback)
+        self.device_map = {'cuda': 'cuda', 'ascend': 'dlinfer', 'npu': 'dlinfer', 'maca': 'dlinfer', 'camb': 'dlinfer'}
 
     def device_callback(self, context: DeviceContext):
-        """device context callback."""
+        """Device context callback."""
         self.dispatched_func = self.load_and_call
 
     def load_func(self, device: str):
-        """load function."""
+        """Load function."""
         try:
             mod = importlib.import_module(f'lmdeploy.pytorch.kernels.{device}')
             func = getattr(mod, self.func_name)
@@ -87,7 +88,7 @@ class FunctionDispatcher:
             self.impl_map[device] = func
 
     def load_and_call(self, *args, **kwargs):
-        """load and call."""
+        """Load and call."""
         device = self.device_manager.current_context().device_type
         if device not in self.impl_map:
             self.load_func(device)
@@ -95,7 +96,7 @@ class FunctionDispatcher:
         return self.dispatched_func(*args, **kwargs)
 
     def make_caller(self, api: Callable = _default_api, globals=None):
-        """make call function."""
+        """Make call function."""
         signature = inspect.signature(api)
         params = signature.parameters
 

@@ -13,8 +13,7 @@ if(NOT pybind11_FOUND)
 endif()
 
 pybind11_add_module(${PROJECT_NAME} bind.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE TransformerTritonBackend
-    LlamaTritonBackend)
+target_link_libraries(${PROJECT_NAME} PRIVATE LlamaTritonBackend)
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_14)
 
 set(_INSTALL_CUDA_RPATH

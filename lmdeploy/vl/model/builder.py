@@ -12,13 +12,15 @@ from lmdeploy.vl.model.base import VISION_MODELS
 from .cogvlm import CogVLMVisionModel  # noqa F401
 from .deepseek import DeepSeekVisionModel  # noqa F401
 from .deepseek_vl2 import DeepSeek2VisionModel  # noqa F401
+from .gemma3_vl import Gemma3VisionModel  # noqa F401
 from .glm_4v import GLM4VisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
+from .internvl3_hf import InternVL3VisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
+from .llama4 import LLama4VisionModel  # noqa F401
 from .llava import LlavaVisionModel  # noqa F401
 from .llava_hf import LlavaHfVisionModel  # noqa F401
 from .llava_next import LlavaNextVisionModel  # noqa F401
-from .mini_gemeni import MiniGeminiVisionModel  # noqa F401
 from .minicpmv import MiniCPMVModel  # noqa F401
 from .mllama import MllamaVLModel  # noqa F401
 from .molmo import MolmoVisionModel  # noqa F401
@@ -35,7 +37,7 @@ def load_vl_model(model_path: str,
                   backend: str,
                   with_llm: bool = False,
                   backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None):
-    """load visual model.
+    """Load visual model.
 
     Args:
         model_path(str): the path or repo_id from model hub of the model

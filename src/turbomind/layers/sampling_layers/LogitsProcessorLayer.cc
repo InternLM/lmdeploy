@@ -14,140 +14,108 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/layers/sampling_layers/LogitsProcessorLayer.h"
+#include <iostream>
+#include <numeric>
+
+#include "src/turbomind/core/check.h"
+#include "src/turbomind/engine/request.h"
 #include "src/turbomind/kernels/ban_bad_words.h"
+#include "src/turbomind/kernels/penalty_types.h"
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
-#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/layers/sampling_layers/LogitsProcessorLayer.h"
+#include "src/turbomind/layers/sampling_layers/utils.h"
 
 namespace turbomind {
 
 #define ALL_OF(p_, sz_, dt_, v_) (std::all_of(p_, p_ + sz_, [&](dt_ b) { return b == v_; }))
 
+namespace {
+
 template<typename T>
-void init_host_buffer(TensorMap* runtime_args, const std::string& key, size_t size, T* dst, T default_value)
+void init_host_buffer(const TensorMap& map, const std::string& key, size_t size, T* dst, T default_value)
 {
-    const Tensor src      = runtime_args->isExist(key) ? runtime_args->at(key) : Tensor();
-    const size_t src_size = src.size();
-    if (src_size > size) {
-        TM_LOG_ERROR("runtime_args %s has invalid size %ld vs batch_size %ld", key.c_str(), src_size, size);
-    }
-    if (src_size > 0) {
-        std::copy_n(src.getPtr<T>(), size, dst);
+    Tensor        empty{};
+    const Tensor& src = map.contains(key) ? map.at(key) : empty;
+
+    if (src) {
+        if (size_t sz = src.size(); sz > size) {
+            TM_LOG_ERROR("runtime_args %s has invalid size %ld vs batch_size %ld", key.c_str(), sz, size);
+        }
+        std::copy_n(src.data<T>(), size, dst);
     }
     else {
         std::fill_n(dst, size, default_value);
     }
 }
 
+}  // namespace
+
 template<typename T>
-void LogitsProcessorLayer<T>::allocateBuffer()
+LogitsProcessorLayer<T>::LogitsProcessorLayer(const BaseParam& param): BaseDynamicDecodeLayer{param}
 {
-    FT_CHECK(false);
+
+    repetition_penalty_ = {max_batch_size_, kCPUpinned};
+    min_lengths_        = {max_batch_size_, kCPUpinned};
+    temperature_        = {max_batch_size_, kCPUpinned};
+    bad_words_          = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kCPUpinned};
+    end_ids_            = {max_batch_size_ * kMaxEndIdsSize, kCPUpinned};
+
+    repetition_penalty_buf_ = {max_batch_size_, kDEVICE};
+    min_lengths_buf_        = {max_batch_size_, kDEVICE};
+    temperature_buf_        = {max_batch_size_, kDEVICE};
+    bad_words_buf_          = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kDEVICE};
+    end_ids_buf_            = {max_batch_size_ * kMaxEndIdsSize, kDEVICE};
 }
 
 template<typename T>
-void LogitsProcessorLayer<T>::allocateBuffer(const size_t batch_size)
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    repetition_penalty_buf_ =
-        reinterpret_cast<float*>(allocator_->reMalloc(repetition_penalty_buf_, sizeof(float) * batch_size, false));
-    min_lengths_buf_ = reinterpret_cast<int*>(allocator_->reMalloc(min_lengths_buf_, sizeof(int) * batch_size, false));
-    temperature_buf_ =
-        reinterpret_cast<float*>(allocator_->reMalloc(temperature_buf_, sizeof(float) * batch_size, false));
-
-    repetition_penalty_.resize(batch_size);
-    min_lengths_.resize(batch_size);
-    context_length_.resize(batch_size);
-    prompt_length_.resize(batch_size);
-    temperature_.resize(batch_size);
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
-}
-
-template<typename T>
-void LogitsProcessorLayer<T>::freeBuffer()
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    repetition_penalty_ = {};
-    min_lengths_        = {};
-    context_length_     = {};
-    prompt_length_      = {};
-    temperature_        = {};
-
-    allocator_->free((void**)&repetition_penalty_workspace_);
-    allocator_->free((void**)&repetition_penalty_buf_);
-    allocator_->free((void**)&min_lengths_buf_);
-    allocator_->free((void**)&temperature_buf_);
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
-}
-
-template<typename T>
-LogitsProcessorLayer<T>::~LogitsProcessorLayer()
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    freeBuffer();
-
-    TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
-}
-
-template<typename T>
-void LogitsProcessorLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors)
+void LogitsProcessorLayer<T>::Forward(TensorMap& args)
 {
     // apply repetition penalty -> ban bad words -> min length penalty -> temperature penalty
     // the order is same with transformers
 
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    FT_CHECK(input_tensors->at("logits").shape.size() == 3);
+    Tensor_<int> output_ids = args.at("output_ids");
+    Tensor_<T>   logits     = args.at("logits");
 
-    const int batch_size       = output_tensors->at("output_ids").shape[1];
-    const int step             = input_tensors->at("step").getVal<int>();
-    const int max_input_length = input_tensors->at("max_input_length").getVal<int>();
-    T*        logits           = input_tensors->at("logits").getPtr<T>();
+    const auto bsz = logits.shape(0);
+
+    const int step             = *args.at("step").data<int>();
+    const int max_input_length = *args.at("max_input_length").data<int>();
 
     // repetition penalty
     if (step > 1 && repetition_penalty_type_ != RepetitionPenaltyType::None) {
-        float default_value = getDefaultPenaltyValue(repetition_penalty_type_);
-        if (!ALL_OF(repetition_penalty_.begin(), batch_size, float, default_value)) {
-            repetition_penalty_workspace_ = reinterpret_cast<int*>(allocator_->reMalloc(
-                repetition_penalty_workspace_, batch_size * step * (sizeof(int) + sizeof(float)), false));
-            invokeBatchApplyRepetitionPenalty(
-                logits,
-                repetition_penalty_buf_,
-                repetition_penalty_workspace_,
-                output_tensors->at("output_ids").getPtr<int>(),
-                batch_size,
-                batch_size,
-                args_.vocab_size_padded,
-                input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<int>(),
-                max_input_length,
-                step,
-                repetition_penalty_type_,
-                stream_);
-            sync_check_cuda_error();
-        }
+        Buffer_<uint8_t> workspace(bsz * step * (sizeof(int) + sizeof(float)), kDEVICE);
+        invokeBatchApplyRepetitionPenalty(logits.data(),
+                                          repetition_penalty_buf_.data(),
+                                          (int*)workspace.data(),
+                                          output_ids.data(),
+                                          bsz,
+                                          bsz,
+                                          vocab_size_padded_,
+                                          args.at("init_context_length").data<int>(),
+                                          max_input_length,
+                                          step,
+                                          repetition_penalty_type_,
+                                          stream_);
+        sync_check_cuda_error();
     }
 
     // ban bad words
-    if (input_tensors->isExist("bad_words_list")) {
-        const Tensor bad_words = input_tensors->at("bad_words_list");
-        FT_CHECK(bad_words.shape.size() == 3);
-        const size_t bad_words_len = bad_words.shape[2];
-        invokeBanBadWords(logits,
-                          output_tensors->at("output_ids").getPtr<const int>(),
+    if (auto& bad_words = bad_words_ten_) {
+        TM_CHECK_EQ(bad_words.ndim(), 3);
+        const auto bad_words_len = bad_words.shape(2);
+        invokeBanBadWords(logits.data(),
+                          output_ids.data(),
                           nullptr,
-                          batch_size,
-                          batch_size,
+                          bsz,
+                          bsz,
                           1,
-                          bad_words.getPtr<const int>(),
+                          bad_words.data(),
                           false,
                           bad_words_len,
                           0,
-                          args_.vocab_size_padded,
+                          vocab_size_padded_,
                           step,
                           stream_);
 
@@ -155,74 +123,117 @@ void LogitsProcessorLayer<T>::forward(TensorMap* output_tensors, TensorMap* inpu
     }
 
     // min length
-    {
-        const int        num_generated_tokens = step - max_input_length;
-        const int*       min_lengths          = min_lengths_.data();
-        std::vector<int> index(batch_size);
-        std::iota(index.begin(), index.end(), 0);
-        const bool invoke_min_length_penalty = std::any_of(index.begin(), index.end(), [&](int i) {
-            return min_lengths[i] > context_length_[i] + num_generated_tokens;
-        });
-        if (invoke_min_length_penalty && input_tensors->isExist("end_ids")) {
-            const Tensor end_ids = input_tensors->at("end_ids");
-            FT_CHECK(end_ids.shape.size() == 2);
-            invokeMinLengthPenalty(logits,
-                                   min_lengths_buf_,
-                                   output_tensors->getPtr<const int>("sequence_length"),
-                                   args_.vocab_size_padded,
-                                   batch_size,
-                                   input_tensors->getPtr<const int>("end_ids"),
-                                   end_ids.shape[1],
+    if (end_ids_ten_) {
+        TM_CHECK_EQ(end_ids_ten_.ndim(), 2);
+        auto enable = [&] {
+            const int num_generated_tokens = step - max_input_length;
+            auto      context_len          = args.at("context_length").data<int>();
+            for (int i = 0; i < bsz; ++i) {
+                if (min_lengths_[i] > context_len[i] + num_generated_tokens) {
+                    return true;
+                }
+            }
+            return false;
+        }();
+        if (enable) {
+            invokeMinLengthPenalty(logits.data(),
+                                   min_lengths_buf_.data(),
+                                   args.at("sequence_length").data<int>(),
+                                   vocab_size_padded_,
+                                   bsz,
+                                   end_ids_ten_.data(),
+                                   end_ids_ten_.shape(1),
                                    stream_);
             sync_check_cuda_error();
         }
     }
 
     // temperature
-    {
-        if (!ALL_OF(temperature_.begin(), batch_size, float, 1.f)) {
-            invokeBatchApplyTemperaturePenalty_v2(
-                logits, (T*)nullptr, temperature_buf_, batch_size, args_.vocab_size, args_.vocab_size_padded, stream_);
-            sync_check_cuda_error();
-        }
+    if (!ALL_OF(temperature_.begin(), bsz, float, 1.f)) {
+        invokeBatchApplyTemperaturePenalty_v2(logits.data(),  //
+                                              (T*)nullptr,
+                                              temperature_buf_.data(),
+                                              bsz,
+                                              vocab_size_,
+                                              vocab_size_padded_,
+                                              stream_);
+        sync_check_cuda_error();
     }
 
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template<typename T>
-void LogitsProcessorLayer<T>::setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args)
+void LogitsProcessorLayer<T>::Setup(const std::vector<const Request*>& rs, const TensorMap& args)
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    allocateBuffer(batch_size);
+    const int bsz = rs.size();
 
-    // repetition_penalty
-    if (runtime_args->isExist("repetition_penalty")) {
-        init_host_buffer(runtime_args, "repetition_penalty", batch_size, repetition_penalty_.data(), 1.f);
-        repetition_penalty_type_ = RepetitionPenaltyType::Multiplicative;
+    const auto prompt_length = args.at("prompt_length").data<int>();
+
+    repetition_penalty_type_ = RepetitionPenaltyType::None;
+
+    for (int i = 0; i < bsz; ++i) {
+        auto& c = rs[i]->gen_cfg;
+        // repetition_penalty
+        repetition_penalty_[i] = c.repetition_penalty;
+        if (repetition_penalty_[i] != 1.f) {
+            repetition_penalty_type_ = RepetitionPenaltyType::Multiplicative;
+        }
+        // temperature
+        temperature_[i] = c.temperature;
+        // min_length
+        min_lengths_[i] = c.min_new_tokens + prompt_length[i];
     }
 
-    // temperature
-    init_host_buffer(runtime_args, "temperature", batch_size, temperature_.data(), 1.f);
-
-    // min_length
-    init_host_buffer(runtime_args, "min_length", batch_size, min_lengths_.data(), 0);
-    init_host_buffer(runtime_args, "context_length", batch_size, context_length_.data(), 0);
-    init_host_buffer(runtime_args, "prompt_length", batch_size, prompt_length_.data(), 0);
-
-    // invokeMinLengthPenalty if min_length > context_length - prompt_length + num_generated_tokens
-    std::transform(
-        min_lengths_.begin(), min_lengths_.end(), prompt_length_.begin(), min_lengths_.begin(), std::plus<int>());
-
-    cudaAutoCpy(temperature_buf_, temperature_.data(), batch_size, stream_);
-    cudaAutoCpy(repetition_penalty_buf_, repetition_penalty_.data(), batch_size, stream_);
-    cudaAutoCpy(min_lengths_buf_, min_lengths_.data(), batch_size, stream_);
+    Copy_(temperature_, bsz, temperature_buf_);
+    Copy_(repetition_penalty_, bsz, repetition_penalty_buf_);
+    Copy_(min_lengths_, bsz, min_lengths_buf_);
 
     sync_check_cuda_error();
+
+    bad_words_ten_ = {};
+    init_stop_bad_words(&GenerationConfig::bad_ids,  //
+                        "bad_words",
+                        rs,
+                        bad_words_.data(),
+                        bad_words_buf_.data(),
+                        bad_words_ten_);
+
+    {  // end ids for min length
+        end_ids_ten_   = {};
+        int max_length = 0;
+        for (int i = 0; i < bsz; ++i) {
+            max_length = std::max(max_length, (int)rs[i]->gen_cfg.eos_ids.size());
+        }
+        if (max_length) {
+            max_length     = std::min(max_length, kMaxEndIdsSize);
+            int* h_end_ids = end_ids_.data();
+            std::fill(h_end_ids, h_end_ids + std::min(kMaxEndIdsSize, max_length) * bsz, -1);
+            for (int i = 0; i < bsz; ++i) {
+                const auto& eos_ids = rs[i]->gen_cfg.eos_ids;
+                if (eos_ids.size() == 0) {
+                    continue;
+                }
+                if (TM_UNLIKELY(eos_ids.size() > kMaxEndIdsSize)) {
+                    TM_LOG_WARNING("[InitializeSampling] [%ld] eos length (%d) exceeds %d, truncated to %d",
+                                   (long)rs[i]->id,
+                                   (int)eos_ids.size(),
+                                   kMaxEndIdsSize,
+                                   kMaxEndIdsSize);
+                }
+                std::copy_n(eos_ids.begin(), std::min((int)eos_ids.size(), kMaxEndIdsSize), h_end_ids);
+                h_end_ids += max_length;
+            }
+            Copy(end_ids_, bsz * max_length, end_ids_buf_);
+            end_ids_ten_ = {end_ids_buf_.data(), {bsz, max_length}, kDEVICE};
+        }
+    }
 
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template class LogitsProcessorLayer<float>;
+
 }  // namespace turbomind

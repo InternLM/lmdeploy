@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Tested TurboMind models list. eg. [internlm_chat_7b,internlm_chat_7b_w8a16]'
         type: string
-        default: '[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_7b_chat_batch1_4bits, turbomind_internlm3_8b_instruct, pytorch_internlm3_8b_instruct, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_internlm2_chat_20b, pytorch_internlm2_chat_20b, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, turbomind_qwen2_5_7b_instruct, pytorch_qwen2_5_7b_instruct, turbomind_llama2_7b_chat, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it, pytorch_gemma_2_27b_it, turbomind_internlm2_chat_7b_4bits, turbomind_internlm2_chat_7b_kvint4, turbomind_internlm2_chat_7b_kvint8, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, turbomind_internlm2_5_7b_chat_kvint8, pytorch_internlm2_5_7b_chat_w8a8, turbomind_internlm3_8b_instruct_4bits, turbomind_internlm3_8b_instruct_kvint4, turbomind_internlm3_8b_instruct_kvint8, pytorch_internlm3_8b_instruct_w8a8, turbomind_internlm2_5_20b_chat_4bits, turbomind_internlm2_5_20b_chat_kvint4, turbomind_internlm2_5_20b_chat_kvint8, turbomind_llama3_8b_instruct_4bits, turbomind_llama3_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_4bits, turbomind_llama3_1_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_kvint8,turbomind_llama3_8b_instruct_kvint8, pytorch_llama3_1_8b_instruct_w8a8, turbomind_qwen2_7b_instruct_4bits, turbomind_qwen2_7b_instruct_kvint8, pytorch_qwen2_7b_instruct_w8a8, turbomind_qwen2_5_7b_instruct_4bits, turbomind_qwen2_5_7b_instruct_kvint8, pytorch_qwen2_5_7b_instruct_w8a8, turbomind_llama2_7b_chat_4bits, turbomind_llama2_7b_chat_kvint4, turbomind_llama2_7b_chat_kvint8]'
+        default: '[turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_7b_chat_batch1_4bits, turbomind_internlm3_8b_instruct, pytorch_internlm3_8b_instruct, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, turbomind_qwen2_5_7b_instruct, pytorch_qwen2_5_7b_instruct, turbomind_qwen2_5_32b_instruct, pytorch_qwen2_5_32b_instruct, turbomind_llama2_7b_chat, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it, pytorch_gemma_2_27b_it, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, turbomind_internlm2_5_7b_chat_kvint8, pytorch_internlm2_5_7b_chat_w8a8, turbomind_internlm3_8b_instruct_4bits, turbomind_internlm3_8b_instruct_kvint4, turbomind_internlm3_8b_instruct_kvint8, pytorch_internlm3_8b_instruct_w8a8, turbomind_llama3_8b_instruct_4bits, turbomind_llama3_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_4bits, turbomind_llama3_1_8b_instruct_kvint4, turbomind_llama3_1_8b_instruct_kvint8,turbomind_llama3_8b_instruct_kvint8, pytorch_llama3_1_8b_instruct_w8a8, turbomind_qwen2_7b_instruct_4bits, turbomind_qwen2_7b_instruct_kvint8, pytorch_qwen2_7b_instruct_w8a8, turbomind_qwen2_5_7b_instruct_4bits, turbomind_qwen2_5_7b_instruct_kvint8, pytorch_qwen2_5_7b_instruct_w8a8, turbomind_qwen2_5_32b_instruct_4bits, turbomind_qwen2_5_32b_instruct_kvint8, pytorch_qwen2_5_32b_instruct_w8a8,turbomind_llama2_7b_chat_4bits, turbomind_llama2_7b_chat_kvint4, turbomind_llama2_7b_chat_kvint8]'
       chat_datasets:
         required: true
         description: 'Tested datasets list. eg. [*bbh_datasets,*ceval_datasets,*cmmlu_datasets,*GaokaoBench_datasets,*gpqa_datasets,*gsm8k_datasets,*hellaswag_datasets,*humaneval_datasets,*ifeval_datasets,*math_datasets,*sanitized_mbpp_datasets,*mmlu_datasets,*nq_datasets,*race_datasets,*TheoremQA_datasets,*triviaqa_datasets,*winogrande_datasets,*crowspairs_datasets]'
@@ -62,8 +62,8 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda11.8
-      OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
+      DOCKER_TAG: cuda12.4
+      OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -88,18 +88,17 @@ jobs:
           retention-days: 1
           name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
 
-
   evaluate:
     needs: linux-build
     if: ${{github.event_name == 'schedule' || !cancelled()}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-eval]
     timeout-minutes: 4320 # 72hours
     strategy:
       fail-fast: false
       matrix:
         evaluate_type: ['chat', 'base']
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -108,6 +107,7 @@ jobs:
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/root/models
+        - /mnt/187:/mnt/187
         - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -133,8 +133,6 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r /root/models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -156,7 +154,6 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
       - name: Setup paths for evaluation
@@ -169,7 +166,6 @@ jobs:
           echo ${{github.event.inputs.chat_models}}
           echo ${{github.event.inputs.chat_datasets}}
           export LMDEPLOY_DIR=$(pwd)
-
           python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.chat_models}}" "${{github.event.inputs.chat_datasets}}" /root/evaluation-reports/${{ github.run_id }} chat
       - name: Evaluate base models
         if: matrix.evaluate_type == 'base'
@@ -177,7 +173,6 @@ jobs:
           echo ${{github.event.inputs.base_models}}
           echo ${{github.event.inputs.baes_datasets}}
           export LMDEPLOY_DIR=$(pwd)
-
           python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation-reports/${{ github.run_id }} base
       - name: Clear workspace
         if: always()

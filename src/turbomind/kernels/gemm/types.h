@@ -26,6 +26,17 @@ constexpr Order operator~(Order a)
     return a == kColMajor ? kRowMajor : kColMajor;
 }
 
+constexpr const char* to_string(Order order)
+{
+    switch (order) {
+        case kColMajor:
+            return "Col";
+        case kRowMajor:
+            return "Row";
+    }
+    return "";
+}
+
 using Pack = uint32_t;
 
 typedef enum MMA_Tag
@@ -98,126 +109,6 @@ enum class Epilogue : int
     kGatedSilu          = 0x2,
 };
 
-enum class DataType : int
-{
-    U4,
-    U8,
-    U16,
-    U32,
-    U64,
-    F8_E4M3,
-    F8_E5M2,
-    F16,
-    F32,
-    BF16,
-    TF32,
-};
-
-inline const char* to_string(DataType data_type)
-{
-    switch (data_type) {
-        case DataType::U4:
-            return "u4";
-        case DataType::U8:
-            return "u8";
-        case DataType::F16:
-            return "f16";
-        case DataType::F32:
-            return "f32";
-        case DataType::BF16:
-            return "bf16";
-        case DataType::TF32:
-            return "tf32";
-        default:
-            return "unknown";
-    }
-}
-
-inline int64_t get_size(DataType type, int64_t size)
-{
-    if (!size) {
-        return 0;
-    }
-    switch (type) {
-        case DataType::U64:
-            return size * 8;
-        case DataType::F32:
-        case DataType::U32:
-            return size * 4;
-        case DataType::BF16:
-        case DataType::F16:
-        case DataType::U16:
-            return size * 2;
-        case DataType::U8:
-        case DataType::F8_E4M3:
-        case DataType::F8_E5M2:
-            return size;
-        case DataType::U4:
-            return size / 2;
-        default:
-            // std::cerr << to_string(type) << "\n";
-            return -1;
-    }
-}
-
-template<class T>
-struct get_data_type {
-};
-
-template<>
-struct get_data_type<half> {
-    static constexpr auto value = DataType::F16;
-};
-
-#if ENABLE_BF16
-template<>
-struct get_data_type<nv_bfloat16> {
-    static constexpr auto value = DataType::BF16;
-};
-#endif
-
-template<>
-struct get_data_type<uint4_t> {
-    static constexpr auto value = DataType::U4;
-};
-
-template<>
-struct get_data_type<uint8_t> {
-    static constexpr auto value = DataType::U8;
-};
-
-template<class T>
-inline constexpr auto get_data_type_v = get_data_type<T>::value;
-
-template<DataType dtype>
-struct get_dtype {
-};
-
-template<>
-struct get_dtype<DataType::F16> {
-    using type = half;
-};
-
-template<>
-struct get_dtype<DataType::U4> {
-    using type = uint4_t;
-};
-
-template<>
-struct get_dtype<DataType::U8> {
-    using type = uint8_t;
-};
-
-template<>
-struct get_dtype<DataType::U16> {
-    using type = uint16_t;
-};
-
-template<>
-struct get_dtype<DataType::U32> {
-    using type = uint32_t;
-};
-
 struct QuantDesc {
     QuantType type;
     int       group_size;
@@ -273,9 +164,15 @@ struct MatrixLayout {
     int*     idxs;
 };
 
-inline int64_t get_size(const MatrixLayout& m)
+inline std::ostream& operator<<(std::ostream& os, const MatrixLayout& x)
 {
-    return get_size(m.type, (int64_t)m.rows * m.cols);
+    os << x.type << " " << to_string(x.order) << " " << x.rows << " " << x.cols << " " << x.num << " " << x.ld;
+    return os;
+}
+
+inline int64_t byte_size(const MatrixLayout& m)
+{
+    return byte_size(m.type, (int64_t)m.rows * m.cols);
 }
 
 inline Striding get_mode(const MatrixLayout& m)
@@ -294,6 +191,9 @@ struct Workspace {
     size_t barriers_size;
     void*  partials;
     size_t partials_size;
+    void*  tensormaps;
+    size_t tensormaps_size;
+    int*   flags;
 };
 
 }  // namespace turbomind::gemm
