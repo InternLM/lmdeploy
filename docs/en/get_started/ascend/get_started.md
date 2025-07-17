@@ -28,7 +28,7 @@ cd lmdeploy
 
 ### Environment Preparation
 
-The Docker version is supposed to be no less than `18.09`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
+The Docker version is supposed to be no less than `18.09`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/600/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
 
 > \[!CAUTION\]
 > If error message `libascend_hal.so: cannot open shared object file` shows, that means **Ascend Docker Runtime** is not installed correctly!
@@ -58,7 +58,7 @@ If the following command executes without any errors, it indicates that the envi
 docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-ascend:latest lmdeploy check_env
 ```
 
-For more information about running the Docker client on Ascend devices, please refer to the [guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc1/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)
+For more information about running the Docker client on Ascend devices, please refer to the [guide](https://www.hiascend.com/document/detail/zh/mindx-dl/600/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)
 
 ## Offline batch inference
 
