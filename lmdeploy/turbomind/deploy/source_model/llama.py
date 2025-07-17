@@ -176,8 +176,7 @@ class LlamaModel(BaseInputModel):
                                                beta_slow=beta_slow)
                 elif scaling_type == 'mrope':
                     mrope_section = rope_scaling.get('mrope_section')
-                    rope_param.__dict__.update(type='mrope',
-                                               mrope_section=mrope_section)
+                    rope_param.__dict__.update(type='mrope', mrope_section=mrope_section)
                 else:
                     raise RuntimeError(f'Unsupported rope type: {scaling_type}')
 

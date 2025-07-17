@@ -76,7 +76,7 @@ struct Llama3RopeKernelParam {
 
 struct MultimodalRopeKernelParam {
     int3 section;
-    // runtime set
+
     int  session_len{};
     int* position_ids{};
     int* position_delta{};

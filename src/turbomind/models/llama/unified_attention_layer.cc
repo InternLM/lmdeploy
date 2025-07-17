@@ -141,9 +141,9 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
         rope_param_.base = const_cast<float*>(rope_base_.data());
     }
     else if (rope_param_.type == RopeType::kMultimodal && !isTuning()) {
-        auto& position_ids                    = args.at("mrope_position_ids");
-        rope_param_.multimodal.session_len    = position_ids.shape(1);  // session_len_ * 3
-        rope_param_.multimodal.position_ids   = position_ids.data<int>();
+        auto& position_ids                  = args.at("mrope_position_ids");
+        rope_param_.multimodal.session_len  = position_ids.shape(1) / 3;  // position_ids [batch_size, 3 * session_len]
+        rope_param_.multimodal.position_ids = position_ids.data<int>();
         rope_param_.multimodal.position_delta = args.at("mrope_position_delta").data<int>();
         rope_param_.multimodal.length         = args.at("mrope_position_length").data<int>();
     }

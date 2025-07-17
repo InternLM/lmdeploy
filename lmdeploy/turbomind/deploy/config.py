@@ -2,7 +2,7 @@
 import inspect
 import json
 from dataclasses import asdict, fields
-from typing import List, Union
+from typing import List
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
