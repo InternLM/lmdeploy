@@ -26,15 +26,15 @@ def get_launching_server_cmd(model_path, backend, server_config):
 
 
 def get_output_file(model_path, backend, server_config):
-    """Generate the benchmark output filename"""
+    """Generate the benchmark output filename."""
     model_name = server_config.get('model_name', None) or os.path.basename(model_path)
 
     if backend not in ['turbomind', 'pytorch', 'sglang', 'vllm']:
         raise ValueError(f'Unknown backend: {backend}')
-    
+
     if backend in ['sglang', 'vllm']:
         return f'benchmark_{model_name}_{backend}.csv'
-    
+
     # For turbomind/pytorch backends
     params = {
         'bs': server_config['max_batch_size'],
@@ -42,7 +42,7 @@ def get_output_file(model_path, backend, server_config):
         'cache': server_config.get('cache_max_entry_count', 0.8),
         'mptk': server_config.get('max_prefill_token_num', '')
     }
-    
+
     params_str = '_'.join(f'{k}{v}' for k, v in params.items() if v != '')
     return f'benchmark_{model_name}_{backend}_{params_str}.csv'
 
