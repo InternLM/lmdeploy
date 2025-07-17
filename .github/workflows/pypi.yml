@@ -58,6 +58,9 @@ jobs:
         pyver: ['3.9', '3.10', '3.11', '3.12', '3.13']
     runs-on: windows-latest
     steps:
+      - name: Set git for windows
+        run: |
+          git config --global core.longpaths true
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Set up python
@@ -66,8 +69,7 @@ jobs:
           python-version: ${{ matrix.pyver }}
       - name: Install python packages
         run: |
-          pip install -r requirements/build.txt
-          pip install wheel
+          pip install build change-wheel-version
       - name: Setup CUDA Toolkit
         id: cuda-toolkit
         shell: pwsh
@@ -76,20 +78,8 @@ jobs:
             INPUT_CUDA_VERSION: '12.1.0'
       - name: Build wheel
         run: |
-          mkdir build
-          cd build
-          # https://github.com/pypa/setuptools/issues/1631
-          pip install -U setuptools
-          ..\builder\windows\generate.ps1
-          cmake --build . --config Release -- /m /v:q
-          if (-Not $?) {
-            echo "build failed"
-            exit 1
-          }
-          cmake --install . --config Release
-          cd ..
-          rm build -Force -Recurse
-          python setup.py bdist_wheel -d build/wheel
+          python -m build --wheel -o build/wheel
+          change_wheel_version build/*.whl --local-version cu121 --delete-old-wheel
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
