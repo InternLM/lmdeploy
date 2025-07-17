@@ -40,10 +40,13 @@ def get_output_file(model_path, backend, server_config):
         'bs': server_config['max_batch_size'],
         'tp': server_config.get('tp', 1),
         'cache': server_config.get('cache_max_entry_count', 0.8),
-        'mptk': server_config.get('max_prefill_token_num', '')
+        'mptk': server_config.get('max_prefill_token_num', ''),
     }
-
     params_str = '_'.join(f'{k}{v}' for k, v in params.items() if v != '')
+    # Turbomind-specific additions
+    if backend == 'turbomind' and (comm := server_config.get('communicator')):
+        params_str += f'_{comm}'
+
     return f'benchmark_{model_name}_{backend}_{params_str}.csv'
 
 
