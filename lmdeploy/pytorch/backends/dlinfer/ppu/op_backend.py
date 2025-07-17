@@ -12,7 +12,7 @@ logger = get_logger('lmdeploy')
 
 
 class PpuOpsBackend(DlinferOpsBackend):
-    """Maca layer backend."""
+    """PPU layer backend."""
     total_slots = None
 
     @staticmethod
@@ -112,7 +112,7 @@ class PpuOpsBackend(DlinferOpsBackend):
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
 
-    @staticmethod
-    def support_ray():
-        """Support ray."""
-        return True
+    # @staticmethod
+    # def support_ray():
+    #     """Support ray."""
+    #     return True
