@@ -975,7 +975,7 @@ class Engine:
         return self.engine_conn.p2p_connect(conn_request)
 
     async def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
-        return self.engine_conn.p2p_drop_connect()
+        return self.engine_conn.p2p_drop_connect(drop_conn_request)
 
     @torch.inference_mode()
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
@@ -992,18 +992,22 @@ class Engine:
                     prefill_block_ids = migration_request.remote_block_ids
                     decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
 
-                    assert len(prefill_block_ids) == len(decode_block_ids)
-                    migration_execution_requests.append((
-                        migration_request.remote_engine_id,
-                        list(zip(prefill_block_ids, decode_block_ids)),
-                    ))
-                    migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
-                                                               requests=migration_execution_requests)
-                    logger.info(f'migrating session: {msg.session_id} begin')
-                    await self.executor.migrate(migration_inputs)
-                    logger.info(f'migrating session: {msg.session_id} done')
-                    await self.engine_conn.zmq_send(remote_engine_id=migration_request.remote_engine_id,
-                                                    remote_session_id=migration_request.remote_session_id)
+                    if not migration_request.is_dummy_prefill:
+                        assert len(prefill_block_ids) == len(decode_block_ids), (
+                            f'#prefill block ids ({len(prefill_block_ids)}) must equal to '
+                            f'#decode block ids ({len(decode_block_ids)})'
+                            f'all id length: {len(msg.num_token_ids)}')
+                        migration_execution_requests.append((
+                            migration_request.remote_engine_id,
+                            list(zip(prefill_block_ids, decode_block_ids)),
+                        ))
+                        migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
+                                                                   requests=migration_execution_requests)
+                        logger.info(f'migrating session: {msg.session_id} begin')
+                        await self.executor.migrate(migration_inputs)
+                        logger.info(f'migrating session: {msg.session_id} done')
+                        await self.engine_conn.zmq_send(remote_engine_id=migration_request.remote_engine_id,
+                                                        remote_session_id=migration_request.remote_session_id)
 
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()

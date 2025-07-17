@@ -108,7 +108,7 @@ class NodeManager:
         self.migration_protocol = MigrationProtocol[migration_protocol]
         self.rdma_config = DistServeRDMAConfig(with_gdr=with_gdr, link_type=RDMALinkType[link_type])
         self.pd_connection_pool = PDConnectionPool()
-        self.initialized = False
+        self.is_dummy_prefill = False
 
     def get_nodes(self, role: EngineRole) -> Dict:
         items = list(self.nodes.items())
@@ -315,7 +315,7 @@ class NodeManager:
         ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
         return ret
 
-    def handle_navailable_model(self, model_name):
+    def handle_unavailable_model(self, model_name):
         """Handle unavailable model.
 
         Args:
@@ -599,14 +599,17 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
 
-        p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
-        if not p_url:
-            return node_manager.handle_unavailable_model(request.model)
-        logger.info(f'A Prefill request is dispatched to {p_url}')
+        prefill_info = {}
+        p_url = 'dummy:dummy'
+        if not node_manager.is_dummy_prefill:
+            p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+            if not p_url:
+                return node_manager.handle_unavailable_model(request.model)
+            logger.info(f'A Prefill request is dispatched to {p_url}')
 
-        start = node_manager.pre_call(p_url)
-        prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/chat/completions'))
-        node_manager.post_call(p_url, start)
+            start = node_manager.pre_call(p_url)
+            prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/chat/completions'))
+            node_manager.post_call(p_url, start)
 
         # # Decode
         d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
@@ -614,21 +617,27 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             return node_manager.handle_unavailable_model(request.model)
         logger.info(f'A Decode request is dispatched to {d_url}')
 
-        if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
-            await node_manager.pd_connection_pool.connect(
-                PDConnectionMessage(
-                    p_url=p_url,
-                    d_url=d_url,
-                    protocol=node_manager.migration_protocol,
-                    rdma_config=node_manager.rdma_config,
-                ))
+        if not node_manager.is_dummy_prefill:
+            if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
+                await node_manager.pd_connection_pool.connect(
+                    PDConnectionMessage(
+                        p_url=p_url,
+                        d_url=d_url,
+                        protocol=node_manager.migration_protocol,
+                        rdma_config=node_manager.rdma_config,
+                    ))
+
+        remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
+        remote_block_ids = prefill_info.get('cache_block_ids') or []
+        remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
+
         request_dict['migration_request'] = MigrationRequest(
             protocol=node_manager.migration_protocol,
             remote_engine_id=p_url,
-            remote_session_id=int(prefill_info['id']),
-            remote_block_ids=prefill_info['cache_block_ids'],
-            remote_token_id=prefill_info['remote_token_ids'][-1],
-        ).model_dump(mode='json')
+            remote_session_id=remote_session_id,
+            remote_block_ids=remote_block_ids,
+            remote_token_id=remote_token_id,
+            is_dummy_prefill=node_manager.is_dummy_prefill).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
         node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
@@ -716,19 +725,23 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
 
-        try:
-            p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
-        except Exception as e:
-            logger.error(f'error Msg: {str(e)}')
-            return {'status': 'Instance sch error, cannot find available p_url'}
+        if not node_manager.is_dummy_prefill:
+            try:
+                p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+            except Exception as e:
+                logger.error(f'error Msg: {str(e)}')
+                return {'status': 'Instance sch error, cannot find available p_url'}
 
-        if not p_url:
-            return node_manager.handle_unavailable_model(request.model)
-        logger.info(f'A Prefill request is dispatched to {p_url}')
+            if not p_url:
+                return node_manager.handle_unavailable_model(request.model)
+            logger.info(f'A Prefill request is dispatched to {p_url}')
 
-        start = node_manager.pre_call(p_url)
-        prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/completions'))
-        node_manager.post_call(p_url, start)
+            start = node_manager.pre_call(p_url)
+            prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/completions'))
+            node_manager.post_call(p_url, start)
+        else:
+            p_url = 'dummy:dummy'
+            prefill_info = {}
 
         # Decode
         try:
@@ -741,27 +754,31 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             return node_manager.handle_unavailable_model(request.model)
         logger.info(f'A Decode request is dispatched to {d_url}')
 
-        if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
-            try:
-                await node_manager.pd_connection_pool.connect(
-                    PDConnectionMessage(
-                        p_url=p_url,
-                        d_url=d_url,
-                        protocol=node_manager.migration_protocol,
-                        rdma_config=node_manager.rdma_config,
-                    ))
-            except Exception as e:
-                logger.error(f'error Msg: {str(e)}')
-                return {'status': f'Connection error, cannot establish connection {(p_url, d_url)}'}
+        if not node_manager.is_dummy_prefill:
+            if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
+                try:
+                    await node_manager.pd_connection_pool.connect(
+                        PDConnectionMessage(
+                            p_url=p_url,
+                            d_url=d_url,
+                            protocol=node_manager.migration_protocol,
+                            rdma_config=node_manager.rdma_config,
+                        ))
+                except Exception as e:
+                    logger.error(f'error Msg: {str(e)}')
+                    return {'status': f'Connection error, cannot establish connection {(p_url, d_url)}'}
+            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
 
+        remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
+        remote_block_ids = prefill_info.get('cache_block_ids') or []
+        remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
         request_dict['migration_request'] = MigrationRequest(
             protocol=node_manager.migration_protocol,
             remote_engine_id=p_url,
-            remote_session_id=int(prefill_info['id']),
-            remote_block_ids=prefill_info['cache_block_ids'],
-            remote_token_id=prefill_info['remote_token_ids'][-1],
-        ).model_dump(mode='json')
-        node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
+            remote_session_id=remote_session_id,
+            remote_block_ids=remote_block_ids,
+            remote_token_id=remote_token_id,
+            is_dummy_prefill=node_manager.is_dummy_prefill).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
         if request.stream is True:
@@ -788,6 +805,7 @@ def proxy(server_name: str = '0.0.0.0',
           disable_cache_status: bool = False,
           link_type: Literal['RoCE', 'IB'] = 'RoCE',
           migration_protocol: Literal['RDMA'] = 'RDMA',
+          is_dummy_prefill: bool = False,
           **kwargs):
     """To launch the proxy server.
 
@@ -810,6 +828,7 @@ def proxy(server_name: str = '0.0.0.0',
     node_manager.serving_strategy = ServingStrategy[serving_strategy]
     node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)
     node_manager.migration_protocol = MigrationProtocol[migration_protocol]
+    node_manager.is_dummy_prefill = is_dummy_prefill
 
     node_manager.rdma_config = DistServeRDMAConfig(
         link_type=RDMALinkType[link_type],

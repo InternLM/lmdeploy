@@ -85,6 +85,8 @@ class MigrationRequest(BaseModel):
     remote_token_id: int
     remote_block_ids: List[int]
 
+    is_dummy_prefill: bool = False
+
 
 class DistServeCacheFreeRequest(BaseModel):
     remote_engine_id: str
