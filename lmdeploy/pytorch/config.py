@@ -240,6 +240,7 @@ class MiscConfig:
     empty_init: bool = False
     model_format: str = None
     hf_overrides: Dict[str, Any] = None
+    load_llm_only: bool = False
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -248,5 +249,6 @@ class MiscConfig:
                           empty_init=engine_config.empty_init,
                           prefill_interval=engine_config.prefill_interval,
                           model_format=engine_config.model_format,
-                          hf_overrides=engine_config.hf_overrides)
+                          hf_overrides=engine_config.hf_overrides,
+                          load_llm_only=engine_config.load_llm_only)
         return misc_config

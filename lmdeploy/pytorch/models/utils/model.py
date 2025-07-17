@@ -44,3 +44,31 @@ class DeployModelMixin:
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return None
+
+
+def _patch_vlm_init(vlm_cls):
+    """Patch the class to add DeployModelMixin."""
+    origin_init = vlm_cls.__init__
+
+    def _new_init(self, *args, **kwargs):
+        """New init method."""
+        from lmdeploy.pytorch.models.patch import get_build_model_context
+        bm_ctx = get_build_model_context()
+        load_llm_only = bm_ctx.load_llm_only
+
+        if load_llm_only:
+            # assume vls_cls is subclass of nn.Module
+            super(vlm_cls, self).__init__()
+            self._is_dummy_mod = True
+            return
+
+        origin_init(self, *args, **kwargs)
+
+    vlm_cls.__init__ = _new_init
+    return vlm_cls
+
+
+def vlm_model(vlm_cls):
+    """Decorator to mark a class as a VLM model."""
+    vlm_cls = _patch_vlm_init(vlm_cls)
+    return vlm_cls

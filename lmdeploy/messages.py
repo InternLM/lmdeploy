@@ -358,6 +358,7 @@ class PytorchEngineConfig:
     model_format: str = None
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
+    load_llm_only: bool = False
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
