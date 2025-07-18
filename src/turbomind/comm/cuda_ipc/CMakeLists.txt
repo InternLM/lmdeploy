@@ -7,7 +7,8 @@ add_library(cuda_ipc_comm STATIC
         allreduce.cu
         allgather.cu
         fused_allreduce.cu
-        fused_allreduce_ex.cu)
+        fused_allreduce_ex.cu
+        broadcast.cu)
 
 target_link_libraries(cuda_ipc_comm PRIVATE
         rms_norm
