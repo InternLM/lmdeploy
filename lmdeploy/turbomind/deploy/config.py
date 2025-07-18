@@ -107,6 +107,7 @@ class RopeParam:
     low_freq_factor: float = None
     high_freq_factor: float = None
     original_max_position_embeddings: int = None
+    mrope_section: List[int] = None
 
 
 @dataclass

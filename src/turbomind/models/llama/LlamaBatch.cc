@@ -340,6 +340,22 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             }
         }
 
+        // copy multimodal rope input meta
+        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+            TM_CHECK(r->session.start_flag) << "Multimodal rope doesn't support interactive chat";
+            if (r->inputs.count("mrope_position_ids")) {
+                core::Copy(r->inputs.at("mrope_position_ids").data<int>(),
+                           input_length * 3,
+                           state.mrope.position_ids.data() + idx * 3 * session_len_);
+                core::Copy(
+                    r->inputs.at("mrope_position_delta").data<int>(), 1, state.mrope.position_delta.data() + idx);
+                core::Copy(&input_length, 1, state.mrope.length.data() + idx);
+            }
+            else {
+                cudaMemsetAsync(state.mrope.length.data() + idx, 0, sizeof(int), stream_);
+            }
+        }
+
         const int max_new_tokens = state.requests[idx]->gen_cfg.max_new_tokens;
         state.seq_len_limit[idx] = state.h_context_length[idx] + max_new_tokens;
         // `length_criterion` sets finish flag when step >= seq_limit_len, however when step == seq_limit_len
@@ -673,6 +689,14 @@ void LlamaBatch::CopyState(const std::vector<std::tuple<BatchState*, BatchState*
                     d_idx,
                     std::tuple{s->output_ids.data(), d->output_ids.data(), session_len_},
                     std::tuple{(curandState_t*)s->curand_state.data(), (curandState_t*)d->curand_state.data(), 1});
+
+        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+            IndexedCopy(s_idx,
+                        d_idx,
+                        std::tuple{s->mrope.position_ids.data(), d->mrope.position_ids.data(), session_len_ * 3},
+                        std::tuple{s->mrope.position_delta.data(), d->mrope.position_delta.data(), 1},
+                        std::tuple{s->mrope.length.data(), d->mrope.length.data(), 1});
+        }
     }
 
     for (const auto& [s, d, si, di] : desc) {
@@ -743,6 +767,12 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
 
         s.curand_state = {{batch_size, sizeof(curandState_t)}, kDEVICE};
         Clear(s.curand_state.buffer());
+
+        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+            s.mrope.position_ids   = {{batch_size, session_len_ * 3}, kDEVICE};
+            s.mrope.position_delta = {batch_size, kDEVICE};
+            s.mrope.length         = {batch_size, kDEVICE};
+        }
     }
 
     h_input_length_buf_ = {batch_size, kCPUpinned};
@@ -1522,6 +1552,14 @@ bool LlamaBatch::Forward(GenerationState& g)
             }
         }
 
+        std::shared_ptr<MultimodalRope> mrope_sptr;
+        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+            mrope_sptr.reset(new MultimodalRope{session_len_,
+                                                state_->mrope.position_ids.slice(first, mini_batch_size),
+                                                state_->mrope.position_delta.slice(first, mini_batch_size),
+                                                state_->mrope.length.slice(first, mini_batch_size)});
+        }
+
         // Synchronize batch token num with sync DP ranks
         auto local_token_nums = AllGather(comm_.h_dp_group, sum_q);
         auto global_token_num = std::accumulate(local_token_nums.begin(), local_token_nums.end(), 0);
@@ -1536,6 +1574,7 @@ bool LlamaBatch::Forward(GenerationState& g)
                         h_input_length_buf_.slice(first, mini_batch_size),
                         state_->h_context_length.slice(first, mini_batch_size),
                         rope_theta_.slice(first, mini_batch_size),
+                        mrope_sptr.get(),
                         finished_buf_.slice(first, mini_batch_size),
                         Buffer(local_token_nums.data(), local_token_nums.size(), kCPU),
                         lora_mask_buf_,
@@ -1727,6 +1766,7 @@ void LlamaBatch::Warmup()
                             Buffer{&input_length, 1, kCPU},
                             Buffer{&input_length, 1, kCPU},
                             rope_theta_.slice(0, bsz),
+                            nullptr,  // mrope
                             finished_buf_.slice(0, bsz),
                             Buffer{local_token_nums.data(), (int)local_token_nums.size(), kCPU},
                             Buffer{},

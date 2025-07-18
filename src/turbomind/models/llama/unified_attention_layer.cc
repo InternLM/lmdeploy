@@ -135,6 +135,18 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
 
     cu_block_nums_ = args.at("cu_block_nums").buffer();
     kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
+
+    // rotary embedding, add offest when forward
+    if (rope_param_.type == RopeType::kDynamic) {
+        rope_param_.base = const_cast<float*>(rope_base_.data());
+    }
+    else if (rope_param_.type == RopeType::kMultimodal && !isTuning()) {
+        auto& position_ids                  = args.at("mrope_position_ids");
+        rope_param_.multimodal.session_len  = position_ids.shape(1) / 3;  // position_ids [batch_size, 3 * session_len]
+        rope_param_.multimodal.position_ids = position_ids.data<int>();
+        rope_param_.multimodal.position_delta = args.at("mrope_position_delta").data<int>();
+        rope_param_.multimodal.length         = args.at("mrope_position_length").data<int>();
+    }
 }
 
 void UnifiedAttentionLayer::Finalize()
@@ -284,11 +296,19 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.inv_sqrt_dh /= std::sqrt((float)params.size_per_head);
         }
 
-        // rotary embedding
-        if (rope_param_.type == RopeType::kDynamic) {
-            rope_param_.base = const_cast<float*>(rope_base_.data()) + offset;
-        }
+        // add offset to rope
         params.rope_param = rope_param_;
+        if (isTuning()) {
+            params.rope_param.type = RopeType::kDefault;
+        }
+        else if (rope_param_.type == RopeType::kDynamic) {
+            params.rope_param.base += offset;
+        }
+        else if (rope_param_.type == RopeType::kMultimodal) {
+            params.rope_param.multimodal.position_ids += offset * rope_param_.multimodal.session_len;
+            params.rope_param.multimodal.position_delta += offset;
+            params.rope_param.multimodal.length += offset;
+        }
 
         // logn attn
         params.use_logn_attn           = param_.use_logn_attn;
