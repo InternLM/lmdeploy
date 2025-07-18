@@ -78,8 +78,11 @@ CudaIpcCommImpl::CudaIpcCommImpl(HostComm h_comm):
     comm::AllGather(h_comm_, ordinals_.data(), 1);
 
 #if __CUDACC_VER_MAJOR__ >= 12
-    CUDRVCHECK(cuDeviceGetAttribute(&multicast_capability_, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, ordinals_[rank]));
-    multicast_capability_ = comm::AllReduce(h_comm_, multicast_capability_, RedOp::kMin);
+    if (global_n_ranks_ >= 4) {  // solve 2n-2>n+1 -> n>3
+        CUDRVCHECK(
+            cuDeviceGetAttribute(&multicast_capability_, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, ordinals_[rank]));
+        multicast_capability_ = comm::AllReduce(h_comm_, multicast_capability_, RedOp::kMin);
+    }
 #endif
 
     // Prepare access descriptors

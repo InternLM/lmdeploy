@@ -152,17 +152,6 @@ struct TestComm {
         return std::make_tuple(h_comm, std::move(d_comm), h_split, d_split);
     }
 
-    static void Deinit(std::vector<DeviceComm>& comm)
-    {
-        std::vector<std::thread> threads;
-        for (size_t i = 0; i < comm.size(); ++i) {
-            threads.emplace_back([&] { comm[i] = {}; });
-        }
-        for (auto& t : threads) {
-            t.join();
-        }
-    }
-
     void Run(int hidden_dim, int vocab_size, int tp, int warmup, int iters, std::vector<int> tokens)
     {
         int device_num{};
@@ -187,15 +176,13 @@ struct TestComm {
 
         const int g = 0;
 
-        // TestAllReduce<half>(hidden_dim, 0);
+        TestAllReduce<half>(hidden_dim, 0);
         // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
         // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
         // TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
         // TestAllGather<half>(vocab_size / tp, g);
-
-        Deinit(d_comm_);
     }
 
     template<class T>
@@ -913,7 +900,7 @@ int main(int argc, char* argv[])
 
     TestComm test;
 
-    test.Run(8192,  //
+    test.Run(2048,  //
              128000,
              -1,
              10,
