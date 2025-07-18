@@ -68,12 +68,6 @@ class Qwen2VLModel(VisonModel):
 
         if self.with_llm:
             self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu')
-        else:
-            from transformers import Qwen2_5_VLForConditionalGeneration
-            model_cls = Qwen2_5_VLForConditionalGeneration
-
-        if self.with_llm:
-            self.vl_model = model_cls.from_pretrained(self.model_path, device_map='cpu')
             # TODO treat mrope as an option to the common rope functions
             # it seems mrope is build upon default/linear/dynamic rope functions and is not a rope type
             # current implementation bind mrope with default rope function which is the default
@@ -88,7 +82,7 @@ class Qwen2VLModel(VisonModel):
                 config.quantization_config = {}  # disable vision part quantization
                 # disable accelerate check_tied_parameters_in_config for Qwen2-VL-2B-Instruct
                 config.tie_word_embeddings = False
-                model = model_cls._from_config(config)
+                model = AutoModelCls._from_config(config)
                 del model.model
                 del model.lm_head
                 model.half()
