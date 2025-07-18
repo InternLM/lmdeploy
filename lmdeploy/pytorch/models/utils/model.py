@@ -54,9 +54,9 @@ def _patch_vlm_init(vlm_cls):
         """New init method."""
         from lmdeploy.pytorch.models.patch import get_build_model_context
         bm_ctx = get_build_model_context()
-        load_llm_only = bm_ctx.load_llm_only
+        disable_vision_encoder = bm_ctx.disable_vision_encoder
 
-        if load_llm_only:
+        if disable_vision_encoder:
             # assume vls_cls is subclass of nn.Module
             super(vlm_cls, self).__init__()
             self._is_dummy_mod = True

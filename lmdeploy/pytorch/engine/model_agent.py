@@ -817,7 +817,7 @@ class BaseModelAgent:
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
-        build_model_ctx = BuildModelContext(load_llm_only=self.misc_config.load_llm_only)
+        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder)
         patched_model = build_patched_model(self.model_config,
                                             device=device,
                                             model_format=self.misc_config.model_format,

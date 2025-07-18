@@ -336,7 +336,7 @@ def add_adapters(model: torch.nn.Module,
 @dataclass
 class BuildModelContext:
     """Context for building model."""
-    load_llm_only: bool = False
+    disable_vision_encoder: bool = False
 
 
 BUILD_MODEL_CTX = BuildModelContext()
