@@ -77,22 +77,8 @@ class QwenQwQReasoningParser(ReasoningParser):
                 # reasoning content continues
                 return DeltaMessage(reasoning_content=delta_text)
         else:
-            # No <think> in previous or delta, also need to check for </think>.
-            # Because the model may have generated </think> without <think>
-            # Ref https://huggingface.co/deepseek-ai/DeepSeek-R1/commit/8a58a132790c9935686eb97f042afa8013451c9f
-            if self.think_end_token in delta_text:
-                # </think> in delta with more tokens,
-                # extract reasoning content and content
-                end_index = delta_text.find(self.think_end_token)
-                reasoning_content = delta_text[:end_index]
-                content = delta_text[end_index + len(self.think_end_token):]
-                return DeltaMessage(reasoning_content=reasoning_content, content=content if content else None)
-            elif self.think_end_token in previous_text:
-                # </think> in previous, thinking content ends
-                return DeltaMessage(content=delta_text)
-            else:
-                # no </think> in previous or delta, reasoning content continues
-                return DeltaMessage(reasoning_content=delta_text)
+            # no <think> in previous or delta, all content
+            return DeltaMessage(content=delta_text)
 
     def extract_reasoning_content(self, model_output: str, request: ChatCompletionRequest,
                                   **kwargs) -> Tuple[Optional[str], Optional[str]]:
@@ -109,26 +95,35 @@ class QwenQwQReasoningParser(ReasoningParser):
             reasoning_content (str | None): The reasoning content.
             final_output (str | None): The content.
         """
-        # DeepSeek R1 doesn't generate <think> now.
+        start_index = model_output.find(self.think_start_token)
+        end_index = model_output.find(self.think_end_token)
         # Thus we assume the reasoning content is always at the start.
-        # Ref https://huggingface.co/deepseek-ai/DeepSeek-R1/commit/8a58a132790c9935686eb97f042afa8013451c9f
-        if self.think_end_token not in model_output:
+        if end_index < 0:
             # for qwen3 model, the reasoning content is wrapped by <think> </think> xml tags
-            return None, model_output
-        # Add a start token if it's missing to keep compatibility.
-        if self.think_start_token not in model_output:
-            model_output = f'{self.think_start_token}{model_output}'
-        # Use a regex to find the reasoning content
-        reasoning_content = self.reasoning_regex.findall(model_output)[0]
+            if start_index < 0:
+                return None, model_output
+            reasoning_content = model_output[start_index + len(self.think_start_token):]
+            reasoning_content = self._trim_newlines(reasoning_content)
+            return reasoning_content, None
 
-        end_index = len(f'{self.think_start_token}{reasoning_content}{self.think_end_token}')
-        final_output = model_output[end_index:]
-        if reasoning_content.startswith('\n'):
-            reasoning_content = reasoning_content[1:]
-        if reasoning_content.endswith('\n'):
-            reasoning_content = reasoning_content[:-1]
+        if start_index >= 0 and start_index < end_index:
+            reasoning_content = model_output[start_index + len(self.think_start_token):end_index]
+        else:
+            reasoning_content = model_output[:end_index]
+        reasoning_content = self._trim_newlines(reasoning_content)
+
+        final_output = model_output[end_index + len(self.think_end_token):]
+        final_output = self._trim_newlines(final_output)
 
         if len(final_output) == 0:
             return reasoning_content, None
-
         return reasoning_content, final_output
+
+    @classmethod
+    def _trim_newlines(cls, text: str):
+        """Trim newlines from the start and end of a string."""
+        while text.startswith('\n'):
+            text = text[1:]
+        while text.endswith('\n'):
+            text = text[:-1]
+        return text
