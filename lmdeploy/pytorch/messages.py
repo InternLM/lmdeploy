@@ -511,7 +511,7 @@ class SchedulerSequence:
         """Token ids."""
         start = self.history_len
         end = start + self._num_token_ids
-        return self.history_cache[start:end]
+        return self.history_cache._token_ids[start:end]
 
     @property
     def input_embeddings(self) -> List[InputEmbeddings]:
@@ -523,12 +523,12 @@ class SchedulerSequence:
     @property
     def history_ids(self) -> np.ndarray:
         """History ids."""
-        return self.history_cache[:self.history_len]
+        return self.history_cache._token_ids[:self.history_len]
 
     @property
     def all_ids(self) -> np.ndarray:
         """Full token ids."""
-        return self.history_cache[:self.num_all_ids]
+        return self.history_cache._token_ids[:self.num_all_ids]
 
     @property
     def num_history_ids(self):

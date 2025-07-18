@@ -98,6 +98,10 @@ with set_envs():
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
 
+    # dlblas
+    # we don't need to read this, it would be passed to ray workers
+    os.getenv('DEEPEP_MAX_BATCH_SIZE', None)
+
 
 def get_all_envs():
     """Get all environment variables."""
