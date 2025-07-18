@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
 from typing import Iterable, List, Optional, Tuple
 
 import torch
@@ -46,29 +47,20 @@ class DeployModelMixin:
         return None
 
 
-def _patch_vlm_init(vlm_cls):
-    """Patch the class to add DeployModelMixin."""
-    origin_init = vlm_cls.__init__
+def vlm_model(vlm_cls):
+    if not issubclass(vlm_cls, torch.nn.Module):
+        raise ValueError('Only subclasses of nn.Module can be decorated with this decorator.')
 
-    def _new_init(self, *args, **kwargs):
-        """New init method."""
+    @functools.wraps(vlm_cls)
+    def wrapper(*args, **kwargs):
         from lmdeploy.pytorch.models.patch import get_build_model_context
         bm_ctx = get_build_model_context()
         disable_vision_encoder = bm_ctx.disable_vision_encoder
-
         if disable_vision_encoder:
-            # assume vls_cls is subclass of nn.Module
-            super(vlm_cls, self).__init__()
-            self._is_dummy_mod = True
-            return
+            mod = torch.nn.Identity()
+            mod._is_dummy_mod = True
+            return mod
+        else:
+            return vlm_cls(*args, **kwargs)
 
-        origin_init(self, *args, **kwargs)
-
-    vlm_cls.__init__ = _new_init
-    return vlm_cls
-
-
-def vlm_model(vlm_cls):
-    """Decorator to mark a class as a VLM model."""
-    vlm_cls = _patch_vlm_init(vlm_cls)
-    return vlm_cls
+    return wrapper
