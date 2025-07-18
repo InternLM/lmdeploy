@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+import json
 from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
@@ -7,9 +8,9 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import (AssignmentInstruct, DistServeRegisterMRMessage, MigrationAssignment,
                                               MigrationExecutionBatch)
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, ModelConfig
@@ -315,7 +316,7 @@ class CacheEngine:
 
     """ Metheds for PD Disaggregation Begin. """
 
-    def p2p_initialize(self, migration_init_request: DistServeInitRequest):
+    def p2p_initialize(self, migration_init_request: DistServeInitRequest) -> DistServeKVTransferEndpointInfo:
         if not self.migration_backend_impl:
             self.migration_backend_impl = MIGRATION_BACKENDS.module_dict[self.cache_config.migration_backend.name]()
         migration_init_request.rank = self.rank
@@ -330,11 +331,14 @@ class CacheEngine:
                                                              offset=t.storage_offset(),
                                                              length=t.numel() * t.itemsize)
             self.migration_backend_impl.register_memory_region(register_mr_request)
-        return self.migration_backend_impl.endpoint_info(migration_init_request.remote_engine_id,
-                                                         migration_init_request.protocol)
+        return DistServeKVTransferEndpointInfo(protocol=migration_init_request.protocol,
+                                               endpoint_info=json.dumps(
+                                                   self.migration_backend_impl.endpoint_info(
+                                                       migration_init_request.remote_engine_id,
+                                                       migration_init_request.protocol)))
 
-    def p2p_connect(self, migration_conn_request: DistServeConnectionRequest):
-        self.migration_backend_impl.p2p_connect(migration_conn_request[self.tp_rank])
+    def p2p_connect(self, remote_engine_id: str, migration_conn_request: List[DistServeKVTransferEndpointInfo]):
+        self.migration_backend_impl.p2p_connect(remote_engine_id, migration_conn_request[self.tp_rank])
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
 
