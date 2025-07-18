@@ -1,14 +1,19 @@
-num_promts: &num_prompts 1
+num_promts: &num_prompts 10000
 dataset_path: &dataset_path "/nvme1/shared/ShareGPT_V3_unfiltered_cleaned_split.json"
 dataset_name: &dataset_name "sharegpt"
-model_path: &model_path "Qwen/Qwen3-8B"
+model_path: &model_path "Qwen/Qwen3-30B-A3B-FP8"
 server:
   server_port: 23333
 engine:
   - tp: 1
     model_path: *model_path
-    max_batch_size: 1024
-    cache_max_entry_count: 0.8
+    max_batch_size: 1280
+    cache_max_entry_count: 0.9
+  - tp: 1
+    model_path: *model_path
+    max_batch_size: 1280
+    cache_max_entry_count: 0.9
+    max_prefill_token_num: 4096
 data:
   - dataset_name: *dataset_name
     dataset_path: *dataset_path
