@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import contextlib
 import importlib
 import inspect
 import os.path as osp
@@ -8,6 +9,7 @@ import sys
 from typing import Any, Dict
 
 import torch
+from attr import dataclass
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.utils import get_logger
@@ -183,7 +185,10 @@ def _get_model_class(config, module_map):
     raise RuntimeError(f'Can not found rewrite for architectures: {architectures}')
 
 
-def build_model_from_hf_config(model_config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
+def build_model_from_hf_config(model_config: PretrainedConfig,
+                               dtype: torch.dtype = None,
+                               device: torch.device = None,
+                               build_model_ctx: 'BuildModelContext' = None):
     """Build model from hf config."""
     from lmdeploy.pytorch.model_inputs import StepContextManager
     ctx_mgr = StepContextManager()
@@ -191,7 +196,8 @@ def build_model_from_hf_config(model_config: PretrainedConfig, dtype: torch.dtyp
     if device is None:
         device = torch.device('cuda')
     model_cls = _get_model_class(model_config, module_map)
-    model = model_cls(model_config, ctx_mgr, dtype=dtype, device=device)
+    with build_model_context(build_model_ctx):
+        model = model_cls(model_config, ctx_mgr, dtype=dtype, device=device)
     return model.eval()
 
 
@@ -213,13 +219,16 @@ def _patch_quantization_config(model_config: PretrainedConfig, model_format: str
 
 
 @torch.inference_mode()
-def build_patched_model(config: ModelConfig, device: torch.device = None, model_format: str = None):
+def build_patched_model(config: ModelConfig,
+                        device: torch.device = None,
+                        model_format: str = None,
+                        build_model_ctx: 'BuildModelContext' = None):
     """Build patched model."""
     model_config = config.hf_config
     llm_config = config.llm_config
     _patch_quantization_config(llm_config, model_format)
     dtype = config.dtype
-    return build_model_from_hf_config(model_config, dtype=dtype, device=device)
+    return build_model_from_hf_config(model_config, dtype=dtype, device=device, build_model_ctx=build_model_ctx)
 
 
 @torch.inference_mode()
@@ -322,3 +331,30 @@ def add_adapters(model: torch.nn.Module,
             load_lora_weights(model, state_dict.items(), adapter_id=adapter_id)
 
     return target_infos
+
+
+@dataclass
+class BuildModelContext:
+    """Context for building model."""
+    disable_vision_encoder: bool = False
+
+
+BUILD_MODEL_CTX = BuildModelContext()
+
+
+@contextlib.contextmanager
+def build_model_context(ctx: BuildModelContext):
+    """Context manager for building model."""
+    global BUILD_MODEL_CTX
+    old_ctx = BUILD_MODEL_CTX
+    if ctx is None:
+        ctx = old_ctx
+    BUILD_MODEL_CTX = ctx
+    yield
+    BUILD_MODEL_CTX = old_ctx
+
+
+def get_build_model_context() -> BuildModelContext:
+    """Get build model context."""
+    global BUILD_MODEL_CTX
+    return BUILD_MODEL_CTX

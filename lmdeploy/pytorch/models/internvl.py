@@ -19,7 +19,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 
 class InternVisionEmbeddings(nn.Module):
@@ -252,6 +252,7 @@ class InternVisionEncoder(nn.Module):
         return hidden_states
 
 
+@vlm_model
 class InternVisionModel(nn.Module):
     """Intern vision model."""
 

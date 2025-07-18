@@ -327,6 +327,8 @@ class PytorchEngineConfig:
         model_format (str): weight quantization policy, options: ['fp8'].
         hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
             It can be used to override the default config of the model,
+        disable_vision_encoder (bool): Whether to disable loading vision
+            encoder. Default to False.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -358,6 +360,7 @@ class PytorchEngineConfig:
     model_format: str = None
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
+    disable_vision_encoder: bool = False
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
