@@ -342,13 +342,14 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
 
         // copy multimodal rope input meta
         if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
-            if (r->inputs.count("mrope_length")) {
+            TM_CHECK(r->session.start_flag) << "Multimodal rope doesn't support interactive chat";
+            if (r->inputs.count("mrope_position_ids")) {
                 core::Copy(r->inputs.at("mrope_position_ids").data<int>(),
                            input_length * 3,
                            state.mrope.position_ids.data() + idx * 3 * session_len_);
                 core::Copy(
                     r->inputs.at("mrope_position_delta").data<int>(), 1, state.mrope.position_delta.data() + idx);
-                core::Copy(r->inputs.at("mrope_length").data<int>(), 1, state.mrope.length.data() + idx);
+                core::Copy(&input_length, 1, state.mrope.length.data() + idx);
             }
             else {
                 cudaMemsetAsync(state.mrope.length.data() + idx, 0, sizeof(int), stream_);
