@@ -58,21 +58,14 @@ class InternVLModel(LlamaModel):
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         self.llm_config = getattr(config, 'llm_config', None) or getattr(config, 'text_config', None)
         arch = self.llm_config.architectures[0]
-        _readers = dict(
-            InternLM2ForCausalLM=InternVL2Reader,
-            LlamaForCausalLM=InternVLReader,
-            Qwen2ForCausalLM=InternVLReader,
-            Qwen3MoeForCausalLM=InternS1Reader,
+        relations = dict(
+            InternLM2ForCausalLM=('internlm2', InternLM2Reader),
+            LlamaForCausalLM=('llama', InternVLReader),
+            Qwen2ForCausalLM=('qwen2', InternVLReader),
+            Qwen3MoeForCausalLM=('qwen3-moe', InternS1Reader),
         )
-        self.Reader = _readers[arch]
-
-        _llm_models = dict(InternLM2ForCausalLM='internlm2',
-                           LlamaForCausalLM='llama',
-                           Qwen2ForCausalLM='qwen2',
-                           Qwen3MoeForCausalLM='qwen3-moe')
-        self.llm_model = INPUT_MODELS.get(_llm_models[arch])(model_path=model_path,
-                                                             tokenizer_path=tokenizer_path,
-                                                             **kwargs)
+        llm_model, self.Reader = relations[arch]
+        self.llm_model = INPUT_MODELS.get(llm_model)(model_path=model_path, tokenizer_path=tokenizer_path, **kwargs)
 
     def model_info(self):
         """Read model info."""
