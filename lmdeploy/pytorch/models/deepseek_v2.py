@@ -22,6 +22,7 @@ from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+from .utils.expert_distribution_recorder import ExpertsDistributionRecorder
 
 
 # microbatch
@@ -662,10 +663,12 @@ class MoEGate(nn.Module):
 
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
+    recorder = ExpertsDistributionRecorder()
 
     def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
+        self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
         self.num_experts = config.n_routed_experts
@@ -737,6 +740,7 @@ class DeepseekV2MoE(nn.Module):
         if self._all_reduce:
             dist.all_reduce(out_states)
 
+        DeepseekV2MoE.recorder.record(topk_ids, self.layer_idx, self.num_experts)
         return out_states
 
 
