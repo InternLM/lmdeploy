@@ -140,7 +140,7 @@ class Session:
         for user, assistant in self.history:
             if isinstance(user, list):
                 user = str(user)
-            res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
+            res += f'USER: \n{user}\nASSISTANT: \n{assistant}\n'
         return res
 
     def __enter__(self):
@@ -470,7 +470,8 @@ class AsyncEngine(LogitsMixin):
 
         loop = loop or self.internal_thread.loop
         # submit the coroutine to async world
-        asyncio.run_coroutine_threadsafe(_infer(), loop).add_done_callback(lambda f: None if f.cancelled() else f.result())
+        asyncio.run_coroutine_threadsafe(_infer(),
+                                         loop).add_done_callback(lambda f: None if f.cancelled() else f.result())
 
         return iter(que.get, None)
 

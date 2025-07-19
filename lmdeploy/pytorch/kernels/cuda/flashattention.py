@@ -395,6 +395,7 @@ def _kernel_meta_sm9x(BLOCK_DK: int, shared_kv: bool):
     num_stages = 3 if BLOCK_DK <= 128 else 2
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
+
 def _kernel_meta_sm12x(BLOCK_DK: int, shared_kv: bool):
     # Blackwell (sm_120, cc 12.x) + B200/B100 variants
     if BLOCK_DK <= 128:
@@ -417,6 +418,7 @@ def _kernel_meta_sm12x(BLOCK_DK: int, shared_kv: bool):
         BLOCK_N = 32
         num_warps = 4
         num_stages = 2
+
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
@@ -490,6 +492,8 @@ def flash_attention_fwd(
             BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
         else:
             BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
+    elif _nv_cap[0] < 13:
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)
     else:
         BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
 
