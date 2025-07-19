@@ -470,7 +470,7 @@ class AsyncEngine(LogitsMixin):
 
         loop = loop or self.internal_thread.loop
         # submit the coroutine to async world
-        asyncio.run_coroutine_threadsafe(_infer(), loop).add_done_callback(lambda x: x.result())
+        asyncio.run_coroutine_threadsafe(_infer(), loop).add_done_callback(lambda f: None if f.cancelled() else f.result())
 
         return iter(que.get, None)
 
