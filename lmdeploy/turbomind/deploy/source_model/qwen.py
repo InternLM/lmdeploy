@@ -118,6 +118,10 @@ class Qwen2Model(LlamaModel):
 class Qwen2MoeReader(LlamaReader):
 
     ffn_pattern = r'shared_expert\.'
+    moe_ffn_gate_pattern = r'model\.layers\.([0-9]+)\.mlp\.gate\.weight'
+    moe_ffn_expert_pattern = r'model\.layers\.([0-9]+)\.mlp\.experts\.([0-9]+)\.'
+    moe_ffn_shared_gate_pattern = r'model\.layers\.([0-9]+)\.mlp\.shared_expert_gate\.weight'
+    moe_ffn_shared_gate_pattern = r'model\.layers\.([0-9]+)\.mlp\.shared_expert\.'
 
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:
