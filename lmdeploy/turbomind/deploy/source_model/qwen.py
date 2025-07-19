@@ -118,24 +118,20 @@ class Qwen2Model(LlamaModel):
 class Qwen2MoeReader(LlamaReader):
 
     ffn_pattern = r'shared_expert\.'
-    moe_ffn_gate_pattern = r'model\.layers\.([0-9]+)\.mlp\.gate\.weight'
-    moe_ffn_expert_pattern = r'model\.layers\.([0-9]+)\.mlp\.experts\.([0-9]+)\.'
-    moe_ffn_shared_gate_pattern = r'model\.layers\.([0-9]+)\.mlp\.shared_expert_gate\.weight'
-    moe_ffn_shared_gate_pattern = r'model\.layers\.([0-9]+)\.mlp\.shared_expert\.'
 
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:
             return self.filter(r'experts')
         result = []
         for key in ['gate', 'down', 'up']:
-            name = f'model.layers.{i}.mlp.experts.{e}.{key}_proj.{kind}'
+            name = f'{self.attn_layer_prefix}.{i}.mlp.experts.{e}.{key}_proj.{kind}'
             tensor = self.params.get(name)
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
     def moe_ffn_gate(self, i):
-        return self.transform(self.params.get(f'model.layers.{i}.mlp.gate.weight'), 'weight')
+        return self.transform(self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.gate.weight'), 'weight')
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
@@ -143,13 +139,13 @@ class Qwen2MoeReader(LlamaReader):
             return self.filter(self.ffn_pattern)
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[f'model.layers.{i}.mlp.shared_expert.{key}_proj.{kind}']
+            tensor = self.params[f'{self.attn_layer_prefix}.{i}.mlp.shared_expert.{key}_proj.{kind}']
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
     def moe_ffn_shared_gate(self, i):
-        return self.params.get(f'model.layers.{i}.mlp.shared_expert_gate.weight')
+        return self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.shared_expert_gate.weight')
 
 
 @INPUT_MODELS.register_module(name='qwen2-moe')

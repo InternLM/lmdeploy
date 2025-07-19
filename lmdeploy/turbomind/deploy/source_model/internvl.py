@@ -47,34 +47,6 @@ class InternS1Reader(Qwen3MoeReader):
         model_cfg = model_cfg.get('llm_config')
         super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
-    def moe_ffn_expert(self, e=None, i=None, kind=None):
-        if not kind:
-            return self.filter(r'experts')
-        result = []
-        for key in ['gate', 'down', 'up']:
-            name = f'language_model.model.layers.{i}.mlp.experts.{e}.{key}_proj.{kind}'
-            tensor = self.params.get(name)
-            tensor = self.transform(tensor, kind)
-            result.append(tensor)
-        return (*result, )
-
-    def moe_ffn_gate(self, i):
-        return self.transform(self.params.get(f'language_model.model.layers.{i}.mlp.gate.weight'), 'weight')
-
-    def _ffn(self, i: int, kind: str):
-        """Get ffn kind for layer i."""
-        if not kind:
-            return self.filter(self.ffn_pattern)
-        result = []
-        for key in ['gate', 'down', 'up']:
-            tensor = self.params[f'language_model.model.layers.{i}.mlp.shared_expert.{key}_proj.{kind}']
-            tensor = self.transform(tensor, kind)
-            result.append(tensor)
-        return (*result, )
-
-    def moe_ffn_shared_gate(self, i):
-        return self.params.get(f'language_model.model.layers.{i}.mlp.shared_expert_gate.weight')
-
 
 @INPUT_MODELS.register_module(name='internvl')
 class InternVLModel(LlamaModel):
