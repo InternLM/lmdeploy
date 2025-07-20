@@ -43,8 +43,6 @@ SUPPORTED_ARCHS = dict(
     DeepseekV2ForCausalLM='deepseek2',
     # MiniCPMV
     MiniCPMV='minicpmv',
-    # mini gemini
-    MGMLlamaForCausalLM='llama',
     # chatglm2/3, glm4
     ChatGLMModel='glm4',
     ChatGLMForConditionalGeneration='glm4',
