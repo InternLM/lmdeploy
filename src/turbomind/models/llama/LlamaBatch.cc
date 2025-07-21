@@ -349,7 +349,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
                            state.mrope.position_ids.data() + idx * 3 * session_len_);
                 core::Copy(
                     r->inputs.at("mrope_position_delta").data<int>(), 1, state.mrope.position_delta.data() + idx);
-                core::Copy(&input_length, 1, state.mrope.length.data() + idx);
+                core::Copy(r->inputs.at("mrope_length").data<int>(), 1, state.mrope.length.data() + idx);
             }
             else {
                 cudaMemsetAsync(state.mrope.length.data() + idx, 0, sizeof(int), stream_);

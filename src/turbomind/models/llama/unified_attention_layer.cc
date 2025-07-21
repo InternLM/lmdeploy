@@ -305,7 +305,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.rope_param.base += offset;
         }
         else if (rope_param_.type == RopeType::kMultimodal) {
-            params.rope_param.multimodal.position_ids += offset * rope_param_.multimodal.session_len;
+            params.rope_param.multimodal.position_ids += offset * rope_param_.multimodal.session_len * 3;
             params.rope_param.multimodal.position_delta += offset;
             params.rope_param.multimodal.length += offset;
         }

@@ -618,6 +618,7 @@ class TurboMindInstance:
             mrope_position_ids, mrope_position_delta = self.prepare_mrope(input_meta, input_len)
             inputs['mrope_position_ids'] = mrope_position_ids.type(torch.int32)
             inputs['mrope_position_delta'] = mrope_position_delta.type(torch.int32)
+            inputs['mrope_length'] = torch.IntTensor([mrope_position_ids.shape[0]])
 
         return inputs, input_len
 
