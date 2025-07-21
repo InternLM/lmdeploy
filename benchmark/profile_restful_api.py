@@ -407,17 +407,10 @@ def download_and_cache_file(url: str, filename: Optional[str] = None):
     return filename
 
 
-def sample_sharegpt_requests(
-    dataset_path: str,
-    num_requests: int,
-    tokenizer: PreTrainedTokenizerBase,
-    fixed_output_len: Optional[int] = None,
-    expected_output_len: Optional[int] = None,
-) -> List[Tuple[str, int, int]]:
-
-    if not (fixed_output_len is None ^ expected_output_len is None):
-        raise ValueError(f'either fixed_output_len or expected_output_len is specified, but got {fixed_output_len} '
-                         f'and {expected_output_len}')
+def sample_sharegpt_requests(dataset_path: str,
+                             num_requests: int,
+                             tokenizer: PreTrainedTokenizerBase,
+                             fixed_output_len: Optional[int] = None) -> List[Tuple[str, int, int]]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError('output_len too small')
 
@@ -457,11 +450,6 @@ def sample_sharegpt_requests(
             continue
         filtered_dataset.append((prompt, prompt_len, output_len))
 
-    if expected_output_len:
-        ave_output_len = sum(x[2] for x in filtered_dataset) / len(filtered_dataset)
-        ratio = expected_output_len / ave_output_len
-        filtered_dataset = [(_0, _1, int(_2 * ratio)) for _0, _1, _2 in filtered_dataset]
-
     print(f'#Input tokens: {np.sum([x[1] for x in filtered_dataset])}')
     print(f'#Output tokens: {np.sum([x[2] for x in filtered_dataset])}')
     return filtered_dataset
@@ -470,29 +458,22 @@ def sample_sharegpt_requests(
 def sample_random_requests(
     input_len: int,
     output_len: int,
-    expected_output_len: int,
     num_prompts: int,
     range_ratio: float,
     tokenizer: PreTrainedTokenizerBase,
     dataset_path: str,
 ) -> List[Tuple[str, int, int]]:
 
-    if not (output_len is None ^ expected_output_len is None):
-        raise ValueError(f'either radom_output_len or expected_output_len is specified, but got {output_len} '
-                         f'and {expected_output_len}')
     input_lens = np.random.randint(
         max(int(input_len * range_ratio), 1),
         input_len + 1,
         size=num_prompts,
     )
-    if output_len is not None:
-        output_lens = np.random.randint(
-            int(output_len * range_ratio),
-            output_len + 1,
-            size=num_prompts,
-        )
-    if expected_output_len is not None:
-        output_lens = np.zeros(num_prompts)
+    output_lens = np.random.randint(
+        int(output_len * range_ratio),
+        output_len + 1,
+        size=num_prompts,
+    )
 
     # Sample token ids from ShareGPT and repeat/truncate them to
     # satisfy the input_lens
@@ -533,11 +514,6 @@ def sample_random_requests(
             input_ids = (prompt_token_ids * ratio)[:input_lens[i]]
         prompt = tokenizer.decode(input_ids)
         input_requests.append((prompt, int(input_lens[i]), int(output_lens[i])))
-
-    if expected_output_len:
-        ave_output_len = sum(origin_output_lens) / len(origin_output_lens)
-        ratio = expected_output_len / ave_output_len
-        input_requests = [(_0, _1, int(_2 * ratio)) for _0, _1, _2 in input_requests]
 
     print(f'#Input tokens: {np.sum([x[1] for x in input_requests])}')
     print(f'#Output tokens: {np.sum([x[2] for x in input_requests])}')
@@ -905,18 +881,18 @@ def run_benchmark(args_: argparse.Namespace):
 
     if args.dataset_name == 'sharegpt':
         assert args.random_input_len is None and args.random_output_len is None
-        input_requests = sample_sharegpt_requests(dataset_path=args.dataset_path,
-                                                  num_requests=args.num_prompts,
-                                                  tokenizer=tokenizer,
-                                                  fixed_output_len=args.sharegpt_output_len,
-                                                  expected_output_len=args.expected_output_len)
+        input_requests = sample_sharegpt_requests(
+            dataset_path=args.dataset_path,
+            num_requests=args.num_prompts,
+            tokenizer=tokenizer,
+            fixed_output_len=args.sharegpt_output_len,
+        )
     elif args.dataset_name == 'random':
         assert args.random_input_len is not None and \
             args.random_output_len is not None
         input_requests = sample_random_requests(
             input_len=args.random_input_len,
             output_len=args.random_output_len,
-            expected_output_len=args.expected_output_len,
             num_prompts=args.num_prompts,
             range_ratio=args.random_range_ratio,
             tokenizer=tokenizer,
@@ -1020,13 +996,6 @@ if __name__ == '__main__':
         type=int,
         default=None,
         help='Output length for each request. Overrides the output length '
-        'from the ShareGPT dataset.',
-    )
-    parser.add_argument(
-        '--expected-output-len',
-        type=int,
-        default=None,
-        help='The expected output length for each request. Overrides the output length '
         'from the ShareGPT dataset.',
     )
     parser.add_argument(

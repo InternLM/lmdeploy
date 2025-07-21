@@ -38,15 +38,15 @@ def get_output_file(model_path, backend, server_config):
         return f'benchmark_{model_name}_{backend}.csv'
 
     # For turbomind/pytorch backends
-    params = {
-        'bs': server_config['max_batch_size'],
-        'tp': server_config.get('tp', 1),
-        'dp': server_config.get('dp', ''),
-        'ep': server_config.get('ep', ''),
-        'cache': server_config.get('cache_max_entry_count', 0.8),
-        'mptk': server_config.get('max_prefill_token_num', ''),
-    }
-    params_str = '_'.join(f'{k}{v}' for k, v in params.items() if v != '')
+    params = [
+        ('bs', server_config['max_batch_size']),
+        ('tp', server_config.get('tp', 1)),
+        ('dp', server_config.get('dp', '')),
+        ('ep', server_config.get('ep', '')),
+        ('cache', server_config.get('cache_max_entry_count', 0.8)),
+        ('mptk', server_config.get('max_prefill_token_num', '')),
+    ]
+    params_str = '_'.join(f'{k}{v}' for k, v in params if v != '')
     # Turbomind-specific additions
     if backend == 'turbomind' and (comm := server_config.get('communicator')):
         params_str += f'_{comm}'
