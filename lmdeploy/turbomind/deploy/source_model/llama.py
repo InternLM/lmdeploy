@@ -145,8 +145,13 @@ class LlamaModel(BaseInputModel):
                     raise ValueError(f'Ambiguous rope_scaling in config: {model_arg}')
                 scaling_type = llama2_scaling_type if llama2_scaling_type \
                     else llama3_scaling_type
+                if rope_scaling.get('mrope_section') is not None:
+                    # TODO: treat mrope as an option to the common rope functions
+                    scaling_type = 'mrope'
                 scaling_factor = rope_scaling.get('factor', 0.0)
-                if scaling_type == 'dynamic':
+                if scaling_type == 'default':
+                    pass
+                elif scaling_type == 'dynamic':
                     rope_param.type = 'dynamic'
                     rope_param.factor = scaling_factor
                     rope_param.max_position_embeddings = max_position_embeddings
