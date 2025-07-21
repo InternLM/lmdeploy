@@ -21,7 +21,7 @@ from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
 from ..model_inputs import ModelInputs, step_ctx_manager
-from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
+from ..models.patch import add_adapters, build_patched_model, estimate_runtime_mem_size, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
@@ -275,6 +275,7 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.profiler: AgentProfiler = None
+        self.runtime_mem_size = self.init_runtime_mem_size()
 
         # microbatch
         self.enable_microbatch = self.dist_ctx.dist_config.enable_microbatch
@@ -284,6 +285,26 @@ class BaseModelAgent:
             int(getenv('ENABLE_MICROBATCH_PREFILL_TOKEN_THRESHOLD', 2))
         self.enable_microbatch_decode_batchsize_threshold = \
             int(getenv('ENABLE_MICROBATCH_DECODE_BATCHSIZE_THRESHOLD', 2))
+
+    def get_runtime_mem_size(self):
+        """Get runtime mem size."""
+        return self.runtime_mem_size
+
+    def init_runtime_mem_size(self):
+        """Initialize runtime memory size."""
+        max_prefill_token_num = self.cache_config.max_prefill_token_num
+        vocal_size = self.model_config.vocab_size
+        # lm_head size
+        return int(max_prefill_token_num * vocal_size * 2)
+
+    def update_runtime_mem_size(self, model: torch.nn.Module):
+        """Update runtime memory size."""
+        from lmdeploy.pytorch.nn.utils import RuntimeEstimateInfo
+        runtime_mem_size = self.runtime_mem_size
+        info = RuntimeEstimateInfo(max_prefill_token_num=self.cache_config.max_prefill_token_num,
+                                   max_batches=self.cache_config.max_batches)
+        new_size = estimate_runtime_mem_size(model, info)
+        return max(new_size, runtime_mem_size)
 
     @contextmanager
     def all_context(self):
@@ -827,6 +848,7 @@ class BaseModelAgent:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
         self.patched_model = patched_model
+        self.runtime_mem_size = self.update_runtime_mem_size(patched_model)
 
     def build_model(self):
         """Build model api."""

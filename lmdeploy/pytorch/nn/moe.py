@@ -9,6 +9,7 @@ from torch import nn
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.pytorch.nn.utils import RuntimeEstimateInfo
 
 from ..backends import OpType, get_backend
 from .quant_utils import quant_blocked_fp8
@@ -243,6 +244,7 @@ class FusedMoE(nn.Module):
         self.hidden_dim = hidden_dim
         self.ffn_dim = ffn_dim
         self.num_experts = num_experts
+        self.top_k = top_k
         self.dtype = dtype
         self.device = device
         world_size, _ = get_tp_world_rank()
@@ -266,6 +268,14 @@ class FusedMoE(nn.Module):
         if self.all_reduce:
             ret = _moe_reduce(ret, self.enable_ep)
         return ret
+
+    def get_runtime_mem(self, info: RuntimeEstimateInfo):
+        """Get runtime memory."""
+        max_prefill_token_num = info.max_prefill_token_num
+        dtype_size = self.dtype.itemsize
+        intermediate1 = max_prefill_token_num * self.top_k * self.ffn_dim * 2 * dtype_size
+        intermediate2 = max_prefill_token_num * self.top_k * self.hidden_dim * dtype_size
+        return intermediate1 + intermediate2
 
 
 class LinearWeightsW8A8(LinearWeights):
@@ -379,6 +389,7 @@ class FusedMoEW8A8(nn.Module):
         self.hidden_dim = hidden_dim
         self.ffn_dim = ffn_dim
         self.num_experts = num_experts
+        self.top_k = top_k
         self.dtype = dtype
         self.device = device
         world_size, _ = get_tp_world_rank()
@@ -400,6 +411,14 @@ class FusedMoEW8A8(nn.Module):
         if self.all_reduce:
             dist.all_reduce(ret)
         return ret
+
+    def get_runtime_mem(self, info: RuntimeEstimateInfo):
+        """Get runtime memory."""
+        max_prefill_token_num = info.max_prefill_token_num
+        dtype_size = self.dtype.itemsize
+        intermediate1 = max_prefill_token_num * self.top_k * self.ffn_dim * 2 * dtype_size
+        intermediate2 = max_prefill_token_num * self.top_k * self.hidden_dim * dtype_size
+        return intermediate1 + intermediate2
 
 
 class LinearWeightsBlockedF8(LinearWeights):
@@ -553,6 +572,7 @@ class FusedMoEBlockedF8(nn.Module):
         self.hidden_dim = hidden_dim
         self.ffn_dim = ffn_dim
         self.num_experts = num_experts
+        self.top_k = top_k
         self.dtype = dtype
         self.device = device
         world_size, _ = get_tp_world_rank()
@@ -740,6 +760,17 @@ class FusedMoEBlockedF8(nn.Module):
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
         return self.impl.fusedmoe_build(low_latency_mode)
+
+    def get_runtime_mem(self, info: RuntimeEstimateInfo):
+        """Get runtime memory."""
+        if self.ep_size > 1:
+            # TODO: find out how to estimate ep mem usage.
+            return 0
+        max_prefill_token_num = info.max_prefill_token_num
+        dtype_size = self.dtype.itemsize
+        intermediate1 = max_prefill_token_num * self.top_k * self.ffn_dim * 2 * dtype_size
+        intermediate2 = max_prefill_token_num * self.top_k * self.hidden_dim * dtype_size
+        return intermediate1 + intermediate2
 
 
 def build_fused_moe(

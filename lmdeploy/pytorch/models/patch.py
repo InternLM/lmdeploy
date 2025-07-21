@@ -10,6 +10,7 @@ from typing import Any, Dict
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.nn.utils import RuntimeEstimateInfo
 from lmdeploy.utils import get_logger
 
 from ..config import ModelConfig
@@ -322,3 +323,28 @@ def add_adapters(model: torch.nn.Module,
             load_lora_weights(model, state_dict.items(), adapter_id=adapter_id)
 
     return target_infos
+
+
+def _estimate_runtime_mem_size_impl(model: torch.nn.Module, info: RuntimeEstimateInfo, mod_name: str = ''):
+    """Estimate runtime memory size."""
+    if hasattr(model, 'get_runtime_mem'):
+        mem_size = model.get_runtime_mem(info)
+        logger.debug(f'Estimate runtime mem for {mod_name}: {mem_size / 1024 / 1024:.2f} MB')
+        return mem_size
+
+    mem_size = 0
+    for name, mod in model.named_children():
+        mod_size = _estimate_runtime_mem_size_impl(mod, info, mod_name=f'{mod_name}{name}.')
+        mem_size = max(mem_size, mod_size)
+    return mem_size
+
+
+@torch.inference_mode()
+def estimate_runtime_mem_size(model: torch.nn.Module, info: RuntimeEstimateInfo):
+    """Estimate runtime memory size."""
+
+    if hasattr(model, 'get_runtime_mem'):
+        mem_size = model.get_runtime_mem(info)
+        return mem_size
+
+    return _estimate_runtime_mem_size_impl(model, info, mod_name='')

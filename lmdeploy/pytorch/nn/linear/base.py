@@ -7,6 +7,7 @@ from torch import nn
 
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.pytorch.nn.utils import RuntimeEstimateInfo
 
 from .utils import update_tp_args
 
@@ -102,3 +103,14 @@ class LinearBase(nn.Module):
             return self._forward_default(x, self.all_reduce, tp_sizes)
         else:
             return self._forward_lora(x, tp_sizes)
+
+    def get_runtime_mem(self, info: RuntimeEstimateInfo):
+        """Get runtime memory."""
+        max_prefill_token_num = info.max_prefill_token_num
+        in_features = self.in_features
+        out_features = self.out_features
+        dtype_size = self.dtype.itemsize
+
+        in_mems = in_features * max_prefill_token_num * dtype_size
+        out_mems = out_features * max_prefill_token_num * dtype_size
+        return in_mems + out_mems

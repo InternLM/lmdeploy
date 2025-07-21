@@ -50,6 +50,9 @@ class ExecutorBase:
         """Gather available memory."""
         raise NotImplementedError('Not Implemented.')
 
+    def gather_runtime_mem(self):
+        raise NotImplementedError('Not Implemented.')
+
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
         raise NotImplementedError('Not Implemented.')
@@ -128,6 +131,32 @@ class ExecutorBase:
             max_prefill_token_num = max_prefill_token_num // 2
         return runtime_cache_size, max_prefill_token_num
 
+    def _update_runtime_size(self, runtime_mem_size: int, num_free_gpu_mem: int, cache_block_size: int,
+                             cache_config: CacheConfig):
+        """Update max prefill token num."""
+        max_prefill_token_num = cache_config.max_prefill_token_num
+        max_batches = cache_config.max_batches
+
+        if num_free_gpu_mem < cache_block_size * 16:
+            raise RuntimeError('No enough gpu memory for kv cache. '
+                               f'Free memory: {num_free_gpu_mem >> 20} mb, ')
+
+        # reserve mem for cudagraph
+        ratio = (max_prefill_token_num + max_batches * 2) / max_prefill_token_num
+        runtime_mem_size = int(runtime_mem_size * ratio)
+
+        # at least 16 blocks is required
+        threshold = num_free_gpu_mem - cache_block_size * 16
+        while runtime_mem_size > threshold and max_prefill_token_num > 0:
+            runtime_mem_size //= 2
+            max_prefill_token_num //= 2
+
+        if cache_config.max_prefill_token_num != max_prefill_token_num:
+            cache_config.max_prefill_token_num = max_prefill_token_num
+            logger.warning(f'No enough memory. Update max_prefill_token_num={max_prefill_token_num}')
+
+        return runtime_mem_size
+
     def _adjust_block_size(self):
         """Adjust block_size."""
         if self.model_config.use_flash_mla is True:
@@ -149,17 +178,12 @@ class ExecutorBase:
         free_mems = self.gather_free_mem()
         free_mem = min(free_mems)
         logger.debug(f'minimal free gpu memory: {free_mem >> 20} mb')
-        vocal_size = self.model_config.vocab_size
 
         tp = self.dist_config.attn_config.tp
         cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, tp,
                                                             cache_config.quant_policy)
-        runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mem, cache_block_size, vocal_size)
-        if cache_config.max_prefill_token_num != max_prefill_token_num:
-            if max_prefill_token_num <= 0:
-                raise RuntimeError('No enough gpu memory for runtime.')
-            cache_config.max_prefill_token_num = max_prefill_token_num
-            logger.warning(f'No enough memory. Update max_prefill_token_num={max_prefill_token_num}')
+        runtime_mem = max(self.gather_runtime_mem())
+        runtime_mem = self._update_runtime_size(runtime_mem, free_mem, cache_block_size, cache_config)
         free_mem -= runtime_mem
         logger.debug(f'estimated max runtime memory: {runtime_mem >> 20} mb')
         available_mem = free_mem * cache_config.cache_max_entry_count
