@@ -473,7 +473,7 @@ class Engine:
             session_len = max_tokens
         else:
             session_len = min(max_tokens, session_len)
-        return session_len
+        return session_len - self.cache_config.block_size
 
     def _on_add_session(self, reqs: List[Request], **kwargs):
         """On add session callback."""
@@ -558,7 +558,13 @@ class Engine:
             """Update max new tokens."""
             max_session_len = self.max_session_len
             sampling_param = msg.sampling_param
-            sampling_param.max_new_tokens = min(sampling_param.max_new_tokens, max_session_len - msg.num_all_tokens())
+            max_new_tokens = sampling_param.max_new_tokens
+            num_all_tokens = msg.num_all_tokens()
+            if max_new_tokens + num_all_tokens > max_session_len:
+                logger.warning(
+                    f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
+                    f'Update max_new_tokens={max_session_len - num_all_tokens}.')
+                sampling_param.max_new_tokens = max_session_len - num_all_tokens
 
         scheduler = self.scheduler
         for req in reqs:
@@ -880,7 +886,7 @@ class Engine:
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
 
-        assert len(running) > 0
+        assert len(running) > 0, 'No running sequences scheduled.'
 
         # create inputs
         inputs = self.create_model_inputs(running, prefill)
