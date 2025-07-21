@@ -9,12 +9,6 @@
 ## Build lmdeploy wheel
 
 ```powershell
-mkdir build
-cd build
-..\builder\windows\generate.ps1
-cmake --build . --config Release -- /m
-cmake --install . --config Release
-cd ..
-rm build -Force -Recurse
-python setup.py bdist_wheel -d build\wheel
+pip install build
+python -m build --wheel
 ```

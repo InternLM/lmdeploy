@@ -32,6 +32,9 @@ jobs:
     name: cuda-${{ matrix.cudaver }}
     runs-on: windows-latest
     steps:
+      - name: Set git for windows
+        run: |
+          git config --global core.longpaths true
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Set up python
@@ -40,8 +43,7 @@ jobs:
           python-version: '3.10'
       - name: Install python packages
         run: |
-          pip install -r requirements/build.txt
-          pip install wheel
+          pip install build
       - name: Setup CUDA Toolkit
         id: cuda-toolkit
         shell: pwsh
@@ -50,16 +52,4 @@ jobs:
             INPUT_CUDA_VERSION: ${{ matrix.cudaver }}
       - name: Build wheel
         run: |
-          $env:BUILD_TEST="OFF"
-          mkdir build
-          cd build
-          ..\builder\windows\generate.ps1
-          cmake --build . --config Release -- /m /v:n
-          if (-Not $?) {
-            echo "build failed"
-            exit 1
-          }
-          cmake --install . --config Release
-          cd ..
-          rm build -Force -Recurse
-          python setup.py bdist_wheel -d build/wheel
+          python -m build --wheel
