@@ -49,7 +49,7 @@ BlockManager::BlockManager(
     }
 
     TM_LOG_INFO("[BlockManager] block_size = %.3f MB", (float)block_size_ / (1 << 20));
-    TM_LOG_INFO("[BlockManager] max_block_count = %d", max_block_count_);
+    TM_LOG_WARNING("[BlockManager] max_block_count = %d", max_block_count_);
     TM_LOG_INFO("[BlockManager] chunk_size = %d", chunk_size_);
 
     blocks_.reserve(max_block_count_);

@@ -43,8 +43,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
 
     pytorch_has = is_supported_pytorch(model_path)
 
-    try_run_msg = (f'Try to run with pytorch engine because `{model_path}`'
-                   ' is not explicitly supported by lmdeploy. ')
+    try_run_msg = 'Try to run with pytorch engine'
     if is_turbomind_installed:
         if not turbomind_has:
             if pytorch_has:

@@ -179,7 +179,7 @@ class ExecutorBase:
         self.update_configs()
         logger.info('Building GraphRunner and warmup ops, please waiting.')
         self.build_graph_runner()
-        logger.info(f'Building CacheEngine with config: \n{self.cache_config}.')
+        logger.warning(f'Building CacheEngine with config: \n{self.cache_config}.')
         self.build_cache_engine()
         logger.info('Warming up model.')
         self.warmup()

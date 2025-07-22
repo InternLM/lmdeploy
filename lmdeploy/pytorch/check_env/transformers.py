@@ -4,7 +4,7 @@ from packaging import version
 from .base import BaseChecker
 
 MIN_TRANSFORMERS_VERSION = '4.33.0'
-MAX_TRANSFORMERS_VERSION = '4.51.0'
+MAX_TRANSFORMERS_VERSION = '4.53.3'
 
 
 class TransformersChecker(BaseChecker):
