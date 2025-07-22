@@ -28,7 +28,6 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
-from .utils import ModelSource, get_model_source
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -127,7 +126,6 @@ class TurboMind:
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
-                 model_source: ModelSource = ModelSource.WORKSPACE,
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
@@ -149,10 +147,10 @@ class TurboMind:
 
         if not osp.exists(model_path):
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
-        self.model_comm = self._from_hf(model_source=model_source, model_path=model_path, engine_config=_engine_config)
+        self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config)
 
         if not _engine_config.empty_init:
-            self._load_weights(model_source)
+            self._load_weights()
             self._process_weights()
             self._create_engine()
 
@@ -165,10 +163,8 @@ class TurboMind:
             logger.warning('the model may not be loaded successfully '
                            f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
 
-    def _load_weights(self, model_source: ModelSource):
+    def _load_weights(self):
         """Load weights."""
-        if model_source == ModelSource.WORKSPACE:
-            return
 
         with torch.cuda.device(self.devices[0]):
             self._tm_model.export()
@@ -260,10 +256,8 @@ class TurboMind:
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
-    def _from_hf(self, model_source: ModelSource, model_path: str, engine_config: TurbomindEngineConfig):
+    def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
-        assert model_source == ModelSource.HF_MODEL, \
-            f'{model_source} is not supported'
         assert is_supported(model_path), (f'turbomind does not support {model_path}. '
                                           'Plz try pytorch engine instead.')
 
@@ -354,14 +348,11 @@ class TurboMind:
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
         """
-        model_source = get_model_source(pretrained_model_name_or_path)
-        logger.info(f'model_source: {model_source}')
         return cls(model_path=pretrained_model_name_or_path,
                    tokenizer=tokenizer,
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,
-                   model_source=model_source,
                    **kwargs)
 
     def close(self):
