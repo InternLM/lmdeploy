@@ -347,8 +347,7 @@ def build_model_context(ctx: BuildModelContext):
     """Context manager for building model."""
     global BUILD_MODEL_CTX
     old_ctx = BUILD_MODEL_CTX
-    if ctx is None:
-        ctx = old_ctx
+    ctx = ctx or old_ctx
     BUILD_MODEL_CTX = ctx
     yield
     BUILD_MODEL_CTX = old_ctx

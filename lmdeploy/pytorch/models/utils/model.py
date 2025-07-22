@@ -49,7 +49,7 @@ class DeployModelMixin:
 
 def vlm_model(vlm_cls):
     if not issubclass(vlm_cls, torch.nn.Module):
-        raise ValueError('Only subclasses of nn.Module can be decorated with this decorator.')
+        raise ValueError('Only subclasses of nn.Module can be decorated with @vlm_model.')
 
     @functools.wraps(vlm_cls)
     def wrapper(*args, **kwargs):
