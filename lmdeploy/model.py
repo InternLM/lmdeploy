@@ -1055,7 +1055,7 @@ class Qwen2d5Chat(Qwen7BChat):
             if message['role'] == 'tool':
                 if index == 0 or messages[index - 1]['role'] != 'tool':
                     ret += '<|im_start|>user'
-                ret += f"{self.separator}<tool_response>{self.separator}{get_text(message['content'])}{self.separator}</tool_response>"  # noqa
+                ret += f"{self.separator}<tool_response>{self.separator}{message['content']}{self.separator}</tool_response>"  # noqa
                 if index == len(messages) - 1 or messages[index + 1]['role'] != 'tool':
                     ret += f'{self.eoh}'
         ret += f'{self.assistant}'
