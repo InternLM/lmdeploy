@@ -76,7 +76,7 @@ NORM2FN = {
 }
 
 
-@torch.compile
+@torch.compile(dynamic=True)
 def pre_rms_norm(x: torch.Tensor) -> torch.Tensor:
     """Pre rms norm."""
     x = x.to(torch.float32)
@@ -84,7 +84,7 @@ def pre_rms_norm(x: torch.Tensor) -> torch.Tensor:
     return variance
 
 
-@torch.compile
+@torch.compile(dynamic=True)
 def post_rms_norm(x: torch.Tensor, variance: torch.Tensor, weight: torch.Tensor, eps: float, embed_dim: int,
                   dtype: torch.dtype) -> torch.Tensor:
     """Post rms norm."""
