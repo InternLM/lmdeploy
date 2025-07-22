@@ -481,7 +481,7 @@ class Engine:
             session_len = max_tokens
         else:
             session_len = min(max_tokens, session_len)
-        return session_len
+        return session_len - self.cache_config.block_size
 
     def _on_add_session(self, reqs: List[Request], **kwargs):
         """On add session callback."""
@@ -549,6 +549,13 @@ class Engine:
             if len(input_multimodals) == 0:
                 req_data['input_multimodals'] = None
                 continue
+
+            if self.engine_config.disable_vision_encoder:
+                # ignore multimodal inputs
+                req_data['input_multimodals'] = None
+                logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+                continue
+
             result = self.input_processor.preprocess_input(input_ids, input_multimodals)
 
             input_ids = result.input_ids
@@ -566,7 +573,13 @@ class Engine:
             """Update max new tokens."""
             max_session_len = self.max_session_len
             sampling_param = msg.sampling_param
-            sampling_param.max_new_tokens = min(sampling_param.max_new_tokens, max_session_len - msg.num_all_tokens())
+            max_new_tokens = sampling_param.max_new_tokens
+            num_all_tokens = msg.num_all_tokens()
+            if max_new_tokens + num_all_tokens > max_session_len:
+                logger.warning(
+                    f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
+                    f'Update max_new_tokens={max_session_len - num_all_tokens}.')
+                sampling_param.max_new_tokens = max_session_len - num_all_tokens
 
         scheduler = self.scheduler
         for req in reqs:
