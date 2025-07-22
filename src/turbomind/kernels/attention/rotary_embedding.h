@@ -85,6 +85,7 @@ struct FastRoPE {
     __device__ void init(int idx)
     {
         is_valid_ = idx < param_.dim;
+        idx_      = idx;
         switch (param_.type) {
             case RopeType::kDefault:
             case RopeType::kLinear:
