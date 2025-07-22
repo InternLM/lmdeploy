@@ -19,7 +19,7 @@
 namespace turbomind {
 
 struct MultimodalRope {
-    int          session_len;
+    int          stride{};
     Tensor_<int> position_ids;
     Buffer_<int> position_delta;
     Buffer_<int> length;

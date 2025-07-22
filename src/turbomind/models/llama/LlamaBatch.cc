@@ -11,6 +11,7 @@
 #include <memory>
 #include <memory_resource>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <thread>
@@ -341,18 +342,18 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         }
 
         // copy multimodal rope input meta
-        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
             TM_CHECK(r->session.start_flag) << "Multimodal rope doesn't support interactive chat";
             if (r->inputs.count("mrope_position_ids")) {
                 core::Copy(r->inputs.at("mrope_position_ids").data<int>(),
                            input_length * 3,
-                           state.mrope.position_ids.data() + idx * 3 * session_len_);
+                           state.mrope.position_ids.data() + idx * state.mrope.position_ids.shape(1));
                 core::Copy(
                     r->inputs.at("mrope_position_delta").data<int>(), 1, state.mrope.position_delta.data() + idx);
                 core::Copy(r->inputs.at("mrope_length").data<int>(), 1, state.mrope.length.data() + idx);
             }
             else {
-                cudaMemsetAsync(state.mrope.length.data() + idx, 0, sizeof(int), stream_);
+                check_cuda_error(cudaMemsetAsync(state.mrope.length.data() + idx, 0, sizeof(int), stream_));
             }
         }
 
@@ -690,10 +691,12 @@ void LlamaBatch::CopyState(const std::vector<std::tuple<BatchState*, BatchState*
                     std::tuple{s->output_ids.data(), d->output_ids.data(), session_len_},
                     std::tuple{(curandState_t*)s->curand_state.data(), (curandState_t*)d->curand_state.data(), 1});
 
-        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
             IndexedCopy(s_idx,
                         d_idx,
-                        std::tuple{s->mrope.position_ids.data(), d->mrope.position_ids.data(), session_len_ * 3},
+                        std::tuple{s->mrope.position_ids.data(),
+                                   d->mrope.position_ids.data(),
+                                   (int)s->mrope.position_ids.shape(1)},
                         std::tuple{s->mrope.position_delta.data(), d->mrope.position_delta.data(), 1},
                         std::tuple{s->mrope.length.data(), d->mrope.length.data(), 1});
         }
@@ -768,10 +771,12 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
         s.curand_state = {{batch_size, sizeof(curandState_t)}, kDEVICE};
         Clear(s.curand_state.buffer());
 
-        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
             s.mrope.position_ids   = {{batch_size, session_len_ * 3}, kDEVICE};
             s.mrope.position_delta = {batch_size, kDEVICE};
             s.mrope.length         = {batch_size, kDEVICE};
+            Clear(s.mrope.position_delta);
+            Clear(s.mrope.length);
         }
     }
 
@@ -1552,12 +1557,12 @@ bool LlamaBatch::Forward(GenerationState& g)
             }
         }
 
-        std::shared_ptr<MultimodalRope> mrope_sptr;
-        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
-            mrope_sptr.reset(new MultimodalRope{session_len_,
-                                                state_->mrope.position_ids.slice(first, mini_batch_size),
-                                                state_->mrope.position_delta.slice(first, mini_batch_size),
-                                                state_->mrope.length.slice(first, mini_batch_size)});
+        MultimodalRope mrope;
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            mrope.stride         = state_->mrope.position_ids.shape(1);
+            mrope.position_ids   = state_->mrope.position_ids.slice(first, mini_batch_size);
+            mrope.position_delta = state_->mrope.position_delta.slice(first, mini_batch_size);
+            mrope.length         = state_->mrope.length.slice(first, mini_batch_size);
         }
 
         // Synchronize batch token num with sync DP ranks
@@ -1574,7 +1579,7 @@ bool LlamaBatch::Forward(GenerationState& g)
                         h_input_length_buf_.slice(first, mini_batch_size),
                         state_->h_context_length.slice(first, mini_batch_size),
                         rope_theta_.slice(first, mini_batch_size),
-                        mrope_sptr.get(),
+                        &mrope,
                         finished_buf_.slice(first, mini_batch_size),
                         Buffer(local_token_nums.data(), local_token_nums.size(), kCPU),
                         lora_mask_buf_,

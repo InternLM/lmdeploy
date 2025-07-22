@@ -75,8 +75,8 @@ struct FastRoPE {
         else if (param_.type == RopeType::kYarn) {
             attention_scaling_ = param_.yarn.attention_factor;
         }
-        else if (param_.type == RopeType::kMultimodal) {
-            param_.multimodal.position_ids += batch_idx * param_.multimodal.session_len * 3;
+        else if (param_.type == RopeType::kMrope) {
+            param_.multimodal.position_ids += batch_idx * param_.multimodal.stride;
             param_.multimodal.position_delta += batch_idx;
             param_.multimodal.length += batch_idx;
         }
@@ -90,7 +90,7 @@ struct FastRoPE {
             case RopeType::kDefault:
             case RopeType::kLinear:
             case RopeType::kDynamic:
-            case RopeType::kMultimodal:
+            case RopeType::kMrope:
                 init_default<N>(inv_freq_, idx, param_);
                 break;
             case RopeType::kYarn:
@@ -105,7 +105,7 @@ struct FastRoPE {
     template<typename T>
     __device__ void apply(Array<T, N>& x, float timestep)
     {
-        if (param_.type == RopeType::kMultimodal) {
+        if (param_.type == RopeType::kMrope) {
             return apply_mrope(x, timestep);
         }
         // Most models apply rotary embedding in half precision

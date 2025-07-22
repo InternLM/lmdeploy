@@ -262,7 +262,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                    {"kv_block_ptrs", kv_block_ptrs},
                    {"local_token_nums", local_token_nums}};
 
-    if (mrope != nullptr) {
+    if (mrope != nullptr && mrope->position_ids) {
         args.insert({"mrope_position_ids", mrope->position_ids});
         args.insert({"mrope_position_delta", mrope->position_delta});
         args.insert({"mrope_position_length", mrope->length});

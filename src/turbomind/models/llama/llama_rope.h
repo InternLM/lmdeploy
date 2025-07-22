@@ -16,7 +16,7 @@ enum class RopeType
     kDynamic,
     kYarn,
     kLlama3,
-    kMultimodal,
+    kMrope,
 };
 
 inline RopeType GetRoPEType(const std::string& type)
@@ -26,7 +26,7 @@ inline RopeType GetRoPEType(const std::string& type)
                                               {"dynamic", RopeType::kDynamic},
                                               {"yarn", RopeType::kYarn},
                                               {"llama3", RopeType::kLlama3},
-                                              {"mrope", RopeType::kMultimodal}};
+                                              {"mrope", RopeType::kMrope}};
     return lookup.at(type);
 }
 
@@ -77,7 +77,7 @@ struct Llama3RopeKernelParam {
 struct MultimodalRopeKernelParam {
     int3 section;
 
-    int  session_len{};
+    int  stride{};
     int* position_ids{};
     int* position_delta{};
     int* length{};
@@ -145,7 +145,7 @@ inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_
         dst.beta                          = src.low_freq_factor * inv_diff_freq_factor;
     }
 
-    else if (rope.type == RopeType::kMultimodal) {
+    else if (rope.type == RopeType::kMrope) {
         auto& src     = rope.multimodal;
         auto& dst     = rope_kernel.multimodal;
         dst.section.x = src.section.x * 2;

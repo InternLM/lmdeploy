@@ -134,7 +134,7 @@ static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
         case RopeType::kLlama3:
             parse_llama3_rope_param(node, rope);
             break;
-        case RopeType::kMultimodal:
+        case RopeType::kMrope:
             parse_multimodal_rope_param(node, rope);
             break;
         default:
