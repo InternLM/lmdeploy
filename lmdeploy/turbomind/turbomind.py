@@ -146,14 +146,10 @@ class TurboMind:
         self.devices = _engine_config.devices
 
         self.tokenizer = tokenizer
-        if model_source == ModelSource.WORKSPACE:
-            self.model_comm = self._from_workspace(model_path=model_path, engine_config=_engine_config)
-        else:
-            if not osp.exists(model_path):
-                model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
-            self.model_comm = self._from_hf(model_source=model_source,
-                                            model_path=model_path,
-                                            engine_config=_engine_config)
+
+        if not osp.exists(model_path):
+            model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
+        self.model_comm = self._from_hf(model_source=model_source, model_path=model_path, engine_config=_engine_config)
 
         if not _engine_config.empty_init:
             self._load_weights(model_source)
@@ -289,29 +285,6 @@ class TurboMind:
         tm_params = tm_model.tm_params
         self._get_model_params(model_comm, tm_params)
         logger.warning(f'get {len(tm_params)} model params')
-        return model_comm
-
-    def _from_workspace(self, model_path: str, engine_config: TurbomindEngineConfig):
-        """Load model which is converted by `lmdeploy convert`"""
-        config_path = osp.join(model_path, 'triton_models', 'weights', 'config.yaml')
-        # load TurbomindModelConfig from config file
-        with open(config_path, 'r') as f:
-            _cfg = yaml.safe_load(f)
-        cfg = TurbomindModelConfig.from_dict(_cfg)
-
-        # always use tp in converted model (config.yaml)
-        assert cfg.model_config.attn_tp_size == engine_config.attn_tp_size, \
-            f'tp size mismatch ({cfg.model_config.attn_tp_size} vs {engine_config.attn_tp_size})'
-
-        self._postprocess_config(cfg, engine_config)
-
-        weight_dir = osp.join(model_path, 'triton_models', 'weights')
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
-                                                                     config=yaml.safe_dump(self.config_dict),
-                                                                     weight_type=self.config.weight_type)
-
-        # create weight and load params
-        self._create_weight(model_comm)
         return model_comm
 
     def update_params(self, request: UpdateParamsRequest):
