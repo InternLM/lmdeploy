@@ -63,7 +63,7 @@ jobs:
           # manually install flash attn
           python3 -m pip install /root/packages/cu118/flash_attn-*.whl
           python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt
-          DISABLE_TURBOMIND=1 python3 -m pip install -e .
+          python3 -m pip install -e .
       - name: Check env
         run: |
           python3 -m pip list
