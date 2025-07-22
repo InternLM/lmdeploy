@@ -1005,3 +1005,39 @@ def test_qwen3(model_path, enable_thinking):
                                             enable_thinking=enable_thinking)
     lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
     assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
+@pytest.mark.parametrize('enable_thinking', [True, False, None])
+def test_interns1(model_path, enable_thinking):
+    from transformers import AutoTokenizer
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    except OSError:
+        pytest.skip(reason='internlm/Intern-S1 not exists')
+
+    chat_template_name = best_match_model(model_path)
+    chat_template = MODELS.get(chat_template_name)()
+
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    if enable_thinking is None:
+        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    else:
+        ref = tokenizer.apply_chat_template(messages,
+                                            tokenize=False,
+                                            add_generation_prompt=True,
+                                            enable_thinking=enable_thinking)
+    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
+    assert ref == lm_res

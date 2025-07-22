@@ -1965,6 +1965,93 @@ class Llama4(BaseChatTemplate):
             return 'llama4'
 
 
+@MODELS.register_module(name='intern_s1')
+class InternS1(InternVL2_5):
+
+    def __init__(
+            self,
+            botools='',
+            eotools='',
+            meta_instruction='You are an expert reasoner with extensive experience in all areas. You approach problems through systematic thinking and rigorous reasoning. Your response should reflect deep understanding and precise logical thinking, making your solution path and reasoning clear to others. Please put your thinking process within <think>...</think> tags.',  # noqa: E501
+            **kwargs):
+        self.botools = botools
+        self.eotools = eotools
+        super(InternVL2_5, self).__init__(meta_instruction=meta_instruction, **kwargs)
+
+    def messages2prompt(self, messages, sequence_start=True, tools=None, enable_thinking=None, **kwargs):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       assistant=self.assistant,
+                       system=self.system,
+                       environment=self.environment,
+                       tool=self.environment)
+        eox_map = dict(user=self.eoh,
+                       assistant=self.eoa + self.separator,
+                       system=self.eosys,
+                       environment=self.eoenv,
+                       tool=self.eoenv)
+        name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
+        ret = ''
+        if self.meta_instruction is not None and sequence_start:
+            if len(messages):
+                if messages[0]['role'] != 'system' and enable_thinking is not False:
+                    ret += f'{self.system}{self.meta_instruction}{eox_map["system"]}'
+
+        if tools:
+            tools_prompt = dict(
+                role='system',
+                name='plugin',  # only support internlm2
+                content=f'{self.botools}{json.dumps(tools, ensure_ascii=False)}{self.eotools}')
+            insert_index = 0
+            if messages[0]['role'] == 'system':
+                insert_index = 1
+            messages.insert(insert_index, tools_prompt)
+        for message in messages:
+            role = message['role']
+            content = get_text(message['content'])
+            if role == 'assistant' and message.get('tool_calls', None) is not None:
+                for tool_call in message['tool_calls']:
+                    function = tool_call.get('function', {})
+                    function['name'] = function.get('name', '')
+                    function['parameters'] = function.get('parameters', function.get('arguments', ''))
+                    function.pop('arguments')
+                    if isinstance(function['parameters'], str):
+                        function['parameters'] = json.loads(function['parameters'])
+                    content += f'<|action_start|><|plugin|>\n{json.dumps(function, ensure_ascii=False)}<|action_end|>'
+            if 'name' in message and message['name'] in name_map:
+                begin = box_map[role].strip() + f" name={name_map[message['name']]}\n"
+            else:
+                begin = box_map[role]
+            ret += f'{begin}{content}{eox_map[role]}'
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return ret[:-len(eox_map['assistant'])]  # prefix of response
+        ret += f'{self.assistant}'
+
+        if enable_thinking is not False:
+            ret += '<think>\n'
+        return ret
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'intern-s1' in path:
+            return 'intern_s1'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 
