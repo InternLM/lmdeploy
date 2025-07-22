@@ -98,6 +98,12 @@ with set_envs():
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
 
+    # dump expert distribution
+    dump_expert_distribution = env_to_bool('LMDEPLOY_DUMP_EXPERT_DISTRIBUTION', False)
+    expert_dump_dir = os.getenv('LMDEPLOY_EXPERT_DUMP_DIR', '/tmp/lmdeploy/expert_distribution')
+    expert_dump_frequency = env_to_int('LMDEPLOY_EXPERT_DUMP_FREQUENCY', 5)
+    expert_dump_rank = env_to_int('LMDEPLOY_EXPERT_DUMP_RANK', 0)
+
 
 def get_all_envs():
     """Get all environment variables."""
