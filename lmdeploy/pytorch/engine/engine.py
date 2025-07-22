@@ -3,6 +3,7 @@ import asyncio
 import copy
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
@@ -1029,11 +1030,14 @@ class Engine:
                     session_id = msg.session_id
                     msg.resp.type = ResponseType.SUCCESS
                     token_ids = [msg.migration_request.remote_token_id]
+                    new_token_timestamp = time.perf_counter()
+                    metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
                     out = InferOutput(
                         session_id=session_id,
                         resp=msg.resp,
                         finish=False,
                         token_ids=np.array(token_ids),
+                        metrics_info=metrics_info,
                     )
                     outputs[session_id] = out
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
