@@ -788,7 +788,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/completions')
             node_manager.post_call(d_url, start)
-            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
             resp = JSONResponse(json.loads(response))
         if not node_manager.dummy_prefill:
             node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
