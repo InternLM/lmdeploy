@@ -103,6 +103,7 @@ def build_rotary_params(config: PretrainedConfig):
                            dynamic=_get_dynamic_ntk_parameters,
                            yarn=_get_yarn_parameters,
                            longrope=_get_longrope_parameters,
+                           su=_get_longrope_parameters,
                            llama3=_get_llama3_parameters)
         params.update(build_funcs[rope_type_str](config))
 
