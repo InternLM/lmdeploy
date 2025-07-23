@@ -47,7 +47,7 @@ class InternVL3VisionModel(VisonModel):
         self.arch = hf_config.architectures[0]
 
     def build_preprocessor(self):
-        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True, use_fast=False)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
         tokenizer = self.processor.tokenizer
         self.image_token_id = tokenizer.context_image_token_id
         self.image_tokens_per_patch = self.processor.image_seq_length

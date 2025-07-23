@@ -624,11 +624,19 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
             ('.qkv_proj', '.v_proj', 'v'),
         ]
         for name, loaded_weight in weights:
+            # deal with interns1
+            if name == 'lm_head.weight':
+                name = 'language_model.lm_head.weight'
+            elif name.startswith('model.language_model.'):
+                name = 'language_model.model.' + name[len('model.language_model.'):]
+            elif name.startswith('model.'):
+                name = name[len('model.'):]
+
             if name.startswith(lang_prefix):
                 new_key = name[lang_prefix_length:]
                 new_weights[new_key] = loaded_weight
                 continue
-            # if 'vision_tower.encoder.layer.' in name:
+
             for (param_name, weight_name, shard_id) in vision_stacked_params_mapping:
                 if weight_name not in name:
                     continue
