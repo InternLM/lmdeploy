@@ -37,14 +37,16 @@ class InternVL2Reader(InternLM2Reader):
 class InternS1Reader(Qwen3MoeReader):
     """InternVL3Reader for InternVL+Qwen3MoE model."""
 
-    attn_layer_prefix = 'language_model.model.layers'
-    attn_layer_patten = r'language_model.model.layers.([0-9]+).'
-    tok_embeddings_key = 'language_model.model.embed_tokens.weight'
-    norm_weight_key = 'language_model.model.norm.weight'
-    output_weight_key = 'language_model.lm_head.weight'
+    attn_layer_prefix = 'model.language_model.layers'
+    attn_layer_patten = r'model.language_model.layers.([0-9]+).'
+    tok_embeddings_key = 'model.language_model.embed_tokens.weight'
+    norm_weight_key = 'model.language_model.norm.weight'
+    output_weight_key = 'lm_head.weight'
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
-        model_cfg = model_cfg.get('llm_config')
+        model_cfg = model_cfg.get('text_config')
+        if model_cfg is None:
+            raise ValueError(f'Miss "text_config" in model config: {model_cfg}')
         super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
