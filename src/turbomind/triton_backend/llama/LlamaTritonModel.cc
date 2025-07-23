@@ -106,12 +106,12 @@ static void parse_llama3_rope_param(const YAML::Node& node, RopeParam& param)
     param.llama3.original_max_position_embeddings = node["original_max_position_embeddings"].as<int>();
 }
 
-static void parse_multimodal_rope_param(const YAML::Node& node, RopeParam& param)
+static void parse_mrope_rope_param(const YAML::Node& node, RopeParam& param)
 {
     parse_default_rope_param(node, param);
     auto mrope_section = node["mrope_section"].as<std::vector<int>>();
     FT_CHECK(mrope_section.size() == 3);
-    param.multimodal.section = {mrope_section[0], mrope_section[1], mrope_section[2]};
+    param.mrope.section = {mrope_section[0], mrope_section[1], mrope_section[2]};
 }
 
 static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
@@ -135,7 +135,7 @@ static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
             parse_llama3_rope_param(node, rope);
             break;
         case RopeType::kMrope:
-            parse_multimodal_rope_param(node, rope);
+            parse_mrope_rope_param(node, rope);
             break;
         default:
             FT_CHECK(0);

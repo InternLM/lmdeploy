@@ -141,11 +141,11 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
         rope_param_.base = const_cast<float*>(rope_base_.data());
     }
     else if (rope_param_.type == RopeType::kMrope && !isTuning()) {
-        auto& position_ids                    = args.at("mrope_position_ids");
-        rope_param_.multimodal.stride         = position_ids.shape(1);
-        rope_param_.multimodal.position_ids   = position_ids.data<int>();
-        rope_param_.multimodal.position_delta = args.at("mrope_position_delta").data<int>();
-        rope_param_.multimodal.length         = args.at("mrope_position_length").data<int>();
+        auto& position_ids               = args.at("mrope_position_ids");
+        rope_param_.mrope.stride         = position_ids.shape(1);
+        rope_param_.mrope.position_ids   = position_ids.data<int>();
+        rope_param_.mrope.position_delta = args.at("mrope_position_delta").data<int>();
+        rope_param_.mrope.length         = args.at("mrope_position_length").data<int>();
     }
 }
 
@@ -302,9 +302,9 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.rope_param.base += offset;
         }
         else if (rope_param_.type == RopeType::kMrope) {
-            params.rope_param.multimodal.position_ids += offset * rope_param_.multimodal.stride;
-            params.rope_param.multimodal.position_delta += offset;
-            params.rope_param.multimodal.length += offset;
+            params.rope_param.mrope.position_ids += offset * rope_param_.mrope.stride;
+            params.rope_param.mrope.position_delta += offset;
+            params.rope_param.mrope.length += offset;
         }
 
         // logn attn

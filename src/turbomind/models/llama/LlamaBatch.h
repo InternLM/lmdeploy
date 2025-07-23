@@ -18,7 +18,7 @@
 
 namespace turbomind {
 
-struct MultimodalRope {
+struct MropeRope {
     int          stride{};
     Tensor_<int> position_ids;
     Buffer_<int> position_delta;
@@ -31,7 +31,7 @@ struct BatchState {
     Buffer_<int>  h_context_length;
     Buffer_<bool> h_finished;
 
-    MultimodalRope mrope;
+    MropeRope mrope;
 
     Tensor_<uint8_t> curand_state;  // [n, sizeof(curandState_t)]
 

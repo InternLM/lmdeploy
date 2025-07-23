@@ -42,7 +42,7 @@ struct Llama3RopeParam {
     int   original_max_position_embeddings;
 };
 
-struct MultimodalRopeParam {
+struct MropeRopeParam {
     int3 section;
 };
 
@@ -55,9 +55,9 @@ struct RopeParam {
     int   max_position_embeddings;
     // unique
     union {
-        YarnRopeParam       yarn;
-        Llama3RopeParam     llama3;
-        MultimodalRopeParam multimodal;
+        YarnRopeParam   yarn;
+        Llama3RopeParam llama3;
+        MropeRopeParam  mrope;
     };
 };
 
@@ -74,7 +74,7 @@ struct Llama3RopeKernelParam {
     float beta;
 };
 
-struct MultimodalRopeKernelParam {
+struct MropeRopeKernelParam {
     int3 section;
 
     int  stride{};
@@ -91,9 +91,9 @@ struct RopeKernelParam {
     float  scale_factor;
     float  inv_factor;
 
-    YarnRopeKernelParam       yarn;
-    Llama3RopeKernelParam     llama3;
-    MultimodalRopeKernelParam multimodal;
+    YarnRopeKernelParam   yarn;
+    Llama3RopeKernelParam llama3;
+    MropeRopeKernelParam  mrope;
 };
 
 inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_kernel)
@@ -146,8 +146,8 @@ inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_
     }
 
     else if (rope.type == RopeType::kMrope) {
-        auto& src     = rope.multimodal;
-        auto& dst     = rope_kernel.multimodal;
+        auto& src     = rope.mrope;
+        auto& dst     = rope_kernel.mrope;
         dst.section.x = src.section.x * 2;
         dst.section.y = src.section.y * 2 + dst.section.x;
         dst.section.z = src.section.z * 2 + dst.section.y;

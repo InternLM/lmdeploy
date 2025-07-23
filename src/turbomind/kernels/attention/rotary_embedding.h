@@ -76,9 +76,9 @@ struct FastRoPE {
             attention_scaling_ = param_.yarn.attention_factor;
         }
         else if (param_.type == RopeType::kMrope) {
-            param_.multimodal.position_ids += batch_idx * param_.multimodal.stride;
-            param_.multimodal.position_delta += batch_idx;
-            param_.multimodal.length += batch_idx;
+            param_.mrope.position_ids += batch_idx * param_.mrope.stride;
+            param_.mrope.position_delta += batch_idx;
+            param_.mrope.length += batch_idx;
         }
     }
 
@@ -128,15 +128,15 @@ struct FastRoPE {
     __device__ void apply_mrope(Array<T, N>& x, float timestep)
     {
         int  tt, th, tw;
-        int3 section = param_.multimodal.section;
-        if (timestep < *param_.multimodal.length) {
-            const int* t = param_.multimodal.position_ids + 3 * (int)timestep;
+        int3 section = param_.mrope.section;
+        if (timestep < *param_.mrope.length) {
+            const int* t = param_.mrope.position_ids + 3 * (int)timestep;
             tt           = t[0];
             th           = t[1];
             tw           = t[2];
         }
         else {
-            tt = th = tw = (int)timestep + (*param_.multimodal.position_delta);
+            tt = th = tw = (int)timestep + (*param_.mrope.position_delta);
         }
 
         PRAGMA_UNROLL

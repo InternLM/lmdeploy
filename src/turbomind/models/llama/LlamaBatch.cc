@@ -341,9 +341,9 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             }
         }
 
-        // copy multimodal rope input meta
+        // copy mrope input meta
         if (model_->attn_param_.rope.type == RopeType::kMrope) {
-            TM_CHECK(r->session.start_flag) << "Multimodal rope doesn't support interactive chat";
+            TM_CHECK(r->session.start_flag) << "Mrope doesn't support interactive chat";
             if (r->inputs.count("mrope_position_ids")) {
                 core::Copy(r->inputs.at("mrope_position_ids").data<int>(),
                            input_length * 3,
@@ -1557,7 +1557,7 @@ bool LlamaBatch::Forward(GenerationState& g)
             }
         }
 
-        MultimodalRope mrope;
+        MropeRope mrope;
         if (model_->attn_param_.rope.type == RopeType::kMrope) {
             mrope.stride         = state_->mrope.position_ids.shape(1);
             mrope.position_ids   = state_->mrope.position_ids.slice(first, mini_batch_size);
