@@ -92,8 +92,7 @@ def _get_llama3_parameters(config: PretrainedConfig):
 
 def build_rotary_params(config: PretrainedConfig):
     """Get scaling_factor rotary params, and emb_type."""
-    partial_rotary_factor = config.partial_rotary_factor if hasattr(config, 'partial_rotary_factor') else None
-    params = dict(emb_type=RopeType.Default, partial_rotary_factor=partial_rotary_factor)
+    params = dict(emb_type=RopeType.Default)
     # cannot access config.rope_scaling when the model is "Qwen/Qwen2-Math-RM-72B"
     rope_scaling = getattr(config, 'rope_scaling', None)
     if rope_scaling is not None:
@@ -106,6 +105,12 @@ def build_rotary_params(config: PretrainedConfig):
                            longrope=_get_longrope_parameters,
                            llama3=_get_llama3_parameters)
         params.update(build_funcs[rope_type_str](config))
+
+        # update partial_rotary_factor
+        partial_rotary_factor = config.partial_rotary_factor if hasattr(config, 'partial_rotary_factor') else None
+        if partial_rotary_factor is not None:
+            params['partial_rotary_factor'] = partial_rotary_factor
+
     return params
 
 
