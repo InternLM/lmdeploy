@@ -13,12 +13,12 @@ from torch import nn
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding,
+                                 build_rotary_params)
 from lmdeploy.pytorch.nn.eplb import EPLBDispatchInfo, EPLBManager
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
-from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -26,7 +26,7 @@ from .utils.cudagraph import CudaGraphMixin
 
 # microbatch
 class ExecType(Enum):
-    """Batch ecex type."""
+    """Batch exec type."""
     One = auto()
     Two0101 = auto()
     Two0110 = auto()
@@ -976,33 +976,11 @@ class DeepseekV2Model(nn.Module):
                                                                                      config.num_attention_heads)
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
-        scaling_factor = 1.0
-        other_params = dict()
-        if config.rope_scaling is not None:
-            scaling_type = config.rope_scaling['type']
-            scaling_factor = config.rope_scaling['factor']
-            if scaling_type == 'dynamic':
-                emb_type = RopeType.DynamicNTKScaling
-            elif scaling_type == 'yarn':
-                emb_type = RopeType.Yarn
-                rope_max_pos_emb = config.rope_scaling.get('original_max_position_embeddings', 4096)
-                kwargs = {
-                    key: config.rope_scaling[key]
-                    for key in [
-                        'beta_fast',
-                        'beta_slow',
-                        'mscale',
-                        'mscale_all_dim',
-                    ] if key in self.config.rope_scaling
-                }
-                yarn_params = YarnParameters(**kwargs)
-                other_params['yarn_params'] = yarn_params
-        self.rotary_emb = build_rotary_embedding(rope_dim,
-                                                 rope_max_pos_emb,
-                                                 rope_base,
-                                                 scaling_factor,
-                                                 emb_type=emb_type,
-                                                 **other_params)
+
+        rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
+        update_params = build_rotary_params(config)
+        rope_params.update(update_params)
+        self.rotary_emb = build_rotary_embedding(**rope_params)
 
     def forward(
         self,

@@ -10,7 +10,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul
 from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
                                         build_rowwise_linear)
-from lmdeploy.pytorch.nn.rotary_embedding import LongRoPEScalingParameters, build_rotary_embedding
+from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding, build_rotary_params
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -231,32 +231,16 @@ class Phi3Model(nn.Module):
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
-        rope_scaling = config.rope_scaling
         partial_rotary_factor = getattr(config, 'partial_rotary_factor', None)
-        if rope_scaling is not None:
-            scaling_type = rope_scaling['type']
-            assert scaling_type in ['longrope', 'su']
-            emb_type = RopeType.LongRoPEScaling
-            ori_pos_emb = getattr(config, 'original_max_position_embeddings', rope_max_pos_emb)
-            longrope_params = LongRoPEScalingParameters(short_factor=rope_scaling['short_factor'],
-                                                        long_factor=rope_scaling['long_factor'],
-                                                        original_max_position_embeddings=ori_pos_emb)
-            self.rotary_emb = build_rotary_embedding(
-                rope_dim,
-                rope_max_pos_emb,
-                rope_base,
-                longrope_params=longrope_params,
-                emb_type=emb_type,
-                partial_rotary_factor=partial_rotary_factor,
-            )
-        else:
-            self.rotary_emb = build_rotary_embedding(
-                rope_dim,
-                rope_max_pos_emb,
-                rope_base,
-                emb_type=emb_type,
-                partial_rotary_factor=partial_rotary_factor,
-            )
+
+        rope_params = dict(emb_type=emb_type,
+                           dim=rope_dim,
+                           max_position_embeddings=rope_max_pos_emb,
+                           base=rope_base,
+                           partial_rotary_factor=partial_rotary_factor)
+        update_params = build_rotary_params(config)
+        rope_params.update(update_params)
+        self.rotary_emb = build_rotary_embedding(**rope_params)
 
     def forward(
         self,
