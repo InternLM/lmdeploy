@@ -7,10 +7,10 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul
 from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
                                         build_rowwise_linear)
-from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding, build_rotary_params
+from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding_from_config
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -227,20 +227,7 @@ class Phi3Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        emb_type = RopeType.LinearScaling
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        partial_rotary_factor = getattr(config, 'partial_rotary_factor', None)
-
-        rope_params = dict(emb_type=emb_type,
-                           dim=rope_dim,
-                           max_position_embeddings=rope_max_pos_emb,
-                           base=rope_base,
-                           partial_rotary_factor=partial_rotary_factor)
-        update_params = build_rotary_params(config)
-        rope_params.update(update_params)
-        self.rotary_emb = build_rotary_embedding(**rope_params)
+        self.rotary_emb = build_rotary_embedding_from_config(config)
 
     def forward(
         self,

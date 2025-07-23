@@ -9,8 +9,7 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding,
-                                 build_rotary_params)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import build_fused_moe
@@ -325,15 +324,7 @@ class Llama4TextModel(nn.Module):
     @staticmethod
     def build_llama4_rotary_embedding(config: Llama4TextConfig):
         """Build llama4 rotary embedding."""
-
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        emb_type = RopeType.LinearScaling
-        rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
-        update_params = build_rotary_params(config)
-        rope_params.update(update_params)
-        return build_rotary_embedding(**rope_params)
+        return build_rotary_embedding_from_config(config)
 
     def forward(
         self,
