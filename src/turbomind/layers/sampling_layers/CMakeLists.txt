@@ -34,3 +34,8 @@ add_library(StopCriteriaLayer STATIC StopCriteriaLayer.cc)
 set_property(TARGET StopCriteriaLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET StopCriteriaLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(StopCriteriaLayer PUBLIC CUDA::cudart stop_criteria memory_utils)
+
+add_library(GuidedDecodeLayer STATIC GuidedDecodeMaskLayer.cc GuidedDecodeUpdateLayer.cc)
+set_property(TARGET GuidedDecodeLayer PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET GuidedDecodeLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(GuidedDecodeLayer PUBLIC CUDA::cudart)
