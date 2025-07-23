@@ -173,6 +173,12 @@ def _override_hf_config(hf_config: Any, key: str, hf_overrides):
         _overide_hf_config_cfg(hf_config, key, hf_overrides)
 
 
+def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
+    """Override HF config."""
+    for k, v in hf_overrides.items():
+        _override_hf_config(hf_config, k, v)
+
+
 @dataclass
 class ModelConfig:
     """Config of model."""
@@ -234,8 +240,7 @@ class ModelConfig:
         if hf_overrides is not None:
             logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
-            for k, v in hf_overrides.items():
-                _override_hf_config(model_config.hf_config, k, v)
+            override_hf_config(model_config.hf_config, hf_overrides)
 
         return model_config
 
