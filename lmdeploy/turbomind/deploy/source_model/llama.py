@@ -175,8 +175,13 @@ class LlamaModel(BaseInputModel):
                     beta_fast = rope_scaling.get('beta_fast', 32.0)
                     beta_slow = rope_scaling.get('beta_slow', 1.0)
                     rope_param.type = 'yarn'
+                    if 'original_max_position_embeddings' in rope_scaling:
+                        original_max_position_embeddings = rope_scaling['original_max_position_embeddings']
+                        scaling_factor = max_position_embeddings / original_max_position_embeddings
+                    else:
+                        original_max_position_embeddings = max_position_embeddings
                     rope_param.factor = scaling_factor
-                    rope_param.max_position_embeddings = max_position_embeddings
+                    rope_param.max_position_embeddings = original_max_position_embeddings
                     rope_param.attention_factor = attention_factor
                     rope_param.beta_fast = beta_fast
                     rope_param.beta_slow = beta_slow

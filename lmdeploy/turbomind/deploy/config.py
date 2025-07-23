@@ -163,8 +163,13 @@ class TurbomindModelConfig:
 
                 rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
                 rope_param.type = override_params.get('rope_type', '')
-                rope_param.factor = override_params.get('factor', 1.0)
-                rope_param.max_position_embeddings = override_params.get('original_max_position_embeddings', None)
+                if rope_param.type == 'yarn' and 'original_max_position_embeddings' in override_params:
+                    rope_param.factor = self.attention_config.max_position_embeddings / override_params[
+                        'original_max_position_embeddings']
+                    rope_param.max_position_embeddings = override_params['original_max_position_embeddings']
+                else:
+                    rope_param.factor = override_params.get('factor', 1.0)
+                    rope_param.max_position_embeddings = override_params.get('original_max_position_embeddings', None)
 
                 self.attention_config.rope_param = rope_param
             logger.warning(f'Overriding HF config with {hf_overrides}')
