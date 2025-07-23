@@ -76,6 +76,32 @@ NORM2FN = {
 }
 
 
+@torch.compile(dynamic=True)
+def pre_rms_norm(q: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    """Pre rms norm."""
+    q = q.to(torch.float32)
+    k = k.to(torch.float32)
+    variance_q = (q * q).sum(-1, keepdim=True)
+    variance_k = (k * k).sum(-1, keepdim=True)
+    variance = torch.stack([variance_q, variance_k], dim=0)
+    return variance
+
+
+@torch.compile(dynamic=True)
+def post_rms_norm(q: torch.Tensor, k: torch.Tensor, weight_q: torch.Tensor, weight_k: torch.Tensor,
+                  variance: torch.Tensor, eps: float, embed_dim: int, dtype: torch.dtype):
+    """Post rms norm."""
+    q = q.to(torch.float32)
+    k = k.to(torch.float32)
+    variance = variance / embed_dim + eps
+    variance_q, variance_k = variance
+    q = q * torch.rsqrt(variance_q)
+    q = q.to(dtype) * weight_q
+    k = k * torch.rsqrt(variance_k)
+    k = k.to(dtype) * weight_k
+    return q, k
+
+
 class InternAttention(nn.Module):
     """Intern vl attention."""
 
@@ -130,6 +156,38 @@ class InternAttention(nn.Module):
                                  is_tp=True,
                                  tp_align_size=self.head_dim)
 
+    def pre_rms_norm(self, q: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+        """Pre rms norm."""
+        return pre_rms_norm(q, k)
+
+    def post_rms_norm(self, q: torch.Tensor, k: torch.Tensor, variance: torch.Tensor,
+                      dtype: torch.dtype) -> torch.Tensor:
+        """Post rms norm."""
+        eps = self.config.layer_norm_eps
+        return post_rms_norm(q, k, self.q_norm.weight, self.k_norm.weight, variance, eps, self.embed_dim, dtype)
+
+    def qkv_norm(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        import lmdeploy.pytorch.distributed as dist
+        q_shape = q.shape
+        k_shape = k.shape
+        q = q.flatten(-2, -1)
+        k = k.flatten(-2, -1)
+
+        tp, _ = get_tp_world_rank()
+        if tp == 1:
+            q = self.q_norm(q).view(q_shape)
+            k = self.k_norm(k).view(k_shape)
+            return q, k
+
+        # variance
+        variance = self.pre_rms_norm(q, k)
+        dist.all_reduce(variance)
+        q, k = self.post_rms_norm(q, k, variance, q.dtype)
+        q = q.view(q_shape)
+        k = k.view(k_shape)
+
+        return q, k
+
     def forward(self, hidden_states):
         """forward."""
 
@@ -138,9 +196,7 @@ class InternAttention(nn.Module):
         q, k, v = self.qkv.split_qkv(qkv_states)
 
         if self.qk_normalization:
-            q_shape = q.shape
-            q = self.q_norm(q.flatten(-2, -1)).view(q_shape)
-            k = self.k_norm(k.flatten(-2, -1)).view(q_shape)
+            q, k = self.qkv_norm(q, k)
 
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
