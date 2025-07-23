@@ -81,7 +81,8 @@ _SUPPORTED_ARCHS = dict(
     InternLM3ForCausalLM=True,
     # internvl3
     InternVLForConditionalGeneration=True,
-)
+    # interns1
+    InternS1ForConditionalGeneration=True)
 
 
 def is_supported(model_path: str):
