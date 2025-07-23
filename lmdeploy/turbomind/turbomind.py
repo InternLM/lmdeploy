@@ -571,7 +571,7 @@ class TurboMindInstance:
             if item and isinstance(item[0], np.ndarray):
                 item = [torch.from_numpy(x).squeeze() for x in item]
             # convert to lookup table type
-            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16)
+            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16, fp8=torch.bfloat16)
             dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
             item = [x.to(dtype=dtype) for x in item]
             item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]

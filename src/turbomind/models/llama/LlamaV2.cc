@@ -231,7 +231,6 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
             sync_check_cuda_error();
         }
 
-        TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
     }
 
     bool have_embeddings = false;
@@ -246,6 +245,8 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                         &have_embeddings);
         sync_check_cuda_error();
     }
+
+    TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
 
     TensorMap args{{"decoder_input", input_embeds},
                    {"decoder_output", hidden_states_out.view({-1, (int)hidden_units_}).borrow()},
