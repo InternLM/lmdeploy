@@ -5,8 +5,8 @@ import contextlib
 from typing import Any, Dict, List
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
 
@@ -105,7 +105,7 @@ class ExecutorBase:
         """Init rdma link."""
         raise NotImplementedError('Not implemented')
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+    def p2p_connect(self, conn_request: List[DistServeKVTransferEndpointInfo]):
         """rdma_connect."""
         raise NotImplementedError('Not Implemented')
 

@@ -127,6 +127,58 @@ class DistConfig:
         return self.tp > 1 or self.ep > 1
 
 
+def _override_hf_config_dict(hf_config: dict, key: str, hf_overrides):
+    """Override hf_config dict."""
+    from transformers import PretrainedConfig
+    if key not in hf_config:
+        # copy if key not in hf_config
+        hf_config[key] = hf_overrides
+        return
+
+    hf_config_val = hf_config[key]
+    is_dict = isinstance(hf_config_val, dict)
+    is_cfg = isinstance(hf_config_val, PretrainedConfig)
+    if not isinstance(hf_overrides, dict) or not (is_dict or is_cfg):
+        # if one of them is not dict, just override
+        hf_config[key] = hf_overrides
+        return
+
+    for key, value in hf_overrides.items():
+        _override_hf_config(hf_config_val, key, value)
+
+
+def _overide_hf_config_cfg(hf_config: list, key: str, hf_overrides):
+    """Override hf_config config."""
+    from transformers import PretrainedConfig
+    if getattr(hf_config, key, None) is None:
+        hf_config.update({key: hf_overrides})
+
+    hf_config_val = getattr(hf_config, key)
+    is_dict = isinstance(hf_config_val, dict)
+    is_cfg = isinstance(hf_config_val, PretrainedConfig)
+    if not isinstance(hf_overrides, dict) or not (is_dict or is_cfg):
+        # if one of them is not list, just override
+        hf_config.update({key: hf_overrides})
+        return
+
+    for key, value in hf_overrides.items():
+        _override_hf_config(hf_config_val, key, value)
+
+
+def _override_hf_config(hf_config: Any, key: str, hf_overrides):
+    """Override HF config."""
+    if isinstance(hf_config, dict):
+        _override_hf_config_dict(hf_config, key, hf_overrides)
+    else:
+        _overide_hf_config_cfg(hf_config, key, hf_overrides)
+
+
+def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
+    """Override HF config."""
+    for k, v in hf_overrides.items():
+        _override_hf_config(hf_config, k, v)
+
+
 @dataclass
 class ModelConfig:
     """Config of model."""
@@ -188,7 +240,7 @@ class ModelConfig:
         if hf_overrides is not None:
             logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
-            model_config.hf_config.update(hf_overrides)
+            override_hf_config(model_config.hf_config, hf_overrides)
 
         return model_config
 

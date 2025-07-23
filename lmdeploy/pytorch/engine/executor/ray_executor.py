@@ -17,8 +17,8 @@ from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -690,9 +690,12 @@ class RayExecutor(ExecutorBase):
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.collective_rpc('p2p_initialize', (init_request, ))
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
         """Rdma connect."""
-        return self.collective_rpc('p2p_connect', (conn_request, ))
+        return self.collective_rpc('p2p_connect', (
+            remote_engine_id,
+            conn_request,
+        ))
 
     async def migrate(self, batch: MigrationExecutionBatch):
         jobs = (worker.migrate.remote(batch) for worker in self.workers)
