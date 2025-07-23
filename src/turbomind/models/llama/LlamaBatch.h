@@ -18,11 +18,20 @@
 
 namespace turbomind {
 
+struct MropeRope {
+    int          stride{};
+    Tensor_<int> position_ids;
+    Buffer_<int> position_delta;
+    Buffer_<int> length;
+};
+
 struct BatchState {
 
     Buffer_<int>  h_prompt_length;  // history + input, ignore generated
     Buffer_<int>  h_context_length;
     Buffer_<bool> h_finished;
+
+    MropeRope mrope;
 
     Tensor_<uint8_t> curand_state;  // [n, sizeof(curandState_t)]
 

@@ -1037,11 +1037,11 @@ class Qwen2d5Chat(Qwen7BChat):
         for index, message in enumerate(messages):
             if (message['role'] == 'user' or (message['role'] == 'system' and index != 0)
                     or (message['role'] == 'assistant' and message.get('tool_calls') is None)):
-                ret += f"{box_map[message['role']]}{message['content']}{self.eosys}"
+                ret += f"{box_map[message['role']]}{get_text(message['content'])}{self.eosys}"
             elif message['role'] == 'assistant':
                 ret += '<|im_start|>assistant'
                 if message.get('content') is not None:
-                    ret += f"{self.separator}{message['content']}"
+                    ret += f"{self.separator}{get_text(message['content'])}"
 
                 if message.get('tool_calls') is not None:
                     tool_calls = message['tool_calls']
