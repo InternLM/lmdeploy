@@ -10,7 +10,8 @@ from transformers.configuration_utils import PretrainedConfig
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding,
+                                 build_rotary_params)
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -326,12 +327,10 @@ class Qwen2MoeModel(nn.Module):
         rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            emb_type=emb_type,
-        )
+        rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
+        update_params = build_rotary_params(config)
+        rope_params.update(update_params)
+        self.rotary_emb = build_rotary_embedding(**rope_params)
 
     def forward(
         self,
