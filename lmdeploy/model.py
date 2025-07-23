@@ -1965,17 +1965,17 @@ class Llama4(BaseChatTemplate):
             return 'llama4'
 
 
-@MODELS.register_module(name='intern_s1')
+@MODELS.register_module(name='interns1')
 class InternS1(InternVL2_5):
 
     def __init__(
             self,
-            botools='',
-            eotools='',
+            tool='# External Tools\nYou have access to these tools:\n',
+            eotool='\n# Tool Call Formatted\nYour response should consist of a reasoning step (**thought**) followed immediately by a function call in valid JSON format. Wrap each function call using the `<|action_start|><|plugin|>` and `<|action_end|>` tags.\n**Format example:**\n```\n(Your thought goes here...)\n<|action_start|><|plugin|>\n{\n    "name": "tool_name",\n    "parameters": {\n        "parameter1": "value1",\n        "parameter2": "value2"\n    }\n}\n<|action_end|>\n```',  # noqa: E501
             meta_instruction='You are an expert reasoner with extensive experience in all areas. You approach problems through systematic thinking and rigorous reasoning. Your response should reflect deep understanding and precise logical thinking, making your solution path and reasoning clear to others. Please put your thinking process within <think>...</think> tags.',  # noqa: E501
             **kwargs):
-        self.botools = botools
-        self.eotools = eotools
+        self.tool = tool or ''
+        self.eotool = eotool or ''
         super(InternVL2_5, self).__init__(meta_instruction=meta_instruction, **kwargs)
 
     def messages2prompt(self, messages, sequence_start=True, tools=None, enable_thinking=None, **kwargs):
@@ -2010,7 +2010,7 @@ class InternS1(InternVL2_5):
             tools_prompt = dict(
                 role='system',
                 name='plugin',  # only support internlm2
-                content=f'{self.botools}{json.dumps(tools, ensure_ascii=False)}{self.eotools}')
+                content=f'{self.tool}{json.dumps(tools, ensure_ascii=False)}{self.eotool}')
             insert_index = 0
             if messages[0]['role'] == 'system':
                 insert_index = 1
@@ -2037,7 +2037,7 @@ class InternS1(InternVL2_5):
         ret += f'{self.assistant}'
 
         if enable_thinking is not False:
-            ret += '<think>\n'
+            ret += '<think>'
         return ret
 
     @classmethod
@@ -2049,7 +2049,7 @@ class InternS1(InternVL2_5):
         """
         path = model_path.lower()
         if 'interns1' in path:
-            return 'intern_s1'
+            return 'interns1'
 
 
 def best_match_model(query: str) -> Optional[str]:
