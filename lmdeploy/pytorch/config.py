@@ -240,6 +240,7 @@ class MiscConfig:
     empty_init: bool = False
     model_format: str = None
     hf_overrides: Dict[str, Any] = None
+    disable_vision_encoder: bool = False
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -248,5 +249,6 @@ class MiscConfig:
                           empty_init=engine_config.empty_init,
                           prefill_interval=engine_config.prefill_interval,
                           model_format=engine_config.model_format,
-                          hf_overrides=engine_config.hf_overrides)
+                          hf_overrides=engine_config.hf_overrides,
+                          disable_vision_encoder=engine_config.disable_vision_encoder)
         return misc_config

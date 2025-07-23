@@ -121,10 +121,11 @@ class ExecutorBase:
         """Find best prefill num."""
         cache_max_entry_count = self.cache_config.cache_max_entry_count
         max_prefill_token_num = self.cache_config.max_prefill_token_num
+        max_batches = self.cache_config.max_batches
         runtime_cache_size = 0
         while max_prefill_token_num > 0:
-            # lm_head output(2) + to float(4) + estimated misc(1) = 7
-            runtime_cache_size = int(max_prefill_token_num * vocal_size * 7)
+            # estimate runtime mem size
+            runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocal_size * 2)
             num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
             if int(num_available) // cache_block_size >= 16:
                 break

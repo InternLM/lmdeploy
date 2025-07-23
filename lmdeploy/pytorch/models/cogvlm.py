@@ -19,7 +19,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwi
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 
 class VisionExpertAttention(nn.Module):
@@ -487,6 +487,7 @@ class GLU(nn.Module):
         return x
 
 
+@vlm_model
 class EVA2CLIPModel(nn.Module):
     """Vision model."""
 
