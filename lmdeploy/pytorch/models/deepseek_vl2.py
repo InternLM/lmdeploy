@@ -16,9 +16,10 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .deepseek_v2 import DeepseekV2ForCausalLM
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 
+@vlm_model
 class MlpProjector(nn.Module):
 
     def __init__(self, cfg, dtype):

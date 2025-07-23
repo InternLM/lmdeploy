@@ -55,6 +55,5 @@ jobs:
             cd /work
             source /opt/conda/bin/activate
             conda activate py310
-            mkdir build && cd build
-            bash ../generate.sh make
-            make -j$(nproc) && make install
+            pip install build
+            python -m build --wheel

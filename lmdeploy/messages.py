@@ -2,7 +2,7 @@
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -223,6 +223,8 @@ class TurbomindEngineConfig:
         devices(List[int]): the used devices
         empty_init (bool): Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
+        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+            It can be used to override the default config of the model,
     """
 
     dtype: str = 'auto'
@@ -252,6 +254,7 @@ class TurbomindEngineConfig:
     devices: Optional[List[int]] = None
     empty_init: bool = False
     communicator: str = 'nccl'
+    hf_overrides: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -322,6 +325,10 @@ class PytorchEngineConfig:
             Default to `MigrationBackend.DLSlime`.
         enable_mp_engine (bool): run engine in multi-process mode.
         model_format (str): weight quantization policy, options: ['fp8'].
+        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+            It can be used to override the default config of the model,
+        disable_vision_encoder (bool): Whether to disable loading vision
+            encoder. Default to False.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -352,6 +359,8 @@ class PytorchEngineConfig:
     enable_mp_engine: bool = False
     model_format: str = None
     enable_metrics: bool = False
+    hf_overrides: Optional[Dict[str, Any]] = None
+    disable_vision_encoder: bool = False
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime

@@ -194,32 +194,41 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     }
 }
 
+double get_memory_bandwidth()  // -> GB/s
+{
+    int clock_rate_khz{};
+    int bus_width_bits{};
+    cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrMemoryClockRate, 0);
+    cudaDeviceGetAttribute(&bus_width_bits, cudaDevAttrGlobalMemoryBusWidth, 0);
+    return 2. * (double)clock_rate_khz / 1e6 * (double)bus_width_bits / 8.;
+}
+
 #define KV_INT8 0
 
-#define KV_INT4 0
+#define KV_INT4 1
 
-#define DECODING 0
+#define DECODING 1
 
 template<class T>
 int test_attention()
 {
     AttentionParams<T> params{};
 
-    constexpr size_t kHeadDim = 192;
+    constexpr size_t kHeadDim = 128;
 
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
     constexpr size_t kHeadNum   = 32;
     constexpr size_t KvHeadNum  = kHeadNum / 4;
-    constexpr size_t kBatchSize = 1;
+    constexpr size_t kBatchSize = 128;
     constexpr size_t kInputLen  = 1;
     // constexpr size_t kSequenceLen = 63;
     // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 511;
     // constexpr size_t kSequenceLen = 2047;
     // constexpr size_t kSequenceLen = 4095;
-    constexpr size_t kSequenceLen = 8191;
+    constexpr size_t kSequenceLen = 8 * 1024 - 1;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
@@ -229,7 +238,7 @@ int test_attention()
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
     // constexpr int kSequenceLen = 2047;
-    constexpr int kBlockSz   = 128;
+    constexpr int kBlockSz   = 64;
     constexpr int kMaxSplitK = 128;
 #else
 
@@ -430,11 +439,11 @@ int test_attention()
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
 
-    Reference<T> reference(kDump ? Reference<T>::kUNFUSED : Reference<T>::kFLASH_ATTENTION, {});
-    // Reference<T> reference(Reference<T>::kUNFUSED, {});
+    // Reference<T> reference(kDump ? Reference<T>::kUNFUSED : Reference<T>::kFLASH_ATTENTION, {});
+    Reference<T> reference(Reference<T>::kUNFUSED, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
-    for (int i = 0; i < 1; ++i) {
+    for (int i = 0; i < 0; ++i) {
         reference.Execute(params.out,  //
                           k_cache_ref.data().get(),
                           v_cache_ref.data().get(),
@@ -473,8 +482,16 @@ int test_attention()
 
     std::vector<thrust::universal_vector<T>> outputs;
 
-    for (int i = 0; i < std::max(kTestIter, 1); ++i) {
+    std::vector<cudaEvent_t> ev_start(kTestIter);
+    std::vector<cudaEvent_t> ev_end(kTestIter);
 
+    for (int i = 0; i < kTestIter; ++i) {
+        cudaEventCreate(&ev_start[i]);
+        cudaEventCreate(&ev_end[i]);
+    }
+
+    for (int i = 0; i < std::max(kTestIter, 1); ++i) {
+        cudaEventRecord(ev_start[i]);
 #if DECODING
         dispatchDecoding<T>(params);
 #else
@@ -487,6 +504,8 @@ int test_attention()
         dispatchAttention(params);
         // params.linear_iter_params.kv_cache = std::exchange(tmp, nullptr);
 #endif
+        cudaEventRecord(ev_end[i]);
+
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";
             return -1;
@@ -536,6 +555,20 @@ int test_attention()
                        kBatchSize,
                        kQuantPolicy);
     cudaDeviceSynchronize();
+
+    const size_t nbytes = blocks.size();
+
+    const float peak_bw = get_memory_bandwidth();
+
+    std::cout << "Device peak global memory bandwidth: " << peak_bw << " GB/s\n";
+
+    for (int i = 0; i < kTestIter; ++i) {
+        float ms{};
+        cudaEventElapsedTime(&ms, ev_start[i], ev_end[i]);
+        const float bw      = nbytes / 1e9f / ms * 1000.f;
+        const float percent = bw / peak_bw * 100.f;
+        printf("time %.3f ms, bw %.3f GB/s, %.3f %%\n", ms, bw, percent);
+    }
 
     if (outputs.size() > 1) {
         std::cout << "Evaluating consistency..." << std::endl;
