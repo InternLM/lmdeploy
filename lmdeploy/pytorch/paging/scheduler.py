@@ -339,6 +339,9 @@ class Scheduler:
     def has_waiting(self):
         return self.num_waiting() > 0
 
+    def has_to_be_migrated(self):
+        return self.num_to_be_migrated() > 0
+
     def has_migration_running(self):
         return self.num_running() > 0
 
@@ -359,6 +362,14 @@ class Scheduler:
     def num_waiting(self):
         """Num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING)
+
+    def num_to_be_migrated(self):
+        """Num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.TO_BE_MIGRATED)
+
+    def num_migration_locked(self):
+        """Num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_LOCKED)
 
     def num_migration_running(self):
         """Num migration running."""
