@@ -2048,7 +2048,7 @@ class InternS1(InternVL2_5):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'intern-s1' in path:
+        if 'interns1' in path:
             return 'intern_s1'
 
 

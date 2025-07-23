@@ -35,7 +35,7 @@ class InternVLProcessorKwargs(ProcessingKwargs, total=False):
 class InternVL3VisionModel(VisonModel):
     """Internvl3 vision model."""
 
-    _arch = 'InternVLForConditionalGeneration'
+    _arch = ['InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration']
 
     def __init__(self,
                  model_path: str,
@@ -46,7 +46,7 @@ class InternVL3VisionModel(VisonModel):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
 
     def build_preprocessor(self):
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
         tokenizer = self.processor.tokenizer
         self.image_token_id = tokenizer.context_image_token_id
         self.image_tokens_per_patch = self.processor.image_seq_length
