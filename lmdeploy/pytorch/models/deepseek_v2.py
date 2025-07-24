@@ -723,6 +723,7 @@ class DeepseekV2MoE(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
+
         out_states = self.experts(
             hidden_states,
             topk_weights,

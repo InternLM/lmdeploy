@@ -10,9 +10,10 @@ from dlslime import NVLinkEndpoint, RDMAEndpoint, available_nic
 from lmdeploy.logger import get_logger
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, MigrationBackend, MigrationProtocol
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, MigrationBackend
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeInitRequest, DistServeKVTransferEndpointInfo,
+                                                   MigrationProtocol)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 logger = get_logger('lmdeploy')
 
@@ -60,8 +61,8 @@ class DLSlimeMigrationManagement:
                                                                            register_mr_request.offset,
                                                                            register_mr_request.length)
 
-    def connect(self, connect_request: DistServeConnectionRequest):
-        self.endpoint[connect_request.protocol].connect(json.loads(connect_request.remote_endpoint_info))
+    def connect(self, kvtransfer_endpoint_info: DistServeKVTransferEndpointInfo):
+        self.endpoint[kvtransfer_endpoint_info.protocol].connect(json.loads(kvtransfer_endpoint_info.endpoint_info))
 
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op=False):
         batch = [
@@ -91,6 +92,7 @@ class DLSlimeMigrationManagement:
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)
 class DLSlimeBackend(MigrationBackendImpl):
+    """DLSlime Transfer Engine."""
 
     def __init__(self):
         self.links: Dict[int, DLSlimeMigrationManagement] = {}
@@ -104,8 +106,8 @@ class DLSlimeBackend(MigrationBackendImpl):
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         return self.links[remote_engine_id].endpoint[protocol].endpoint_info
 
-    def p2p_connect(self, conn_req: DistServeConnectionRequest):
-        self.links[conn_req.remote_engine_id].connect(conn_req)
+    def p2p_connect(self, remote_engine_id: str, conn_req: DistServeKVTransferEndpointInfo):
+        self.links[remote_engine_id].connect(conn_req)
 
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         await self.links[assignment.remote_engine_id].p2p_migrate(assignment, async_op=async_op)

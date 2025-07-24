@@ -8,9 +8,10 @@ from typing import Dict
 
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.pytorch.disagg.config import MigrationBackend, MigrationProtocol, MooncakeEngineConfig
+from lmdeploy.pytorch.disagg.config import MigrationBackend, MooncakeEngineConfig
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeInitRequest, DistServeKVTransferEndpointInfo,
+                                                   MigrationProtocol)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -160,9 +161,9 @@ class MooncakeMigrationManagement:
 
         return endpoint_info
 
-    def connect(self, connect_request: DistServeConnectionRequest):
+    def connect(self, connect_request: DistServeKVTransferEndpointInfo):
         """Connect to the remote engine."""
-        remote_endpoint_info = json.loads(connect_request.remote_endpoint_info)
+        remote_endpoint_info = json.loads(connect_request.endpoint_info)
 
         self.remote_url = remote_endpoint_info['session_id']
         self.remote_kv_table = remote_endpoint_info['mr_info']
@@ -247,8 +248,8 @@ class MooncakeBackend(MigrationBackendImpl):
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         return self.links[remote_engine_id].endpoint_info
 
-    def p2p_connect(self, connect_request: DistServeConnectionRequest):
-        self.links[connect_request.remote_engine_id].connect(connect_request)
+    def p2p_connect(self, remote_engine_id: str, connect_request: DistServeKVTransferEndpointInfo):
+        self.links[remote_engine_id].connect(connect_request)
 
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         await self.links[assignment.remote_engine_id].p2p_migrate(assignment, async_op=async_op)
