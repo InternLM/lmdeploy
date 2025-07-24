@@ -6,8 +6,7 @@ import random
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
-from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.serve.async_engine import get_names_from_model
+from lmdeploy.model import ChatTemplateConfig, best_match_model
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg
 
@@ -108,7 +107,7 @@ def main(model_path: str,
     """
 
     # chat template
-    _, chat_template_name = get_names_from_model(model_path)
+    chat_template_name = best_match_model(model_path)
     if chat_template_config is None:
         chat_template_config = ChatTemplateConfig(chat_template_name)
     elif chat_template_config.model_name is None:
