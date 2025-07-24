@@ -9,13 +9,13 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-.venv/
 triton-rerope/
 develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
+.venv/
 lib/
 lib64/
 parts/
@@ -43,7 +43,6 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
-.venv/
 *build*/
 !builder/
 lmdeploy/lib/

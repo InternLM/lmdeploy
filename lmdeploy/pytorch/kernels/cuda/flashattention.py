@@ -404,18 +404,18 @@ def _kernel_meta_sm12x(BLOCK_DK: int, shared_kv: bool):
         num_warps = 8
         num_stages = 3
     elif BLOCK_DK <= 256:
-        BLOCK_M = 96 if shared_kv else 64
-        BLOCK_N = 64
+        BLOCK_M = 64
+        BLOCK_N = 128 if shared_kv else 64
         num_warps = 8
         num_stages = 3
     elif BLOCK_DK <= 512:
-        BLOCK_M = 48 if shared_kv else 32
+        BLOCK_M = 64 if shared_kv else 32
         BLOCK_N = 64
         num_warps = 4
         num_stages = 2
     else:
         BLOCK_M = 32
-        BLOCK_N = 32
+        BLOCK_N = 32 if not shared_kv else 64
         num_warps = 4
         num_stages = 2
 
