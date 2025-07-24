@@ -9,6 +9,7 @@
 #include "src/turbomind/core/data_type.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
@@ -278,7 +279,8 @@ void CudaIpcCommImpl::AllReduceSum(
                                                               constant<vec_size>{},
                                                               std::false_type{});
         }
-        else if (bytesize <= 1 << 20) {
+#if 0
+        else if (round_up(bytesize, 2 * n_ranks * sizeof(LLPacket)) <= std::min<size_t>(1 << 20, kPacketBuffSize)) {
             constexpr int vec_size      = sizeof(uint2) / sizeof(T);
             const int     slice         = (count / vec_size + n_ranks - 1) / n_ranks;
             constexpr int ctas_per_peer = 4;
@@ -297,7 +299,8 @@ void CudaIpcCommImpl::AllReduceSum(
                                                               flag_++,
                                                               constant<ctas_per_peer>{});
         }
-        else if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
+#endif
+        else if (round_up(bytesize, n_ranks * sizeof(uint4)) <= std::min<size_t>(6 << 20, kScratchBuffSize)) {
             constexpr int vec_size = sizeof(uint4) / sizeof(T);
             constexpr int threads  = 1024;
             const int     slice    = (count / vec_size + n_ranks - 1) / n_ranks;

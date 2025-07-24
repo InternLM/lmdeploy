@@ -448,9 +448,11 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                                                 groups,
                                                                                 std::false_type{});
         }
+#if 0
         else if (bytesize <= 1 << 19) {
             return false;
         }
+#endif
         else if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
             constexpr int block_dim    = 1024;
             const int     max_ctas     = 48;
