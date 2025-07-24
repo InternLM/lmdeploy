@@ -171,6 +171,9 @@ struct GlooCommImpl: public HostCommImpl {
 
     void Sync() override
     {
+        if (n_ranks_ == 1) {
+            return;
+        }
         ::gloo::BarrierOptions opts(context_);
         opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
         ::gloo::barrier(opts);
@@ -178,6 +181,9 @@ struct GlooCommImpl: public HostCommImpl {
 
     void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) override
     {
+        if (n_ranks_ == 1) {
+            return;
+        }
         ::gloo::BroadcastOptions opts(context_);
         opts.setRoot(root);
         opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
@@ -187,6 +193,9 @@ struct GlooCommImpl: public HostCommImpl {
 
     void AllGather(void* data, int count, DataType dtype, copy_fn copy) override
     {
+        if (n_ranks_ == 1) {
+            return;
+        }
         ::gloo::AllgatherOptions opts(context_);
         opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
         opts.setOutput((char*)data, count * n_ranks_);
@@ -236,6 +245,9 @@ struct GlooCommImpl: public HostCommImpl {
 
     void AllReduce(void* data, int count, DataType dtype, RedOp red_op) override
     {
+        if (n_ranks_ == 1) {
+            return;
+        }
         ::gloo::AllreduceOptions opts(context_);
         opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
         opts.setReduceFunction(getReduceFunc(dtype, red_op));

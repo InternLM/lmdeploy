@@ -205,7 +205,6 @@ void Recv(HostCommImpl* comm, T* data, int n, int src)
         }
         else {
             try {
-                deserialize(data, 0, {});
                 uint64_t size;
                 comm->Recv(&size, 1, data_type_v<uint64_t>, src, detail::copy_fn<int>);
                 std::vector<char> buf(size);

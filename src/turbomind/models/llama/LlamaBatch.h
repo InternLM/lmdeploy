@@ -98,17 +98,17 @@ struct IntermediateData {
     bool abort{false};
 
     // cpu
-    std::vector<BlockIds> blocks;
+    std::vector<BlockIds> blocks{};
     Buffer_<int>          h_cu_block_counts;
     Buffer_<int>          h_input_length_buf;
     Buffer_<int>          h_context_length;
     Buffer_<float>        h_rope_theta;
     Buffer_<bool>         h_finished;
-    int                   dc_batch_size;
-    int                   pf_batch_size;
+    int                   dc_batch_size{};
+    int                   pf_batch_size{};
 
-    std::vector<int> local_token_nums;
-    int              global_token_num;
+    std::vector<int> local_token_nums{};
+    int              global_token_num{};
 
     // gpu
     // hidden, residual, logits

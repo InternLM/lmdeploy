@@ -1436,6 +1436,93 @@ void deserialize(std::shared_ptr<RequestData>* req, int n, const std::vector<cha
     }
 }
 
+template<typename T>
+void serialize(std::ostream& os, const Buffer_<T>& buf)
+{
+    serialize(os, buf.size());
+    serialize(os, buf.device().type);
+    os.write((char*)buf.raw_data(), sizeof(T) * buf.size());
+}
+
+template<typename T>
+void deserialize(std::istream& is, Buffer_<T>& buf)
+{
+    ssize_t    size;
+    DeviceType dev_type;
+    deserialize(is, size);
+    deserialize(is, dev_type);
+    buf = {size, kCPU};
+    is.read((char*)buf.raw_data(), sizeof(T) * size);
+}
+
+void serialize(std::ostream& os, const IntermediateData& inter)
+{
+    serialize(os, inter.abort);
+    serialize(os, inter.dc_batch_size);
+    serialize(os, inter.pf_batch_size);
+    serialize(os, inter.local_token_nums);
+    serialize(os, inter.global_token_num);
+
+    if (inter.dc_batch_size + inter.pf_batch_size) {
+        int sz = inter.blocks.size();
+        serialize(os, sz);
+        for (const auto& b : inter.blocks) {
+            serialize(os, b);
+        }
+        serialize(os, inter.h_cu_block_counts);
+        serialize(os, inter.h_input_length_buf);
+        serialize(os, inter.h_context_length);
+        serialize(os, inter.h_rope_theta);
+        serialize(os, inter.h_finished);
+    }
+}
+
+void deserialize(std::istream& is, IntermediateData& inter)
+{
+    deserialize(is, inter.abort);
+    deserialize(is, inter.dc_batch_size);
+    deserialize(is, inter.pf_batch_size);
+    deserialize(is, inter.local_token_nums);
+    deserialize(is, inter.global_token_num);
+
+    if (inter.dc_batch_size + inter.pf_batch_size) {
+        int sz;
+        deserialize(is, sz);
+        inter.blocks.resize(sz);
+        for (auto& b : inter.blocks) {
+            deserialize(is, b);
+        }
+        deserialize(is, inter.h_cu_block_counts);
+        deserialize(is, inter.h_input_length_buf);
+        deserialize(is, inter.h_context_length);
+        deserialize(is, inter.h_rope_theta);
+        deserialize(is, inter.h_finished);
+    }
+}
+
+template<>
+void serialize(const IntermediateData* inter, int n, std::vector<char>& vec)
+{
+
+    std::stringstream ss;
+    for (int i = 0; i < n; ++i) {
+        const auto& r = inter[i];
+        serialize(ss, r);
+    }
+    vec = streambuf_to_vector(ss.rdbuf());
+}
+
+template<>
+void deserialize(IntermediateData* inter, int n, const std::vector<char>& vec)
+{
+    std::stringstream ss;
+    ss.write(vec.data(), vec.size());
+    for (int i = 0; i < n; ++i) {
+        auto& r = inter[i];
+        deserialize(ss, r);
+    }
+}
+
 }  // namespace comm
 
 #endif  // BUILD_MULTI_GPU
@@ -1470,7 +1557,7 @@ void LlamaBatch::InternalThreadEntry()
                 int        wait     = 0;
                 do {
                     gateway_->pop(req->infer, req->kill, free_slot_count, blocking, req->abort, dp_rank_);
-                    if (!comm_.h_comm->is_same_process()) {
+                    if (!comm_.h_comm->is_same_process() && param_.pp_size == 1) {
                         bool empty_pop = req->infer.size() == 0 && req->kill.size() == 0 && req->abort == false;
                         wait           = is_empty && empty_pop;
                         wait           = AllReduce(comm_.h_comm, wait, comm::RedOp::kSum) == comm_.h_comm->n_ranks();
