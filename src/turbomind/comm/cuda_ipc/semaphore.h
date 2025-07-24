@@ -28,8 +28,6 @@ struct SystemSemaphoreStorage {
 
         data_ = v.uc[rank];
 
-        check_cuda_error(cudaMemsetAsync(data_, 0, byte_size));
-
         SystemSemaphoreInfo info{};
 
         for (int c = 0; c < kMaxChannels; ++c) {  // block idx

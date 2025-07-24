@@ -56,9 +56,11 @@ int CudaIpcCommImpl::Split(int color, int key, int group)
     }
 
     g.semaphore.Allocate(l2g.size(), g2l[global_rank_], [&](size_t size) {
-        auto ptr = (uint64_t*)Allocate(size);
-        Register(ptr, size);
-        return get_symmetric_v2(ptr, index);
+        auto buf = (uint64_t*)Allocate(size);
+        check_cuda_error(cudaMemsetAsync(buf, 0, size));
+        check_cuda_error(cudaStreamSynchronize(0));
+        Register(buf, size);
+        return get_symmetric_v2(buf, index);
     });
 
     return index;
