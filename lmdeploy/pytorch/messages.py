@@ -416,7 +416,7 @@ class HistoryMultiModals:
 
     def empty(self):
         if len(self.multimodals) == 0:
-            return 0
+            return True
 
         return all(len(vals) == 0 for vals in self.multimodals)
 
