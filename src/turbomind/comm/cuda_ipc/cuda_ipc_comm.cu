@@ -111,9 +111,11 @@ CudaIpcCommImpl::CudaIpcCommImpl(HostComm h_comm):
 
     /// TODO: release
     g.semaphore.Allocate(global_n_ranks_, global_rank_, [this](size_t size) {
-        auto ptr = (uint64_t*)Allocate(size);
-        Register(ptr, size);
-        return get_symmetric_v2(ptr, 0);
+        auto buf = (uint64_t*)Allocate(size);
+        check_cuda_error(cudaMemsetAsync(buf, 0, size));
+        check_cuda_error(cudaStreamSynchronize(0));
+        Register(buf, size);
+        return get_symmetric_v2(buf, 0);
     });
 
     check_cuda_error(cudaStreamSynchronize(0));
