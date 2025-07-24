@@ -221,6 +221,10 @@ void invokeGenericActivation_v2(
 template<template<typename T> class Activation>
 void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream)
 {
+    if (inter_.get().size() == 0) {
+        return;
+    }
+
     auto& inter = inter_.get();
     TM_CHECK_EQ(inter.ndim(), 2);
     TM_CHECK_EQ(gate.ndim(), 2);

@@ -324,6 +324,8 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     engine_param_.attn_tp_rank  = 0;
     engine_param_.mlp_tp_size   = engine_reader["mlp_tp_size"].as<int>();
     engine_param_.mlp_tp_rank   = 0;
+    engine_param_.pp_size       = engine_reader["pp"].as<int>();
+    engine_param_.pp_rank       = 0;
 
     engine_param_.devices = engine_reader["devices"].as<std::vector<int>>();
 
@@ -411,15 +413,33 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
         group_ids_[i]->Initialize();
     }
 
-    const int device_num = engine_param_.outer_dp_size * comm_size_;
+    const int device_num_per_pp = engine_param_.outer_dp_size * comm_size_;
+    const int device_num        = engine_param_.outer_dp_size * comm_size_ * engine_param_.pp_size;
 
     engine_params_.resize(device_num, engine_param_);
     for (int i = 0; i < device_num; ++i) {
         auto& e         = engine_params_[i];
-        e.outer_dp_rank = i / comm_size_;
+        e.outer_dp_rank = i % device_num_per_pp / comm_size_;
         e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
         e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
         e.mlp_tp_rank   = i % comm_size_;
+        e.pp_rank       = i / device_num_per_pp;
+    }
+
+    std::vector<int> decoder_layers = {0, (int)model_param_.layer_num};
+    if (engine_param_.pp_size > 1) {
+        decoder_layers.resize(engine_param_.pp_size + 1);
+        for (int i = 1; i <= engine_param_.pp_size; ++i) {
+            int layer_num_i = model_param_.layer_num / engine_param_.pp_size;
+            if (i <= model_param_.layer_num % engine_param_.pp_size) {
+                layer_num_i++;
+            }
+            decoder_layers[i] = decoder_layers[i - 1] + layer_num_i;
+        }
+    }
+    for (auto& e : engine_params_) {
+        e.start_layer = decoder_layers[e.pp_rank];
+        e.end_layer   = decoder_layers[e.pp_rank + 1];
     }
 
     std::vector<int> node_dp_ranks;
@@ -427,7 +447,7 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
          local_rank < engine_param_.ngpus_per_node;
          ++local_rank) {
         auto& e = engine_params_[offset + local_rank];
-        if (e.attn_tp_rank == 0) {
+        if (e.attn_tp_rank == 0 && e.pp_rank == 0) {
             node_dp_ranks.push_back(e.outer_dp_rank * e.attn_dp_size + e.attn_dp_rank);
         }
     }
@@ -478,21 +498,30 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
 {
     Communicators comm{};
 
-    const int outer_rank = rank / comm_size_;
-    const int inner_rank = rank % comm_size_;
+    const int device_num_per_pp = engine_param_.outer_dp_size * comm_size_;
 
-    comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
+    const int outer_rank = rank % device_num_per_pp / comm_size_;
+    const int inner_rank = (rank / device_num_per_pp) * comm_size_ + rank % comm_size_;
 
-    comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
-    comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
+    auto h_comm_all_pp = group_ids_[outer_rank]->CreateCommunicator(comm_size_ * engine_param_.pp_size, inner_rank);
+
+    comm.h_comm = h_comm_all_pp->Split(inner_rank / comm_size_, 0);
+
+    comm.h_tp_group = comm.h_comm->Split(comm.h_comm->rank() / engine_param_.attn_tp_size, 0);
+    comm.h_dp_group = comm.h_comm->Split(comm.h_comm->rank() % engine_param_.attn_tp_size, 0);
+    comm.h_pp_group = h_comm_all_pp->Split(inner_rank % comm_size_, 0);
 
     if (comm_size_ > 1) {
-        comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
+        comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, comm.h_comm->rank(), comm.h_comm);
         //
         comm.d_tp_group = 0;
         if (engine_param_.attn_tp_size != comm_size_) {
-            comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+            comm.d_tp_group = comm.d_comm->Split(comm.h_comm->rank() / engine_param_.attn_tp_size, 0, 0);
         }
+    }
+    if (engine_param_.pp_size > 1) {
+        comm.d_pp_comm =
+            CreateDeviceCommunicator(communicator_, engine_param_.pp_size, inner_rank / comm_size_, comm.h_pp_group);
     }
 
     return comm;
@@ -530,7 +559,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
     try {
         const int dp_rank   = engine_param.outer_dp_rank * engine_param.attn_dp_size + engine_param.attn_dp_rank;
         engines_[device_id] = std::make_unique<Engine>(dtype_,
-                                                       engine_param_,  //
+                                                       engine_param,  //
                                                        std::move(model),
                                                        std::move(ctx),
                                                        gateway_,
@@ -550,7 +579,10 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
     auto& engine = *engines_[device_id];
 
     try {
-        engine.Warmup();
+        if (engine_param_.pp_size == 1) {
+            // TODO: support pp
+            engine.Warmup();
+        }
     }
     catch (const std::exception& e) {
         TM_LOG_ERROR("[Engine][Warmup] %s", e.what());

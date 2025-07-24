@@ -25,6 +25,8 @@ public:
     void Forward(TensorMap& args, const std::vector<WeightType*>& weights);
 
 private:
+    const EngineParam param_;
+
     const size_t layer_num_;
     const size_t hidden_units_;
 

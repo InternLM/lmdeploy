@@ -45,6 +45,10 @@ public:
     virtual void AllGather(void* data, int count, DataType dtype, copy_fn copy) = 0;
 
     virtual void AllReduce(void* data, int count, DataType dtype, RedOp red_op) = 0;
+
+    virtual void Send(void* data, int count, DataType dtype, int dst) = 0;
+
+    virtual void Recv(void* data, int count, DataType dtype, int src, copy_fn copy) = 0;
 };
 
 class HostComm {
@@ -156,7 +160,63 @@ void AllGather(HostCommImpl* comm, T* data, int n)
 template<class T>
 void AllReduce(HostCommImpl* comm, T* data, int n, RedOp red_op)
 {
+    static_assert(std::is_trivially_copyable_v<T>, "AllReduce only supports trivially copyable types");
     comm->AllReduce(data, n, data_type_v<T>, red_op);
+}
+
+template<class T>
+void Send(HostCommImpl* comm, T* data, int n, int dst)
+{
+    if constexpr (std::is_trivially_copyable_v<T>) {
+        comm->Send(data, sizeof(T) * n, data_type_v<uint8_t>, dst);
+    }
+    else {
+        if (comm->is_same_process()) {
+            comm->Send(data, n, kNull, dst);
+        }
+        else {
+            try {
+                std::vector<char> buf;
+                for (int i = 0; i < n; ++i) {
+                    std::vector<char> ibuf;
+                    serialize(data + i, 1, ibuf);
+                    buf.insert(buf.end(), ibuf.begin(), ibuf.end());
+                }
+                uint64_t size = buf.size();
+                comm->Send(&size, 1, data_type_v<uint64_t>, dst);
+                comm->Send(buf.data(), buf.size(), data_type_v<uint8_t>, dst);
+            }
+            catch (const std::invalid_argument& e) {
+                TM_CHECK(0) << "Send failed: " << e.what();
+            }
+        }
+    }
+}
+
+template<class T>
+void Recv(HostCommImpl* comm, T* data, int n, int src)
+{
+    if constexpr (std::is_trivially_copyable_v<T>) {
+        comm->Recv(data, sizeof(T) * n, data_type_v<uint8_t>, src, detail::copy_fn<uint8_t>);
+    }
+    else {
+        if (comm->is_same_process()) {
+            comm->Recv(data, n, kNull, src, detail::copy_fn<T>);
+        }
+        else {
+            try {
+                deserialize(data, 0, {});
+                uint64_t size;
+                comm->Recv(&size, 1, data_type_v<uint64_t>, src, detail::copy_fn<int>);
+                std::vector<char> buf(size);
+                comm->Recv(buf.data(), size, data_type_v<uint8_t>, src, detail::copy_fn<char>);
+                deserialize(data, n, buf);
+            }
+            catch (const std::invalid_argument& e) {
+                TM_CHECK(0) << "Recv failed: " << e.what();
+            }
+        }
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -182,6 +242,18 @@ T AllReduce(HostCommImpl* comm, const T& value, RedOp red_op)
     T tmp = value;
     AllReduce(comm, &tmp, 1, red_op);
     return tmp;
+}
+
+template<class T>
+void Send(HostCommImpl* comm, T& value, int dst)
+{
+    Send(comm, &value, 1, dst);
+}
+
+template<class T>
+void Recv(HostCommImpl* comm, T& value, int src)
+{
+    Recv(comm, &value, 1, src);
 }
 
 class HostGroupId {

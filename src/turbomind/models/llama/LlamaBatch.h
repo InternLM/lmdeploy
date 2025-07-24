@@ -3,6 +3,9 @@
 #pragma once
 
 #include <curand_kernel.h>
+#include <deque>
+#include <queue>
+#include <vector>
 
 #include "src/turbomind/core/core.h"
 
@@ -37,6 +40,34 @@ struct BatchState {
 
     std::vector<int> errors;
 
+    Buffer_<int> input_ids_buf;
+
+    // lengths
+    Buffer_<int> context_length_buf;  // history length + input_length
+    Buffer_<int> sequence_lengths;    // current sequence length, updated by sampling
+    Buffer_<int> init_context_length;
+    Buffer_<int> h_input_length_buf;
+
+    bool copy_init{true};         // extra flag for pipeline parallel to control whether to copy init_context_length
+    bool pp_init_sampling{true};  // flag to control whether to copy required buffers when initializing sampling
+
+    // rope theta
+    Buffer_<float> rope_theta;
+
+    // used by dynamic decoder
+    Buffer_<int>  token_ids_buf;  // all token IDs in [S, B], indexed using `step`
+    Buffer_<bool> finished_buf;
+    Buffer_<int>  h_seq_limit_len;
+    Buffer_<int>  seq_limit_len;
+
+    // value set when model forward, no need to copy
+    int              dc_batch_size;
+    int              pf_batch_size;
+    std::vector<int> local_token_nums;
+    int              global_token_num;
+    Tensor           hidden_states;
+    Tensor           residual;
+
     // |<-- existing -->|<-- swap-in -->|
     // |<----------- active ----------->|<-- inactive -->|
     int active_size;
@@ -60,6 +91,27 @@ struct GenerationState {
     std::deque<int> min_input_count;
 
     int finished_count;
+};
+
+// struct for pipeline parallel
+struct IntermediateData {
+    bool abort{false};
+
+    // cpu
+    std::vector<BlockIds> blocks;
+    Buffer_<int>          h_cu_block_counts;
+    Buffer_<int>          h_input_length_buf;
+    Buffer_<int>          h_context_length;
+    Buffer_<float>        h_rope_theta;
+    Buffer_<bool>         h_finished;
+    int                   dc_batch_size;
+    int                   pf_batch_size;
+
+    std::vector<int> local_token_nums;
+    int              global_token_num;
+
+    // gpu
+    // hidden, residual, logits
 };
 
 class LlamaBatch {
@@ -88,7 +140,7 @@ public:
 
     void InitializeSampling(const GenerationState& g);
 
-    bool Forward(GenerationState& g);
+    bool Forward(GenerationState*& g);
 
     void Finish(GenerationState& g, std::vector<Signal>& signals);
 
@@ -134,6 +186,8 @@ private:
     void OutputThreadEntry();
 
     void CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc);
+
+    void SwapState(BatchState*& a, BatchState*& b);
 
     template<class... Ts>
     void IndexedCopyImpl(const int* src_idx, const int* dst_idx, int count, const std::tuple<Ts*, Ts*, int>&... cpys)
@@ -182,6 +236,14 @@ private:
 
     void DestroyCommunicators();
 
+    void SendIntermediateData(IntermediateData& inter);
+
+    void RecvIntermediateData(IntermediateData& inter);
+
+    void PreProcessIntermediateData(IntermediateData& inter);
+
+    void PostProcessIntermediateData(IntermediateData& inter);
+
 private:
     const EngineParam param_;
 
@@ -221,17 +283,11 @@ private:
     // context decoding temp buffers
     Tensor symm_hidden_states_buf_;
     Tensor symm_logits_buf_;
+    Tensor symm_residual_buf_;
 
     Tensor decoder_output_buf_;
 
     Tensor_<float> sampling_logits_;
-
-    Buffer_<int> input_ids_buf_;
-
-    // lengths
-    Buffer_<int> context_length_buf_;  // history length + input_length
-    Buffer_<int> sequence_lengths_;    // current sequence length, updated by sampling
-    Buffer_<int> init_context_length_;
 
     Buffer_<int> lora_mask_buf_;  // lora
 
@@ -242,17 +298,8 @@ private:
     Buffer_<uint32_t> h_sampled_indexes_;
     Buffer_<uint32_t> h_sampled_nums_;
 
-    Buffer_<float> rope_theta_;
-
-    // used by dynamic decoder
-    Buffer_<int>  token_ids_buf_;  // all token IDs in [S, B], indexed using `step`
-    Buffer_<bool> finished_buf_;
-    Buffer_<int>  seq_limit_len_;
-
     // pinned buffers
     Buffer_<int> h_output_ids_;
-    Buffer_<int> h_input_length_buf_;
-    Buffer_<int> h_seq_limit_len_;
 
     Buffer_<int>       h_cu_block_counts_;
     Buffer_<uintptr_t> h_block_ptrs_;
@@ -263,11 +310,17 @@ private:
     Tensor_<uint8_t> h_curand_state_;  // [n, sizeof(curandState_t)]
     Tensor_<uint8_t> d_curand_state_;
 
-    std::array<BatchState, 3> states_{};
+    std::vector<BatchState> states_;
 
     BatchState* state_{};
     BatchState* back_{};
     BatchState* incoming_{};
+
+    // pipeline parallel
+    std::deque<std::pair<BatchState*, GenerationState*>> slots_;
+    std::queue<std::pair<BatchState*, GenerationState*>> batch_que_;
+    std::vector<GenerationState>                         gs_;
+    bool                                                 pp_abort_{false};
 
     // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;

@@ -280,6 +280,40 @@ struct ThreadCommImpl: public HostCommImpl {
             }
         }
     }
+
+    void Send(void* data, int count, DataType dtype, int dst) override
+    {
+        if (l2g_.at(dst) == rank_) {  // src == dst
+            return;
+        }
+
+        // transform dst to global rank
+        dst = l2g_.at(dst);
+
+        auto& c = channel(rank_, dst);
+        void* expected{};
+        while (!c.compare_exchange_weak(expected, data, std::memory_order_release)) {
+            expected = {};
+        }
+        while (c.load(std::memory_order_relaxed)) {}
+    }
+
+    void Recv(void* data, int count, DataType dtype, int src, copy_fn copy) override
+    {
+        TM_CHECK(copy);
+        if (l2g_.at(src) == rank_) {  // src == dst
+            return;
+        }
+
+        // transform src to global rank
+        src = l2g_.at(src);
+
+        auto& c = channel(src, rank_);
+        void* incoming{};
+        while (!(incoming = c.load(std::memory_order_acquire))) {}
+        copy(incoming, count, data, 0);
+        c.store(nullptr, std::memory_order_relaxed);
+    }
 };
 
 class ThreadGroupId: public HostGroupId {

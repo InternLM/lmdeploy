@@ -72,6 +72,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     local_kv_head_num_(model.kv_head_num / tp_size),
     param_(attn),
     model_param_(model),
+    engine_param_(engine),
     lora_param_(lora),
     context_(ctx),
     stream_(ctx.stream),
@@ -179,9 +180,6 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     const auto& weights = *p.weights;
 
-    // [L, 2, H, s, D]
-    const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;
-
     Tensor qkv;
 
     if (weights.qkv.output_dim) {
@@ -258,7 +256,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         // Decoding use only
         params.block_iter_params = BlockIteratorParams{(char**)kv_block_ptrs_.data(),  //
                                                        cu_block_nums_.data() + offset,
-                                                       layer_id,
+                                                       layer_id - engine_param_.start_layer,
                                                        (int)param_.cache_block_seq_len};
 
         // Prefilling use only

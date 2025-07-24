@@ -60,6 +60,7 @@ LlamaV2::LlamaV2(DataType                     dtype,
                  int                          max_batch_size,
                  std::shared_ptr<LlamaWeight> weights):
     dtype_{dtype},
+    engine_param_(engine),
     param_(model),
     attn_param_(attn),
     lora_param_(lora),
@@ -156,6 +157,7 @@ void LlamaV2::updateEmbedding(char*            decoder_input,
 
 void LlamaV2::Forward(Buffer_<int>     input_ids,
                       Tensor           hidden_states_out,
+                      Tensor           residual,
                       Tensor           decoder_out,
                       Buffer           kv_block_ptrs,
                       Buffer           cu_block_nums,
@@ -171,18 +173,18 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    Tensor input_embeds;
-
     const int token_num = input_ids.size();
 
     if (token_num) {
         const auto& embedding_table = weights_->pre_decoder_embedding.weight;
         TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units_);
 
-        input_embeds = Tensor{{token_num, (int)hidden_units_}, dtype_, kDEVICE};
+        if (!residual) {
+            residual = Tensor{{token_num, (int)hidden_units_}, dtype_, kDEVICE};
+        }
 
         if (tp_size_ == 1) {
-            invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, stream_);
+            invokeEmbeddingLookup(residual, input_ids, embedding_table, stream_);
             sync_check_cuda_error();
         }
         else if (use_allgather_2d_) {
@@ -206,7 +208,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                                        stream_);
             sync_check_cuda_error();
 
-            Copy(temp.buffer(), input_embeds.buffer());
+            Copy(temp.buffer(), residual.buffer());
         }
         else {
             const auto local_hidden_units = embedding_table.shape(1);
@@ -221,7 +223,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                 local.raw_data(), temp.raw_data(), local.size(), dtype_, comm_->d_tp_group, stream_);
             sync_check_cuda_error();
 
-            invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
+            invokeInPlaceTranspose102((uint16_t*)residual.raw_data(),
                                       (uint16_t*)temp.raw_data(),
                                       tp_size_,
                                       token_num,
@@ -231,13 +233,13 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
             sync_check_cuda_error();
         }
 
-        TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
+        TM_DEBUG_TENSOR(residual, "embeddings", 1);
     }
 
     bool have_embeddings = false;
     if (token_num) {
         // Copy input embeddings from corresponding sequences
-        updateEmbedding((char*)input_embeds.raw_data(),
+        updateEmbedding((char*)residual.raw_data(),
                         h_input_length.size(),
                         h_input_length.data(),
                         sequences,
@@ -247,7 +249,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
         sync_check_cuda_error();
     }
 
-    TensorMap args{{"decoder_input", input_embeds},
+    TensorMap args{{"decoder_input", residual},
                    {"decoder_output", hidden_states_out.view({-1, (int)hidden_units_}).borrow()},
                    {"last_token_hidden_units", decoder_out},
                    {"output_norm_weight", weights_->output_norm_weight},

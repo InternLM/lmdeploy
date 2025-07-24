@@ -302,6 +302,50 @@ public:
         }
     }
 
+    int CreateOrGetP2PGroupIndex(int src, int dst, int group)
+    {
+        int         low_rank  = src < dst ? src : dst;
+        int         high_rank = src < dst ? dst : src;
+        std::string key = std::to_string(group) + ":" + std::to_string(low_rank) + ":" + std::to_string(high_rank);
+
+        if (p2p_group_index_map_.count(key) == 0) {
+            ncclUniqueId uid{};
+            static_assert(std::is_trivially_copyable_v<ncclUniqueId>);
+            if (src == rank(group)) {
+                NCCLCHECK(ncclGetUniqueId(&uid));
+                ::turbomind::comm::Send(h_comm_, uid, dst);
+            }
+            else {
+                ::turbomind::comm::Recv(h_comm_, uid, src);
+            }
+
+            int        new_rank = low_rank == rank(group) ? 0 : 1;
+            ncclComm_t comm{};
+            NCCLCHECK(ncclCommInitRank(&comm, 2, uid, new_rank));
+            groups_.push_back(comm);
+            p2p_group_index_map_[key] = groups_.size() - 1;
+        }
+        return p2p_group_index_map_[key];
+    }
+
+    void Send(const void* sendbuff, size_t count, DataType type, int dst, int group, cudaStream_t stream) override
+    {
+        int        peer = rank(group) < dst ? 1 : 0;
+        ncclComm_t comm = groups_.at(CreateOrGetP2PGroupIndex(rank(group), dst, group));
+        NCCLCHECK(ncclGroupStart());
+        NCCLCHECK(ncclSend(sendbuff, count, to_nccl_dtype(type), peer, comm, stream));
+        NCCLCHECK(ncclGroupEnd());
+    }
+
+    void Recv(void* recvbuff, size_t count, DataType type, int src, int group, cudaStream_t stream) override
+    {
+        int        peer = rank(group) < src ? 1 : 0;
+        ncclComm_t comm = groups_.at(CreateOrGetP2PGroupIndex(src, rank(group), group));
+        NCCLCHECK(ncclGroupStart());
+        NCCLCHECK(ncclRecv(recvbuff, count, to_nccl_dtype(type), peer, comm, stream));
+        NCCLCHECK(ncclGroupEnd());
+    }
+
 private:
     HostComm h_comm_;
 
@@ -312,6 +356,8 @@ private:
 
     std::unordered_map<void*, void*>  handles_;
     std::unordered_map<void*, size_t> buffers_;
+
+    std::unordered_map<std::string, int> p2p_group_index_map_;
 };
 
 DeviceComm CreateNcclCommunicator(int n_ranks, int rank, HostComm h_comm)

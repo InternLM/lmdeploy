@@ -92,13 +92,16 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.device_num = cfg.device_num or len(cfg.devices) * cfg.nnodes
 
     if not complete_parallel_config(cfg):
-        total = cfg.dp * cfg.tp
+        total = cfg.dp * cfg.tp * cfg.pp
         if not cfg.device_num:
             count = torch.cuda.device_count()
             if total < count:
                 count = total
             cfg.device_num = count
+        assert cfg.device_num % cfg.pp == 0
         assert total % cfg.device_num == 0
+        if cfg.dp > 1:
+            total = cfg.device_num // cfg.pp
         overlap = total // cfg.device_num
         attn_dp_size = overlap
         mlp_tp_size = overlap
@@ -109,8 +112,10 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_dp_size = 1
         cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size * cfg.pp == cfg.device_num
+    assert cfg.outer_dp_size > 0 and cfg.attn_tp_size > 0
     cfg.devices = cfg.devices or list(range(cfg.device_num))
+
 
     # update devices
     if cfg.nnodes == 1:

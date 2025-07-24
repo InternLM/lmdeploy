@@ -70,6 +70,11 @@ LlamaWeight::LlamaWeight(DataType           data_type,
 
     decoder_layer_weights.reserve(num_layer_);
     for (int i = 0; i < num_layer_; ++i) {
+        if (engine_param.start_layer > i || i > engine_param.end_layer) {
+            // [start_layer, end_layer], using closed interval for norm
+            decoder_layer_weights.emplace_back(nullptr);
+            continue;
+        }
         decoder_layer_weights.emplace_back(
             new LlamaDecoderLayerWeight(data_type, i, model, engine_param, lora_param, moe_param));
         register_module("layers", *decoder_layer_weights.back(), i);
@@ -112,7 +117,9 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
     auto stream = core::Context::stream().handle();
 
     for (auto& layer : decoder_layer_weights) {
-        layer->prepare(prop, stream);
+        if (layer != nullptr) {
+            layer->prepare(prop, stream);
+        }
     }
 
     // Block until processing is done

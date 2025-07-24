@@ -86,6 +86,7 @@ private:
     const int local_head_num_;
     const int local_kv_head_num_;
 
+    const EngineParam    engine_param_;
     const AttentionParam param_;
     const ModelParam     model_param_;
     const LoraParam      lora_param_;

@@ -258,6 +258,20 @@ struct GlooCommImpl: public HostCommImpl {
         ::gloo::allreduce(opts);
     }
 
+    void Send(void* data, int count, DataType dtype, int dst) override
+    {
+        auto buf = context_->createUnboundBuffer(const_cast<void*>(data), byte_size(dtype) * count);
+        buf->send(dst, 0);
+        buf->waitSend(std::chrono::milliseconds(1000 * 60 * 30));
+    }
+
+    void Recv(void* data, int count, DataType dtype, int src, copy_fn copy) override
+    {
+        auto buf = context_->createUnboundBuffer(data, byte_size(dtype) * count);
+        buf->recv(src, 0);
+        buf->waitRecv(std::chrono::milliseconds(1000 * 60 * 30));
+    }
+
     int                                          n_split_{};
     std::shared_ptr<::gloo::transport::Device>   device_;
     std::shared_ptr<::gloo::rendezvous::Context> context_;

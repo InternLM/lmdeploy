@@ -62,6 +62,7 @@ private:
 
     void Forward(Buffer_<int>     input_ids,
                  Tensor           hidden_states_out,
+                 Tensor           residual,
                  Tensor           decoder_out,
                  Buffer           kv_block_ptrs,
                  Buffer           cu_block_nums,
@@ -97,6 +98,7 @@ private:
 
     const DataType dtype_;
 
+    const EngineParam    engine_param_;
     const ModelParam     param_;
     const AttentionParam attn_param_;
     const LoraParam      lora_param_;

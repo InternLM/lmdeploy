@@ -96,6 +96,12 @@ struct EngineParam {
     int attn_tp_rank;
     int mlp_tp_size;
     int mlp_tp_rank;
+    int pp_size;
+    int pp_rank;
+
+    // decoder layer range for pp [start, end)
+    int start_layer;
+    int end_layer;
 
     // multi-node
     int nnodes;

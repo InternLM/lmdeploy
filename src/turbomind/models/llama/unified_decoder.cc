@@ -25,6 +25,7 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
                                const Context&        ctx):
     layer_num_(model.layer_num),
     hidden_units_(model.hidden_units),
+    param_(engine),
     attn_tp_size_(engine.attn_tp_size),
     attn_dp_size_(engine.attn_dp_size),
     attn_dp_rank_(engine.attn_dp_rank),
@@ -148,12 +149,14 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
     TM_DEBUG_TENSOR(local_residual, "res", 1);
     TM_DEBUG_TENSOR(weights.at(0)->self_attn_norm, "norm_weight", 2);
 
-    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->self_attn_norm, rmsnorm_eps_, stream_);
-    sync_check_cuda_error();
+    if (param_.pp_rank == 0) {
+        invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->self_attn_norm, rmsnorm_eps_, stream_);
+        sync_check_cuda_error();
 
-    TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
+        TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
+    }
 
-    for (int layer = 0; layer < layer_num_; ++layer) {
+    for (int layer = param_.start_layer; layer < param_.end_layer; ++layer) {
 
         /// TODO: do not skip the layers when they are heterogeneous
         if (isTuning() && layer >= tune_layer_num_) {
