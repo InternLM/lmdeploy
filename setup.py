@@ -22,7 +22,7 @@ def readme():
 
 def get_version():
     file_path = os.path.join(pwd, version_file)
-    pattern = re.compile(r"\s*__version__\s*=\s*'(\d+\.\d+\.\d+)'")
+    pattern = re.compile(r"\s*__version__\s*=\s*'([0-9A-Za-z.-]+)'")
     with open(file_path, 'r') as f:
         for line in f:
             m = pattern.match(line)
