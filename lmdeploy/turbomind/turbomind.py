@@ -14,7 +14,7 @@ from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
@@ -255,7 +255,12 @@ class TurboMind:
 
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
-        self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
+        engine_config_dict = asdict(engine_config)
+        # Sanitize `engine_config` for YAML serialization.
+        # `PyYAML` raises a `RepresenterError` on `mmengine.ConfigDict` objects
+        # passed by frameworks like OpenCompass. This ensures a standard dict.
+        engine_config_dict = json.loads(json.dumps(engine_config_dict))
+        self.config_dict.update(dict(engine_config=engine_config_dict))
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
@@ -583,11 +588,19 @@ class TurboMindInstance:
 
         return input_embeddings, input_embedding_ranges
 
+    def prepare_mrope(self, input_meta: Dict[str, Any], input_len: int):
+        mrope_position_ids = input_meta['mrope_position_ids']
+        mrope_position_delta = input_meta['mrope_position_delta']
+        assert mrope_position_ids.size(-1) == input_len
+        mrope_position_ids = mrope_position_ids.t().contiguous()
+        return mrope_position_ids, mrope_position_delta
+
     def prepare_inputs(self,
                        input_ids,
                        gen_config: GenerationConfig,
                        input_embeddings=None,
-                       input_embedding_ranges=None):
+                       input_embedding_ranges=None,
+                       input_meta: Dict[str, Any] = None):
         """Convert inputs format."""
         assert isinstance(input_ids, Sequence)
 
@@ -600,6 +613,12 @@ class TurboMindInstance:
         if input_embeddings is not None:
             inputs['input_embeddings'] = input_embeddings.cpu()
             inputs['input_embedding_ranges'] = input_embedding_ranges
+
+        if input_meta and 'mrope_position_ids' in input_meta:
+            mrope_position_ids, mrope_position_delta = self.prepare_mrope(input_meta, input_len)
+            inputs['mrope_position_ids'] = mrope_position_ids.type(torch.int32)
+            inputs['mrope_position_delta'] = mrope_position_delta.type(torch.int32)
+            inputs['mrope_length'] = torch.IntTensor([mrope_position_ids.shape[0]])
 
         return inputs, input_len
 
@@ -625,6 +644,7 @@ class TurboMindInstance:
                                  input_ids,
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
+                                 input_meta: Dict[str, Any] = None,
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
@@ -653,6 +673,7 @@ class TurboMindInstance:
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
                                                 input_embeddings=input_embeddings,
                                                 input_embedding_ranges=input_embedding_ranges,
+                                                input_meta=input_meta,
                                                 gen_config=gen_config)
 
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
@@ -686,6 +707,7 @@ class TurboMindInstance:
                 if status in [7, 8]:  # finish / canceled
                     finish, status = True, 0
                 elif status:
+                    logger.error(f'internal error. status_code {status}')
                     yield self._get_error_output()
                     break
 

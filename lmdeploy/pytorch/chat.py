@@ -42,7 +42,7 @@ def run_chat(model_path: str,
     from lmdeploy import pipeline
 
     if gen_config is None:
-        gen_config = GenerationConfig(do_sample=True)
+        gen_config = GenerationConfig(do_sample=True, max_new_tokens=4096)
 
     adapter_name = None
     if engine_config.adapters is not None:

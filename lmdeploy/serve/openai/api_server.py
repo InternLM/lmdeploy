@@ -4,7 +4,9 @@ import asyncio
 import copy
 import json
 import os
+import re
 import time
+from contextlib import asynccontextmanager
 from functools import partial
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
@@ -17,12 +19,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Mount
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
+                                                   DistServeDropConnectionRequest, DistServeInitRequest,
+                                                   MigrationRequest)
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -32,7 +38,8 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, TopLogprob, UpdateParamsRequest, UsageInfo)
+                                            ModelPermission, PoolingRequest, PoolingResponse, TopLogprob,
+                                            UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -419,6 +426,8 @@ async def chat_completions_v1(raw_request: Request = None):
             ]
         else:
             tools = [item.function.model_dump() for item in request.tools]
+    # text completion for string input
+    do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
@@ -427,7 +436,7 @@ async def chat_completions_v1(raw_request: Request = None):
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
-        do_preprocess=not isinstance(request.messages, str),  # text completion for string input
+        do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         enable_thinking=request.enable_thinking,
     )
@@ -871,6 +880,59 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
+@router.post('/pooling')
+async def pooling(request: PoolingRequest, raw_request: Request = None):
+    """Pooling prompts for reward model.
+
+    In vLLM documentation, https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#pooling-api_1,
+    the input format of Pooling API is the same as Embeddings API.
+
+    Go to https://platform.openai.com/docs/api-reference/embeddings/create
+    for the Embeddings API specification.
+
+    The request should be a JSON object with the following fields:
+    - model (str): model name. Available from /v1/models.
+    - input (List[int] | List[List[int]] | str | List[str]): input text to be embed
+    """
+
+    async_engine = VariableInterface.async_engine
+
+    request_input = request.input
+    model_name = request.model or async_engine.model_name
+
+    # Normalize all inputs to be a batch (List[List[int]])
+    if isinstance(request_input, str):
+        input_ids = [async_engine.tokenizer.encode(request_input)]
+    elif isinstance(request_input, List):
+        if not request_input:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list cannot be empty.')
+        if isinstance(request_input[0], str):  # List[str]
+            input_ids = [async_engine.tokenizer.encode(p) for p in request_input]
+        elif isinstance(request_input[0], int):  # List[int]
+            input_ids = [request_input]
+        elif isinstance(request_input[0], List):  # List[List[int]]
+            input_ids = request_input
+        else:
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Input list contains an invalid type.')
+    else:
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Input must be a string or a list.')
+
+    batch_scores = await async_engine._async_get_reward_score(input_ids)
+    prompt_tokens = sum(len(ids) for ids in input_ids)
+    usage = UsageInfo(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+
+    data = []
+    for i, score in enumerate(batch_scores):
+        data.append({
+            'index': i,
+            'object': 'pooling',
+            'data': score,
+        })
+
+    response = PoolingResponse(model=model_name, data=data, usage=usage)
+    return response.model_dump()
+
+
 @router.post('/update_weights', dependencies=[Depends(check_api_key)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
@@ -883,16 +945,16 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 
 @router.get('/distserve/engine_info')
 async def engine_info():
-    engine = VariableInterface.async_engine.engine
+    engine_config = VariableInterface.async_engine.backend_config
 
-    response = DistServeEngineConfig(tp_size=engine.engine_config.tp,
-                                     dp_size=engine.engine_config.dp,
+    response = DistServeEngineConfig(tp_size=engine_config.tp,
+                                     dp_size=engine_config.dp,
                                      pp_size=None,
-                                     ep_size=engine.engine_config.ep,
-                                     dp_rank=engine.engine_config.dp_rank,
-                                     block_size=engine.engine_config.block_size,
-                                     num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
-                                     num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks)
+                                     ep_size=engine_config.ep,
+                                     dp_rank=engine_config.dp_rank,
+                                     block_size=engine_config.block_size,
+                                     num_cpu_blocks=engine_config.num_cpu_blocks,
+                                     num_gpu_blocks=engine_config.num_gpu_blocks)
 
     return response.model_dump_json()
 
@@ -903,14 +965,18 @@ async def p2p_initialize(init_request: DistServeInitRequest):
 
 
 @router.post('/distserve/p2p_connect')
-async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
+async def p2p_connect(conn_request: DistServeConnectionRequest):
     return VariableInterface.async_engine.p2p_connect(conn_request)
 
 
+@router.post('/distserve/p2p_drop_connect')
+async def p2p_drop_connect(drop_conn_request: DistServeDropConnectionRequest):
+    return VariableInterface.async_engine.p2p_drop_connect(drop_conn_request)
+
+
 @router.post('/distserve/free_cache')
-async def free_cache(raw_request: Request) -> JSONResponse:
-    config = await raw_request.json()
-    session_id = int(config['session_id'])
+async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONResponse:
+    session_id = cache_free_request.remote_session_id
     VariableInterface.async_engine.free_cache(session_id)
     return {'status': 'SUCCESS'}
 
@@ -1080,7 +1146,7 @@ async def startup_event():
         return
     try:
         import requests
-        engine_config = VariableInterface.async_engine.engine.engine_config
+        engine_config = VariableInterface.async_engine.backend_config
         engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
         url = f'{VariableInterface.proxy_url}/nodes/add'
         data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
@@ -1091,6 +1157,13 @@ async def startup_event():
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
+
+
+@router.on_event('shutdown')
+async def shutdown_event():
+    async_engine = VariableInterface.async_engine
+    if async_engine is not None:
+        async_engine.close()
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -1136,6 +1209,50 @@ def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[st
             raise ValueError(
                 f'The reasoning parser {tool_parser} is not in the parser list: {ToolParserManager.module_dict.keys()}'  # noqa
             )
+
+
+def mount_metrics(app: FastAPI, backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig]):
+    if not getattr(backend_config, 'enable_metrics', False):
+        return
+
+    from prometheus_client import REGISTRY, make_asgi_app
+    registry = REGISTRY
+
+    # Add prometheus asgi middleware to route /metrics requests
+    metrics_route = Mount('/metrics', make_asgi_app(registry=registry))
+
+    # Workaround for 307 Redirect for /metrics
+    metrics_route.path_regex = re.compile('^/metrics(?P<path>.*)$')
+    app.routes.append(metrics_route)
+
+
+def create_lifespan_handler(backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig],
+                            async_engine: AsyncEngine):
+    """Factory function to create a lifespan handler."""
+
+    @asynccontextmanager
+    async def lifespan_handler(app: FastAPI):
+        task = None
+        try:
+            if getattr(backend_config, 'enable_metrics', False):
+                metrics_processor.start_metrics_handler(enable_metrics=True)
+                log_interval = 10.
+
+                async def _force_log():
+                    while True:
+                        await asyncio.sleep(log_interval)
+
+                        await async_engine.do_log_stats()
+
+                task = asyncio.create_task(_force_log())
+
+            yield
+        finally:
+            if task:
+                task.cancel()
+            await metrics_processor.stop_metrics_handler()
+
+    return lifespan_handler
 
 
 def serve(model_path: str,
@@ -1216,31 +1333,6 @@ def serve(model_path: str,
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
 
-    if disable_fastapi_docs:
-        app = FastAPI(
-            docs_url=None,
-            redoc_url=None,
-            openapi_url=None,
-        )
-    else:
-        app = FastAPI(docs_url='/')
-
-    app.include_router(router)
-    app.add_exception_handler(RequestValidationError, validation_exception_handler)
-
-    if allow_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=allow_origins,
-            allow_credentials=allow_credentials,
-            allow_methods=allow_methods,
-            allow_headers=allow_headers,
-        )
-
-    # Set the maximum number of concurrent requests
-    if max_concurrent_requests is not None:
-        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
-
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     if api_keys is not None:
         if isinstance(api_keys, str):
@@ -1254,6 +1346,8 @@ def serve(model_path: str,
 
     handle_torchrun()
     _, pipeline_class = get_task(model_path)
+    if isinstance(backend_config, PytorchEngineConfig):
+        backend_config.enable_mp_engine = True
     VariableInterface.async_engine = pipeline_class(model_path=model_path,
                                                     model_name=model_name,
                                                     backend=backend,
@@ -1263,6 +1357,31 @@ def serve(model_path: str,
                                                     **kwargs)
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)
+
+    # create FastAPI lifespan events
+    lifespan = create_lifespan_handler(backend_config, VariableInterface.async_engine)
+
+    if disable_fastapi_docs:
+        app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    else:
+        app = FastAPI(docs_url='/', lifespan=lifespan)
+
+    app.include_router(router)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    mount_metrics(app, backend_config)
+
+    if allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_credentials=allow_credentials,
+            allow_methods=allow_methods,
+            allow_headers=allow_headers,
+        )
+
+    # set the maximum number of concurrent requests
+    if max_concurrent_requests is not None:
+        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url

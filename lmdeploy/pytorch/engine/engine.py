@@ -3,14 +3,18 @@ import asyncio
 import copy
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.messages import MetricsInfo, PytorchEngineConfig, ResponseType
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
+                                                   DistServeInitRequest)
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
@@ -45,6 +49,9 @@ class InferOutput:
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
     cache_block_ids: List[int] = None
+
+    # for logging
+    metrics_info: MetricsInfo = None
 
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
@@ -371,6 +378,8 @@ class Engine:
         self.backend_config = backend_config
         self.dist_config = dist_config
         self.max_session_len = self._get_max_session_len()
+        self.engine_config.num_cpu_blocks = self.cache_config.num_cpu_blocks
+        self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
 
         self.req_manager = self._bind_request_manager()
 
@@ -378,8 +387,13 @@ class Engine:
         self._start_loop()
         self._loop_main = None
 
-        # for migration loop management
+        # for PD Disaggregation
+        # For migrating prefill request to decode engine
         self.migration_event: asyncio.Event = None
+        # For backpressure prefill request when cache is full
+        self.perfill_watermark_event: asyncio.Event = None
+
+        self.engine_conn = EngineP2PConnection(self)
 
     @classmethod
     def from_pretrained(cls,
@@ -405,6 +419,12 @@ class Engine:
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
         """
+        if engine_config is not None and engine_config.enable_mp_engine:
+            from .mp_engine.mp_engine import MPEngine
+            return MPEngine(model_path=pretrained_model_name_or_path,
+                            tokenizer=tokenizer,
+                            engine_config=engine_config,
+                            trust_remote_code=trust_remote_code)
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
@@ -462,7 +482,7 @@ class Engine:
             session_len = max_tokens
         else:
             session_len = min(max_tokens, session_len)
-        return session_len
+        return session_len - self.cache_config.block_size
 
     def _on_add_session(self, reqs: List[Request], **kwargs):
         """On add session callback."""
@@ -486,10 +506,10 @@ class Engine:
                 self.scheduler.stop_session(session_id)
                 session = self.scheduler.sessions[session_id]
                 for seq in session.sequences.values():
-                    resp: Response = getattr(seq, 'resp', None)
-                    if resp is not None:
-                        resp.type = ResponseType.FINISH
-                        self.req_manager.response(resp)
+                    _resp: Response = getattr(seq, 'resp', None)
+                    if _resp is not None:
+                        _resp.type = ResponseType.FINISH
+                        self.req_manager.response(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -501,9 +521,9 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                msg = list(self.scheduler.sessions[session_id].sequences.values())[0]
-                if msg.preserve_cache:
-                    self.scheduler._set_message_status(msg, MessageStatus.TO_BE_MIGRATED)
+                msgs = list(self.scheduler.sessions[session_id].sequences.values())
+                if len(msgs) > 0 and msgs[0].preserve_cache:
+                    self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
                 else:
                     self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -512,8 +532,14 @@ class Engine:
 
     def _on_add_message(self, reqs: List[Request], **kwargs):
         """On add message callback."""
+        valid_reqs = []
         for req in reqs:
             req_data = req.data
+            session_id = req_data['session_id']
+            if self.scheduler and session_id not in self.scheduler.sessions:
+                self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
+                continue
+            valid_reqs.append(req)
             if req_data.get('input_multimodals', None) is None:
                 continue
             elif self.input_processor is None:
@@ -524,6 +550,13 @@ class Engine:
             if len(input_multimodals) == 0:
                 req_data['input_multimodals'] = None
                 continue
+
+            if self.engine_config.disable_vision_encoder:
+                # ignore multimodal inputs
+                req_data['input_multimodals'] = None
+                logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
+                continue
+
             result = self.input_processor.preprocess_input(input_ids, input_multimodals)
 
             input_ids = result.input_ids
@@ -532,8 +565,8 @@ class Engine:
             req_data['token_ids'] = input_ids
             req_data['input_multimodals'] = input_multimodals
 
-        if len(reqs) > 0:
-            self._add_message(reqs)
+        if len(valid_reqs) > 0:
+            self._add_message(valid_reqs)
 
     def _add_message(self, reqs: List[Request]):
 
@@ -541,7 +574,13 @@ class Engine:
             """Update max new tokens."""
             max_session_len = self.max_session_len
             sampling_param = msg.sampling_param
-            sampling_param.max_new_tokens = min(sampling_param.max_new_tokens, max_session_len - msg.num_all_tokens())
+            max_new_tokens = sampling_param.max_new_tokens
+            num_all_tokens = msg.num_all_tokens()
+            if max_new_tokens + num_all_tokens > max_session_len:
+                logger.warning(
+                    f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
+                    f'Update max_new_tokens={max_session_len - num_all_tokens}.')
+                sampling_param.max_new_tokens = max_session_len - num_all_tokens
 
         scheduler = self.scheduler
         for req in reqs:
@@ -737,7 +776,7 @@ class Engine:
             msg.update_token_ids(update_token, model_meta=model_meta)
             msg.num_new_tokens += 1
             if stop:
-                msg.status = MessageStatus.STOPPED
+                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
 
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
                                  model_metas: List[Dict[str, Any]]):
@@ -757,8 +796,8 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
-                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
+    def _make_infer_outputs(self, new_token_timestamp: float, next_token_ids: torch.LongTensor, running: SeqList,
+                            logits: torch.Tensor, stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
         """Make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
@@ -772,7 +811,7 @@ class Engine:
             if not is_run[idx]:
                 continue
             token_ids = msg.all_ids[-msg.num_new_tokens:]
-            finish = msg.status == MessageStatus.STOPPED
+            finish = msg.status == MessageStatus.STOPPED or msg.status == MessageStatus.TO_BE_MIGRATED
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
@@ -780,11 +819,13 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
+            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
-                              cache_block_ids=cache_block_ids)
+                              cache_block_ids=cache_block_ids,
+                              metrics_info=metrics_info)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -861,7 +902,8 @@ class Engine:
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
 
-        assert len(running) > 0
+        if len(running) == 0:
+            return None
 
         # create inputs
         inputs = self.create_model_inputs(running, prefill)
@@ -918,7 +960,10 @@ class Engine:
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
             self._response(out.resp,
                            resp_type,
-                           data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
+                           data=dict(token_ids=out.token_ids,
+                                     logits=out.logits,
+                                     cache_block_ids=out.cache_block_ids,
+                                     metrics_info=out.metrics_info))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
@@ -937,6 +982,15 @@ class Engine:
             await self._await_forward_event(forward_event)
             __send_resps(resps)
 
+    async def p2p_initialize(self, init_request: DistServeInitRequest):
+        return await self.engine_conn.p2p_initialize(init_request)
+
+    def p2p_connect(self, conn_request: DistServeConnectionRequest):
+        return self.engine_conn.p2p_connect(conn_request)
+
+    async def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
+        return self.engine_conn.p2p_drop_connect(drop_conn_request)
+
     @torch.inference_mode()
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """Async loop migration."""
@@ -952,16 +1006,22 @@ class Engine:
                     prefill_block_ids = migration_request.remote_block_ids
                     decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
 
-                    assert len(prefill_block_ids) == len(decode_block_ids)
-                    migration_execution_requests.append((
-                        migration_request.remote_engine_id,
-                        list(zip(prefill_block_ids, decode_block_ids)),
-                    ))
-                    migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
-                                                               requests=migration_execution_requests)
-                    logger.info(f'migrating session: {msg.session_id} begin')
-                    await self.executor.migrate(migration_inputs)
-                    logger.info(f'migrating session: {msg.session_id} done')
+                    if not migration_request.is_dummy_prefill:
+                        assert len(prefill_block_ids) == len(decode_block_ids), (
+                            f'#prefill block ids ({len(prefill_block_ids)}) must equal to '
+                            f'#decode block ids ({len(decode_block_ids)})'
+                            f'all id length: {len(msg.num_token_ids)}')
+                        migration_execution_requests.append((
+                            migration_request.remote_engine_id,
+                            list(zip(prefill_block_ids, decode_block_ids)),
+                        ))
+                        migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
+                                                                   requests=migration_execution_requests)
+                        logger.info(f'migrating session: {msg.session_id} begin')
+                        await self.executor.migrate(migration_inputs)
+                        logger.info(f'migrating session: {msg.session_id} done')
+                        await self.engine_conn.zmq_send(remote_engine_id=migration_request.remote_engine_id,
+                                                        remote_session_id=migration_request.remote_session_id)
 
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
@@ -970,11 +1030,14 @@ class Engine:
                     session_id = msg.session_id
                     msg.resp.type = ResponseType.SUCCESS
                     token_ids = [msg.migration_request.remote_token_id]
+                    new_token_timestamp = time.perf_counter()
+                    metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
                     out = InferOutput(
                         session_id=session_id,
                         resp=msg.resp,
                         finish=False,
                         token_ids=np.array(token_ids),
+                        metrics_info=metrics_info,
                     )
                     outputs[session_id] = out
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
@@ -983,7 +1046,7 @@ class Engine:
                 has_runable_event.set()
             else:
                 # release coroutine for decoding
-                await asyncio.sleep(0)
+                await asyncio.sleep(.5)
 
     @torch.inference_mode()
     async def _async_loop_main(
@@ -1006,6 +1069,14 @@ class Engine:
                 await has_runable_event.wait()
                 scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
+                if next_running is None:
+                    # TODO (JimyMa): add watermark check event instead of async sleep.
+                    # self.perfill_watermark_event.wait()
+                    logger.warning(f'no next prefill running request, Maybe cache is full, '
+                                   f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
+                                   f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
+                    await asyncio.sleep(0.1)
+                    continue
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
@@ -1118,7 +1189,7 @@ class Engine:
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
         except Exception as e:
-            logger.error(f'exception happened: {e}')
+            logger.error(f'exception happened: {type(e)} {e}')
         finally:
             self._loop_finally()
 
@@ -1145,3 +1216,16 @@ class Engine:
             return True
         self.req_manager.create_loop_task()
         return True
+
+    def end_session(self, session_id: int):
+        """End session."""
+        if session_id in self.scheduler.sessions:
+            self.scheduler.end_session(session_id)
+            return True
+        return False
+
+    def get_model_config(self):
+        return self.model_config
+
+    def get_engine_config(self):
+        return self.engine_config

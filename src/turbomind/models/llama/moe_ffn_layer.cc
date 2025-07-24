@@ -36,7 +36,7 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
 
     h_offsets_ = {max_expert_num + 1, kCPUpinned};
 
-    const int max_token_num = engine.max_forward_token_num;
+    const int max_token_num = engine.max_forward_token_num * engine.attn_dp_size;
     const int pad_token_num = (max_token_num + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
 
     masks_   = {max_expert_num * pad_token_num, kDEVICE};

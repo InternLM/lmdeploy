@@ -1,16 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import argparse
 import os
 
 from ..version import __version__
-from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args, get_chat_template, get_lora_adapters
+from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter, FlexibleArgumentParser, convert_args,
+                    get_chat_template, get_lora_adapters)
 
 
 class CLI(object):
     _desc = 'The CLI provides a unified API for converting, ' \
             'compressing and deploying large language models.'
-    parser = argparse.ArgumentParser(prog='lmdeploy', description=_desc, add_help=True)
+    parser = FlexibleArgumentParser(prog='lmdeploy', description=_desc, add_help=True)
     parser.add_argument('-v', '--version', action='version', version=__version__)
     subparsers = parser.add_subparsers(title='Commands', description='lmdeploy has following commands:', dest='command')
 

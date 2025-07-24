@@ -127,6 +127,58 @@ class DistConfig:
         return self.tp > 1 or self.ep > 1
 
 
+def _override_hf_config_dict(hf_config: dict, key: str, hf_overrides):
+    """Override hf_config dict."""
+    from transformers import PretrainedConfig
+    if key not in hf_config:
+        # copy if key not in hf_config
+        hf_config[key] = hf_overrides
+        return
+
+    hf_config_val = hf_config[key]
+    is_dict = isinstance(hf_config_val, dict)
+    is_cfg = isinstance(hf_config_val, PretrainedConfig)
+    if not isinstance(hf_overrides, dict) or not (is_dict or is_cfg):
+        # if one of them is not dict, just override
+        hf_config[key] = hf_overrides
+        return
+
+    for key, value in hf_overrides.items():
+        _override_hf_config(hf_config_val, key, value)
+
+
+def _overide_hf_config_cfg(hf_config: list, key: str, hf_overrides):
+    """Override hf_config config."""
+    from transformers import PretrainedConfig
+    if getattr(hf_config, key, None) is None:
+        hf_config.update({key: hf_overrides})
+
+    hf_config_val = getattr(hf_config, key)
+    is_dict = isinstance(hf_config_val, dict)
+    is_cfg = isinstance(hf_config_val, PretrainedConfig)
+    if not isinstance(hf_overrides, dict) or not (is_dict or is_cfg):
+        # if one of them is not list, just override
+        hf_config.update({key: hf_overrides})
+        return
+
+    for key, value in hf_overrides.items():
+        _override_hf_config(hf_config_val, key, value)
+
+
+def _override_hf_config(hf_config: Any, key: str, hf_overrides):
+    """Override HF config."""
+    if isinstance(hf_config, dict):
+        _override_hf_config_dict(hf_config, key, hf_overrides)
+    else:
+        _overide_hf_config_cfg(hf_config, key, hf_overrides)
+
+
+def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
+    """Override HF config."""
+    for k, v in hf_overrides.items():
+        _override_hf_config(hf_config, k, v)
+
+
 @dataclass
 class ModelConfig:
     """Config of model."""
@@ -158,7 +210,8 @@ class ModelConfig:
                         pretrained_model_name_or_path: str,
                         trust_remote_code: bool = True,
                         dtype: str = 'auto',
-                        dist_config: DistConfig = None):
+                        dist_config: DistConfig = None,
+                        hf_overrides: Dict[str, Any] = None):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -168,13 +221,28 @@ class ModelConfig:
                 models defined on the Hub in their own modeling files.
             dtype (str): user specified data type for model weights and
                 activations. Refer to `PyTorchEngineConfig` for details
+            hf_overrides (Dict[str, Any]): overrides for the HF config.
         """
         from transformers import AutoConfig
+
+        from lmdeploy.utils import get_logger
+
         hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
-        return cls.from_hf_config(hf_config, pretrained_model_name_or_path, dtype=dtype, dist_config=dist_config)
+
+        model_config = cls.from_hf_config(hf_config,
+                                          pretrained_model_name_or_path,
+                                          dtype=dtype,
+                                          dist_config=dist_config)
+
+        if hf_overrides is not None:
+            logger = get_logger('lmdeploy')
+            logger.warning(f'Overriding HF config with {hf_overrides}')
+            override_hf_config(model_config.hf_config, hf_overrides)
+
+        return model_config
 
     @classmethod
     def from_hf_config(cls,
@@ -223,14 +291,16 @@ class MiscConfig:
     custom_module_map: str = None
     empty_init: bool = False
     model_format: str = None
+    hf_overrides: Dict[str, Any] = None
+    disable_vision_encoder: bool = False
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
         """From engine config."""
-        misc_config = cls(
-            custom_module_map=engine_config.custom_module_map,
-            empty_init=engine_config.empty_init,
-            prefill_interval=engine_config.prefill_interval,
-            model_format=engine_config.model_format,
-        )
+        misc_config = cls(custom_module_map=engine_config.custom_module_map,
+                          empty_init=engine_config.empty_init,
+                          prefill_interval=engine_config.prefill_interval,
+                          model_format=engine_config.model_format,
+                          hf_overrides=engine_config.hf_overrides,
+                          disable_vision_encoder=engine_config.disable_vision_encoder)
         return misc_config

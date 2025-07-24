@@ -16,8 +16,8 @@ from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -257,7 +257,11 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
-        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, dist_config=dist_config)
+        model_config = ModelConfig.from_pretrained(model_path,
+                                                   dtype=dtype,
+                                                   hf_overrides=misc_config.hf_overrides,
+                                                   dist_config=dist_config)
+
         super().__init__(
             model_path=model_path,
             cache_config=cache_config,
@@ -299,6 +303,9 @@ class RayWorkerWrapper(WorkerWrapperBase):
         """Pack output."""
         for k, v in output.items():
             if isinstance(v, torch.Tensor):
+                # fix numpy do not have BFloat16 type
+                if v.dtype is torch.bfloat16:
+                    v = v.to(torch.float16)
                 output[k] = v.numpy()
         return output
 
@@ -463,7 +470,7 @@ class RayExecutor(ExecutorBase):
         self.remote_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
         logger.info('Starting async task RayPrefetchOutput loop.')
-        self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
+        self._prefetch_task = event_loop.create_task(self._prefetch_outputs(), name='RayExecutorPrefetchOutput')
         self._prefetch_task.add_done_callback(self._prefetch_task_callback)
 
     def stop(self):
@@ -642,9 +649,12 @@ class RayExecutor(ExecutorBase):
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.collective_rpc('p2p_initialize', (init_request, ))
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
         """Rdma connect."""
-        return self.collective_rpc('p2p_connect', (conn_request, ))
+        return self.collective_rpc('p2p_connect', (
+            remote_engine_id,
+            conn_request,
+        ))
 
     async def migrate(self, batch: MigrationExecutionBatch):
         jobs = (worker.migrate.remote(batch) for worker in self.workers)
