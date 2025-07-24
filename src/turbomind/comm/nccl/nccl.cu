@@ -385,6 +385,17 @@ public:
         }
     }
 
+    void Broadcast(const void*  sendbuff,  //
+                   void*        recvbuff,
+                   size_t       count,
+                   DataType     type,
+                   int          root,
+                   int          group,
+                   cudaStream_t stream) override
+    {
+        NCCLCHECK(ncclBroadcast(recvbuff, recvbuff, count, to_nccl_dtype(type), root, groups_.at(group), stream));
+    }
+
 private:
     HostComm h_comm_;
 

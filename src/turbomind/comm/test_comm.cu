@@ -183,6 +183,7 @@ struct TestComm {
         // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
         // TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
         // TestAllGather<half>(vocab_size / tp, g);
+        // TestBroadcast<half>(32768, g);
     }
 
     template<class T>
@@ -580,7 +581,6 @@ struct TestComm {
                         else {
                             d_comm->AllGather(d_tmp + rank * count, d_tmp, count, dtype, group, stream);
                         }
-                        // d_comm->Broadcast(d_tmp, d_tmp, count, dtype, 0, group, stream);
                     });
                     if (i >= warmup_) {
                         delta += ms;
@@ -598,9 +598,116 @@ struct TestComm {
                     const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
                     const float  busbw = algbw * (n_ranks - 1) / n_ranks;
 
-                    // const size_t count = tokens_[i] * dim;
-                    // const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
-                    // const float  busbw = algbw;
+                    SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
+                }
+            }
+
+            d_comm->Deregister(d_tmp);
+            d_comm->Free(d_tmp);
+        };
+
+        std::vector<std::thread> threads;
+        for (size_t i = 0; i < d_comm_.size(); ++i) {
+            threads.emplace_back(func, i, std::ref(d_comm_[i]), std::ref(h_comm_[i]));
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+    }
+
+    template<class T>
+    void TestBroadcast(size_t dim, int group)
+    {
+        const auto dtype = data_type_v<T>;
+
+        const int tp_size = d_comm_[0]->n_ranks(group);
+        const int dp_size = d_comm_.size() / tp_size;
+
+        constexpr int root = 0;
+
+        vector<vector<T>> data(dp_size);
+
+        auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
+            const int rank    = d_comm->rank(group);
+            const int n_ranks = d_comm->n_ranks(group);
+            const int g_rank  = d_comm->rank(0);
+            const int d       = g_rank / n_ranks;
+
+            const size_t max_count = max_tokens_ * dim;
+
+            if (h_comm->rank() == root) {
+                std::cout << "preparing data ... " << std::flush;
+                std::mt19937                  gen{(unsigned)index};
+                std::uniform_int_distribution dist{0, 100};
+                data[d].resize(max_count);
+                for (size_t i = 0; i < max_count; ++i) {
+                    data[d][i] = T(dist(gen));
+                }
+                std::cout << "done.\n";
+            }
+
+            h_comm->Sync();
+
+            Context ctx{g_rank};
+
+            T* d_data = ctx.malloc<T>(max_count);
+
+            T* d_tmp = (T*)d_comm->Allocate(sizeof(T) * max_count);
+            d_comm->Register(d_tmp, sizeof(T) * max_count);
+
+            if (rank == root) {
+                ctx.copy_n(data[d].data(), max_count, d_data);
+            }
+
+            [[maybe_unused]] auto verify = [&](int64_t count) {
+                auto           total_count = count;
+                std::vector<T> res(total_count);
+                ctx.copy_n(d_tmp, total_count, res.data());
+                ctx.sync();
+                size_t diff = 0;
+                for (auto i = 0; i < count; ++i) {
+                    auto& x = res[i];
+                    auto& y = data[d][i];
+                    diff += (x != y);
+                    if (diff == 1) {
+                        printf("%d: %f vs %f\n", (int)i, (float)x, (float)y);
+                    }
+                }
+                if (diff) {
+                    printf("[rank %d] count = %d, diff = %lu\n", g_rank, (int)count, diff);
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    std::abort();
+                }
+            };
+
+            std::vector<float> deltas;
+            for (const auto& n : tokens_) {
+                const size_t count = (size_t)n * dim;  // dim = hidden_dim / tp
+                auto&        delta = deltas.emplace_back();
+                h_comm->Sync();
+                for (int i = 0; i < warmup_ + iters_; ++i) {
+                    check_cuda_error(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count, ctx.stream));
+                    if (rank == root) {
+                        ctx.copy_n(d_data, count, d_tmp);
+                    }
+                    auto ms = ctx.exec([&](auto stream) {  //
+                        d_comm->Broadcast(d_tmp, d_tmp, count, dtype, 0, group, stream);
+                    });
+                    if (i >= warmup_) {
+                        delta += ms;
+                    }
+                    // verify(count);
+                }
+                verify(count);
+            }
+
+            if (g_rank == 0) {
+                SummaryHeader("broadcast", dim, n_ranks);
+                for (size_t i = 0; i < tokens_.size(); ++i) {
+                    const float  avg   = deltas[i] / iters_;
+                    const size_t count = tokens_[i] * dim;
+                    const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
+                    const float  busbw = algbw;
                     SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
                 }
             }
@@ -904,7 +1011,7 @@ int main(int argc, char* argv[])
              128000,
              -1,
              10,
-             1000,
+             10000,
              //   {1024});
              //   {1024, 2048, 4096, 8192});
              // {512});
