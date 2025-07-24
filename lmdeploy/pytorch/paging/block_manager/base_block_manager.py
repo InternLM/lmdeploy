@@ -270,10 +270,7 @@ class BaseBlockManager:
 
     def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
         """Allocate stuff."""
-        if isinstance(data, SchedulerSequence):
-            return self.allocate_msg(data, prealloc_size)
-        else:
-            raise TypeError(f'Unsupported allocate type: {type(data)}')
+        return self.allocate_msg(data, prealloc_size)
 
     def get_num_free_gpu_blocks(self) -> int:
         """Get number of free gpu blocks."""
