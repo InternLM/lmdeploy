@@ -142,6 +142,13 @@ class ModelWeightLoader:
             weights_iterator = _get_pt_weights_iterator(path, self._prefix)
         return weights_iterator
 
+    @staticmethod
+    def _skip_dummy_iterator(iterator, dummy_prefix: list):
+        """Wrap iterator to skip dummy weights."""
+        for name, param in iterator:
+            if not any(name.startswith(prefix) for prefix in dummy_prefix):
+                yield name, param
+
     def load_model_weights(
         self,
         model: torch.nn.Module,
@@ -153,11 +160,19 @@ class ModelWeightLoader:
         _, rank = get_world_rank()
         disable_tqdm = rank != 0
 
+        # get dummy prefix
+        dummy_prefix = []
+        for name, mod in model.named_modules():
+            if getattr(mod, '_is_dummy_mod', False):
+                dummy_prefix.append(f'{name}.')
+
         paths = sorted(paths)
         if _envs.random_load_weight:
             np.random.shuffle(paths)
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
             weights_iterator = self._get_weights_iterator(path)
+            if len(dummy_prefix) > 0:
+                weights_iterator = self._skip_dummy_iterator(weights_iterator, dummy_prefix)
             model.load_weights(weights_iterator)
         if device is not None:
             model.to(device)

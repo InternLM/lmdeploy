@@ -162,6 +162,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                       Buffer_<int>     h_input_length,
                       Buffer_<int>     h_context_length,
                       Buffer           rope_base,
+                      MropeRope*       mrope,
                       Buffer           finished,
                       Buffer           local_token_nums,
                       Buffer           lora_mask,
@@ -261,6 +262,12 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                    {"cu_block_nums", cu_block_nums},
                    {"kv_block_ptrs", kv_block_ptrs},
                    {"local_token_nums", local_token_nums}};
+
+    if (mrope != nullptr && mrope->position_ids) {
+        args.insert({"mrope_position_ids", mrope->position_ids});
+        args.insert({"mrope_position_delta", mrope->position_delta});
+        args.insert({"mrope_position_length", mrope->length});
+    }
 
     unified_decoder_->Forward(args, weights_->decoder_layer_weights);
 }
