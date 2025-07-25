@@ -231,7 +231,6 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                                       stream_);
             sync_check_cuda_error();
         }
-
     }
 
     bool have_embeddings = false;
