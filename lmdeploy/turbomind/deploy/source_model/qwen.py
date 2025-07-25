@@ -12,7 +12,7 @@ from .llama import LlamaModel, LlamaReader
 class QwenReader(LlamaReader):
     """QwenReader."""
 
-    attn_layer_patten = r'transformer.h.([0-9]+).'
+    attn_layer_patten = r'transformer\.h\.([0-9]+).'
     tok_embeddings_key = 'transformer.wte.weight'
     norm_weight_key = 'transformer.ln_f.weight'
     output_weight_key = 'lm_head.weight'

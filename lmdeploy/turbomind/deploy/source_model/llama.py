@@ -15,7 +15,7 @@ class LlamaReader(BaseReader):
     """LlamaReader."""
 
     attn_layer_prefix = 'model.layers'
-    attn_layer_patten = r'model.layers.([0-9]+).'
+    attn_layer_patten = r'model\.layers\.([0-9]+).'
     tok_embeddings_key = 'model.embed_tokens.weight'
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'lm_head.weight'

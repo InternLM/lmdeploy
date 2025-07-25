@@ -38,7 +38,7 @@ class InternS1Reader(Qwen3MoeReader):
     """InternVL3Reader for InternVL+Qwen3MoE model."""
 
     attn_layer_prefix = 'model.language_model.layers'
-    attn_layer_patten = r'model.language_model.layers.([0-9]+).'
+    attn_layer_patten = r'model\.language_model\.layers\.([0-9]+).'
     tok_embeddings_key = 'model.language_model.embed_tokens.weight'
     norm_weight_key = 'model.language_model.norm.weight'
     output_weight_key = 'lm_head.weight'
@@ -61,7 +61,7 @@ class InternVLModel(LlamaModel):
         self.llm_config = getattr(config, 'llm_config', None) or getattr(config, 'text_config', None)
         arch = self.llm_config.architectures[0]
         relations = dict(
-            InternLM2ForCausalLM=('internlm2', InternLM2Reader),
+            InternLM2ForCausalLM=('internlm2', InternVL2Reader),
             LlamaForCausalLM=('llama', InternVLReader),
             Qwen2ForCausalLM=('qwen2', InternVLReader),
             Qwen3MoeForCausalLM=('qwen3-moe', InternS1Reader),

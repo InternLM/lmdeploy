@@ -11,7 +11,7 @@ class LlavaReader(LlamaReader):
     """LlavaReader for llama model."""
 
     attn_layer_prefix = 'language_model.model.layers'
-    attn_layer_patten = r'language_model.model.layers.([0-9]+).'
+    attn_layer_patten = r'language_model\.model\.layers\.([0-9]+).'
     tok_embeddings_key = 'language_model.model.embed_tokens.weight'
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
