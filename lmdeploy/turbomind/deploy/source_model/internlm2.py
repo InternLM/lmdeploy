@@ -10,7 +10,7 @@ class InternLM2Reader(LlamaReader):
     """InternLM2 model reader."""
 
     attn_layer_prefix = 'model.layers'
-    attn_layer_patten = r'model.layers.([0-9]+).'
+    attn_layer_patten = r'model\.layers\.([0-9]+).'
     tok_embeddings_key = 'model.tok_embeddings.weight'
     norm_weight_key = 'model.norm.weight'
     output_weight_key = 'output.weight'
