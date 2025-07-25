@@ -1189,7 +1189,7 @@ class Engine:
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
         except Exception as e:
-            logger.error(f'exception happened: {type(e)} {e}')
+            logger.exception(f'exception happened: {type(e)} {e}')
         finally:
             self._loop_finally()
 
