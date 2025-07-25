@@ -1,0 +1,60 @@
+name: test-docker
+
+on:
+  push:
+    paths:
+      - 'docker/**'
+      - '.github/workflows/*docker.yml'
+  pull_request:
+    paths:
+      - 'docker/**'
+      - '.github/workflows/*docker.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test_docker_image:
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cuda_version: [cu12, cu11]
+    env:
+      CUDA_VERSION: ${{ matrix.cuda_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{github.event.inputs.repo_ref}}
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+      - name: Get docker info
+        run: |
+          docker info
+          # remove http extraheader
+          git config --local --unset "http.https://github.com/.extraheader"
+      - name: Build Docker image
+        run: |
+          docker build . -t lmdeploy:latest -f docker/Dockerfile --build-arg CUDA_VERSION=${CUDA_VERSION}
+      - name: Test image with lmdeploy check_env
+        run: |
+          docker images
+          docker run --rm lmdeploy:latest lmdeploy check_env
+      - name: Dive
+        uses: MaxymVlasov/dive-action@v1.5.0
+        with:
+          image: lmdeploy:latest
+          github-token: ${{ secrets.GITHUB_TOKEN }}
