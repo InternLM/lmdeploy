@@ -22,7 +22,7 @@ def readme():
 
 def get_version():
     file_path = os.path.join(pwd, version_file)
-    pattern = re.compile(r"\s*__version__\s*=\s*'(\d+\.\d+\.\d+)'")
+    pattern = re.compile(r"\s*__version__\s*=\s*'([0-9A-Za-z.-]+)'")
     with open(file_path, 'r') as f:
         for line in f:
             m = pattern.match(line)
@@ -138,6 +138,7 @@ if get_target_device() == 'cuda' and not os.getenv('DISABLE_TURBOMIND', '').lowe
                 '-DCALL_FROM_SETUP_PY:BOOL=ON',
                 '-DBUILD_SHARED_LIBS:BOOL=OFF',
                 # Select the bindings implementation
+                '-DCMAKE_BUILD_TYPE=' + os.getenv('CMAKE_BUILD_TYPE', 'RelWithDebInfo'),
                 '-DBUILD_PY_FFI=ON',
                 '-DBUILD_MULTI_GPU=' + ('OFF' if os.name == 'nt' else 'ON'),
                 '-DUSE_NVTX=' + ('OFF' if os.name == 'nt' else 'ON'),
