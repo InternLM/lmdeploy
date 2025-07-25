@@ -504,7 +504,8 @@ async def chat_completions_v1(raw_request: Request = None):
                         streaming_tools = True
             elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
                 logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
-            if VariableInterface.reasoning_parser is not None:
+
+            if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
                 reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
                     previous_text=previous_text,
                     current_text=current_text,
@@ -570,7 +571,7 @@ async def chat_completions_v1(raw_request: Request = None):
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-    if VariableInterface.reasoning_parser is not None:
+    if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
         reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
