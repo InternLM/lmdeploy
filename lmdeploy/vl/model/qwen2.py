@@ -75,6 +75,10 @@ class Qwen2VLModel(VisonModel):
                 # disable accelerate check_tied_parameters_in_config for Qwen2-VL-2B-Instruct
                 config.tie_word_embeddings = False
                 model = AutoModelCls._from_config(config)
+                if hasattr(AutoModelCls, 'visual'):
+                    # transformers >= 4.52.0 modified model structure
+                    # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L1791-L1800
+                    model.visual = model.model.visual
                 del model.model
                 del model.lm_head
                 model.half()
