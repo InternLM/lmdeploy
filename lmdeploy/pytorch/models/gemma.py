@@ -388,7 +388,7 @@ class GemmaModel(nn.Module):
                 emb_type = RopeType.DynamicNTKScaling
             else:
                 raise RuntimeError(f'Unsupported rope type: {rope_type}')
-            scaling_factor = rope_scaling.get('scaling_factor', scaling_factor)
+            scaling_factor = rope_scaling.get('scaling_factor', rope_scaling.get('factor', scaling_factor))
 
         rope_dim = config.head_dim
         rope_max_pos_emb = config.max_position_embeddings
@@ -406,8 +406,8 @@ class GemmaModel(nn.Module):
                 rope_dim,
                 rope_max_pos_emb,
                 config.rope_local_base_freq,
-                scaling_factor,
-                emb_type=emb_type,
+                1.0,
+                emb_type=RopeType.LinearScaling,
             )
 
     def forward(
