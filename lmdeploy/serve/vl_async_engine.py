@@ -73,7 +73,12 @@ class VLAsyncEngine(AsyncEngine):
                 isinstance(message['content'], list) and any(item['type'] in ['image_url', 'image_data']
                                                              for item in message['content']) for message in messages)
             if not has_multimodal_input:
-                return await super()._get_prompt_input(messages, do_preprocess, sequence_start, adapter_name, tools,
+                return await super()._get_prompt_input(messages,
+                                                       do_preprocess,
+                                                       sequence_start,
+                                                       adapter_name,
+                                                       tools,
+                                                       enable_thinking=enable_thinking,
                                                        **kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
