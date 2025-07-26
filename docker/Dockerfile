@@ -2,6 +2,9 @@
 
 ARG CUDA_VERSION=cu12
 
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
+ENV CUDA_VERSION_SHORT=cu128
+
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS cu12
 ENV CUDA_VERSION_SHORT=cu124
 
@@ -20,6 +23,9 @@ WORKDIR /opt/lmdeploy
 RUN --mount=type=cache,target=/root/.cache docker/build.sh
 
 # Runtime image
+FROM nvidia/cuda:12.8.1-base-ubuntu22.04 AS cu12.8-base
+ENV CUDA_VERSION_SHORT=cu128
+
 FROM nvidia/cuda:12.4.1-base-ubuntu22.04 AS cu12-base
 ENV CUDA_VERSION_SHORT=cu124
 
