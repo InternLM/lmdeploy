@@ -1,12 +1,18 @@
 #!/bin/bash -ex
 
+export DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
 apt-get update -y
 apt-get install -y --no-install-recommends \
-    software-properties-common wget curl openssh-server ssh sudo \
-    git-core libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core
-add-apt-repository -y ppa:deadsnakes/ppa
+    tzdata wget curl openssh-server ssh sudo git-core libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1 pkg-config
+
+if [[ ${PYTHON_VERSION} != "3.10" ]]; then
+    apt-get install -y --no-install-recommends software-properties-common
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update -y
+fi
+
 apt-get install -y --no-install-recommends \
-    rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION}-minimal python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
+    rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
 apt-get clean -y
 rm -rf /var/lib/apt/lists/*
 
@@ -34,6 +40,7 @@ popd >/dev/null
 rm -rf /tmp/nccl
 
 export LD_LIBRARY_PATH=/usr/local/nccl/lib:$LD_LIBRARY_PATH
+mkdir -p /wheels /usr/local/include /usr/local/nccl/lib
 
 pip install --upgrade pip build
 python3 -m build -w -o /wheels -v .

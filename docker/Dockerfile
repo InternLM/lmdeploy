@@ -21,6 +21,7 @@ COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
 RUN --mount=type=cache,target=/root/.cache docker/build.sh
+RUN --mount=type=cache,target=/root/.cache docker/prepare_wheel.sh
 
 # Runtime image
 FROM nvidia/cuda:12.8.1-base-ubuntu22.04 AS cu12.8-base
@@ -43,6 +44,8 @@ RUN --mount=type=cache,target=/root/.cache /tmp/install.sh
 RUN rm -rf /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl
 COPY --from=builder /usr/local/include /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl/include
 COPY --from=builder /usr/local/nccl/lib /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl/lib
+COPY --from=builder /usr/local/gdrcopy /usr/local/gdrcopy
+COPY --from=builder /usr/local/nvshmem /usr/local/nvshmem
 
 # explicitly set ptxas path for triton
 ENV PATH=/opt/py3/bin:$PATH
