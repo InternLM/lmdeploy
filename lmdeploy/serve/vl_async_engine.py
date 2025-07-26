@@ -52,6 +52,7 @@ class VLAsyncEngine(AsyncEngine):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
+                                enable_thinking: Optional[bool] = None,
                                 **kwargs):
         """Process messages and return the required data for the inference
         engines.
@@ -60,14 +61,24 @@ class VLAsyncEngine(AsyncEngine):
         the argument specification.
         """
         if isinstance(messages, str):
-            return await super()._get_prompt_input(messages, do_preprocess, sequence_start, adapter_name, tools,
+            return await super()._get_prompt_input(messages,
+                                                   do_preprocess,
+                                                   sequence_start,
+                                                   adapter_name,
+                                                   tools=tools,
+                                                   enable_thinking=enable_thinking,
                                                    **kwargs)
         elif isinstance(messages, List):
             has_multimodal_input = any(
                 isinstance(message['content'], list) and any(item['type'] in ['image_url', 'image_data']
                                                              for item in message['content']) for message in messages)
             if not has_multimodal_input:
-                return await super()._get_prompt_input(messages, do_preprocess, sequence_start, adapter_name, tools,
+                return await super()._get_prompt_input(messages,
+                                                       do_preprocess,
+                                                       sequence_start,
+                                                       adapter_name,
+                                                       tools,
+                                                       enable_thinking=enable_thinking,
                                                        **kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
@@ -82,11 +93,21 @@ class VLAsyncEngine(AsyncEngine):
             # embedding_ranges and so on. All the returned values are passed
             # to tm engine for token generation
             results = await self.vl_encoder.async_infer(results)
-            results = await self.vl_encoder.wrap_for_turbomind(results, chat_template, self.tokenizer, sequence_start)
+            results = await self.vl_encoder.wrap_for_turbomind(results,
+                                                               chat_template,
+                                                               self.tokenizer,
+                                                               sequence_start,
+                                                               tools=tools,
+                                                               enable_thinking=enable_thinking)
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
-            results = await self.vl_encoder.wrap_for_pytorch(results, chat_template, self.tokenizer, sequence_start)
+            results = await self.vl_encoder.wrap_for_pytorch(results,
+                                                             chat_template,
+                                                             self.tokenizer,
+                                                             sequence_start,
+                                                             tools=tools,
+                                                             enable_thinking=enable_thinking)
         return results
 
     @classmethod
