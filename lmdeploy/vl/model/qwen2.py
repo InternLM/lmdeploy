@@ -175,12 +175,12 @@ class Qwen2VLModel(VisonModel):
         mrope_position_delta = torch.tensor([st_idx - seq_len], dtype=torch.long)
         return mrope_position_ids, mrope_position_delta
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         """Return to the information needed by pytorch engine."""
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         info = super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess'][0]
