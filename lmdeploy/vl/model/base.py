@@ -119,7 +119,7 @@ class VisonModel(ABC):
         if self.backend == 'turbomind':
             raise NotImplementedError()
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         """Pack the preprocessing results in a format compatible with what is
         required by pytorch engine. ONLY implement it when the backend is
         pytorch engine.
@@ -133,7 +133,7 @@ class VisonModel(ABC):
         if self.backend == 'pytorch':
             raise NotImplementedError()
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         """Pack the forwarding results in a format compatible with what is
         required by turbomind engine. ONLY implement it when the backend is
         turbomind engine.
