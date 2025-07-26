@@ -233,9 +233,7 @@ def _gemm_fp8_tma_kernel(
         'BLOCK_N': 64,
     }, num_stages=3, num_warps=4)
 ],
-                 key=['N', 'K'],
-                 warmup=5,
-                 rep=10)
+                 key=['N', 'K'])
 @triton.jit
 def _gemm_fp8_kernel(
     A,
