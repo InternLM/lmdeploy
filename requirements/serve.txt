@@ -1,3 +1,4 @@
 gradio
+prometheus_client
 protobuf
 tritonclient[grpc]
