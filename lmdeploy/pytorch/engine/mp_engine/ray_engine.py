@@ -1,25 +1,30 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import ray
-from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+import asyncio
 import pickle
 from typing import Dict
-from lmdeploy.pytorch import envs as _envs
-import os
+
+import ray
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.messages import PytorchEngineConfig
-from lmdeploy.utils import get_logger
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.ray import RayContext
-from .base_worker import EngineWorkerBase
+from lmdeploy.utils import get_logger
 
 from .base import MPEngine
-import asyncio
+from .base_worker import EngineWorkerBase
 
 logger = get_logger('lmdeploy')
 
 
 class RayEngineWorker(EngineWorkerBase):
 
-    def __init__(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None, log_level:int = 30, **kwargs) -> None:
+    def __init__(self,
+                 model_path: str,
+                 tokenizer: object,
+                 engine_config: PytorchEngineConfig = None,
+                 log_level: int = 30,
+                 **kwargs) -> None:
         """Initialize Ray engine worker."""
         from lmdeploy.pytorch.engine.engine import Engine
         from lmdeploy.tokenizer import Tokenizer
@@ -50,24 +55,16 @@ class RayEngineWorker(EngineWorkerBase):
         """Create a stream task."""
         stream_id = self._stream_id
         self._stream_id += 1
-
-        # method = getattr(self, func)
-        # iter_obj = aiter(method(*args, **kwargs))
-        # self._stream_aiter[stream_id] = iter_obj
-
         event_loop = asyncio.get_event_loop()
         self._stream_aiter[stream_id] = [asyncio.Event(), None]
         task = event_loop.create_task(self._stream_task_wrapper(stream_id, func, *args, **kwargs))
         self._stream_task[stream_id] = task
 
         return stream_id
-    
+
     async def get_stream_task_result(self, stream_id: int):
         """Get the result of a stream task."""
         assert stream_id in self._stream_aiter, f'Stream id {stream_id} not found.'
-
-        # iter_obj = self._stream_aiter[stream_id]
-
         stopped = False
 
         event = self._stream_aiter[stream_id][0]
@@ -79,6 +76,7 @@ class RayEngineWorker(EngineWorkerBase):
             self._stream_aiter.pop(stream_id, None)
             self._stream_task.pop(stream_id, None)
         return result, stopped
+
 
 def _update_runtime_envs(runtime_env: Dict):
     """Update runtime envs."""
@@ -104,7 +102,7 @@ class RayMPEngine(MPEngine):
         """Initialize Ray."""
         if engine_config is None:
             engine_config = PytorchEngineConfig()
-        
+
         device_type = engine_config.device_type if engine_config else 'cuda'
         dp = engine_config.dp if engine_config else 1
         world_size = engine_config.tp if dp <= 1 else 1
@@ -151,7 +149,7 @@ class RayMPEngine(MPEngine):
     async def _collective_rpc_streaming_async(self, func, *args, **kwargs):
         """Collective rpc call."""
         # ray generator would try cache every result, which is too verbose.
-        stream_id = await self._collective_rpc_async('create_stream_task' , func, *args, **kwargs)
+        stream_id = await self._collective_rpc_async('create_stream_task', func, *args, **kwargs)
 
         stopped = False
         while not stopped:

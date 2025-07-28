@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
 import os
 import time
-import ray
-from lmdeploy.utils import get_logger
+from typing import Dict, List
 
+import ray
+from ray.util.placement_group import PlacementGroup
+
+from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 PG_WAIT_TIMEOUT = 1800
@@ -22,7 +24,7 @@ def get_device_str(device_type: str):
     return device_type
 
 
-def _wait_until_pg_ready(current_placement_group: 'PlacementGroup'):
+def _wait_until_pg_ready(current_placement_group: PlacementGroup):
     """Wait until a placement group is ready.
 
     It prints the informative log messages if the placement group is not created within time.
@@ -132,8 +134,10 @@ class RayContext:
 
     def __init__(self, world_size: int, ray_address: str = None, dp: int = 1, device_type: str = 'cuda'):
         """Initialize Ray context."""
-        placement_group, owned_pg = init_ray_cluster(
-            world_size=world_size, ray_address=ray_address, dp=dp, device_type=device_type)
+        placement_group, owned_pg = init_ray_cluster(world_size=world_size,
+                                                     ray_address=ray_address,
+                                                     dp=dp,
+                                                     device_type=device_type)
 
         self.placement_group = placement_group
         self.owned_pg = owned_pg
@@ -141,7 +145,7 @@ class RayContext:
     def get_placement_group(self):
         """Get the placement group."""
         return self.placement_group
-        
+
     def shutdown(self):
         """Shutdown Ray."""
         if self.owned_pg:
@@ -152,7 +156,7 @@ class RayContext:
             try:
                 ray.shutdown()
                 logger.debug('Ray shutdown.')
-            except Exception as e:
+            except Exception:
                 logger.exception('Error during Ray shutdown.')
         else:
             logger.debug('Ray is not initialized, skipping shutdown.')
