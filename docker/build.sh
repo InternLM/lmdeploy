@@ -3,7 +3,7 @@
 export DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
 apt-get update -y
 apt-get install -y --no-install-recommends \
-    tzdata wget curl openssh-server ssh sudo git-core libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1 pkg-config
+    tzdata wget curl openssh-server ssh sudo git-core libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1 libssl-dev pkg-config
 
 if [[ ${PYTHON_VERSION} != "3.10" ]]; then
     apt-get install -y --no-install-recommends software-properties-common
