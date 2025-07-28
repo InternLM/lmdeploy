@@ -31,9 +31,8 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     Returns:
         str: the backend type.
     """
-    from lmdeploy.pytorch.supported_models import is_supported as is_supported_pytorch
 
-    pytorch_has, turbomind_has = False, False
+    turbomind_has = False
     is_turbomind_installed = True
     try:
         from lmdeploy.turbomind.supported_models import is_supported as is_supported_turbomind
@@ -41,25 +40,16 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     except ImportError:
         is_turbomind_installed = False
 
-    pytorch_has = is_supported_pytorch(model_path)
-
-    try_run_msg = (f'Try to run with pytorch engine because `{model_path}`'
-                   ' is not explicitly supported by lmdeploy. ')
     if is_turbomind_installed:
         if not turbomind_has:
-            if pytorch_has:
-                logger.warning('Fallback to pytorch engine because '
-                               f'`{model_path}` not supported by turbomind'
-                               ' engine.')
-            else:
-                logger.warning(try_run_msg)
+            logger.warning('Fallback to pytorch engine because '
+                           f'`{model_path}` not supported by turbomind'
+                           ' engine.')
     else:
         logger.warning('Fallback to pytorch engine because turbomind engine is not '
                        'installed correctly. If you insist to use turbomind engine, '
                        'you may need to reinstall lmdeploy from pypi or build from '
                        'source and try again.')
-        if not pytorch_has:
-            logger.warning(try_run_msg)
 
     backend = 'turbomind' if turbomind_has else 'pytorch'
     return backend
