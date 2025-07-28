@@ -2,10 +2,22 @@
 
 export PATH=/opt/py3/bin:$PATH
 
+if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
+    TORCH_VERSION="<2.7"
+else
+    TORCH_VERSION=""
+fi
+
+pip install "cmake<4.0" wheel ninja setuptools packaging
+pip install torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
+
 if [[ ${PYTHON_VERSION} = "3.13" ]]; then
-    #curl https://sh.rustup.rs -sSf | sh -s -- -y
-    pip install "cmake<4.0" wheel ninja setuptools
-    pip wheel -v --no-build-isolation -w /wheels "git+https://github.com/google/sentencepiece.git@v0.2.0#subdirectory=python"
+    curl https://sh.rustup.rs -sSf | sh -s -- -y
+    . "$HOME/.cargo/env"
+
+    pip install setuptools_rust
+    pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/google/sentencepiece.git@v0.2.0#subdirectory=python"
+    pip wheel -v --no-build-isolation --no-deps -w /wheels --use-deprecated=legacy-resolver outlines_core==0.1.26
 fi
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
@@ -20,16 +32,15 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
         DEEP_GEMM_VERSION=1876566
     fi
 
-    pip install torch "cmake<4.0" wheel ninja setuptools
-
     pushd /tmp >/dev/null
         curl -sSL "https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v${GDRCOPY_VERSION}.tar.gz" | tar xz
+
         pushd gdrcopy-${GDRCOPY_VERSION} >/dev/null
-            make prefix=/usr/local/gdrcopy -j $(proc) install
+            make prefix=/usr/local/gdrcopy -j $(nproc) install
         popd >/dev/null
         rm -rf gdrcopy-${GDRCOPY_VERSION}
 
-        git clone --depth=1 https://github.com/deepseek-ai/DeepEP.git
+        git clone https://github.com/deepseek-ai/DeepEP.git
         pushd DeepEP >/dev/null
             git checkout ${DEEP_EP_VERSION}
         popd >/dev/null
@@ -52,11 +63,11 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
         popd >/dev/null
         rm -rf nvshmem_src
 
-        NVSHMEM_DIR=/usr/local/nvshmem pip wheel -v --no-build-isolation -w /wheels ./DeepEP
+        NVSHMEM_DIR=/usr/local/nvshmem pip wheel -v --no-build-isolation --no-deps -w /wheels ./DeepEP
         rm -rf DeepEP
 
-        pip wheel -v --no-build-isolation -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
-        pip wheel -v --no-build-isolation -w /wheels "git+https://github.com/deepseek-ai/DeepGEMM.git@${DEEP_GEMM_VERSION}"
+        pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
+        pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepGEMM.git@${DEEP_GEMM_VERSION}"
 
     popd >/dev/null
 else
