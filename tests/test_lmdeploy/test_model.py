@@ -1005,3 +1005,160 @@ def test_qwen3(model_path, enable_thinking):
                                             enable_thinking=enable_thinking)
     lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
     assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
+@pytest.mark.parametrize('enable_thinking', [None, True, False])
+@pytest.mark.parametrize('has_user_sys', [True, False])
+def test_interns1(model_path, enable_thinking, has_user_sys):
+    from transformers import AutoTokenizer
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    except OSError:
+        pytest.skip(reason=f'{model_path} not exists')
+
+    chat_template_name = best_match_model(model_path)
+    chat_template = MODELS.get(chat_template_name)()
+
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    if not has_user_sys:
+        messages = messages[1:]
+
+    if enable_thinking is None:
+        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    else:
+        ref = tokenizer.apply_chat_template(messages,
+                                            tokenize=False,
+                                            add_generation_prompt=True,
+                                            enable_thinking=enable_thinking)
+    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
+    assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
+@pytest.mark.parametrize('enable_thinking', [None, True, False])
+@pytest.mark.parametrize('has_user_sys', [True, False])
+def test_interns1_tools(model_path, enable_thinking, has_user_sys):
+    from transformers import AutoTokenizer
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    except OSError:
+        pytest.skip(reason=f'{model_path} not exists')
+
+    chat_template_name = best_match_model(model_path)
+    chat_template = MODELS.get(chat_template_name)()
+
+    tools = [
+        {
+            'type': 'function',
+            'function': {
+                'name': 'find_user_id_by_name_zip',
+                'description':
+                'Find user id by first name, last name, and zip code. If the user is not found, the function will return an error message. By default, find user id by email, and only call this function if the user is not found by email or cannot remember email.',  # noqa: E501
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'first_name': {
+                            'type': 'string',
+                            'description': "The first name of the customer, such as 'John'."
+                        },
+                        'last_name': {
+                            'type': 'string',
+                            'description': "The last name of the customer, such as 'Doe'."
+                        },
+                        'zip': {
+                            'type': 'string',
+                            'description': "The zip code of the customer, such as '12345'."
+                        }
+                    },
+                    'required': ['first_name', 'last_name', 'zip']
+                }
+            }
+        },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'get_order_details',
+                'description': 'Get the status and details of an order.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'order_id': {
+                            'type':
+                            'string',
+                            'description':
+                            "The order id, such as '#W0000000'. Be careful there is a '#' symbol at the beginning of the order id."  # noqa: E501
+                        }
+                    },
+                    'required': ['order_id']
+                }
+            }
+        }
+    ]
+    messages = [
+        {
+            'role': 'system',
+            'content': 'You are a helpful assistant'
+        },
+        {
+            'role': 'user',
+            'content': "Hi there! I'm looking to return a couple of items from a recent order."
+        },
+        {
+            'role':
+            'assistant',
+            'content':
+            'Could you please provide your email address associated with the account, or share your first name, last name, and zip code?',  # noqa: E501
+            'reasoning_content':
+            'Okay, the user wants to return some items from a recent order. Let me start by authenticating their identity...'  # noqa: E501
+        },
+        {
+            'role': 'user',
+            'content': 'Sure, my name is Omar Anderson and my zip code is 19031.'
+        },
+        {
+            'role':
+            'assistant',
+            'content':
+            '<content>',
+            'reasoning_content':
+            "Since he didn't provide an email, I should use the find_user_id_by_name_zip function. Let me...",  # noqa: E501
+            'tool_calls': [{
+                'function': {
+                    'arguments': '{"first_name": "Omar", "last_name": "Anderson", "zip": "19031"}',
+                    'name': 'find_user_id_by_name_zip'
+                },
+                'id': 'chatcmpl-tool-a9f439084bfc4af29fee2e5105050a38',
+                'type': 'function'
+            }]
+        },
+        {
+            'content': 'omar_anderson_3203',
+            'name': 'find_user_id_by_name_zip',
+            'role': 'tool'
+        }
+    ]
+    if not has_user_sys:
+        messages = messages[1:]
+    if enable_thinking is None:
+        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, tools=tools)
+    else:
+        ref = tokenizer.apply_chat_template(messages,
+                                            tokenize=False,
+                                            add_generation_prompt=True,
+                                            tools=tools,
+                                            enable_thinking=enable_thinking)
+    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking, tools=tools)
+    assert ref == lm_res

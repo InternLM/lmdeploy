@@ -20,7 +20,33 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
+
+
+@torch.compile(dynamic=True)
+def pre_rms_norm(q: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    """Pre rms norm."""
+    q = q.to(torch.float32)
+    k = k.to(torch.float32)
+    variance_q = (q * q).sum(-1, keepdim=True)
+    variance_k = (k * k).sum(-1, keepdim=True)
+    variance = torch.stack([variance_q, variance_k], dim=0)
+    return variance
+
+
+@torch.compile(dynamic=True)
+def post_rms_norm(q: torch.Tensor, k: torch.Tensor, weight_q: torch.Tensor, weight_k: torch.Tensor,
+                  variance: torch.Tensor, eps: float, embed_dim: int, dtype: torch.dtype):
+    """Post rms norm."""
+    q = q.to(torch.float32)
+    k = k.to(torch.float32)
+    variance = variance / embed_dim + eps
+    variance_q, variance_k = variance
+    q = q * torch.rsqrt(variance_q)
+    q = q.to(dtype) * weight_q
+    k = k * torch.rsqrt(variance_k)
+    k = k.to(dtype) * weight_k
+    return q, k
 
 
 class InternVLVisionPatchEmbeddings(nn.Module):
@@ -183,6 +209,37 @@ class InternVLVisionAttention(nn.Module):
                                              is_tp=True,
                                              tp_align_size=self.head_dim)
 
+    def pre_rms_norm(self, q: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+        """Pre rms norm."""
+        return pre_rms_norm(q, k)
+
+    def post_rms_norm(self, q: torch.Tensor, k: torch.Tensor, variance: torch.Tensor, dtype: torch.dtype):
+        """Post rms norm."""
+        eps = self.config.layer_norm_eps
+        return post_rms_norm(q, k, self.q_norm.weight, self.k_norm.weight, variance, eps, self.embed_dim, dtype)
+
+    def qkv_norm(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        import lmdeploy.pytorch.distributed as dist
+        q_shape = q.shape
+        k_shape = k.shape
+        q = q.flatten(-2, -1)
+        k = k.flatten(-2, -1)
+
+        tp, _ = get_tp_world_rank()
+        if tp == 1:
+            q = self.q_norm(q).view(q_shape)
+            k = self.k_norm(k).view(k_shape)
+            return q, k
+
+        # variance
+        variance = self.pre_rms_norm(q, k)
+        dist.all_reduce(variance)
+        q, k = self.post_rms_norm(q, k, variance, q.dtype)
+        q = q.view(q_shape)
+        k = k.view(k_shape)
+
+        return q, k
+
     def forward(self, hidden_states):
         """forward."""
 
@@ -191,9 +248,7 @@ class InternVLVisionAttention(nn.Module):
         q, k, v = self.qkv_proj.split_qkv(qkv_states)
 
         if self.use_qk_norm:
-            q_shape = q.shape
-            q = self.q_norm(q.flatten(-2, -1)).view(q_shape)
-            k = self.k_norm(k.flatten(-2, -1)).view(q_shape)
+            q, k = self.qkv_norm(q, k)
 
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
@@ -313,6 +368,7 @@ class InternVLVisionEncoder(nn.Module):
         return hidden_states
 
 
+@vlm_model
 class InternVLVisionModel(nn.Module):
     """Intern vision model."""
 
@@ -624,11 +680,19 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
             ('.qkv_proj', '.v_proj', 'v'),
         ]
         for name, loaded_weight in weights:
+            # deal with interns1
+            if name == 'lm_head.weight':
+                name = 'language_model.lm_head.weight'
+            elif name.startswith('model.language_model.'):
+                name = 'language_model.model.' + name[len('model.language_model.'):]
+            elif name.startswith('model.'):
+                name = name[len('model.'):]
+
             if name.startswith(lang_prefix):
                 new_key = name[lang_prefix_length:]
                 new_weights[new_key] = loaded_weight
                 continue
-            # if 'vision_tower.encoder.layer.' in name:
+
             for (param_name, weight_name, shard_id) in vision_stacked_params_mapping:
                 if weight_name not in name:
                     continue

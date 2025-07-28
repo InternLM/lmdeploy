@@ -23,6 +23,10 @@ SUPPORTED_ARCHS = dict(
     # Qwen2
     Qwen2ForCausalLM='qwen2',
     Qwen2MoeForCausalLM='qwen2-moe',
+    # Qwen2-VL
+    Qwen2VLForConditionalGeneration='qwen2',
+    # Qwen2.5-VL
+    Qwen2_5_VLForConditionalGeneration='qwen2',
     # Qwen3
     Qwen3ForCausalLM='qwen3',
     Qwen3MoeForCausalLM='qwen3-moe',
@@ -38,13 +42,12 @@ SUPPORTED_ARCHS = dict(
     InternVLChatModel='internvl',
     # internvl3
     InternVLForConditionalGeneration='internvl',
+    InternS1ForConditionalGeneration='internvl',
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl',
     DeepseekV2ForCausalLM='deepseek2',
     # MiniCPMV
     MiniCPMV='minicpmv',
-    # mini gemini
-    MGMLlamaForCausalLM='llama',
     # chatglm2/3, glm4
     ChatGLMModel='glm4',
     ChatGLMForConditionalGeneration='glm4',

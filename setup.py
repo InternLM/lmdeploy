@@ -22,7 +22,7 @@ def readme():
 
 def get_version():
     file_path = os.path.join(pwd, version_file)
-    pattern = re.compile(r"\s*__version__\s*=\s*'(\d+\.\d+\.\d+)'")
+    pattern = re.compile(r"\s*__version__\s*=\s*'([0-9A-Za-z.-]+)'")
     with open(file_path, 'r') as f:
         for line in f:
             m = pattern.match(line)
@@ -132,6 +132,7 @@ if get_target_device() == 'cuda' and not os.getenv('DISABLE_TURBOMIND', '').lowe
             cmake_depends_on=['pybind11'],
             source_dir=str(Path(__file__).parent.absolute()),
             cmake_generator=None if os.name == 'nt' else 'Ninja',
+            cmake_build_type=os.getenv('CMAKE_BUILD_TYPE', 'RelWithDebInfo'),
             cmake_configure_options=[
                 f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
                 f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
