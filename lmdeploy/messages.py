@@ -324,6 +324,8 @@ class PytorchEngineConfig:
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
         enable_mp_engine (bool): run engine in multi-process mode.
+        mp_engine_backend (str): backend of mp engine, options:
+            ['mp', 'ray']. Default to `mp`.
         model_format (str): weight quantization policy, options: ['fp8'].
         hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
             It can be used to override the default config of the model,
@@ -357,6 +359,7 @@ class PytorchEngineConfig:
     enable_microbatch: bool = False
     enable_eplb: bool = False
     enable_mp_engine: bool = False
+    mp_engine_backend: str = 'mp'
     model_format: str = None
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
