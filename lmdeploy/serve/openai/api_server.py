@@ -26,7 +26,9 @@ from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineCo
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
+                                                   DistServeDropConnectionRequest, DistServeInitRequest,
+                                                   MigrationRequest)
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -502,7 +504,8 @@ async def chat_completions_v1(raw_request: Request = None):
                         streaming_tools = True
             elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
                 logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
-            if VariableInterface.reasoning_parser is not None:
+
+            if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
                 reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
                     previous_text=previous_text,
                     current_text=current_text,
@@ -568,7 +571,7 @@ async def chat_completions_v1(raw_request: Request = None):
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-    if VariableInterface.reasoning_parser is not None:
+    if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
         reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
@@ -963,14 +966,18 @@ async def p2p_initialize(init_request: DistServeInitRequest):
 
 
 @router.post('/distserve/p2p_connect')
-async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
+async def p2p_connect(conn_request: DistServeConnectionRequest):
     return VariableInterface.async_engine.p2p_connect(conn_request)
 
 
+@router.post('/distserve/p2p_drop_connect')
+async def p2p_drop_connect(drop_conn_request: DistServeDropConnectionRequest):
+    return VariableInterface.async_engine.p2p_drop_connect(drop_conn_request)
+
+
 @router.post('/distserve/free_cache')
-async def free_cache(raw_request: Request) -> JSONResponse:
-    config = await raw_request.json()
-    session_id = int(config['session_id'])
+async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONResponse:
+    session_id = cache_free_request.remote_session_id
     VariableInterface.async_engine.free_cache(session_id)
     return {'status': 'SUCCESS'}
 

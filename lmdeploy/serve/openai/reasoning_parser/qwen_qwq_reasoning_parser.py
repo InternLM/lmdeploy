@@ -7,7 +7,7 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 from .reasoning_parser import ReasoningParser, ReasoningParserManager
 
 
-@ReasoningParserManager.register_module(name='qwen-qwq')
+@ReasoningParserManager.register_module(name=['qwen-qwq', 'intern-s1'])
 class QwenQwQReasoningParser(ReasoningParser):
     """Reasoning parser for Qwen QwQ model.
 

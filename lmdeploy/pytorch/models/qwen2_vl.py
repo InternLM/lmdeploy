@@ -16,7 +16,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwi
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 
 def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
@@ -524,6 +524,7 @@ class PatchMerger(nn.Module):
         return x
 
 
+@vlm_model
 class Qwen2VisionTransformerPretrainedModel(nn.Module):
     """Vision transformer."""
 

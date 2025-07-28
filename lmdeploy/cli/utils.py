@@ -593,6 +593,14 @@ class ArgumentHelper:
                                    choices=['DLSlime', 'Mooncake'],
                                    help='kvcache migration management backend when PD disaggregation')
 
+    @staticmethod
+    def disable_vision_encoder(parser):
+        """Disable loading vision encoder."""
+        parser.add_argument('--disable-vision-encoder',
+                            action='store_true',
+                            default=False,
+                            help='enable metrics system')
+
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
 class FlexibleArgumentParser(argparse.ArgumentParser):

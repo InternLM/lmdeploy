@@ -17,7 +17,7 @@ from .utils import extract_intermediate_diff
 logger = get_logger('lmdeploy')
 
 
-@ToolParserManager.register_module(['internlm'])
+@ToolParserManager.register_module(['internlm', 'intern-s1'])
 class Internlm2ToolParser(ToolParser):
 
     def __init__(self, tokenizer: object):

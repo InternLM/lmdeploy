@@ -4,8 +4,8 @@ from typing import Any, Dict, List
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
 
@@ -112,7 +112,7 @@ class UniExecutor(ExecutorBase):
         """
         return [self.model_agent.cache_engine.p2p_initialize(init_request)]
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+    def p2p_connect(self, conn_request: List[DistServeKVTransferEndpointInfo]):
         """rdma_connect."""
         self.model_agent.cache_engine.p2p_connect(conn_request)
 

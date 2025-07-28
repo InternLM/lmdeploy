@@ -6,8 +6,7 @@ import random
 from typing import Optional
 
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
-from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.serve.async_engine import get_names_from_model
+from lmdeploy.model import ChatTemplateConfig, best_match_model
 
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
@@ -85,7 +84,7 @@ def run_chat(model_path: str,
     async def __chat_loop(model_path: str):
         """Chat loop."""
         __reset_chat_state()
-        _, chat_template_name = get_names_from_model(model_path)
+        chat_template_name = best_match_model(model_path)
         while True:
             prompt = input_prompt(chat_template_name)
             await __chat_step(prompt)
