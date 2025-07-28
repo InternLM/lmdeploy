@@ -29,6 +29,7 @@ class ExecutorBase:
         cache_config.window_size = model_config.sliding_window
         if cache_config.window_size is not None and cache_config.window_size > 0:
             # do not support sliding window prefix caching
+            logger.warning('Sliding window prefix caching is not supported.')
             cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config
