@@ -363,6 +363,8 @@ def main():
             quant_policy=args.quant_policy,
             dtype=args.dtype,
             distributed_executor_backend=args.distributed_executor_backend,
+            enable_mp_engine=True,
+            mp_engine_backend='ray',
         )
 
     if args.use_uvloop:

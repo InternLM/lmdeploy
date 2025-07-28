@@ -2,7 +2,7 @@
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 import pickle
-from typing import TYPE_CHECKING, Dict
+from typing import Dict
 from lmdeploy.pytorch import envs as _envs
 import os
 
@@ -12,11 +12,9 @@ from lmdeploy.pytorch.ray import RayContext
 from .base_worker import EngineWorkerBase
 
 from .base import MPEngine
+import asyncio
 
 logger = get_logger('lmdeploy')
-
-if TYPE_CHECKING:
-    from lmdeploy.pytorch.engine.engine import Engine
 
 
 class RayEngineWorker(EngineWorkerBase):
@@ -34,6 +32,53 @@ class RayEngineWorker(EngineWorkerBase):
         engine = Engine.from_pretrained(model_path, tokenizer=tokenizer, engine_config=engine_config, **kwargs)
         super().__init__(engine)
 
+        self._stream_id = 0
+        self._stream_aiter = dict()
+        self._stream_task = dict()
+
+    async def _stream_task_wrapper(self, stream_id: int, func: str, *args, **kwargs):
+        """Create a stream task."""
+        method = getattr(self, func)
+        event = self._stream_aiter[stream_id][0]
+        async for result in method(*args, **kwargs):
+            self._stream_aiter[stream_id][1] = (result, False)
+            event.set()
+        self._stream_aiter[stream_id][1] = (result, True)
+        event.set()
+
+    def create_stream_task(self, func, *args, **kwargs):
+        """Create a stream task."""
+        stream_id = self._stream_id
+        self._stream_id += 1
+
+        # method = getattr(self, func)
+        # iter_obj = aiter(method(*args, **kwargs))
+        # self._stream_aiter[stream_id] = iter_obj
+
+        event_loop = asyncio.get_event_loop()
+        self._stream_aiter[stream_id] = [asyncio.Event(), None]
+        task = event_loop.create_task(self._stream_task_wrapper(stream_id, func, *args, **kwargs))
+        self._stream_task[stream_id] = task
+
+        return stream_id
+    
+    async def get_stream_task_result(self, stream_id: int):
+        """Get the result of a stream task."""
+        assert stream_id in self._stream_aiter, f'Stream id {stream_id} not found.'
+
+        # iter_obj = self._stream_aiter[stream_id]
+
+        stopped = False
+
+        event = self._stream_aiter[stream_id][0]
+        await event.wait()
+        result, stopped = self._stream_aiter[stream_id][1]
+        event.clear()
+
+        if stopped:
+            self._stream_aiter.pop(stream_id, None)
+            self._stream_task.pop(stream_id, None)
+        return result, stopped
 
 def _update_runtime_envs(runtime_env: Dict):
     """Update runtime envs."""
@@ -105,19 +150,19 @@ class RayMPEngine(MPEngine):
 
     async def _collective_rpc_streaming_async(self, func, *args, **kwargs):
         """Collective rpc call."""
-        method = getattr(self.worker, func)
-        async for result in method.remote(*args, **kwargs):
-            yield await result
+        # ray generator would try cache every result, which is too verbose.
+        stream_id = await self._collective_rpc_async('create_stream_task' , func, *args, **kwargs)
+
+        stopped = False
+        while not stopped:
+            result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
+            yield result
 
     def close(self) -> None:
         """Close mp engine."""
         logger.info('Closing mp engine.')
         self._collective_rpc('close')
-        
-        ray.util.remove_placement_group(self.placement_group)
-        if ray.is_initialized():
-            ray.shutdown()
-            logger.debug('Shutdown Ray.')
+        self.ray_ctx.shutdown()
 
     def start_loop(self) -> None:
         """Start mp engine loop."""
