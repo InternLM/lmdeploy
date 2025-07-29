@@ -12,7 +12,7 @@
 namespace turbomind::gemm {
 
 template<int TILE_M, int TILE_N, int TILE_K, int BATCH_M, int BATCH_N, int PIPE_M, int PIPE_N>
-struct ScaledGmmaFP8 {
+struct ScaledGmmaFP8_TN {
 
     static constexpr auto select_gmma_operation()
     {
@@ -29,8 +29,14 @@ struct ScaledGmmaFP8 {
         if constexpr (N % 256 == 0) {
             return MMA_64x256x32_F32E4M3E4M3_SS_TN<>{};
         }
+        else if constexpr (N % 224 == 0) {
+            return MMA_64x224x32_F32E4M3E4M3_SS_TN<>{};
+        }
         else if constexpr (N % 192 == 0) {
             return MMA_64x192x32_F32E4M3E4M3_SS_TN<>{};
+        }
+        else if constexpr (N % 160 == 0) {
+            return MMA_64x160x32_F32E4M3E4M3_SS_TN<>{};
         }
         else if constexpr (N % 128 == 0) {
             return MMA_64x128x32_F32E4M3E4M3_SS_TN<>{};

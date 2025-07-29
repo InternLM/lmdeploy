@@ -59,7 +59,7 @@ struct GemmUniversalSm90_v5 {
     static constexpr int WG_TILE_M = TILE_M / WG_M;
     static constexpr int WG_TILE_N = TILE_N / WG_N;
 
-    using GMMA = ScaledGmmaFP8<WG_TILE_M, WG_TILE_N, TILE_K, 1, 1, 1, 1>;
+    using GMMA = ScaledGmmaFP8_TN<WG_TILE_M, WG_TILE_N, TILE_K, 1, 1, 1, 1>;
 
     static constexpr int kMulticastA = multicast_a;
     static constexpr int kMulticastB = multicast_b;
@@ -515,7 +515,7 @@ struct GemmUniversalSm90_v5 {
                         constexpr int N       = LayoutC::C0;
                         constexpr int SW_bits = log2(kSwizzleC / 16);
 
-                        static_assert(!SW_bits || GMMA::OP_M % LayoutC::C0 == 0);
+                        static_assert(!SW_bits || GMMA::OP_N % LayoutC::C0 == 0);
                         static_assert(GMMA::OP_N % 16 == 0);
 
                         const int m0 = m * GMMA::OP_M;
@@ -676,9 +676,11 @@ struct GemmUniversalSm90_v5 {
 
         if constexpr (MMA_SUBTILE_N != 1) {
             int offset = offset_n % 128 + wg_idx_n * WG_TILE_N;
+            static_assert(WG_N == 1);
+            // Safely skip pred_V_0 when distributing WGs along M
             PRAGMA_UNROLL
-            for (int i = 0; i < MMA_SUBTILE_N; ++i) {
-                pred_V[i] = (i * OUTER_N + offset) / 128;
+            for (int i = 1; i < MMA_SUBTILE_N; ++i) {
+                pred_V[i] = (i * OUTER_N + offset) >= 128;
             }
         }
 

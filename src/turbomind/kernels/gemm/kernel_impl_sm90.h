@@ -22,12 +22,20 @@
 
 #include "src/turbomind/utils/cuda_utils.h"
 
+#define TM_GEMM_CUTLASS_NAME 0
+
+#if TM_GEMM_CUTLASS_NAME
+#define gemm_kernel_name cutlass_gemm_kernel_sm90
+#else
+#define gemm_kernel_name gemm_kernel_sm90
+#endif
+
 namespace turbomind::gemm {
 
 extern __shared__ char smem_buf[];
 
 template<class Kernel>
-__global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __grid_constant__ CUtensorMap tm_a,
+__global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_name(const __grid_constant__ CUtensorMap tm_a,
                                                                         const __grid_constant__ CUtensorMap tm_b,
                                                                         const __grid_constant__ CUtensorMap tm_c,
                                                                         const __grid_constant__ CUtensorMap tm_u,
@@ -37,13 +45,9 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __
                                                                         const MatrixParam                   param_U,
                                                                         const MatrixParam                   param_V,
                                                                         const MatrixParam                   param_C,
-                                                                        // uint2                               box_V,
-                                                                        typename Kernel::Scheduler sched,
-                                                                        void*                      tensormap_buf)
+                                                                        typename Kernel::Scheduler          sched,
+                                                                        void* tensormap_buf)
 {
-    // if (cute::thread0()) {
-    //     printf("ffs %d\n", __ffs(0x0));
-    // }
 
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
@@ -58,7 +62,6 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __
                param_U,
                param_V,
                param_C,
-               //    box_V,
                sched,
                (CUtensorMap*)tensormap_buf,
                smem_buf);
@@ -138,11 +141,7 @@ public:
 
         desc_.arch = Gemm::Arch::value;
 
-        // using Sched = typename Gemm::Sched;
-
-        // auto func = gemm_kernel<Gemm, GemmParam, EpilogueParam, Sched>;
-
-        auto func = gemm_kernel_sm90<Gemm>;
+        auto func = gemm_kernel_name<Gemm>;
 
         if (smem_size_ > (48 << 10)) {
             cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);
@@ -269,7 +268,7 @@ public:
         config.dynamicSmemBytes = smem_size_;
         config.stream           = stream;
 
-        auto func = gemm_kernel_sm90<Gemm>;
+        auto func = gemm_kernel_name<Gemm>;
 
         [[maybe_unused]] static bool _ = [&] {
             int max_cluster_size = 0;
@@ -308,65 +307,9 @@ public:
                                      to_param((void*)U, Udesc),
                                      to_param((void*)V, Vdesc),
                                      to_param((void*)D, Ddesc),
-                                     //  box_v,
                                      sched,
                                      workspace.tensormaps);
         TM_CHECK_EQ(ec, cudaSuccess) << cudaGetErrorString(ec);
-
-        // gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched);
-
-        // if constexpr (0) {
-        //     [[maybe_unused]] static const int _ = [] {
-        //         std::cout << "A:\n";
-        //         Print(typename Gemm::OperandA::GmemIter::ThreadMap{});
-        //         std::cout << "\nB:\n";
-        //         Print(typename Gemm::OperandB::GmemIter::ThreadMap{});
-        //         if constexpr (!std::is_same_v<Ta, Tc>) {
-        //             std::cout << "\nU:\n";
-        //             Print(typename Gemm::OperandU::GmemIter::ThreadMap{});
-        //         }
-        //         if constexpr (!std::is_same_v<Tb, Tc>) {
-        //             std::cout << "\nV:\n";
-        //             Print(typename Gemm::OperandV::GmemIter::ThreadMap{});
-        //         }
-        //         printf("warp count: %d\n", Impl::WARPS);
-        //         Print_(typename Gemm::Impl::MMA_Map{});
-
-        //         printf("C:\n");
-        //         Print(typename Gemm::Epilogue::Map{});
-
-        //         std::cout << "Smem for mainloop: " << sizeof(Gemm::SharedStorage::mainloop) << "\n";
-        //         std::cout << "Smem for epilogue: " << sizeof(Gemm::SharedStorage::epilogue) << "\n";
-
-        //         return 0;
-        //     }();
-        // }
-
-        // const bool silu_act = ((int)operation.epilogue & (int)Epilogue::kGatedSilu);
-
-        // MatrixLayout Pdesc = Ddesc;
-        // Pdesc.ld           = mk2cs<Gemm::kOrderC>(Pdesc.rows, Pdesc.cols).x;
-
-        // MatrixCombination_v3 combin_mat{to_param((void*)C, Cdesc), alpha, beta};
-
-        // EpilogueParam epilogue{to_param((void*)D, Ddesc),
-        //                        to_param((void*)workspace.partials, Pdesc),
-        //                        (int*)workspace.barriers,
-        //                        combin_mat,
-        //                        silu_act};
-
-        // std::cout << Adesc.offsets << " " << Adesc.idxs << "\n";
-
-        // GemmParam param{
-        //     to_param((void*)A, Adesc),
-        //     to_param((void*)B, Bdesc),
-        //     to_param((void*)U, Udesc),
-        //     to_param((void*)V, Vdesc),
-        // };
-
-        // std::cout << grid.x << " " << grid.y << " " << grid.z << "\n";
-
-        // gemm_kernel<Gemm><<<grid, block, smem_size_, stream>>>(param, epilogue, sched);
 
         return 0;
     }
