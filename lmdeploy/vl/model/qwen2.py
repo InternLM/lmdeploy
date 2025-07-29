@@ -75,6 +75,10 @@ class Qwen2VLModel(VisonModel):
                 # disable accelerate check_tied_parameters_in_config for Qwen2-VL-2B-Instruct
                 config.tie_word_embeddings = False
                 model = AutoModelCls._from_config(config)
+                if hasattr(AutoModelCls, 'visual'):
+                    # transformers >= 4.52.0 modified model structure
+                    # https://github.com/huggingface/transformers/blob/v4.52.0/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L1791-L1800
+                    model.visual = model.model.visual
                 del model.model
                 del model.lm_head
                 model.half()
@@ -171,12 +175,12 @@ class Qwen2VLModel(VisonModel):
         mrope_position_delta = torch.tensor([st_idx - seq_len], dtype=torch.long)
         return mrope_position_ids, mrope_position_delta
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         """Return to the information needed by pytorch engine."""
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
         info = super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess'][0]

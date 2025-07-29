@@ -4,7 +4,6 @@ import asyncio
 import atexit
 import concurrent.futures
 import dataclasses
-import os
 import random
 from contextlib import asynccontextmanager, closing
 from copy import deepcopy
@@ -31,23 +30,6 @@ from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 logger = get_logger('lmdeploy')
-
-
-def get_names_from_model(model_path: str, model_name: str = None):
-    """Get model name and chat template name from workspace model."""
-    triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
-    if not os.path.exists(triton_model_path):
-        chat_template_name = best_match_model(model_path)
-    else:
-        # `model_path` refers to a turbomind model, reading
-        # chat_template_name from the config
-        config_path = os.path.join(triton_model_path, 'config.yaml')
-        with open(config_path, 'r') as f:
-            import yaml
-            config = yaml.safe_load(f)
-        chat_template_name = config['model_config']['chat_template']
-    model_name = model_name if model_name else model_path
-    return model_name, chat_template_name
 
 
 @dataclasses.dataclass
@@ -266,7 +248,8 @@ class AsyncEngine(LogitsMixin):
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
-        self.model_name, chat_template_name = get_names_from_model(model_path, model_name)
+        self.model_name = model_name if model_name else model_path
+        chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(chat_template_name)
         elif chat_template_config.model_name is None:

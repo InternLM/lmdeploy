@@ -79,7 +79,7 @@ jobs:
       - name: Build wheel
         run: |
           python -m build --wheel -o build/wheel
-          change_wheel_version build/*.whl --local-version cu121 --delete-old-wheel
+          Get-ChildItem -Path "build" -Filter "*.whl" | ForEach-Object { change_wheel_version $_.FullName --local-version cu121 --delete-old-wheel }
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
