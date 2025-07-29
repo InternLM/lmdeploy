@@ -44,6 +44,32 @@ public:
 
     void prepare(const cudaDeviceProp& prop, cudaStream_t st);
 
+    void cpu()
+    {
+        self_attn_norm = to_cpu(self_attn_norm);
+        ffn_norm       = to_cpu(ffn_norm);
+        self_attn_weights->cpu();
+        if (ffn_weights) {
+            ffn_weights->cpu();
+        }
+        if (moe_weights) {
+            moe_weights->cpu();
+        }
+    }
+
+    void cuda()
+    {
+        self_attn_norm = to_cuda(self_attn_norm);
+        ffn_norm       = to_cuda(ffn_norm);
+        self_attn_weights->cuda();
+        if (ffn_weights) {
+            ffn_weights->cuda();
+        }
+        if (moe_weights) {
+            moe_weights->cuda();
+        }
+    }
+
     Tensor self_attn_norm;
     Tensor ffn_norm;
 

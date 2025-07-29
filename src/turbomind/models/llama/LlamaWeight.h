@@ -43,6 +43,16 @@ struct LlamaWeight: core::Module {
 
     void prepare(const cudaDeviceProp& prop);
 
+    bool is_initialized() const;
+
+    void initialize();
+
+    void release();
+
+    void cpu();
+
+    void cuda();
+
     core::ContextGuard context() const;
 
     std::vector<LlamaDecoderLayerWeight*> decoder_layer_weights;
@@ -53,6 +63,11 @@ struct LlamaWeight: core::Module {
     Tensor output_norm_weight;
 
 private:
+    const ModelParam  model_param_;
+    const EngineParam engine_param_;
+    const LoraParam   lora_param_;
+    const MoeParam    moe_param_;
+
     int hidden_units_;
     int vocab_size_;
     int vocab_size_padded_;
@@ -69,6 +84,7 @@ private:
 
     core::Stream    stream_;
     core::Allocator alloca_;
+    bool            initialized_{false};
 };
 
 }  // namespace turbomind

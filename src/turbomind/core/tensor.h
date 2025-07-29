@@ -219,6 +219,10 @@ void Clear(Ref<Tensor> a_, const Stream& stream);
 
 void Clear(Ref<Tensor> a_);
 
+Tensor to_cpu(const Tensor& src);
+
+Tensor to_cuda(const Tensor& src);
+
 #if 0
 
 void Copy(const Tensor& src, Tensor&& dst, Stream& stream);

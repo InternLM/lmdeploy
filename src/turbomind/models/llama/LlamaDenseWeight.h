@@ -51,6 +51,24 @@ struct LlamaDenseWeight: public core::Module {
 
     void prepare(bool fused_moe, bool use_simt);
 
+    void cpu()
+    {
+        weight       = to_cpu(weight);
+        bias         = to_cpu(bias);
+        scales       = to_cpu(scales);
+        zeros        = to_cpu(zeros);
+        scales_zeros = to_cpu(scales_zeros);
+    }
+
+    void cuda()
+    {
+        weight       = to_cuda(weight);
+        bias         = to_cuda(bias);
+        scales       = to_cuda(scales);
+        zeros        = to_cuda(zeros);
+        scales_zeros = to_cuda(scales_zeros);
+    }
+
     LlamaDenseWeight& operator=(std::nullptr_t)
     {
         this->~LlamaDenseWeight();
@@ -103,6 +121,32 @@ struct LlamaAttentionWeight: public core::Module {
 
     void prepare(bool use_simt);
 
+    void cpu()
+    {
+        qkv.cpu();
+        output.cpu();
+        q_proj.cpu();
+        q_a_proj.cpu();
+        q_b_proj.cpu();
+        kv_a_proj.cpu();
+        kv_b_proj.cpu();
+        q_a_layernorm  = to_cpu(q_a_layernorm);
+        kv_a_layernorm = to_cpu(kv_a_layernorm);
+    }
+
+    void cuda()
+    {
+        qkv.cuda();
+        output.cuda();
+        q_proj.cuda();
+        q_a_proj.cuda();
+        q_b_proj.cuda();
+        kv_a_proj.cuda();
+        kv_b_proj.cuda();
+        q_a_layernorm  = to_cuda(q_a_layernorm);
+        kv_a_layernorm = to_cuda(kv_a_layernorm);
+    }
+
     LlamaDenseWeight qkv;
     LlamaDenseWeight output;
 
@@ -133,6 +177,22 @@ struct LlamaFfnWeight: core::Module {
 
     void prepare(bool fused_moe, bool use_simt);
 
+    void cpu()
+    {
+        gating.cpu();
+        intermediate.cpu();
+        output.cpu();
+        fused_gating_intermediate.cpu();
+    }
+
+    void cuda()
+    {
+        gating.cuda();
+        intermediate.cuda();
+        output.cuda();
+        fused_gating_intermediate.cuda();
+    }
+
     LlamaDenseWeight gating;
     LlamaDenseWeight intermediate;
     LlamaDenseWeight output;
@@ -157,6 +217,26 @@ struct MoeFfnWeight: core::Module {
                  bool            fuse_silu_act);
 
     void prepare(bool use_simt);
+
+    void cpu()
+    {
+        gate.cpu();
+        shared_gate.cpu();
+        for (auto& expert : experts) {
+            expert->cpu();
+        }
+        block.cpu();
+    }
+
+    void cuda()
+    {
+        gate.cuda();
+        shared_gate.cuda();
+        for (auto& expert : experts) {
+            expert->cuda();
+        }
+        block.cuda();
+    }
 
     LlamaDenseWeight gate;
     LlamaDenseWeight shared_gate;

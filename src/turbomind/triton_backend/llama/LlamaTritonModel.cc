@@ -554,6 +554,48 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
     engine.Start();
 }
 
+void LlamaTritonModel::sleep(int device_id, int level)
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+
+    if (level == 2) {
+        // free weights
+        weights_[device_id]->release();
+    }
+    else {
+        // offload weights to CPU
+        weights_[device_id]->cpu();
+    }
+
+    // free kv cache
+    engines_[device_id]->FreeKVCache();
+}
+
+void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tags)
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+
+    std::set<std::string> keys(tags.begin(), tags.end());
+
+    if (keys.find("weights") != keys.end()) {
+        TM_CHECK(weights_[device_id] != nullptr);
+        if (weights_[device_id]->is_initialized()) {
+            weights_[device_id]->cuda();
+        }
+        else {
+            weights_[device_id]->initialize();
+        }
+    }
+
+    if (keys.find("kv_cache") != keys.end()) {
+        engines_[device_id]->InitializeKVCache();
+    }
+}
+
 std::string LlamaTritonModel::toString()
 {
     std::stringstream ss;
