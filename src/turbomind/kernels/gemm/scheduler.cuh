@@ -59,7 +59,7 @@ TM_DEVICE void st_shared_cluster(uint32_t ptr, int value)
 }
 
 template<class T, class M>
-constexpr int member_offset(M T::* member)
+constexpr int member_offset(M T::*member)
 {
     return reinterpret_cast<std::size_t>(&(reinterpret_cast<T*>(0)->*member));
 }

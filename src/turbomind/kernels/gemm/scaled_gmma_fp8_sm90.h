@@ -242,11 +242,11 @@ struct ScaledGmmaFP8_TN {
                                 int n = ((i_n * PIPE_N) + p_n * BATCH_N) + b_n;
                                 func(frag[i_m][i_n][p_m][p_n][b_m][b_n], m, n);
                             }  // BATCH_N
-                        }  // BATCH_M
-                    }  // PIPE_N
-                }  // PIPE_M
-            }  // ITER_N
-        }  // ITER_M
+                        }      // BATCH_M
+                    }          // PIPE_N
+                }              // PIPE_M
+            }                  // ITER_N
+        }                      // ITER_M
     }
 
     template<class Frag, class Func>
