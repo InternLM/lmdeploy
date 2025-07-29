@@ -17,6 +17,8 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
         head_dim = getattr(hf_config, 'head_dim', None)
         if head_dim is None:
             head_dim = hf_config.hidden_size // hf_config.num_attention_heads
+            # head_dim should not be None
+            hf_config.head_dim = head_dim
         num_attention_heads = hf_config.num_attention_heads
         num_key_value_heads = getattr(hf_config, 'num_key_value_heads', num_attention_heads)
         use_sliding_window = getattr(hf_config, 'use_sliding_window', True)
