@@ -49,9 +49,7 @@ struct LlamaWeight: core::Module {
 
     void release();
 
-    void cpu();
-
-    void cuda();
+    void to_device(const core::Device& device);
 
     core::ContextGuard context() const;
 

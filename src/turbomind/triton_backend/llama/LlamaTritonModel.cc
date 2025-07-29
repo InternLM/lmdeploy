@@ -566,7 +566,7 @@ void LlamaTritonModel::sleep(int device_id, int level)
     }
     else {
         // offload weights to CPU
-        weights_[device_id]->cpu();
+        weights_[device_id]->to_device(kCPU);
     }
 
     // free kv cache
@@ -584,7 +584,7 @@ void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tag
     if (keys.find("weights") != keys.end()) {
         TM_CHECK(weights_[device_id] != nullptr);
         if (weights_[device_id]->is_initialized()) {
-            weights_[device_id]->cuda();
+            weights_[device_id]->to_device(kDEVICE);
         }
         else {
             weights_[device_id]->initialize();

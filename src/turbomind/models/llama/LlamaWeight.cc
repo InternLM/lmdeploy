@@ -123,29 +123,19 @@ void LlamaWeight::release()
     initialized_ = false;
 }
 
-void LlamaWeight::cpu()
+void LlamaWeight::to_device(const core::Device& device)
 {
     core::ContextGuard guard = context();
-    output_norm_weight       = to_cpu(output_norm_weight);
-    pre_decoder_embedding.cpu();
-    post_decoder_embedding.cpu();
+    output_norm_weight       = core::to_device(output_norm_weight, device);
+    pre_decoder_embedding.to_device(device);
+    post_decoder_embedding.to_device(device);
     for (auto& layer : decoder_layer_weights) {
-        layer->cpu();
+        layer->to_device(device);
     }
     core::Context::stream().Sync();
-    core::Context::device_alloc()->trim(0);
-}
-
-void LlamaWeight::cuda()
-{
-    core::ContextGuard guard = context();
-    output_norm_weight       = to_cuda(output_norm_weight);
-    pre_decoder_embedding.cuda();
-    post_decoder_embedding.cuda();
-    for (auto& layer : decoder_layer_weights) {
-        layer->cuda();
+    if (device.type == kCPU) {
+        core::Context::device_alloc()->trim(0);
     }
-    core::Context::stream().Sync();
 }
 
 core::ContextGuard LlamaWeight::context() const

@@ -51,22 +51,13 @@ struct LlamaDenseWeight: public core::Module {
 
     void prepare(bool fused_moe, bool use_simt);
 
-    void cpu()
+    void to_device(const core::Device& device)
     {
-        weight       = to_cpu(weight);
-        bias         = to_cpu(bias);
-        scales       = to_cpu(scales);
-        zeros        = to_cpu(zeros);
-        scales_zeros = to_cpu(scales_zeros);
-    }
-
-    void cuda()
-    {
-        weight       = to_cuda(weight);
-        bias         = to_cuda(bias);
-        scales       = to_cuda(scales);
-        zeros        = to_cuda(zeros);
-        scales_zeros = to_cuda(scales_zeros);
+        weight       = core::to_device(weight, device);
+        bias         = core::to_device(bias, device);
+        scales       = core::to_device(scales, device);
+        zeros        = core::to_device(zeros, device);
+        scales_zeros = core::to_device(scales_zeros, device);
     }
 
     LlamaDenseWeight& operator=(std::nullptr_t)
@@ -121,30 +112,17 @@ struct LlamaAttentionWeight: public core::Module {
 
     void prepare(bool use_simt);
 
-    void cpu()
+    void to_device(const core::Device& device)
     {
-        qkv.cpu();
-        output.cpu();
-        q_proj.cpu();
-        q_a_proj.cpu();
-        q_b_proj.cpu();
-        kv_a_proj.cpu();
-        kv_b_proj.cpu();
-        q_a_layernorm  = to_cpu(q_a_layernorm);
-        kv_a_layernorm = to_cpu(kv_a_layernorm);
-    }
-
-    void cuda()
-    {
-        qkv.cuda();
-        output.cuda();
-        q_proj.cuda();
-        q_a_proj.cuda();
-        q_b_proj.cuda();
-        kv_a_proj.cuda();
-        kv_b_proj.cuda();
-        q_a_layernorm  = to_cuda(q_a_layernorm);
-        kv_a_layernorm = to_cuda(kv_a_layernorm);
+        qkv.to_device(device);
+        output.to_device(device);
+        q_proj.to_device(device);
+        q_a_proj.to_device(device);
+        q_b_proj.to_device(device);
+        kv_a_proj.to_device(device);
+        kv_b_proj.to_device(device);
+        q_a_layernorm  = core::to_device(q_a_layernorm, device);
+        kv_a_layernorm = core::to_device(kv_a_layernorm, device);
     }
 
     LlamaDenseWeight qkv;
@@ -177,20 +155,12 @@ struct LlamaFfnWeight: core::Module {
 
     void prepare(bool fused_moe, bool use_simt);
 
-    void cpu()
+    void to_device(const core::Device& device)
     {
-        gating.cpu();
-        intermediate.cpu();
-        output.cpu();
-        fused_gating_intermediate.cpu();
-    }
-
-    void cuda()
-    {
-        gating.cuda();
-        intermediate.cuda();
-        output.cuda();
-        fused_gating_intermediate.cuda();
+        gating.to_device(device);
+        intermediate.to_device(device);
+        output.to_device(device);
+        fused_gating_intermediate.to_device(device);
     }
 
     LlamaDenseWeight gating;
@@ -218,24 +188,14 @@ struct MoeFfnWeight: core::Module {
 
     void prepare(bool use_simt);
 
-    void cpu()
+    void to_device(const core::Device& device)
     {
-        gate.cpu();
-        shared_gate.cpu();
+        gate.to_device(device);
+        shared_gate.to_device(device);
         for (auto& expert : experts) {
-            expert->cpu();
+            expert->to_device(device);
         }
-        block.cpu();
-    }
-
-    void cuda()
-    {
-        gate.cuda();
-        shared_gate.cuda();
-        for (auto& expert : experts) {
-            expert->cuda();
-        }
-        block.cuda();
+        block.to_device(device);
     }
 
     LlamaDenseWeight gate;

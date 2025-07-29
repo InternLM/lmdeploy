@@ -44,29 +44,16 @@ public:
 
     void prepare(const cudaDeviceProp& prop, cudaStream_t st);
 
-    void cpu()
+    void to_device(const core::Device& device)
     {
-        self_attn_norm = to_cpu(self_attn_norm);
-        ffn_norm       = to_cpu(ffn_norm);
-        self_attn_weights->cpu();
+        self_attn_norm = core::to_device(self_attn_norm, device);
+        ffn_norm       = core::to_device(ffn_norm, device);
+        self_attn_weights->to_device(device);
         if (ffn_weights) {
-            ffn_weights->cpu();
+            ffn_weights->to_device(device);
         }
         if (moe_weights) {
-            moe_weights->cpu();
-        }
-    }
-
-    void cuda()
-    {
-        self_attn_norm = to_cuda(self_attn_norm);
-        ffn_norm       = to_cuda(ffn_norm);
-        self_attn_weights->cuda();
-        if (ffn_weights) {
-            ffn_weights->cuda();
-        }
-        if (moe_weights) {
-            moe_weights->cuda();
+            moe_weights->to_device(device);
         }
     }
 

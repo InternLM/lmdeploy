@@ -219,9 +219,7 @@ void Clear(Ref<Tensor> a_, const Stream& stream);
 
 void Clear(Ref<Tensor> a_);
 
-Tensor to_cpu(const Tensor& src);
-
-Tensor to_cuda(const Tensor& src);
+Tensor to_device(const Tensor& src, const Device& device);
 
 #if 0
 
