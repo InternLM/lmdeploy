@@ -40,7 +40,13 @@ else
 fi
 
 pip install -U pip wheel setuptools
+
+if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+    pip install nvidia-nvshmem-cu12
+fi
+
 pip install /wheels/*.whl torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
+
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]] && [[ "${PYTHON_VERSION}" != "3.9" ]]; then
     pip install cuda-python dlblas

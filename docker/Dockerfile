@@ -45,7 +45,6 @@ RUN rm -rf /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl
 COPY --from=builder /usr/local/include /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl/include
 COPY --from=builder /usr/local/nccl/lib /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl/lib
 COPY --from=builder /usr/local/gdrcopy /usr/local/gdrcopy
-COPY --from=builder /usr/local/nvshmem /usr/local/nvshmem
 
 # explicitly set ptxas path for triton
 ENV PATH=/opt/py3/bin:$PATH
