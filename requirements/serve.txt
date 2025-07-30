@@ -1,3 +1,2 @@
 gradio
 protobuf
-tritonclient[grpc]
