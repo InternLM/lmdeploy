@@ -56,7 +56,8 @@ class GemmaAttention(nn.Module):
         if hasattr(config, 'query_pre_attn_scalar'):
             self.scaling = config.query_pre_attn_scalar**-0.5
         if self.model_type == 'gemma3_text':
-            is_sliding = bool((layer_idx + 1) % config.sliding_window_pattern)
+            sliding_window_pattern = getattr(config, 'sliding_window_pattern', 6)
+            is_sliding = bool((layer_idx + 1) % sliding_window_pattern)
             self.sliding_window = (getattr(config, 'sliding_window', -1) if is_sliding else -1)
         else:
             self.sliding_window = (getattr(config, 'sliding_window', -1) if not bool(layer_idx % 2) else -1)
@@ -388,7 +389,7 @@ class GemmaModel(nn.Module):
                 emb_type = RopeType.DynamicNTKScaling
             else:
                 raise RuntimeError(f'Unsupported rope type: {rope_type}')
-            scaling_factor = rope_scaling.get('scaling_factor', scaling_factor)
+            scaling_factor = rope_scaling.get('scaling_factor', rope_scaling.get('factor', scaling_factor))
 
         rope_dim = config.head_dim
         rope_max_pos_emb = config.max_position_embeddings
@@ -406,8 +407,8 @@ class GemmaModel(nn.Module):
                 rope_dim,
                 rope_max_pos_emb,
                 config.rope_local_base_freq,
-                scaling_factor,
-                emb_type=emb_type,
+                1.0,
+                emb_type=RopeType.LinearScaling,
             )
 
     def forward(
