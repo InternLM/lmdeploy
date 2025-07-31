@@ -819,7 +819,7 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
-            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
+            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_events, self.scheduler.make_stats())
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -1031,7 +1031,7 @@ class Engine:
                     msg.resp.type = ResponseType.SUCCESS
                     token_ids = [msg.migration_request.remote_token_id]
                     new_token_timestamp = time.perf_counter()
-                    metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
+                    metrics_info = MetricsInfo(new_token_timestamp, msg.engine_events, self.scheduler.make_stats())
                     out = InferOutput(
                         session_id=session_id,
                         resp=msg.resp,

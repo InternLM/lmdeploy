@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
-    from lmdeploy.messages import EngineCoreEvent, ResponseType
+    from lmdeploy.messages import EngineEvent, ResponseType
 
 
 @dataclass
@@ -114,7 +114,7 @@ class FinishedRequestStats:
 
 
 class IterationStats:
-    """Stats associated with a single set of EngineCoreOutputs."""
+    """Stats associated with a single set of EngineOutputs."""
 
     def __init__(self):
         self.iteration_timestamp = time.perf_counter()
@@ -139,9 +139,8 @@ class IterationStats:
         """Calculate an interval relative to this iteration's timestamp."""
         return self.iteration_timestamp - start
 
-    def update_from_output(self, engine_core_timestamp: float, engine_core_events: List['EngineCoreEvent'],
-                           num_prompt_tokens: int, num_new_generation_tokens: int, is_prefilling: bool,
-                           req_stats: RequestStateStats):
+    def update_from_output(self, token_timestamp: float, engine_events: List['EngineEvent'], num_prompt_tokens: int,
+                           num_new_generation_tokens: int, is_prefilling: bool, req_stats: RequestStateStats):
 
         self.num_generation_tokens += num_new_generation_tokens
         if is_prefilling:
@@ -155,31 +154,31 @@ class IterationStats:
         req_stats.num_generation_tokens += num_new_generation_tokens
 
         # Process request-level engine core events
-        if engine_core_events is not None:
-            self.update_from_events(engine_core_events, req_stats)
+        if engine_events is not None:
+            self.update_from_events(engine_events, req_stats)
 
         # Process the batch-level "new tokens" engine core event
         if is_prefilling:
-            req_stats.first_token_ts = engine_core_timestamp
+            req_stats.first_token_ts = token_timestamp
         else:
-            tpot = engine_core_timestamp - req_stats.last_token_ts
+            tpot = token_timestamp - req_stats.last_token_ts
             assert tpot > 0.0, f'TPOT cannot be negative: {tpot:.6f}'
             self.time_per_output_tokens_iter.append(tpot)
 
-        req_stats.last_token_ts = engine_core_timestamp
+        req_stats.last_token_ts = token_timestamp
 
-    def update_from_events(self, engine_core_events: List['EngineCoreEvent'], req_stats: RequestStateStats):
+    def update_from_events(self, engine_events: List['EngineEvent'], req_stats: RequestStateStats):
         # Avoid circular dependency
-        from lmdeploy.messages import EngineCoreEventType
+        from lmdeploy.messages import EngineEventType
 
-        for event in engine_core_events:
-            if event.type == EngineCoreEventType.QUEUED:
+        for event in engine_events:
+            if event.type == EngineEventType.QUEUED:
                 req_stats.queued_ts = event.timestamp
-            elif event.type == EngineCoreEventType.SCHEDULED:
+            elif event.type == EngineEventType.SCHEDULED:
                 if req_stats.scheduled_ts == 0.0:  # ignore preemptions
                     req_stats.scheduled_ts = event.timestamp
             # FIXME: deal with preempted case
-            # elif event.type == EngineCoreEventType.PREEMPTED:
+            # elif event.type == EngineEventType.PREEMPTED:
             #     self.num_preempted_reqs += 1
 
     def update_from_finished_request(self, finish_reason: 'ResponseType', num_prompt_tokens: int,

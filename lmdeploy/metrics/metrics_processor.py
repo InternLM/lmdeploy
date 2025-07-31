@@ -168,8 +168,8 @@ class MetricsProcessor():
                                                  scheduler_raw_info['total_gpu_blocks'])
 
         # update from per-iteration outputs
-        iteration_stats.update_from_output(engine_core_timestamp=metrics_info.engine_core_timestamp,
-                                           engine_core_events=metrics_info.engine_core_events,
+        iteration_stats.update_from_output(token_timestamp=metrics_info.token_timestamp,
+                                           engine_events=metrics_info.engine_events,
                                            num_prompt_tokens=input_len,
                                            num_new_generation_tokens=(outputs.num_token - prev_len),
                                            is_prefilling=(prev_len == 0),

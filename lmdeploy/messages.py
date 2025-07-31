@@ -224,7 +224,8 @@ class TurbomindEngineConfig:
         empty_init (bool): Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
         hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
-            It can be used to override the default config of the model,
+            It can be used to override the default config of the model
+        enable_metrics (bool): enable metrics system
     """
 
     dtype: str = 'auto'
@@ -255,6 +256,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
+    enable_metrics: bool = False
 
     def __post_init__(self):
         """Check input validation."""
@@ -435,7 +437,7 @@ class Response:
 
 
 # copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
-class EngineCoreEventType(enum.IntEnum):
+class EngineEventType(enum.IntEnum):
     """The type of engine core request event.
 
     QUEUED - when the request was received by the engine core and added to the scheduler queue
@@ -450,17 +452,17 @@ class EngineCoreEventType(enum.IntEnum):
 
 # copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
 @dataclass
-class EngineCoreEvent():
+class EngineEvent():
     """A timestamped engine core event associated with a request.
 
     The timestamp is a monotonic timestamps and is used for by the engine frontend to calculate intervals between engine
     core events. These timestamps should not be compared with timestamps from other processes.
     """
-    type: EngineCoreEventType
+    type: EngineEventType
     timestamp: float
 
     @classmethod
-    def new_event(cls, event_type: EngineCoreEventType, timestamp: Optional[float] = None) -> 'EngineCoreEvent':
+    def new_event(cls, event_type: EngineEventType, timestamp: Optional[float] = None) -> 'EngineEvent':
         timestamp = time.perf_counter() if timestamp is None else timestamp
         return cls(event_type, timestamp)
 
@@ -468,8 +470,8 @@ class EngineCoreEvent():
 @dataclass
 class MetricsInfo:
     """Metrics info from the inference engine."""
-    engine_core_timestamp: float = 0.0
-    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
+    token_timestamp: float = 0.0  # when a token is generated
+    engine_events: List[EngineEvent] = field(default_factory=list)
     scheduler_raw_info: dict = field(default_factory=dict)
 
 

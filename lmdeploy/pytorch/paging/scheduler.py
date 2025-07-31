@@ -5,7 +5,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
-from lmdeploy.messages import EngineCoreEventType
+from lmdeploy.messages import EngineEventType
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
@@ -136,7 +136,7 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
-        seq.record_event(EngineCoreEventType.QUEUED)
+        seq.record_event(EngineEventType.QUEUED)
 
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
@@ -229,7 +229,7 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
-            seq.record_event(EngineCoreEventType.SCHEDULED)
+            seq.record_event(EngineEventType.SCHEDULED)
 
         return running, swap_in_map, swap_out_map, copy_map
 
