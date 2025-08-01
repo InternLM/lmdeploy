@@ -127,7 +127,9 @@ class LlamaModel(BaseInputModel):
         else:
             kv_head_num = model_arg['num_attention_heads']
         hidden_units = model_arg['hidden_size']
-        head_dim = model_arg.get('head_dim', hidden_units // attn_head_num)
+        # head_dim could be none in config
+        head_dim = model_arg.get('head_dim', None)
+        head_dim = head_dim or hidden_units // attn_head_num
         # compute rope param
         rope_theta = float(model_arg.get('rope_theta', 10000.0))
         max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
