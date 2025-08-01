@@ -77,7 +77,7 @@ public:
         tie(Pa, Pu)     = tie(c.pa, c.pu);
         tie(Pb, Pv)     = tie(c.pb, c.pv);
 
-        workspace.tensormaps_size = 4096 * sizeof(CUtensorMap);
+        workspace.tensormaps_size = 8192 * sizeof(CUtensorMap);
         cudaMalloc(&workspace.tensormaps, workspace.tensormaps_size);
         cudaMalloc(&workspace.flags, sizeof(int));
         // TM_CHECK_NOTNULL(workspace.flags);

@@ -24,7 +24,7 @@ struct LlamaLinear::Impl {
 
         workspace_.barriers_size   = gemm::Gemm::kBarriersSize;
         workspace_.partials_size   = gemm::Gemm::kPartialsSize;
-        workspace_.tensormaps_size = 4096 * 128;  // maximum 4096 tensor maps
+        workspace_.tensormaps_size = 8192 * 128;  // maximum 4096 tensor maps
 
         check_cuda_error(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, stream_));
         check_cuda_error(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, stream_));
