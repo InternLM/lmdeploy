@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import EngineEvent, EngineEventType, GenerationConfig, LogitsProcessor
+from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -663,7 +663,7 @@ class SchedulerSequence:
 
     def record_event(
         self,
-        event_type: EngineEventType,
+        event_type: EventType,
         timestamp: Optional[float] = None,
     ) -> None:
         self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
