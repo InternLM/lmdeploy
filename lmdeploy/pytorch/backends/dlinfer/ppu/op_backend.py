@@ -59,14 +59,17 @@ class PpuOpsBackend(DlinferOpsBackend):
 
         is_unpaged_prefill = False
         if not step_context.is_decoding:
-            is_unpaged_prefill = \
-               all((step_context.q_seqlens ==
-                    step_context.kv_seqlens).tolist())
-        q_start_loc = torch.cat((torch.tensor([0], device=device), step_context.q_seqlens.cumsum(0))).int()
-        q_seqlens = step_context.q_seqlens.int()
-        kv_seqlens = step_context.kv_seqlens.int()
-        max_q_seq_len = torch.max(q_seqlens).item()
-        max_kv_seq_len = torch.max(kv_seqlens).item()
+            is_unpaged_prefill = torch.all(step_context.q_seqlens.eq(step_context.kv_seqlens))
+
+        # torch.cuda.synchronize()
+        q_start_loc = torch.cat(
+            (step_context.q_start_loc,
+             (step_context.q_start_loc[-1] +
+              step_context.q_seqlens[-1]).unsqueeze(0)))
+        q_seqlens = step_context.q_seqlens
+        kv_seqlens = step_context.kv_seqlens
+        max_q_seq_len = torch.max(q_seqlens)
+        max_kv_seq_len = torch.max(kv_seqlens)
 
         if step_context.is_decoding:
             # collect kv_start_indices without using a for-loop,
@@ -90,7 +93,7 @@ class PpuOpsBackend(DlinferOpsBackend):
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
-            step_context.block_offsets.int(),
+            step_context.block_offsets,
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
