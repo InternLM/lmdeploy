@@ -27,8 +27,6 @@ class PpuOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        # x = 8
-        # return (num_heads, head_size // x, block_size, x)
         return (block_size, num_heads, head_size)
 
     @staticmethod
@@ -38,7 +36,6 @@ class PpuOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        # return (num_heads, head_size, block_size)
         return (block_size, num_heads, head_size)
 
     @classmethod
@@ -61,7 +58,6 @@ class PpuOpsBackend(DlinferOpsBackend):
         if not step_context.is_decoding:
             is_unpaged_prefill = torch.all(step_context.q_seqlens.eq(step_context.kv_seqlens))
 
-        # torch.cuda.synchronize()
         q_start_loc = torch.cat(
             (step_context.q_start_loc,
              (step_context.q_start_loc[-1] +
@@ -72,8 +68,6 @@ class PpuOpsBackend(DlinferOpsBackend):
         max_kv_seq_len = torch.max(kv_seqlens)
 
         if step_context.is_decoding:
-            # collect kv_start_indices without using a for-loop,
-            # (fill kv-cache for just ONE token during the decoding phase)
             idx = (step_context.kv_seqlens - 1) % block_size
             b_num = (step_context.kv_seqlens - 1) // block_size
             last_block = step_context.block_offsets.gather(1, b_num.view(-1, 1)).view(-1)
@@ -82,7 +76,6 @@ class PpuOpsBackend(DlinferOpsBackend):
             for i in range(step_context.q_start_loc.size(0)):
                 q_seq_len = int(step_context.q_seqlens[i])
                 kv_seq_len = int(step_context.kv_seqlens[i])
-                # collect kv start indices during the prefill phase.
                 history_length = kv_seq_len - q_seq_len
                 total_slots = get_total_slots()
                 slot_tables = total_slots[step_context.block_offsets[i]].view(-1)
@@ -115,7 +108,3 @@ class PpuOpsBackend(DlinferOpsBackend):
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
 
-    # @staticmethod
-    # def support_ray():
-    #     """Support ray."""
-    #     return True

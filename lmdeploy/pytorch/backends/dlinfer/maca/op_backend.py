@@ -27,7 +27,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        x = 8
+        x = 16
         return (num_heads, head_size // x, block_size, x)
 
     @staticmethod

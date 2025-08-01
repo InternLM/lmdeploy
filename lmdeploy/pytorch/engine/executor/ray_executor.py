@@ -32,7 +32,7 @@ PG_WAIT_TIMEOUT = 1800
 def get_device_str():
     """Get device str."""
     device_type = get_device_manager().current_context().device_type
-    if device_type == 'cuda' or device_type == 'ppu':
+    if device_type == 'cuda':
         device_type = 'GPU'
     elif device_type == 'ascend':
         device_type = 'NPU'
@@ -589,7 +589,7 @@ class RayExecutor(ExecutorBase):
     def _init_distributed_environment_by_device(self, device_str: str):
         """Init distributed environment."""
         driver_ip = _get_master_addr()
-        if device_str == 'cuda' or device_str == 'ppu':
+        if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
 
         elif device_str == 'ascend':
