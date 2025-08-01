@@ -21,6 +21,9 @@ def _get_backend():
     if device_type == 'camb':
         from .dlinfer import CambOpsBackend
         return CambOpsBackend
+    if device_type == 'ppu':
+        from .dlinfer import PpuOpsBackend
+        return PpuOpsBackend
     else:
         raise RuntimeError(f'Unsupported device type: {device_type}')
 
