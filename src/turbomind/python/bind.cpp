@@ -18,6 +18,7 @@
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/metrics.h"
 
 namespace py = pybind11;
 namespace ft = turbomind;
@@ -291,6 +292,15 @@ struct ScopedGIL {
 
 PYBIND11_MODULE(_turbomind, m)
 {
+    py::class_<ft::RequestMetrics>(m, "RequestMetrics")
+        .def(py::init([](Tensor metrics_tensor) {
+                 ft::RequestMetrics *ptr = (ft::RequestMetrics*)metrics_tensor.data<int8_t>();
+                 return *ptr;
+             }),
+             "metrics_tensor"_a)
+        .def_readwrite("enque_time", &ft::RequestMetrics::enque_time)
+        .def_readwrite("scheduled_time", &ft::RequestMetrics::scheduled_time);
+
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step, bool start, bool end) {
                  if (!start && end) {
@@ -433,13 +443,16 @@ PYBIND11_MODULE(_turbomind, m)
                const ft::SessionParam&     session,
                const ft::GenerationConfig& gen_cfg,
                bool                        stream_output,
+               bool                        enable_metrics,
                std::function<void()>       cb) {
                 ModelRequest::InputParam param{};
-                param.tensors       = std::move(input_tensors);
-                param.session       = session;
-                param.gen_cfg       = gen_cfg;
-                param.stream_output = stream_output;
-                auto ret            = model_request->Forward(std::move(param), [cb = std::move(cb)]() {
+                param.tensors        = std::move(input_tensors);
+                param.session        = session;
+                param.gen_cfg        = gen_cfg;
+                param.stream_output  = stream_output;
+                param.enable_metrics = enable_metrics;
+
+                auto ret = model_request->Forward(std::move(param), [cb = std::move(cb)]() {
                     try {
                         cb();
                     }
@@ -454,6 +467,7 @@ PYBIND11_MODULE(_turbomind, m)
             "session"_a,
             "gen_cfg"_a,
             "stream_output"_a,
+            "enable_metrics"_a,
             "cb"_a)
         .def(
             "cancel",
@@ -543,6 +557,12 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "create_engine",
             [](LlamaTritonModel* model, int deviceId, int rank) { model->createEngine(deviceId, rank); },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "rank"_a)
+        .def(
+            "get_schedule_metrics",
+            [](LlamaTritonModel* model, int deviceId, int rank) { model->getScheduleMetrics(deviceId, rank); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)

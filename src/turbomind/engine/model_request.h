@@ -28,6 +28,7 @@ public:
         GenerationConfig gen_cfg;
 
         bool stream_output;
+        bool enable_metrics;
     };
 
     struct OutputParam {

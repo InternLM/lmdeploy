@@ -9,6 +9,7 @@
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/utils/constant.h"
+#include "src/turbomind/utils/metrics.h"
 
 namespace turbomind {
 
@@ -92,6 +93,13 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
         add(outputs_, "logprob_vals", data_type_v<float>, kCPU, max_out_len, kMaxLogProb);
         add(outputs_, "logprob_indexes", data_type_v<int>, kCPU, max_out_len, kMaxLogProb);
         add(outputs_, "logprob_nums", data_type_v<int>, kCPU, max_out_len);
+    }
+
+    if (param.enable_metrics) {
+        add(outputs_, "metrics", data_type_v<int8_t>, kCPU, sizeof(RequestMetrics));
+        // record enque time
+        auto metric_ptr = (RequestMetrics*)(*outputs_)["metrics"].data<int8_t>();
+        metric_ptr->enque_time = RequestMetrics::timestamp();
     }
 
     auto r = std::make_shared<Request>();

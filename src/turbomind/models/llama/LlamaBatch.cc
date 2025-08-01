@@ -1411,6 +1411,9 @@ void LlamaBatch::InternalThreadEntry()
 
         Initialize(g);
 
+        // update the schedule metrics and request metrics in every forward iter
+        UpdateMetrics();
+
         const int n_active = AllReduce(comm_.h_dp_group, state_->active_size, comm::RedOp::kSum);
 
         if (n_active) {
@@ -1844,6 +1847,25 @@ void LlamaBatch::DestroyCommunicators()
 
     cudaStreamSynchronize(stream_);
     comm_.h_comm->Sync();
+}
+
+void LlamaBatch::UpdateMetrics()
+{
+    if (!param_.enable_metrics) {
+        return;
+    }
+    // update schedule metrics
+    schedule_metrics_.total_seqs = sequence_manager_->total_seqs();
+    schedule_metrics_.active_seqs = sequence_manager_->active_seqs();
+    schedule_metrics_.waiting_seqs   = sequence_manager_->total_seqs() - sequence_manager_->active_seqs();
+    schedule_metrics_.total_blocks = sequence_manager_->max_block_count();
+    schedule_metrics_.cached_blocks = sequence_manager_->cached_count();
+    schedule_metrics_.free_blocks = sequence_manager_->free_count();
+    // update request metrics
+    for (int i = 0; i < state_->active_size; ++i) {
+        auto metrics_ptr = (RequestMetrics*)state_->requests[i]->outputs["metrics"].data<int8_t>();
+        metrics_ptr->scheduled_time = RequestMetrics::timestamp();
+    }
 }
 
 }  // namespace turbomind

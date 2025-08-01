@@ -123,6 +123,24 @@ public:
         return block_manager_->max_block_count();
     }
 
+    int free_count() const noexcept
+    {
+        return block_manager_->free_count();
+    }
+
+    int cached_count() const noexcept
+    {
+        return block_manager_->cached_count();
+    }
+    int total_seqs() const noexcept
+    {
+        return sequences_.size();
+    }
+
+    int active_seqs() const noexcept;
+
+    int cached_seqs() const noexcept;
+
 private:
     void Erase(std::map<uint64_t, Sequence>::iterator& it);
 
