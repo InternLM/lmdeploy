@@ -301,7 +301,7 @@ class ArgumentHelper:
         import logging
         return parser.add_argument('--log-level',
                                    type=str,
-                                   default='ERROR',
+                                   default='WARNING',
                                    choices=list(logging._nameToLevel.keys()),
                                    help='Set the log level')
 
