@@ -52,16 +52,13 @@ class PpuOpsBackend(DlinferOpsBackend):
 
         kv_start_indices, attention_mask = [], []
         block_num, block_size, _, _ = step_context.kv_caches[0][1].shape
-        device = step_context.block_offsets.device
 
         is_unpaged_prefill = False
         if not step_context.is_decoding:
             is_unpaged_prefill = torch.all(step_context.q_seqlens.eq(step_context.kv_seqlens))
 
         q_start_loc = torch.cat(
-            (step_context.q_start_loc,
-             (step_context.q_start_loc[-1] +
-              step_context.q_seqlens[-1]).unsqueeze(0)))
+            (step_context.q_start_loc, (step_context.q_start_loc[-1] + step_context.q_seqlens[-1]).unsqueeze(0)))
         q_seqlens = step_context.q_seqlens
         kv_seqlens = step_context.kv_seqlens
         max_q_seq_len = torch.max(q_seqlens)
@@ -107,4 +104,3 @@ class PpuOpsBackend(DlinferOpsBackend):
         """Build graph runner."""
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
-
