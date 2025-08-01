@@ -6,6 +6,7 @@ from typing import Callable, Dict
 from uuid import uuid4
 
 import zmq
+import zmq.asyncio
 from zmq.asyncio import Context
 
 from lmdeploy.utils import get_logger
@@ -158,13 +159,13 @@ class AsyncRPCServer:
     async def run(self):
         logger.info('Starting AsyncRPCServer...')
         self.running = True
-        poller = zmq.Poller()
+        poller = zmq.asyncio.Poller()
         poller.register(self.socket, zmq.POLLIN)
 
         self.register_method('_asyncrpcserver_get_stream_output', self.get_stream_output)
         try:
             while self.running:
-                events = poller.poll(0)
+                events = await poller.poll(timeout=10)
                 if self.socket in dict(events):
                     await self.call_and_response()
                 else:
