@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
+import contextlib
 from typing import Any, Dict, List
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
@@ -188,3 +189,12 @@ class ExecutorBase:
         self.build_cache_engine()
         logger.info('Warming up model.')
         self.warmup()
+
+    @contextlib.contextmanager
+    def remote_log(self, msg: str):
+        """Send log for debugging.
+
+        Do not use it in production.
+        """
+        # Different executor may have different log sending logic.
+        yield
