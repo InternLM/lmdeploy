@@ -5,6 +5,7 @@ from lmdeploy.messages import EngineOutput, GenerationConfig
 from lmdeploy.utils import get_logger
 
 from ..messages import SamplingParam
+from .base import EngineInstanceBase
 from .engine import Engine
 from .request import RequestSender, RequestType, Response, ResponseType
 
@@ -71,7 +72,7 @@ def cancel(req_sender: RequestSender, session_id: int):
                                f'Error: {resp.type}.'))
 
 
-class EngineInstance:
+class EngineInstance(EngineInstanceBase):
     """Instance of TurboMind.
 
     Args:
