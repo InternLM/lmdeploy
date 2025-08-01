@@ -98,6 +98,9 @@ with set_envs():
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
 
+    # triton
+    triton_custom_cache_mgr_enable = env_to_bool('LMDEPLOY_TRITON_CUSTOM_CACHE_MGR_ENABLE', False)
+
     # dlblas
     # we don't need to read this, it would be passed to ray workers
     # If Ray is launched from outside, it may fail to access the environment variables.
