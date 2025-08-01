@@ -51,6 +51,15 @@ struct LlamaDenseWeight: public core::Module {
 
     void prepare(bool fused_moe, bool use_simt);
 
+    void to_device(const core::Device& device)
+    {
+        weight       = core::to_device(weight, device);
+        bias         = core::to_device(bias, device);
+        scales       = core::to_device(scales, device);
+        zeros        = core::to_device(zeros, device);
+        scales_zeros = core::to_device(scales_zeros, device);
+    }
+
     LlamaDenseWeight& operator=(std::nullptr_t)
     {
         this->~LlamaDenseWeight();
@@ -103,6 +112,19 @@ struct LlamaAttentionWeight: public core::Module {
 
     void prepare(bool use_simt);
 
+    void to_device(const core::Device& device)
+    {
+        qkv.to_device(device);
+        output.to_device(device);
+        q_proj.to_device(device);
+        q_a_proj.to_device(device);
+        q_b_proj.to_device(device);
+        kv_a_proj.to_device(device);
+        kv_b_proj.to_device(device);
+        q_a_layernorm  = core::to_device(q_a_layernorm, device);
+        kv_a_layernorm = core::to_device(kv_a_layernorm, device);
+    }
+
     LlamaDenseWeight qkv;
     LlamaDenseWeight output;
 
@@ -133,6 +155,14 @@ struct LlamaFfnWeight: core::Module {
 
     void prepare(bool fused_moe, bool use_simt);
 
+    void to_device(const core::Device& device)
+    {
+        gating.to_device(device);
+        intermediate.to_device(device);
+        output.to_device(device);
+        fused_gating_intermediate.to_device(device);
+    }
+
     LlamaDenseWeight gating;
     LlamaDenseWeight intermediate;
     LlamaDenseWeight output;
@@ -157,6 +187,16 @@ struct MoeFfnWeight: core::Module {
                  bool            fuse_silu_act);
 
     void prepare(bool use_simt);
+
+    void to_device(const core::Device& device)
+    {
+        gate.to_device(device);
+        shared_gate.to_device(device);
+        for (auto& expert : experts) {
+            expert->to_device(device);
+        }
+        block.to_device(device);
+    }
 
     LlamaDenseWeight gate;
     LlamaDenseWeight shared_gate;

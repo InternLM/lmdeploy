@@ -862,43 +862,7 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
 {
     const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
 
-    const int dbits = byte_size(data_type, 8);
-
-    const auto quant_policy = model_->param_.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
-
-    SequenceManager::BlockConfig block_config{
-        (int)model_->size_per_head_,
-        (int)model_->local_kv_head_num_,
-        cache_block_seq_len,
-        elem_bits == dbits ? 0 : dbits,
-        elem_bits,
-    };
-
-    const auto get_free_size = [&] {  //
-        size_t free{}, total{};
-        check_cuda_error(cudaMemGetInfo(&free, &total));
-        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
-    };
-
-    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
-                                                block_config,
-                                                param.cache_max_block_count,
-                                                param.cache_chunk_size,
-                                                param.enable_prefix_caching,
-                                                tp_rank_,
-                                                core::Context::alloc(kDEVICE),
-                                                get_free_size});
-
-    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
-    if (max_session_len < session_len_) {
-        if (tp_rank_ == 0) {
-            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
-                           session_len_,
-                           max_session_len);
-        }
-        session_len_ = max_session_len;
-    }
+    InitializeKVCache();
 
     FT_CHECK(max_context_token_num_ >= session_len_);
     FT_CHECK(max_forward_token_num_ >= max_batch_size_);
@@ -1799,6 +1763,59 @@ void LlamaBatch::Warmup()
             TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
         }
     }
+}
+
+void LlamaBatch::InitializeKVCache()
+{
+    core::ContextGuard guard{context_->core_stream, context_->allocator};
+
+    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
+
+    const int dbits = byte_size(data_type_, 8);
+
+    const auto quant_policy = model_->param_.quant_policy;
+    const int  elem_bits    = quant_policy ? quant_policy : dbits;
+
+    SequenceManager::BlockConfig block_config{
+        (int)model_->size_per_head_,
+        (int)model_->local_kv_head_num_,
+        cache_block_seq_len,
+        elem_bits == dbits ? 0 : dbits,
+        elem_bits,
+    };
+
+    const auto get_free_size = [&] {  //
+        size_t free{}, total{};
+        check_cuda_error(cudaMemGetInfo(&free, &total));
+        TM_LOG_ERROR("[cache] %ld %ld", free, total);
+        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
+    };
+
+    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
+                                                block_config,
+                                                param_.cache_max_block_count,
+                                                param_.cache_chunk_size,
+                                                param_.enable_prefix_caching,
+                                                tp_rank_,
+                                                core::Context::alloc(kDEVICE),
+                                                get_free_size});
+
+    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
+    if (max_session_len < session_len_) {
+        if (tp_rank_ == 0) {
+            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
+                           session_len_,
+                           max_session_len);
+        }
+        session_len_ = max_session_len;
+    }
+}
+
+void LlamaBatch::FreeKVCache()
+{
+    sequence_manager_.reset();
+    cudaStreamSynchronize(stream_);
+    context_->allocator->trim(0);
 }
 
 void* LlamaBatch::SymmAlloc(size_t size, bool register_)
