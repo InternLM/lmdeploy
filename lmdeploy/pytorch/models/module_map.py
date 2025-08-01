@@ -9,7 +9,10 @@ MACA_MODULE_MAP = dict()
 CAMB_MODULE_MAP = dict()
 PPU_MODULE_MAP = dict()
 
-DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP, maca=MACA_MODULE_MAP, camb=CAMB_MODULE_MAP, ppu=PPU_MODULE_MAP)
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP,
+                                 maca=MACA_MODULE_MAP,
+                                 camb=CAMB_MODULE_MAP,
+                                 ppu=PPU_MODULE_MAP)
 
 # llama
 MODULE_MAP.update({

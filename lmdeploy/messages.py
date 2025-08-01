@@ -364,7 +364,8 @@ class PytorchEngineConfig:
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
-        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb', 'ppu'], (f'invalid device_type: {self.device_type}')
+        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb',
+                                    'ppu'], (f'invalid device_type: {self.device_type}')
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
