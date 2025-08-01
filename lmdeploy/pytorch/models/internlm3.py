@@ -7,7 +7,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -226,34 +226,7 @@ class InternLM3Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        scaling_factor = 1.0
-        rope_scaling = config.rope_scaling
-        if rope_scaling is None:
-            emb_type = RopeType.LinearScaling
-        else:
-            if 'scaling_factor' in rope_scaling:
-                scaling_factor = rope_scaling['scaling_factor']
-            elif 'factor' in rope_scaling:
-                scaling_factor = rope_scaling['factor']
-
-            rope_type = rope_scaling['rope_type']
-            if rope_type == 'dynamic':
-                emb_type = RopeType.DynamicNTKScaling
-            elif rope_type == 'linear':
-                emb_type = RopeType.LinearScaling
-            else:
-                raise RuntimeError(f'Unsupported rope type: {rope_type}')
-
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            scaling_factor,
-            emb_type=emb_type,
-        )
+        self.rotary_emb = build_rotary_embedding_from_config(config)
 
     def forward(
         self,

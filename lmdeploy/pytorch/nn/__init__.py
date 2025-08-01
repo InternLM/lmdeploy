@@ -8,4 +8,5 @@ from .rotary_embedding import ApplyRotaryEmb  # noqa: F401
 from .rotary_embedding import RopeType  # noqa: F401
 from .rotary_embedding import YarnParameters  # noqa: F401
 from .rotary_embedding import build_rotary_embedding  # noqa: F401
+from .rotary_embedding import build_rotary_embedding_from_config  # noqa: F401
 from .rotary_embedding import build_rotary_params  # noqa: F401
