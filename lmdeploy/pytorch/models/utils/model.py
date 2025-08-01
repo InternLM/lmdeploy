@@ -31,6 +31,10 @@ class DeployModelMixin:
         """Compute logits of the model output."""
         return hidden_states
 
+    def rename_weight(self, name: str) -> str:
+        """Rename weight."""
+        return name
+
     def update_weights(self):
         """Update weights."""
         pass
