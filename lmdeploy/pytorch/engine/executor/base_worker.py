@@ -106,6 +106,9 @@ class WorkerWrapperBase:
         """Gather free mem."""
         return self.model_agent.get_free_mem()
 
+    def get_runtime_mem_size(self):
+        return self.model_agent.get_runtime_mem_size()
+
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
         self.model_agent.set_cache_config(cache_config)
