@@ -294,7 +294,7 @@ PYBIND11_MODULE(_turbomind, m)
 {
     py::class_<ft::RequestMetrics>(m, "RequestMetrics")
         .def(py::init([](Tensor metrics_tensor) {
-                 ft::RequestMetrics *ptr = (ft::RequestMetrics*)metrics_tensor.data<int8_t>();
+                 ft::RequestMetrics* ptr = (ft::RequestMetrics*)metrics_tensor.data<int8_t>();
                  return *ptr;
              }),
              "metrics_tensor"_a)

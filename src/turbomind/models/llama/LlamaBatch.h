@@ -17,7 +17,6 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
-
 namespace turbomind {
 
 struct MropeRope {
@@ -139,6 +138,7 @@ public:
     {
         return schedule_metrics_;
     }
+
 private:
     void FindCanceledIndices(std::vector<int>& indices);
 
@@ -294,7 +294,7 @@ private:
 
     std::thread internal_thread_;
 
-    bool enable_metrics_;
+    bool            enable_metrics_;
     ScheduleMetrics schedule_metrics_;
 };
 
