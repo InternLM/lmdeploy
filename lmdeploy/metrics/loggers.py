@@ -53,6 +53,11 @@ class LoggingStatLogger(StatLoggerBase):
 
     def log(self):
         now = time.perf_counter()
+        if self.total_prompt_tokens == 0 and self.total_generation_tokens == 0:
+            # Not show the metrics log in console
+            self._reset(now)
+            return
+
         prompt_throughput = self.total_prompt_tokens / (now - self.last_log_time)
         generation_throughput = self.total_generation_tokens / (now - self.last_log_time)
 
