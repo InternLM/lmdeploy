@@ -22,7 +22,7 @@ import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
+from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
@@ -374,8 +374,13 @@ class TurboMind:
         """
         return TurboMindInstance(self, self.config, cuda_stream_id)
 
-    def get_schedule_metrics(self, dp_rank):
-        self.model_comm.get_schedule_metrics(dp_rank)
+    def get_schedule_metrics(self):
+        # TODO: support dp
+        tm_metrics = self.model_comm.get_schedule_metrics(0, 0)
+        return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
+                               waiting_seqs=tm_metrics.waiting_seqs,
+                               total_blocks=tm_metrics.total_blocks,
+                               free_blocks=tm_metrics.free_blocks)
 
 
 def _get_logits(outputs, offset: int):

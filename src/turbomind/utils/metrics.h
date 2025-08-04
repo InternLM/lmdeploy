@@ -36,7 +36,7 @@ inline std::ostream& operator<<(std::ostream& os, const ScheduleMetrics& m)
 {
     os << "ScheduleMetrics { ";
     os << "total_seqs=" << m.total_seqs;
-    os << "active_seqs=" << m.active_seqs;
+    os << ", active_seqs=" << m.active_seqs;
     os << ", waiting_seqs=" << m.waiting_seqs;
     os << ", total_blocks=" << m.total_blocks;
     os << ", cached_blocks=" << m.cached_blocks;

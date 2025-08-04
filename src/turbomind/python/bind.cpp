@@ -301,6 +301,15 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readwrite("enque_time", &ft::RequestMetrics::enque_time)
         .def_readwrite("scheduled_time", &ft::RequestMetrics::scheduled_time);
 
+    py::class_<ft::ScheduleMetrics>(m, "ScheduleMetrics")
+        .def(py::init())
+        .def_readwrite("total_seqs", &ft::ScheduleMetrics::total_seqs)
+        .def_readwrite("active_seqs", &ft::ScheduleMetrics::active_seqs)
+        .def_readwrite("waiting_seqs", &ft::ScheduleMetrics::waiting_seqs)
+        .def_readwrite("total_blocks", &ft::ScheduleMetrics::total_blocks)
+        .def_readwrite("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
+        .def_readwrite("free_blocks", &ft::ScheduleMetrics::free_blocks);
+
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step, bool start, bool end) {
                  if (!start && end) {
@@ -562,7 +571,7 @@ PYBIND11_MODULE(_turbomind, m)
             "rank"_a)
         .def(
             "get_schedule_metrics",
-            [](LlamaTritonModel* model, int deviceId, int rank) { model->getScheduleMetrics(deviceId, rank); },
+            [](LlamaTritonModel* model, int deviceId, int rank) { return model->getScheduleMetrics(deviceId, rank); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)

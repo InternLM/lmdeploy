@@ -924,6 +924,8 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
 
     // Wait for allocations
     check_cuda_error(cudaStreamSynchronize(stream_));
+
+    UpdateMetrics();
 }
 
 void LlamaBatch::InitializeSampling(const GenerationState& g)
@@ -1278,6 +1280,9 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
         // recover full context length of partial
         state_->h_context_length[i] = g.partial_context_legnth;
     }
+
+    // Update the schedule metrics since some requests might finish the inference
+    UpdateMetrics();
 }
 
 auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
@@ -1855,14 +1860,17 @@ void LlamaBatch::UpdateMetrics()
         return;
     }
     // update schedule metrics
-    schedule_metrics_.total_seqs = sequence_manager_->total_seqs();
-    schedule_metrics_.active_seqs = sequence_manager_->active_seqs();
-    schedule_metrics_.waiting_seqs   = sequence_manager_->total_seqs() - sequence_manager_->active_seqs();
-    schedule_metrics_.total_blocks = sequence_manager_->max_block_count();
+    schedule_metrics_.total_seqs    = sequence_manager_->total_seqs();
+    schedule_metrics_.active_seqs   = sequence_manager_->active_seqs();
+    schedule_metrics_.waiting_seqs  = sequence_manager_->total_seqs() - sequence_manager_->active_seqs();
+    schedule_metrics_.total_blocks  = sequence_manager_->max_block_count();
     schedule_metrics_.cached_blocks = sequence_manager_->cached_count();
-    schedule_metrics_.free_blocks = sequence_manager_->free_count();
+    schedule_metrics_.free_blocks   = sequence_manager_->free_count();
     // update request metrics
     for (int i = 0; i < state_->active_size; ++i) {
+        if (!state_->requests[i]) {
+            continue;
+        }
         auto metrics_ptr = (RequestMetrics*)state_->requests[i]->outputs["metrics"].data<int8_t>();
         metrics_ptr->scheduled_time = RequestMetrics::timestamp();
     }

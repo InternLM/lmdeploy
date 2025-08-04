@@ -351,6 +351,9 @@ class AsyncEngine(LogitsMixin):
             # set stats loggers of metrics processor
             metrics_processor.stat_loggers = self.stat_loggers
 
+    def get_schedule_metrics(self):
+        return self.engine.get_schedule_metrics()
+
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
                  gen_config: Optional[GenerationConfig] = None,

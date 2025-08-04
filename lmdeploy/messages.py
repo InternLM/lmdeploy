@@ -256,7 +256,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
-    enable_metrics: bool = True
+    enable_metrics: bool = False
 
     def __post_init__(self):
         """Check input validation."""
