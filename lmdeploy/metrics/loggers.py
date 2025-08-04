@@ -59,7 +59,6 @@ class LoggingStatLogger(StatLoggerBase):
         self._reset(now)
 
         scheduler_stats = self.last_scheduler_stats
-
         # Format and print output.
         log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} "
                    f'DP{self.dp_rank}] '

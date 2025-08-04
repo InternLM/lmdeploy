@@ -144,7 +144,6 @@ class MetricsProcessor():
                 logger.exception(f'Metrics handler background task failed: {e}')
 
     async def udpate_schedule_stats(self, schedule_metrics: ScheduleMetrics):
-        print(f'schedule_metrics: {schedule_metrics}')
         stats = get_current_scheduler_stats()
         stats.update_from_schedule_metrics(schedule_metrics)
         # record schedule stats

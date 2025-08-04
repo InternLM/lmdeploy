@@ -420,6 +420,6 @@ class Scheduler:
         return ScheduleMetrics(
             active_seqs=self.num_locked(),
             waiting_seqs=self.num_waiting() + self.num_running(),
-            total_blocks=self.block_manager.get_num_free_gpu_blocks(),
+            total_blocks=self.block_manager.num_gpu_blocks,
             free_blocks=self.block_manager.get_num_free_gpu_blocks(),
         )
