@@ -470,7 +470,7 @@ class EngineEvent:
 
 @dataclass
 class ScheduleMetrics:
-    running_seqs: int = 0
+    active_seqs: int = 0
     waiting_seqs: int = 0
     total_blocks: int = 0
     cached_blocks: int = 0

@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
-from lmdeploy.messages import EngineEvent, EngineOutput, ResponseType
+from lmdeploy.messages import EngineEvent, EngineOutput, ResponseType, ScheduleMetrics
 
 
 @dataclass
@@ -35,6 +35,11 @@ class SchedulerStats:
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
                 ')')
+
+    def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
+        self.num_running_reqs = scheduled_metrics.active_seqs
+        self.num_waiting_reqs = scheduled_metrics.waiting_seqs
+        self.gpu_cache_usage = 1.0 - (scheduled_metrics.free_blocks / scheduled_metrics.total_blocks)
 
 
 class RequestState:

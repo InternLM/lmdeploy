@@ -385,9 +385,7 @@ class AsyncEngine(LogitsMixin):
     async def do_log_stats(self):
         """Loop through CLI logger and Prometheus logger and output the
         metrics."""
-        # schedule_metrics = self.schedule_metrics()
         for stat_logger in self.stat_loggers:
-            # stat_logger.record_schedule(schedule_metrics)
             stat_logger.log()
 
     async def stop_session(self, session_id: int):

@@ -1243,6 +1243,11 @@ def create_lifespan_handler(backend_config: Union[PytorchEngineConfig, Turbomind
                     while True:
                         await asyncio.sleep(log_interval)
 
+                        # Since scheduled metrics is not changed as frequently as iteration statistics,
+                        # we conduct its statistics every `log_interval` seconds
+                        schedule_metrics = async_engine.engine.get_schedule_metrics()
+                        await metrics_processor.udpate_schedule_stats(schedule_metrics)
+
                         await async_engine.do_log_stats()
 
                 task = asyncio.create_task(_force_log())

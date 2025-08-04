@@ -1229,3 +1229,6 @@ class Engine:
 
     def get_engine_config(self):
         return self.engine_config
+
+    def get_schedule_metrics(self):
+        return self.scheduler.schedule_metrics

@@ -415,19 +415,11 @@ class Scheduler:
         for seq in migration_done:
             self._set_message_status(seq, MessageStatus.RUNNING)
 
-    # def make_stats(self):
-    #     """Make stats."""
-    #     return {
-    #         'running': self.num_running(),
-    #         'waiting': self.num_waiting(),
-    #         'locked': self.num_locked(),
-    #         'free_gpu_blocks': self.block_manager.get_num_free_gpu_blocks(),
-    #         'total_gpu_blocks': self.block_manager.num_gpu_blocks
-    #     }
+    @property
     def schedule_metrics(self):
         return ScheduleMetrics(
-            running_seqs=self.num_locked(),
+            active_seqs=self.num_locked(),
             waiting_seqs=self.num_waiting() + self.num_running(),
-            total_blocks=self.block_manager.get_num_free_cpu_blocks(),
-            free_blocks=self.block_manager.get_num_free_cpu_blocks(),
+            total_blocks=self.block_manager.get_num_free_gpu_blocks(),
+            free_blocks=self.block_manager.get_num_free_gpu_blocks(),
         )
