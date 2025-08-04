@@ -591,6 +591,10 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
+        self._moe = dict()
+        self._moe[True] = self.fusedmoe_build(True)
+        self._moe[False] = self.fusedmoe_build(False)
+
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         if get_dist_manager().current_context().dist_config.enable_eplb:
@@ -617,7 +621,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
         low_latency_mode = step_ctx.is_decoding and self.use_deep_gemm
-        moe = self.fusedmoe_build(low_latency_mode)
+        moe = self._moe[low_latency_mode]
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
                                  down_scale, expert_list)
         return out_states
