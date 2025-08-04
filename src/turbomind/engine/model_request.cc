@@ -96,7 +96,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     }
 
     if (param.enable_metrics) {
-        add(outputs_, "metrics", data_type_v<int8_t>, kCPU, sizeof(RequestMetrics));
+        add(outputs_, "metrics", data_type_v<int8_t>, kCPU, (int)sizeof(RequestMetrics));
         // record enque time
         auto metric_ptr        = (RequestMetrics*)(*outputs_)["metrics"].data<int8_t>();
         metric_ptr->enque_time = RequestMetrics::timestamp();
