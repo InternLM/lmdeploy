@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
+from pathlib import Path
 from queue import Queue
 from typing import Any, Dict, List
 
@@ -21,7 +22,6 @@ import torch
 import yaml
 from torch.nn.utils.rnn import pad_sequence
 
-import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
@@ -29,10 +29,14 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
 
-# TODO: find another way import _turbomind
-lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
-sys.path.append(osp.join(lmdeploy_dir, 'lib'))
-import _turbomind as _tm  # noqa: E402
+lib_path = str(Path(__file__).parent.parent.joinpath('lib'))
+print(lib_path)
+sys.path.insert(0, lib_path)
+try:
+    import _turbomind as _tm  # noqa: E402
+finally:
+    if lib_path in sys.path:
+        sys.path.remove(lib_path)
 
 logger = get_logger('lmdeploy')
 
@@ -161,7 +165,7 @@ class TurboMind:
         if len(tm_params) > 0:
             uninitialized = list(tm_params.keys())
             logger.warning('the model may not be loaded successfully '
-                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
+                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')  # noqa: E231
 
     def _load_weights(self):
         """Load weights."""
@@ -253,7 +257,7 @@ class TurboMind:
         # passed by frameworks like OpenCompass. This ensures a standard dict.
         engine_config_dict = json.loads(json.dumps(engine_config_dict))
         self.config_dict.update(dict(engine_config=engine_config_dict))
-        logger.info(f'turbomind model config:\n\n'
+        logger.info(f'turbomind model config:\n\n'  # noqa: E231
                     f'{json.dumps(self.config_dict, indent=2)}')
 
     def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
