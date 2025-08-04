@@ -119,9 +119,9 @@ public:
 
     ~LlamaBatch();
 
-    void InitializeKVCache();
+    void InitializeBufferAndKVCache();
 
-    void FreeKVCache();
+    void FreeBufferAndKVCache();
 
     void Start();
 

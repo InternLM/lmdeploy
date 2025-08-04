@@ -79,9 +79,6 @@ bool LlamaWeight::is_initialized() const
 
 void LlamaWeight::initialize()
 {
-    modules_.clear();
-    params_.clear();
-
     core::ContextGuard guard = context();
 
     pre_decoder_embedding.emplace(embedding_size_, hidden_units_ / tp_size_, data_type_, false, data_type_, 1);
@@ -126,11 +123,10 @@ void LlamaWeight::release()
 void LlamaWeight::to_device(const core::Device& device)
 {
     core::ContextGuard guard = context();
-    output_norm_weight       = core::to_device(output_norm_weight, device);
-    pre_decoder_embedding.to_device(device);
-    post_decoder_embedding.to_device(device);
-    for (auto& layer : decoder_layer_weights) {
-        layer->to_device(device);
+
+    auto tensor_ptr_map = get_parameters();
+    for (auto& [name, tensor_ptr] : tensor_ptr_map) {
+        *tensor_ptr = core::to_device(*tensor_ptr, device);
     }
     core::Context::stream().Sync();
     if (device.type == kCPU) {

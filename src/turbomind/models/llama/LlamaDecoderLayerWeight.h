@@ -44,19 +44,6 @@ public:
 
     void prepare(const cudaDeviceProp& prop, cudaStream_t st);
 
-    void to_device(const core::Device& device)
-    {
-        self_attn_norm = core::to_device(self_attn_norm, device);
-        ffn_norm       = core::to_device(ffn_norm, device);
-        self_attn_weights->to_device(device);
-        if (ffn_weights) {
-            ffn_weights->to_device(device);
-        }
-        if (moe_weights) {
-            moe_weights->to_device(device);
-        }
-    }
-
     Tensor self_attn_norm;
     Tensor ffn_norm;
 

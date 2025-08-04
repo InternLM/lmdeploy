@@ -830,7 +830,7 @@ LlamaBatch::~LlamaBatch()
     cudaStreamSynchronize(stream_);
 
     model_.reset();
-    sequence_manager_.reset();
+    FreeBufferAndKVCache();
     context_.reset();  // This destroy all objects in context except for `stream`
 }
 
@@ -860,34 +860,37 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
     comm_(context_->comm),
     session_len_(param.session_len)
 {
-    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
-
-    InitializeKVCache();
-
-    FT_CHECK(max_context_token_num_ >= session_len_);
-    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
-
-    for (auto& s : states_) {
-        s.requests.resize(max_batch_size_);
-        s.sequences.resize(max_batch_size_);
-        s.seq_len_limit.resize(max_batch_size_);
-        s.errors.resize(max_batch_size_);
-    }
-
-    state_    = &states_[0];
-    back_     = &states_[1];
-    incoming_ = &states_[2];
 
     symm_alloc_ = core::SimpleAllocator::Create([this](ssize_t size) { return SymmAlloc(size, true); },
                                                 [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
                                                 kDEVICE);
 
-    AllocSymmBuffers();
-
-    AllocateBuffer(max_batch_size_, session_len_, cache_block_seq_len);
+    InitializeBufferAndKVCache();
 
     // Wait for allocations
     check_cuda_error(cudaStreamSynchronize(stream_));
+}
+
+void LlamaBatch::FreeBuffer()
+{
+    input_ids_buf_       = {};
+    decoder_output_buf_  = {};
+    input_length_buf_    = {};
+    context_length_buf_  = {};
+    init_context_length_ = {};
+    sequence_lengths_    = {};
+    cu_block_counts_     = {};
+    block_ptrs_          = {};
+    sampled_logprobs_    = {};
+    sampled_indexes_     = {};
+    sampled_nums_        = {};
+    token_ids_buf_       = {};
+    sampling_logits_     = {};
+    finished_buf_        = {};
+    seq_limit_len_       = {};
+    rope_theta_          = {};
+    d_random_seed_       = {};
+    d_curand_state_      = {};
 }
 
 void LlamaBatch::InitializeSampling(const GenerationState& g)
@@ -1765,9 +1768,10 @@ void LlamaBatch::Warmup()
     }
 }
 
-void LlamaBatch::InitializeKVCache()
+void LlamaBatch::InitializeBufferAndKVCache()
 {
-    core::ContextGuard guard{context_->core_stream, context_->allocator};
+    // initialize kvcache, BatchState and persist buffers
+    core::ContextGuard guard{context_->core_stream, context_->allocator, Allocator{kCPUpinned}};
 
     const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
 
@@ -1787,7 +1791,6 @@ void LlamaBatch::InitializeKVCache()
     const auto get_free_size = [&] {  //
         size_t free{}, total{};
         check_cuda_error(cudaMemGetInfo(&free, &total));
-        TM_LOG_ERROR("[cache] %ld %ld", free, total);
         return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
     };
 
@@ -1809,11 +1812,36 @@ void LlamaBatch::InitializeKVCache()
         }
         session_len_ = max_session_len;
     }
+
+    FT_CHECK(max_context_token_num_ >= session_len_);
+    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
+
+    for (auto& s : states_) {
+        s.requests.resize(max_batch_size_);
+        s.sequences.resize(max_batch_size_);
+        s.seq_len_limit.resize(max_batch_size_);
+        s.errors.resize(max_batch_size_);
+    }
+    state_    = &states_[0];
+    back_     = &states_[1];
+    incoming_ = &states_[2];
+
+    AllocSymmBuffers();
+
+    AllocateBuffer(max_batch_size_, session_len_, model_->attn_param_.cache_block_seq_len);
 }
 
-void LlamaBatch::FreeKVCache()
+void LlamaBatch::FreeBufferAndKVCache()
 {
     sequence_manager_.reset();
+
+    for (auto& s : states_) {
+        s = {};
+    }
+
+    FreeSymmBuffers();
+    FreeBuffer();
+
     cudaStreamSynchronize(stream_);
     context_->allocator->trim(0);
 }

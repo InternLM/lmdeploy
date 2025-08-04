@@ -451,7 +451,12 @@ void LlamaTritonModel::createSharedWeights(int device_id, int rank)
 
 TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 {
-    return TM_CHECK_NOTNULL(weights_[rank])->get_parameters();
+    const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[rank])->get_parameters();
+    TensorMap   params;
+    for (const auto& [name, tensor_ptr] : tensor_ptr_map) {
+        params[name] = *tensor_ptr;
+    }
+    return params;
 }
 
 void LlamaTritonModel::processWeights(int device_id, int rank)
@@ -570,7 +575,7 @@ void LlamaTritonModel::sleep(int device_id, int level)
     }
 
     // free kv cache
-    engines_[device_id]->FreeKVCache();
+    engines_[device_id]->FreeBufferAndKVCache();
 }
 
 void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tags)
@@ -592,7 +597,7 @@ void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tag
     }
 
     if (keys.find("kv_cache") != keys.end()) {
-        engines_[device_id]->InitializeKVCache();
+        engines_[device_id]->InitializeBufferAndKVCache();
     }
 }
 
