@@ -4,6 +4,8 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
+from .utils import get_device_props
+
 
 @triton.jit
 def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
@@ -17,46 +19,54 @@ def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
 
 
 @triton.jit
-def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr, eps: tl.constexpr, N_COLS: tl.constexpr,
-                    BLOCK_N: tl.constexpr):
+def rms_norm_kernel(input, weight, output, seq_len, input_row_stride: tl.constexpr, eps: tl.constexpr,
+                    N_COLS: tl.constexpr, BLOCK_N: tl.constexpr, NUM_STAGES: tl.constexpr):
     """Rms norm kernel."""
     prog_id = tl.program_id(0)
+    prog_stride = tl.num_programs(0)
     offsets = tl.arange(0, BLOCK_N)
+    mask = offsets < N_COLS
 
-    w = tl.load(weight + offsets, mask=offsets < N_COLS)
+    w = tl.load(weight + offsets, mask=mask).to(tl.float32)
 
-    x_ptr = input + prog_id * input_row_stride
-    x = tl.load(x_ptr + offsets, mask=offsets < N_COLS)
-    out = _compute_rms_norm(x, w, eps, N_COLS)
+    x_ptr = input + prog_id * input_row_stride + offsets
+    out_ptr = output + prog_id * input_row_stride + offsets
+    for _ in tl.range(prog_id, seq_len, prog_stride, num_stages=NUM_STAGES):
+        x = tl.load(x_ptr, mask=mask)
+        out = _compute_rms_norm(x, w, eps, N_COLS)
 
-    out_ptr = output + prog_id * input_row_stride
-    tl.store(out_ptr + offsets, out, mask=offsets < N_COLS)
+        tl.store(out_ptr, out, mask=mask)
+        x_ptr += prog_stride * input_row_stride
+        out_ptr += prog_stride * input_row_stride
 
 
 @triton.jit
-def add_rms_norm_kernel(input, weight, residual, output, out_residual, input_row_stride: tl.constexpr,
+def add_rms_norm_kernel(input, weight, residual, output, out_residual, seq_len, input_row_stride: tl.constexpr,
                         residual_row_stride: tl.constexpr, eps: tl.constexpr, N_COLS: tl.constexpr,
-                        BLOCK_N: tl.constexpr):
+                        BLOCK_N: tl.constexpr, NUM_STAGES: tl.constexpr):
     """Rms norm kernel."""
     prog_id = tl.program_id(0)
+    prog_stride = tl.num_programs(0)
     offsets = tl.arange(0, BLOCK_N)
+    mask = offsets < N_COLS
 
-    w = tl.load(weight + offsets, mask=offsets < N_COLS)
+    w = tl.load(weight + offsets, mask=mask).to(tl.float32)
 
-    x_ptr = input + prog_id * input_row_stride
-    x = tl.load(x_ptr + offsets, mask=offsets < N_COLS)
-
-    res_ptr = residual + prog_id * residual_row_stride
-    res = tl.load(res_ptr + offsets, mask=offsets < N_COLS)
-
-    new_x = x + res
-    out_res_ptr = out_residual + prog_id * residual_row_stride
-    tl.store(out_res_ptr + offsets, new_x, mask=offsets < N_COLS)
-
-    out = _compute_rms_norm(new_x, w, eps, N_COLS)
-
-    out_ptr = output + prog_id * input_row_stride
-    tl.store(out_ptr + offsets, out, mask=offsets < N_COLS)
+    x_ptr = input + prog_id * input_row_stride + offsets
+    res_ptr = residual + prog_id * residual_row_stride + offsets
+    out_res_ptr = out_residual + prog_id * residual_row_stride + offsets
+    out_ptr = output + prog_id * input_row_stride + offsets
+    for _ in tl.range(prog_id, seq_len, prog_stride, num_stages=NUM_STAGES):
+        x = tl.load(x_ptr, mask=mask)
+        res = tl.load(res_ptr, mask=mask)
+        new_x = x + res
+        tl.store(out_res_ptr, new_x, mask=mask)
+        out = _compute_rms_norm(new_x, w, eps, N_COLS)
+        tl.store(out_ptr, out, mask=mask)
+        x_ptr += prog_stride * input_row_stride
+        res_ptr += prog_stride * input_row_stride
+        out_ptr += prog_stride * input_row_stride
+        out_res_ptr += prog_stride * input_row_stride
 
 
 def rms_norm(hidden_states: Tensor,
@@ -76,22 +86,30 @@ def rms_norm(hidden_states: Tensor,
 
     BLOCK_N = triton.next_power_of_2(feat_size)
 
+    props = get_device_props(hidden_states.device.index)
+    num_sm = props['multi_processor_count']
+    warps_per_sm = props['warps_per_sm'] // 2
+    num_warps = min(triton.cdiv(BLOCK_N, 128), 4)
+    cta_per_device = num_sm * warps_per_sm // num_warps
+    num_stages = min(5, triton.cdiv(seq_len, cta_per_device))
+
     if out is None:
         out = torch.empty_like(hidden_states)
 
-    grid = (seq_len, )
-
+    grid = (min(seq_len, cta_per_device), )
     if residual is None:
         rms_norm_kernel[grid](
             hidden_states,
             weight,
             out,
+            seq_len=seq_len,
             input_row_stride=input_stride,
             eps=eps,
             N_COLS=feat_size,
             BLOCK_N=BLOCK_N,
-            num_warps=4,
-            num_stages=2,
+            NUM_STAGES=num_stages,
+            num_warps=num_warps,
+            num_stages=num_stages,
         )
         return out
     else:
@@ -105,13 +123,15 @@ def rms_norm(hidden_states: Tensor,
             residual,
             out,
             out_residual,
+            seq_len=seq_len,
             input_row_stride=input_stride,
             residual_row_stride=res_stride,
             eps=eps,
             N_COLS=feat_size,
             BLOCK_N=BLOCK_N,
-            num_warps=4,
-            num_stages=2,
+            NUM_STAGES=num_stages,
+            num_warps=num_warps,
+            num_stages=num_stages,
         )
         return out, out_residual
 
