@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -105,7 +105,8 @@ class ModelAgentStrategy(ABC):
         pass
 
     @abstractmethod
-    def slice_extra_inputs(self, extra_inputs: ExtraInputs, seq_length: torch.LongTensor) -> ExtraInputs:
+    def slice_extra_inputs(self, extra_inputs: ExtraInputs, model_inputs: 'ModelInputs',
+                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ExtraInputs:
         """Slice outputs."""
         pass
 

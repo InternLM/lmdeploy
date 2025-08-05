@@ -12,13 +12,13 @@ from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, 
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMixin
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
 
 class LlamaAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
 
-    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None, is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -37,6 +37,7 @@ class LlamaAttention(nn.Module):
             dtype=dtype,
             device=device,
             num_replicate_kv_heads=num_replicate_kv_heads,
+            is_tp=is_tp,
         )
 
         # rotary embedding
@@ -48,6 +49,7 @@ class LlamaAttention(nn.Module):
             head_dim,
             num_kv_heads=num_key_value_heads,
             v_head_size=head_dim,
+            use_flash_attn3=getattr(config, 'use_flash_attn3', False),
         )
 
         # o_proj
@@ -57,7 +59,7 @@ class LlamaAttention(nn.Module):
                                    quant_config=quantization_config,
                                    dtype=dtype,
                                    device=device,
-                                   is_tp=True)
+                                   is_tp=is_tp)
 
     def forward(
         self,
@@ -105,7 +107,7 @@ class LlamaAttention(nn.Module):
 class LlamaMLP(nn.Module):
     """Llama mlp."""
 
-    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None, is_tp: bool = True):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -117,7 +119,7 @@ class LlamaMLP(nn.Module):
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
-            is_tp=True,
+            is_tp=is_tp,
         )
 
         # silu and mul
@@ -130,7 +132,7 @@ class LlamaMLP(nn.Module):
                                            quant_config=quantization_config,
                                            dtype=dtype,
                                            device=device,
-                                           is_tp=True)
+                                           is_tp=is_tp)
 
     def forward(self, x):
         """forward."""
@@ -142,16 +144,21 @@ class LlamaMLP(nn.Module):
 class LlamaDecoderLayer(nn.Module):
     """Llama decoder layer."""
 
-    def __init__(self, config: LlamaConfig, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: LlamaConfig,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 is_tp: bool = True):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
+        self.self_attn = LlamaAttention(config, dtype=dtype, device=device, is_tp=is_tp)
 
         # build MLP
-        self.mlp = LlamaMLP(config, dtype=dtype, device=device)
+        self.mlp = LlamaMLP(config, dtype=dtype, device=device, is_tp=is_tp)
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -217,7 +224,7 @@ class LlamaModel(nn.Module):
             LlamaDecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
-
+        self.aux_hidden_state_layers: Tuple[int] = getattr(config, 'aux_hidden_state_layers', tuple())
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
@@ -245,10 +252,14 @@ class LlamaModel(nn.Module):
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
 
+        # for eagle3
+        aux_hidden_states = []
         # decoding
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
             past_key_value = past_key_values[idx]
+            if idx in self.aux_hidden_state_layers:
+                aux_hidden_states.append(hidden_states + residual)
             hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
@@ -260,6 +271,9 @@ class LlamaModel(nn.Module):
         # norm
         hidden_states, _ = self.norm(hidden_states, residual)
 
+        if len(aux_hidden_states) > 0:
+            aux_hidden_states = torch.cat(aux_hidden_states, dim=-1)
+            return dict(hidden_states=hidden_states, aux_hidden_states=aux_hidden_states)
         return hidden_states
 
     def get_input_embeddings(self):
@@ -330,6 +344,15 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
+
+    def get_outputs_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: torch.Tensor, **kwargs):
+        """Get outputs from buffers."""
+        num_tokens = input_ids.size(-1)
+        outputs = dict()
+        outputs['hidden_states'] = graph_meta.output_buffers['hidden_states'][:, :num_tokens]
+        if 'aux_hidden_states' in graph_meta.output_buffers:
+            outputs['aux_hidden_states'] = graph_meta.output_buffers['aux_hidden_states'][:, :num_tokens]
+        return outputs
 
     def prepare_inputs_for_generation(
         self,

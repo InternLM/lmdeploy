@@ -36,6 +36,7 @@ class AttentionImpl(ABC, Generic[T]):
         logit_softcapping: float = None,
         causal: bool = True,
         use_flash_mla: bool = False,
+        use_flash_attn3: bool = False,
         **kwargs,
     ) -> None:
         if scale is None:
@@ -57,6 +58,7 @@ class AttentionImpl(ABC, Generic[T]):
         self.logit_softcapping = logit_softcapping
         self.causal = causal
         self.use_flash_mla = use_flash_mla
+        self.use_flash_attn3 = use_flash_attn3
 
     @abstractmethod
     def forward(
@@ -92,6 +94,7 @@ class AttentionBuilder(ABC, Generic[T]):
         logical_softcapping: float = None,
         causal: bool = True,
         use_flash_mla: bool = False,
+        use_flash_attn3: bool = False,
         learnable_sink: bool = False,
         block_sparse_size: int = 1,
         **kwargs,

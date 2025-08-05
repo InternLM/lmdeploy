@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from torch.profiler import record_function
@@ -63,7 +63,8 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         last_idx = seq_length.cumsum(-1) - 1
         return inputs[last_idx]
 
-    def slice_extra_inputs(self, extra_inputs: ARExtraInputs, seq_length: torch.LongTensor) -> ARExtraInputs:
+    def slice_extra_inputs(self, extra_inputs: ARExtraInputs, model_inputs: ModelInputs,
+                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ARExtraInputs:
         """Slice outputs."""
         return extra_inputs
 

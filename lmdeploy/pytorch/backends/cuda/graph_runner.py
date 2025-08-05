@@ -68,21 +68,21 @@ class CUDASingleGraphRunner:
         pool: Tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
+        decode_query_len: int = 1,
     ):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
         self.model_config = model_config
 
-        self.meta = CudaGraphMeta(
-            max_batchs=max_batches,
-            max_tokens=max_tokens,
-            num_blocks=num_blocks,
-            is_decoding=is_decoding,
-            device=device,
-            input_buffers=dict(),
-            output_buffers=dict(),
-            vocab_size=self.model_config.vocab_size,
-        )
+        self.meta = CudaGraphMeta(max_batchs=max_batches,
+                                  max_tokens=max_tokens,
+                                  num_blocks=num_blocks,
+                                  is_decoding=is_decoding,
+                                  device=device,
+                                  input_buffers=dict(),
+                                  output_buffers=dict(),
+                                  vocab_size=self.model_config.vocab_size,
+                                  decode_query_len=decode_query_len)
         self.device = device
         self.max_batches = max_batches
         self.max_tokens = max_tokens
@@ -109,22 +109,22 @@ class CUDASingleGraphRunner:
         # so we set thread_safe capture mode here.
         with torch.cuda.graph(self._graph, pool=self.pool, stream=current_stream, capture_error_mode='thread_local'):
             output = self.model(**padded_kwargs)
-
-        output_buffers = dict(logits=output)
+        output_buffers = output
+        if isinstance(output, torch.Tensor):
+            output_buffers = dict(hidden_states=output)
         self.meta.output_buffers = output_buffers
         return output
 
     @record_function('forward_cudagraph')
     def forward(self, **kwargs):
         """forward."""
-        num_tokens = kwargs['input_ids'].size(-1)
         assert self._graph is not None
         self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
         self.model.update_context_cudagraph(self.meta, context)
         self._graph.replay()
 
-        output = self.meta.output_buffers['logits'][:, :num_tokens]
+        output = self.model.get_outputs_cudagraph(self.meta, **kwargs)
         return output
 
     def __del__(self):
@@ -187,17 +187,19 @@ class CUDAGraphRunner(GraphRunner):
         batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
+        # for draft model to distinguish inputs from target model and itself
+        query_len = input_ids.size(1) // batch_size
         if meta.padding_batch_size is None:
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch)
+        return (batch_size, is_decoding, enable_microbatch, query_len)
 
-    def _get_max_tokens(self, graph_key: tuple):
+    def _get_max_tokens(self, graph_key: tuple, input_ids: torch.Tensor, q_seqlens: torch.Tensor):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
         assert is_decoding
-        return self.cudagraph_strategy.get_max_tokens(max_batches)
+        return self.cudagraph_strategy.get_max_tokens(max_batches, input_ids, q_seqlens)
 
     def __call__(self, **kwargs):
         """call."""
@@ -213,16 +215,20 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
+        decode_query_len = graph_key[3]
         if graph_key not in self._runner_map:
-            max_tokens = self._get_max_tokens(graph_key)
-            runner = CUDASingleGraphRunner(self.model,
-                                           max_batches=max_batches,
-                                           max_tokens=max_tokens,
-                                           num_blocks=self.num_blocks,
-                                           is_decoding=is_decoding,
-                                           pool=self.graph_pool_handle,
-                                           model_config=self.model_config,
-                                           device=self.device)
+            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
+            runner = CUDASingleGraphRunner(
+                self.model,
+                max_batches=max_batches,
+                max_tokens=max_tokens,
+                num_blocks=self.num_blocks,
+                is_decoding=is_decoding,
+                pool=self.graph_pool_handle,
+                model_config=self.model_config,
+                device=self.device,
+                decode_query_len=decode_query_len,
+            )
             runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
         else:

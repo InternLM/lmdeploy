@@ -291,10 +291,11 @@ class FlashMLAImpl(TritonAttentionImpl):
         kv_seqlens = attn_metadata.kv_seqlens
         kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
+        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        batch_size = q_seqlens.size(0)
         if attn_metadata.is_decoding:
-            max_q_seqlen = 1
-        else:
-            max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+            max_q_seqlen = max_q_seqlen // batch_size
+
         fill_max_q_seqlen = max_q_seqlen
         if attn_metadata.fill_seqlens is not None:
             fill_seqlens = attn_metadata.fill_seqlens
@@ -323,7 +324,7 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         is_decoding = attn_metadata.is_decoding
         if is_decoding:
-            query = query.unsqueeze(1)
+            query = query.unflatten(0, (batch_size, max_q_seqlen))
             if kv_seqlens.dtype == torch.int64:
                 kv_seqlens = kv_seqlens.to(torch.int32)
             attn_output = self.flash_mla_fwd(query,
@@ -421,8 +422,9 @@ class FA3Impl(TritonAttentionImpl):
             causal=causal,
             **kwargs,
         )
-        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
+        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func, flash_attn_with_kvcache
         self.flash_attn_varlen_func_v3 = flash_attn_varlen_func
+        self.flash_attn_with_kvcache_v3 = flash_attn_with_kvcache
 
     def forward(
         self,
@@ -447,10 +449,12 @@ class FA3Impl(TritonAttentionImpl):
         kv_seqlens = attn_metadata.kv_seqlens
         kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
+        batch_size = q_seqlens.size(0)
+
+        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         if attn_metadata.is_decoding:
-            max_q_seqlen = 1
-        else:
-            max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+            max_q_seqlen = max_q_seqlen // batch_size
+
         fill_max_q_seqlen = max_q_seqlen
         if attn_metadata.fill_seqlens is not None:
             fill_seqlens = attn_metadata.fill_seqlens
@@ -473,12 +477,28 @@ class FA3Impl(TritonAttentionImpl):
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
             )
-
-        q_shape = query.shape
-        o_shape = q_shape[:-1] + (self.v_head_size, )
-        attn_output = query.new_empty(o_shape)
-
+        # sliding_window = (-1, -1) if self.sliding_window is None else self.sliding_window
+        # if isinstance(sliding_window, int):
+        #     sliding_window = (sliding_window, sliding_window)
+        # attn_output = self.flash_attn_with_kvcache_v3(
+        #     query,
+        #     k_cache,
+        #     v_cache,
+        #     cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
+        #     cu_seqlens_q=attn_metadata.cu_seqlens_q,
+        #     cu_seqlens_k_new=attn_metadata.cu_seqlens_k,
+        #     max_seqlen_q=max_q_seqlen,
+        #     page_table=block_offsets,
+        #     softmax_scale=self.scale,
+        #     causal=self.causal,
+        #     window_size=sliding_window,
+        #     softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
+        # )
+        # return attn_output
         if is_decoding:
+            q_shape = query.shape
+            o_shape = q_shape[:-1] + (self.v_head_size, )
+            attn_output = query.new_empty(o_shape)
             self.paged_attention_fwd(
                 query,
                 k_cache,
@@ -494,6 +514,24 @@ class FA3Impl(TritonAttentionImpl):
                 logit_softcapping=self.logit_softcapping,
             )
         else:
+            # sliding_window = (-1, -1) if self.sliding_window is None else self.sliding_window
+            # if isinstance(sliding_window, int):
+            #     sliding_window = (sliding_window, sliding_window)
+            # attn_output = self.flash_attn_with_kvcache_v3(
+            #     query,
+            #     k_cache,
+            #     v_cache,
+            #     cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
+            #     cu_seqlens_q=attn_metadata.cu_seqlens_q,
+            #     cu_seqlens_k_new=attn_metadata.cu_seqlens_k,
+            #     max_seqlen_q=max_q_seqlen,
+            #     page_table=block_offsets,
+            #     softmax_scale=self.scale,
+            #     causal=self.causal,
+            #     window_size=sliding_window,
+            #     softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
+            # )
+            # return attn_output
             flatten_k, flatten_v = self.flatten_kv_cache(
                 k_cache,
                 v_cache,
@@ -549,12 +587,13 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         logical_softcapping: float = None,
         causal: bool = True,
         use_flash_mla: bool = False,
+        use_flash_attn3: bool = False,
         learnable_sink: bool = False,
         block_sparse_size: int = 1,
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
-        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size)
+        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size) or use_flash_attn3
         if use_flash_mla is True:
             logger.debug('Build FlashMLAImpl Attention')
             return FlashMLAImpl(num_heads,
