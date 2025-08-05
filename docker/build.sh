@@ -21,26 +21,13 @@ pushd /opt >/dev/null
 popd >/dev/null
 
 export PATH=/opt/py3/bin:$PATH
-
-if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
-    NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70 -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_120,code=sm_120 -gencode=arch=compute_120,code=compute_120"
-else
-    NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70 -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_90,code=compute_90"
-fi
-
-pushd /tmp >/dev/null
-    git clone --depth=1 --branch ${NCCL_BRANCH} https://github.com/NVIDIA/nccl.git
-    pushd nccl >/dev/null
-        make NVCC_GENCODE="$NVCC_GENCODE" -j$(nproc) src.build
-        mv build/include/* /usr/local/include
-        mkdir -p /usr/local/nccl/lib
-        mv build/lib/lib* /usr/local/nccl/lib/
-    popd >/dev/null
-popd >/dev/null
-rm -rf /tmp/nccl
-
-export LD_LIBRARY_PATH=/usr/local/nccl/lib:$LD_LIBRARY_PATH
-mkdir -p /wheels /usr/local/include /usr/local/nccl/lib
+mkdir -p /wheels
 
 pip install --upgrade pip build
+if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+    pip install nvidia-nccl-cu12
+else
+    pip install nvidia-nccl-cu11
+fi
+
 python3 -m build -w -o /wheels -v .

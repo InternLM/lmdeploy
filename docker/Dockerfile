@@ -14,7 +14,6 @@ ENV CUDA_VERSION_SHORT=cu118
 # Builder image
 FROM ${CUDA_VERSION} AS builder
 ARG PYTHON_VERSION=3.10
-ARG NCCL_BRANCH=v2.26.6-1
 
 # Should be in the lmdeploy root directory when building docker image
 COPY . /opt/lmdeploy
@@ -41,9 +40,6 @@ COPY docker/install.sh /tmp/install.sh
 
 RUN --mount=type=cache,target=/root/.cache /tmp/install.sh
 
-RUN rm -rf /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl
-COPY --from=builder /usr/local/include /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl/include
-COPY --from=builder /usr/local/nccl/lib /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl/lib
 COPY --from=builder /usr/local/gdrcopy /usr/local/gdrcopy
 
 # explicitly set ptxas path for triton
