@@ -88,9 +88,11 @@ def rms_norm(hidden_states: Tensor,
 
     props = get_device_props(hidden_states.device.index)
     num_sm = props['multi_processor_count']
-    warps_per_sm = props['warps_per_sm'] // 2
+    warps_per_sm = props['warps_per_sm']
+    blocks_per_sm = props['blocks_per_sm']
     num_warps = min(triton.cdiv(BLOCK_N, 128), 4)
-    cta_per_device = num_sm * warps_per_sm // num_warps
+    cta_per_sm = min(blocks_per_sm, warps_per_sm // num_warps)
+    cta_per_device = num_sm * cta_per_sm
     num_stages = min(5, triton.cdiv(seq_len, cta_per_device))
 
     if out is None:
