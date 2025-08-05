@@ -102,7 +102,7 @@ class PrometheusStatLogger(StatLoggerBase):
         labelvalues = [model_name, str(dp_rank)]
 
         #
-        # Scheduler state
+        # Scheduler stats
         #
         self.gauge_scheduler_finished = prometheus_client.Gauge(name='lmdeploy:num_requests_finished',
                                                                 documentation='Number of current finished requests.',
@@ -203,6 +203,16 @@ class PrometheusStatLogger(StatLoggerBase):
                 ],
                 labelnames=labelnames).labels(*labelvalues)
 
+        self.histogram_iter_token_latency = \
+            prometheus_client.Histogram(
+                name='lmdeploy:iter_token_latency',
+                documentation='Histogram of inter-token latency',
+                buckets=[
+                    0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
+                    0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0, 40.0, 80.0
+                ],
+                labelnames=labelnames).labels(*labelvalues)
+
         request_latency_buckets = [
             0.3, 0.5, 0.8, 1.0, 1.5, 2.0, 2.5, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0, 120.0, 240.0, 480.0,
             960.0, 1920.0, 7680.0
@@ -258,6 +268,9 @@ class PrometheusStatLogger(StatLoggerBase):
 
         if stats.tpot:
             self.histogram_time_per_output_token.observe(stats.tpot)
+
+        if stats.itl:
+            self.histogram_iter_token_latency.observe(stats.itl)
 
     def record_finish(self, stats: FinishedRequestStats) -> None:
         self.counter_request_success[stats.finish_reason].inc()

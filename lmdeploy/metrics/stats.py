@@ -172,6 +172,8 @@ class IterationStats:
         self.ttft: Optional[float] = None
         # Time per Output Token (TPOT), initialized as None and will be updated later
         self.tpot: Optional[float] = None
+        # Iter-Token Latency, initialized as None and will be updated later
+        self.itl: Optional[float] = None
 
     def __repr__(self):
         """Return a human-readable string representation."""
@@ -181,6 +183,7 @@ class IterationStats:
                 f'  prompt_tokens={self.prompt_tokens},\n'
                 f'  ttft={self.ttft},\n'
                 f'  tpot={self.tpot},\n'
+                f'  itl={self.itl},\n'
                 ')')
 
     def _time_since(self, start: float) -> float:
@@ -202,7 +205,8 @@ class IterationStats:
             self.prompt_tokens = req_state.prompt_tokens
             self.ttft = self._time_since(req_state.arrival_time)
         else:
-            self.tpot = self._time_since(req_state.lastest_token_time)
+            self.itl = self._time_since(req_state.lastest_token_time)
+            self.tpot = self._time_since(req_state.lastest_token_time) / self.new_generation_tokens
         # update the latest token generation time
         req_state.lastest_token_time = outputs.req_metrics.token_timestamp
         # update the number of generated tokens
