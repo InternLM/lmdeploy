@@ -1,8 +1,8 @@
 #pragma once
 
-#include <ostream>
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
+#include <ostream>
 
 namespace turbomind {
 
