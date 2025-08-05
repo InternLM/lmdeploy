@@ -30,21 +30,19 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
         DEEP_GEMM_VERSION=1876566
     fi
 
-    if [[ ${PYTHON_VERSION} != "3.9" ]]; then
-        GDRCOPY_VERSION=2.4.4
-        DEEP_EP_VERSION=bdd119f
-        pip install nvidia-nvshmem-cu12
+    GDRCOPY_VERSION=2.4.4
+    DEEP_EP_VERSION=26cf250
+    pip install nvidia-nvshmem-cu12
 
-        pushd /tmp >/dev/null
-            curl -sSL "https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v${GDRCOPY_VERSION}.tar.gz" | tar xz
-            pushd gdrcopy-${GDRCOPY_VERSION} >/dev/null
-                make prefix=/usr/local/gdrcopy -j $(nproc) install
-            popd >/dev/null
-            rm -rf gdrcopy-${GDRCOPY_VERSION}
+    pushd /tmp >/dev/null
+        curl -sSL "https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v${GDRCOPY_VERSION}.tar.gz" | tar xz
+        pushd gdrcopy-${GDRCOPY_VERSION} >/dev/null
+            make prefix=/usr/local/gdrcopy -j $(nproc) install
         popd >/dev/null
+        rm -rf gdrcopy-${GDRCOPY_VERSION}
+    popd >/dev/null
 
-        pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
-    fi
+    pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepGEMM.git@${DEEP_GEMM_VERSION}"
 fi
