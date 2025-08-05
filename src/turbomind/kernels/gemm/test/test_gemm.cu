@@ -15,6 +15,7 @@ int main()
     core::ContextGuard ctx{stream, core::Allocator{kCPU}, core::Allocator{stream, false}};
 
     auto test = gemm::get_test(gemm::TestPreset::kANY_e4m3_e4m3_bf16_TNN);
+    // auto test = gemm::get_test(gemm::TestPreset::kANY_bf16_bf16_bf16_TNN);
 
     // test->Initialize(128, 128, 256, 0, 1, core::Context::stream().handle());
 
@@ -58,13 +59,13 @@ int main()
     test->Ref(0);  // c   <- a   * b
     test->Ref(1);  // c_f <- a_f * b_f
 
-    // cudaProfilerStart();
     test->Run();  // c[2] <- a_q * b_q
-    // cudaProfilerStop();
 
     FC_Header();
-    FC_Print(test->Compare(1, 0));
 
+    // FC_Print(test->Compare(2, 0));
+
+    FC_Print(test->Compare(1, 0));
     FC_Print(test->Compare(2, 0));
     FC_Print(test->Compare(2, 1));
 

@@ -283,7 +283,7 @@ Tensor LlamaV2::postDecodeEmbedding(const Tensor& features, Buffer local_logits)
 
     if (tp_size_ == 1) {
         Tensor logits{local_logits, {bsz, (int)vocab_size_padded_}};
-        linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, logits);
+        linear_.Forward(features, weights_->post_decoder_embedding, logits);
         sync_check_cuda_error();
 
         TM_DEBUG_TENSOR(logits, "logits", 1);
@@ -292,7 +292,7 @@ Tensor LlamaV2::postDecodeEmbedding(const Tensor& features, Buffer local_logits)
     else if (use_allgather_2d_) {
         Tensor logits{local_logits, {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(1));
+        linear_.Forward(features, weights_->post_decoder_embedding, local.squeeze(1));
         sync_check_cuda_error();
         comm_->d_comm->AllGather2D(local.raw_data(),
                                    logits.raw_data(),
@@ -310,7 +310,7 @@ Tensor LlamaV2::postDecodeEmbedding(const Tensor& features, Buffer local_logits)
     else {
         Tensor logits{local_logits, {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(0));
+        linear_.Forward(features, weights_->post_decoder_embedding, local.squeeze(0));
         sync_check_cuda_error();
         comm_->d_comm->AllGather(
             local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_->d_tp_group, stream_);

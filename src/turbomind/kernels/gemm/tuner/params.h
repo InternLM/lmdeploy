@@ -16,7 +16,7 @@ struct TuningParams {
     // Swizzling params
     std::vector<int> swizzle{0, 3};
 
-    // Sampling params
+    // Sampling params for hierarchical kernel selection
     float top_k    = 0;
     int   clusters = 5;
     int   min_iter = 1;

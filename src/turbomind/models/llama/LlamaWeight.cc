@@ -148,6 +148,8 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
 
     auto stream = core::Context::stream().handle();
 
+    post_decoder_embedding.prepare(false, false);
+
     for (auto& layer : decoder_layer_weights) {
         layer->prepare(prop, stream);
     }

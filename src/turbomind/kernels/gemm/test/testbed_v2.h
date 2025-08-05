@@ -166,6 +166,8 @@ public:
                 std::cout << "a_s " << a_s_ << "\n";
                 std::cout << "a_f " << a_f_ << "\n";
             }
+
+            quant_a_ = {QuantType::kB, 128};
         }
 
         if (Tb == kFloat8_e4m3) {  // b is k-major & b_s is n-major
@@ -180,6 +182,8 @@ public:
                 std::cout << "b_s " << b_s_ << "\n";
                 std::cout << "b_f " << b_f_ << "\n";
             }
+
+            quant_b_ = {QuantType::kK, 128};
         }
 
         if (expert_num) {
@@ -323,9 +327,9 @@ public:
     {
         const Operation operation{get_dispatch_policy(),  //
                                   Epilogue::kNone,
-                                  {QuantType::kDefault, 128},
-                                  {QuantType::kDefault, 128},
-                                  0};
+                                  quant_a_,
+                                  quant_b_,
+                                  1};
 
         auto C = &c_x_;
         auto V = &b_s_;
@@ -492,6 +496,9 @@ private:
     int expert_num_;
     int e_;
 
+    QuantDesc quant_a_{};
+    QuantDesc quant_b_{};
+
     Buffer_<int>   m_offset_;
     Buffer_<int>   n_offset_;
     Buffer_<int>   f2n_;   // for `dispatch`
@@ -544,8 +551,7 @@ private:
     Reference reference_;
 };
 
-enum class TestPreset : int
-{
+enum class TestPreset : int {
     kANY_bf16_bf16_bf16_TNN,
     kANY_e4m3_e4m3_bf16_TNN,
 };

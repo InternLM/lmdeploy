@@ -2,9 +2,11 @@
 
 #pragma once
 
+#include <array>
+#include <tuple>
+
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include <array>
 
 namespace turbomind::gemm {
 
@@ -47,11 +49,37 @@ inline GemmDesc transpose(GemmDesc d)
     std::swap(d.pack_u, d.pack_v);
     std::swap(d.quant_a, d.quant_b);
     std::swap(d.m, d.n);
+    d.batch_dim = 1 - d.batch_dim;
     return d;
 }
 
-enum class OpClass
+inline std::string to_string(const GemmDesc& d)
 {
+    std::stringstream ss;
+    ss << "sm" << d.arch / 10;
+    ss << "_" << to_string(d.type_a);  //
+    if (d.quant_a) {
+        ss << to_string(d.quant_a);
+    }
+    ss << "_" << to_string(d.type_b);  //
+    if (d.quant_b) {
+        ss << to_string(d.quant_b);
+    }
+    ss << "_" << to_string(d.type_c);
+    ss << "_"                                    //
+       << (d.order_a == kColMajor ? 'n' : 't')   //
+       << (d.order_b == kColMajor ? 'n' : 't')   //
+       << (d.order_c == kColMajor ? 'n' : 't');  //
+    ss << "_"                                    //
+       << to_string(d.striding_a)                //
+       << to_string(d.striding_b)                //
+       << to_string(d.striding_c);
+    ss << "_" << d.m << "x" << d.n << "x" << d.k;
+    ss << "_" << d.num;
+    return ss.str();
+}
+
+enum class OpClass {
     kSIMT,
     kMMA_s884,
     kMMA_s16816,
@@ -101,11 +129,52 @@ struct KernelDesc {
     int       stages;
     bool      split_k;
     int       sched;
+    int       backend;
+    bool      transpose;
 
     // set by `KernelImpl`
     int                max_active_ctas;
     cudaFuncAttributes attr;
 };
+
+inline KernelDesc transpose(const KernelDesc& d)
+{
+    KernelDesc k{d};
+
+    k.arch     = d.arch;
+    k.op_class = d.op_class;
+
+    k.order_a = ~d.order_b;
+    k.order_b = ~d.order_a;
+    k.order_c = ~d.order_c;
+
+    k.type_a = d.type_b;
+    k.type_b = d.type_a;
+
+    k.striding_a = d.striding_b;
+    k.striding_b = d.striding_a;
+
+    k.pack_a = d.pack_b;
+    k.pack_b = d.pack_a;
+    k.pack_u = d.pack_v;
+    k.pack_v = d.pack_u;
+
+    k.quant_a = d.quant_b;
+    k.quant_b = d.quant_a;
+
+    k.policy_a = d.policy_b;
+    k.policy_b = d.policy_a;
+
+    auto swap = [](auto& v) { std::swap(v.x, v.y); };
+
+    swap(k.cta_tile);
+    swap(k.mma_tile);
+    swap(k.cluster_shape);
+    swap(k.align);
+    swap(k.c_tile);
+
+    return k;
+}
 
 class Kernel;
 struct LaunchSpec {

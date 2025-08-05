@@ -123,7 +123,7 @@ public:
                int                 swizzle,
                int                 splits,
                Workspace&          workspace,
-               cudaStream_t        stream) const override
+               cudaStream_t        stream) override
     {
         using Map = typename Gemm::CtaMap;
 
