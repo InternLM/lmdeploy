@@ -8,7 +8,7 @@ Currently, Turbomind support loading three types of model:
 
 1. A lmdeploy-quantized model hosted on huggingface.co, such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), [internlm-chat-20b-4bit](https://huggingface.co/internlm/internlm-chat-20b-4bit), etc.
 2. Other LM models on huggingface.co like Qwen/Qwen-7B-Chat
-3. A model converted by `lmdeploy convert`, legacy format
+
 
 ## Usage
 
@@ -50,22 +50,4 @@ lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
 lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
-```
-
-### 3) A model converted by `lmdeploy convert`
-
-The usage is like previous
-
-```
-# Convert a model
-lmdeploy convert $MODEL_NAME /path/to/model --dst-path ./workspace
-
-# Inference by TurboMind
-lmdeploy chat ./workspace --model-name $model_name
-
-# Serving with gradio
-lmdeploy serve gradio ./workspace
-
-# Serving with Restful API
-lmdeploy serve api_server ./workspace --tp 1
 ```
