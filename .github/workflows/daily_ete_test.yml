@@ -357,13 +357,13 @@ jobs:
       - name: Start restful api turbomind
         if: matrix.backend == 'turbomind'
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 > ${{env.REPORT_DIR}}/${{matrix.backend}}_start_chat_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 --backend pytorch > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 --backend pytorch > ${{env.REPORT_DIR}}/${{matrix.backend}}_start_chat_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api
@@ -378,13 +378,13 @@ jobs:
       - name: Start restful api turbomind - base
         if: matrix.backend == 'turbomind'
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 > ${{env.REPORT_DIR}}/${{matrix.backend}}_start_base_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
       - name: Start restful api pytorch - base
         if: matrix.backend == 'pytorch'
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 --backend pytorch > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 --backend pytorch > ${{env.REPORT_DIR}}/${{matrix.backend}}_start_base_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api - base
