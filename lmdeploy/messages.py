@@ -464,6 +464,8 @@ class EngineEvent:
 
     @classmethod
     def new_event(cls, event_type: EventType, timestamp: Optional[float] = None) -> 'EngineEvent':
+        # Timestamps MUST use wall-clock time (time.time()) to maintain consistency
+        # between csrc(std::chrono::system_clock) and python
         timestamp = time.time() if timestamp is None else timestamp
         return cls(event_type, timestamp)
 
@@ -482,7 +484,7 @@ class RequestMetrics:
     """Basic metrics for a request.
 
     Attributes:
-        token_timestamp: Timestamp when a token is generated.
+        token_timestamp: A wall-clock time when a token is generated.
         engine_events: List of engine events during inference.
     """
     token_timestamp: float = 0.0

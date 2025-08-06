@@ -1031,7 +1031,8 @@ class Engine:
                     session_id = msg.session_id
                     msg.resp.type = ResponseType.SUCCESS
                     token_ids = [msg.migration_request.remote_token_id]
-                    new_token_timestamp = time.perf_counter()
+                    # MUST be a wall-clock time
+                    new_token_timestamp = time.time()
                     req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
                     out = InferOutput(
                         session_id=session_id,
