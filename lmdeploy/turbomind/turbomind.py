@@ -386,7 +386,7 @@ class TurboMind:
 def _get_logits(outputs, offset: int):
     logits = outputs['logits']
 
-    def _func(out: EngineOutput, step: int):
+    def _func(out: EngineOutput, step: int, **kwargs):
         out.logits = logits[:step - offset - 1, :]
 
     return _func
@@ -395,7 +395,7 @@ def _get_logits(outputs, offset: int):
 def _get_last_hidden_state(outputs, offset: int):
     last_hidden_state = outputs['last_hidden_state']
 
-    def _func(out: EngineOutput, step: int):
+    def _func(out: EngineOutput, step: int, **kwargs):
         out.last_hidden_state = last_hidden_state[:step - offset - 1, :]
 
     return _func
@@ -435,7 +435,7 @@ def _get_logprobs(outputs, output_logprobs: int):
 
     logprobs = []
 
-    def _func(out: EngineOutput, step: int):
+    def _func(out: EngineOutput, step: int, **kwargs):
         _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs, logprobs)
         out.logprobs = logprobs
 
