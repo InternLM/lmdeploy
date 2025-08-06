@@ -140,6 +140,8 @@ struct LlamaFfnWeight: core::Module {
 
     int  inter_size{};
     bool is_fused_silu{};
+
+    int tp_rank{};
 };
 
 struct MoeFfnWeight: core::Module {

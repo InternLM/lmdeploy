@@ -296,6 +296,7 @@ LlamaFfnWeight::LlamaFfnWeight(int      hidden_dim,
     inter_size /= tp_size;
 
     this->inter_size = inter_size;
+    this->tp_rank    = tp_rank;
 
     gating.emplace(hidden_dim, inter_size, data_type, false, weight_type, group_size);
 
@@ -430,6 +431,7 @@ void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
                                   false,
                                   gating.weight_type,
                                   gating.group_size);
+        register_module("w1w3", fused_up_and_gate, this->tp_rank);
 
         if (is_fused_silu) {
             interleave(fused_up_and_gate, gating, intermediate, data_type, stream);

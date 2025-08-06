@@ -14,7 +14,7 @@ from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -142,6 +142,7 @@ class TurboMind:
 
         self.gpu_count = _engine_config.device_num
         self.devices = _engine_config.devices
+        self._engine_created = False
 
         self.tokenizer = tokenizer
 
@@ -184,6 +185,7 @@ class TurboMind:
             ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
             for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks):
                 pass
+        self._engine_created = True
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -276,6 +278,20 @@ class TurboMind:
         logger.warning(f'get {len(tm_params)} model params')
         return model_comm
 
+    def sleep(self, level: int = 1):
+        """Sleep the model."""
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            for _ in e.map(self.model_comm.sleep, range(self.gpu_count), [level] * self.gpu_count):
+                pass
+
+    def wakeup(self, tags: Optional[list[str]] = None):
+        """Wakeup the model."""
+        if tags is None:
+            tags = ['weights', 'kv_cache']
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count):
+                pass
+
     def update_params(self, request: UpdateParamsRequest):
         """Update params.
 
@@ -314,7 +330,8 @@ class TurboMind:
         if request.finished:
             self._check_unloaded_tm_params()
             self._process_weights()
-            self._create_engine()
+            if self._engine_created is False:
+                self._create_engine()
 
     @classmethod
     def from_pretrained(cls,
@@ -358,6 +375,7 @@ class TurboMind:
             del self._export_iter
         if self.model_comm is not None:
             self.model_comm = None
+        self._engine_created = False
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
