@@ -21,7 +21,7 @@ public:
     [[nodiscard]] const std::vector<Kernel*>& kernels() const
     {
         return ptrs_;
-    } 
+    }
 
 private:
     bool Add(std::unique_ptr<Kernel> kernel);
