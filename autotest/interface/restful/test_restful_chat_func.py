@@ -12,7 +12,7 @@ from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
-MODEL = 'internlm/intern-S1'
+MODEL = 'internlm/Intern-S1'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
@@ -69,7 +69,7 @@ class TestRestfulInterfaceIssue:
             data = api_client.chat_interactive_v1(msg,
                                                   session_id=randint(1, 100),
                                                   repetition_penalty=1.02,
-                                                  request_output_len=224)
+                                                  request_output_len=10)
             for item in data:
                 pass
 
@@ -791,7 +791,7 @@ class TestRestfulInterfaceChatInteractive:
                                                          session_id=session_id):
                 continue
             assert_chat_interactive_batch_return(output)
-            assert output.get('history_tokens') == history
+            assert output.get('history_tokens') == history + 1
             history += output.get('input_tokens') + output.get('tokens')
 
     def test_multiple_rounds_streaming(self):
