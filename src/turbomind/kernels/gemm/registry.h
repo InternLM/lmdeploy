@@ -11,6 +11,7 @@ class Registry {
 public:
     explicit Registry(std::shared_ptr<cudaDeviceProp> device_prop);
 
+    /// TODO: remove this
     template<class Config>
     [[maybe_unused]] bool Add()
     {
@@ -41,6 +42,8 @@ private:
     void sm90_s64n32_dynamic();
 
     void u4g128_f16_f16_nnn_sm80_s16816();
+
+    void cublas_float();
 
 private:
     std::shared_ptr<cudaDeviceProp>      device_prop_;

@@ -136,6 +136,10 @@ std::vector<Kernel*> StaticGemmContext::Filter(const std::vector<Kernel*>& kerne
 
 std::vector<LaunchSpec> StaticGemmContext::Populate(const Kernel& kernel, const PopulateParam& param) const
 {
+    if (kernel.desc().backend) {
+        return {LaunchSpec{const_cast<Kernel*>(&kernel), 0, 1}};
+    }
+
     const int m = desc_->m, n = desc_->n, k = desc_->k;
 
     const auto& desc = kernel.desc();

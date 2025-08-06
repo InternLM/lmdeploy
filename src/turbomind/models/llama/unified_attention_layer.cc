@@ -198,7 +198,7 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     if (weights.qkv.output_dim) {
         // [token_num, hidden_dim] -> [token_num, local_q_kv_head_num, head_dim]
-        qkv = linear_.forward(p.input, weights.qkv, LlamaLinear::kGemm);
+        qkv = linear_.Forward(p.input, weights.qkv);
         sync_check_cuda_error();
 
         if (model_param_.qk_norm) {
@@ -222,7 +222,7 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    (void)linear_.forward(attn, weights.output, LlamaLinear::kGemm, p.output);
+    (void)linear_.Forward(attn, weights.output, p.output);
     sync_check_cuda_error();
 }
 
@@ -389,28 +389,28 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     Tensor q;
 
     if (w.q_proj.weight) {
-        q = linear_.forward(hidden_state, w.q_proj);
+        q = linear_.Forward(hidden_state, w.q_proj);
         sync_check_cuda_error();
     }
     else {
-        Tensor q_a = linear_.forward(hidden_state, w.q_a_proj);
+        Tensor q_a = linear_.Forward(hidden_state, w.q_a_proj);
         sync_check_cuda_error();
 
         invokeRMSNorm(q_a, q_a, w.q_a_layernorm, model_param_.norm_eps, stream_);
         sync_check_cuda_error();
 
-        q = linear_.forward(q_a, w.q_b_proj);
+        q = linear_.Forward(q_a, w.q_b_proj);
         sync_check_cuda_error();
     }
 
-    Tensor kv_a_k_pe = linear_.forward(hidden_state, w.kv_a_proj);
+    Tensor kv_a_k_pe = linear_.Forward(hidden_state, w.kv_a_proj);
     sync_check_cuda_error();
 
     auto kv_a = kv_a_k_pe.slice({0, 0}, {-1, kv_lora_rank});
     invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm, model_param_.norm_eps, stream_);
     sync_check_cuda_error();
 
-    Tensor kv_b = linear_.forward(kv_a, w.kv_b_proj);
+    Tensor kv_b = linear_.Forward(kv_a, w.kv_b_proj);
     sync_check_cuda_error();
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;

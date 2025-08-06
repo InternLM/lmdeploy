@@ -78,12 +78,6 @@ public:
     static constexpr int TILE_K = Gemm::TILE_K;
 
     static constexpr auto is_grouped_gemm = Gemm::is_grouped_gemm;
-    // using Impl = typename Gemm::Impl;
-
-    // using OpA = typename Gemm::OperandA;
-    // using OpB = typename Gemm::OperandB;
-    // using OpU = typename Gemm::OperandU;
-    // using OpV = typename Gemm::OperandV;
 
     KernelImplSm90()
     {
@@ -95,9 +89,6 @@ public:
         desc_.type_b = data_type_v<typename Gemm::Tb>;
         desc_.type_c = data_type_v<typename Gemm::Tc>;
 
-        // using IterA = typename OpA::GmemIter;
-        // using IterB = typename OpB::GmemIter;
-
         desc_.striding_a = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // IterA::kMode;
         desc_.striding_b = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // IterB::kMode;
         desc_.striding_c = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // Gemm::Epilogue::kMode;
@@ -107,16 +98,8 @@ public:
         desc_.pack_u = {};  // OpU::kPack;
         desc_.pack_v = {};  // OpV::kPack;
 
-        // desc_.quant_a = QuantDesc{};
-        // desc_.quant_b = QuantDesc{};
-
-        // if constexpr (OpU::SmemLayout::kSize > 1) {
-        desc_.quant_a = QuantDesc{QuantType::kDefault, 128};
-        // }
-
-        // if constexpr (OpV::SmemLayout::kSize > 1) {
-        desc_.quant_b = QuantDesc{QuantType::kDefault, 128};
-        // }
+        desc_.quant_a = QuantDesc{QuantType::kK, 128};
+        desc_.quant_b = QuantDesc{QuantType::kB, 128};
 
         desc_.cta_tile = {TILE_M, TILE_N, TILE_K};
         desc_.mma_tile = {1, 1, 1};
@@ -178,7 +161,7 @@ public:
                int                 swizzle,
                int                 splits,
                Workspace&          workspace,
-               cudaStream_t        stream) const override
+               cudaStream_t        stream) override
     {
         using Sched = typename Gemm::Scheduler;
 
