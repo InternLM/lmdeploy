@@ -571,6 +571,20 @@ PYBIND11_MODULE(_turbomind, m)
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)
+        .def(
+            "sleep",
+            [](LlamaTritonModel* model, int deviceId, int level) { model->sleep(deviceId, level); },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "level"_a)
+        .def(
+            "wakeup",
+            [](LlamaTritonModel* model, int deviceId, const std::vector<std::string>& tags) {
+                model->wakeup(deviceId, tags);
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "tags"_a)
         .def("__str__", &LlamaTritonModel::toString)
         .def("__repr__", &LlamaTritonModel::toString)
         .def("get_tensor_para_size", &LlamaTritonModel::getTensorParaSize)

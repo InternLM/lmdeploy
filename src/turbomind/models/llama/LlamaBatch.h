@@ -120,6 +120,10 @@ public:
 
     ~LlamaBatch();
 
+    void InitializeBufferAndKVCache();
+
+    void FreeBufferAndKVCache();
+
     void Start();
 
     LlamaV2& model() noexcept

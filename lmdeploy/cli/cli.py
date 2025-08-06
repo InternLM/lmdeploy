@@ -15,49 +15,6 @@ class CLI(object):
     subparsers = parser.add_subparsers(title='Commands', description='lmdeploy has following commands:', dest='command')
 
     @staticmethod
-    def add_parser_convert():
-        """Add parser for convert command."""
-        parser = CLI.subparsers.add_parser('convert',
-                                           formatter_class=DefaultsAndTypesHelpFormatter,
-                                           description=CLI.convert.__doc__,
-                                           help=CLI.convert.__doc__)
-        # define arguments
-        parser.add_argument('model_name',
-                            type=str,
-                            help='deprecated and unused, '
-                            'it will be removed on 2024.12.31. It was originally used to '
-                            'specify the name of the built-in chat template, but now it '
-                            'is substituted with a clearer parameter `--chat-template`')
-        parser.add_argument('model_path', type=str, help='The directory path of the model')
-        ArgumentHelper.model_format(parser)
-        ArgumentHelper.tp(parser)
-        # other args
-        ArgumentHelper.revision(parser)
-        ArgumentHelper.download_dir(parser)
-        parser.add_argument('--tokenizer-path', type=str, default=None, help='The path of tokenizer model')
-        parser.add_argument('--dst-path', type=str, default='workspace', help='The destination path that saves outputs')
-        parser.add_argument('--group-size',
-                            type=int,
-                            default=0,
-                            help='A parameter used in awq to quantize fp16 weights '
-                            'to 4 bits')
-        parser.add_argument('--chat-template',
-                            type=str,
-                            default=None,
-                            help='the name of the built-in chat template, which can be '
-                            'overviewed by `lmdeploy list`')
-        parser.add_argument('--dtype',
-                            type=str,
-                            default='auto',
-                            choices=['auto', 'float16', 'bfloat16'],
-                            help='data type for model weights and activations. '
-                            'The "auto" option will use FP16 precision '
-                            'for FP32 and FP16 models, and BF16 precision '
-                            'for BF16 models. This option will be ignored if '
-                            'the model is a quantized model')
-        parser.set_defaults(run=CLI.convert)
-
-    @staticmethod
     def add_parser_list():
         """Add parser for list command."""
         parser = CLI.subparsers.add_parser('list',
@@ -134,13 +91,6 @@ class CLI(object):
                             help='The file path to save env info. Only '
                             'support file format in `json`, `yml`,'
                             ' `pkl`')
-
-    @staticmethod
-    def convert(args):
-        """Convert LLMs to turbomind format."""
-        from lmdeploy.turbomind.deploy.converter import main
-        kwargs = convert_args(args)
-        main(**kwargs)
 
     @staticmethod
     def list(args):
@@ -255,7 +205,6 @@ class CLI(object):
     @staticmethod
     def add_parsers():
         """Add all parsers."""
-        CLI.add_parser_convert()
         CLI.add_parser_list()
         CLI.add_parser_checkenv()
         CLI.add_parser_chat()
