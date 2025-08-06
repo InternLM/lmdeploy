@@ -9,7 +9,6 @@ Currently, Turbomind support loading three types of model:
 1. A lmdeploy-quantized model hosted on huggingface.co, such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), [internlm-chat-20b-4bit](https://huggingface.co/internlm/internlm-chat-20b-4bit), etc.
 2. Other LM models on huggingface.co like Qwen/Qwen-7B-Chat
 
-
 ## Usage
 
 ### 1) A lmdeploy-quantized model
