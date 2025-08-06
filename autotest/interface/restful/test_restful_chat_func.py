@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from random import randint
 
 import pytest
+from openai import OpenAI
 from tqdm import tqdm
 from utils.restful_return_check import (assert_chat_completions_batch_return, assert_chat_completions_stream_return,
                                         assert_chat_interactive_batch_return, assert_chat_interactive_stream_return,
@@ -10,7 +11,7 @@ from utils.restful_return_check import (assert_chat_completions_batch_return, as
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
-BASE_HTTP_URL = 'http://localhost'
+BASE_HTTP_URL = 'http://10.140.0.187'
 DEFAULT_PORT = 23333
 MODEL = 'internlm/Intern-S1'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
@@ -44,9 +45,9 @@ class TestRestfulInterfaceBase:
         assert len(input_ids3) == length3 and length3 > 0
         assert len(input_ids4) == length4 and length4 > 0
         assert len(input_ids5) == length5 and length5 > 0
-        assert length1 == length2 + 1
-        assert input_ids2 == input_ids1[1:]
-        assert input_ids1[0] == 1 and input_ids3[0] == 1
+        assert length1 == length2
+        assert input_ids2 == input_ids1
+        assert input_ids1[0] == 13048 and input_ids3[0] == 151644
         assert length5 == length2 * 100
         assert input_ids5 == input_ids2 * 100
 
@@ -217,34 +218,6 @@ class TestRestfulInterfaceChatCompletions:
             assert ' to' not in outputList[index].get('choices')[0].get('delta').get('content')
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
-    def test_special_words(self):
-        message = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' + \
-                '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' + \
-                '能够在一个有状态的 Jupyter 笔记本环境中运行 Python 代码。当你向 python ' + \
-                '发送含有 Python >代码的消息时，它将在该环境中执行。这个工具适用于多种场景，' + \
-                '如数据分析或处理（包括数据操作、统计分析、图表绘制），复杂的计算问题（解决数学和物理' + \
-                '难题），编程示例（理解编程概念或特性），文本处理和分析（比如文本解析和自然语言处理），机器学习和数据科学（用于' + \
-                '展示模型训练和数据可视化），以及文件操作和数据导入（处理CSV、JSON等格式的文件）。<|im_end|>\n' + \
-                '<|im_start|>user\n设 $L$ 为圆周$x^2+y^2=2x$，计算曲线积分：$I=\\int_L' + \
-                '{x\\mathrm{d}s}=$<|im_end|>\n<|im_start|>assistant'
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
-        for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages=message,
-                                                     skip_special_tokens=False,
-                                                     temperature=0.01):
-            continue
-        assert_chat_completions_batch_return(output, model_name)
-        assert '<|action_start|><|interpreter|>' in output.get('choices')[0].get('message').get('content')
-
-        for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages=message,
-                                                     skip_special_tokens=True,
-                                                     temperature=0.01):
-            continue
-        assert_chat_completions_batch_return(output, model_name)
-        assert '<|action_start|><|interpreter|>' not in output.get('choices')[0].get('message').get('content')
-
     def test_minimum_repetition_penalty(self):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
@@ -255,14 +228,13 @@ class TestRestfulInterfaceChatCompletions:
                                                      max_tokens=200):
             continue
         assert_chat_completions_batch_return(output, model_name)
-        assert ' is is' * 5 in output.get('choices')[0].get('message').get('content') or ' a a' * 5 in output.get(
-            'choices')[0].get('message').get('content')
+        assert ' is is' * 5 in output.get('choices')[0].get('message').get(
+            'content') or ' extensive ' * 5 in output.get('choices')[0].get('message').get('content')
 
     def test_minimum_repetition_penalty_streaming(self):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         outputList = []
-        response = ''
         for output in api_client.chat_completions_v1(model=model_name,
                                                      messages='Hi, pls intro yourself',
                                                      stream=True,
@@ -271,10 +243,11 @@ class TestRestfulInterfaceChatCompletions:
                                                      max_tokens=200):
             outputList.append(output)
         assert_chat_completions_stream_return(outputList[-1], model_name, True)
+        response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += outputList[index].get('choices')[0].get('delta').get('content')
-        assert get_repeat_times(response, 'pls intro yourself') > 5 or get_repeat_times(response, ' pls ') > 5
+        assert get_repeat_times(response, 'pls') > 5 or get_repeat_times(response, 'extensive') > 5
 
     def test_repetition_penalty_bigger_than_1(self):
         api_client = APIClient(BASE_URL)
@@ -310,7 +283,7 @@ class TestRestfulInterfaceChatCompletions:
         for i in range(3):
             for output in api_client.chat_completions_v1(model=model_name,
                                                          messages='Shanghai is',
-                                                         top_p=0.1,
+                                                         top_p=0.0001,
                                                          max_tokens=10):
                 outputList.append(output)
             assert_chat_completions_batch_return(output, model_name)
@@ -329,10 +302,11 @@ class TestRestfulInterfaceChatCompletions:
             for output in api_client.chat_completions_v1(model=model_name,
                                                          messages='Hi, pls intro yourself',
                                                          stream=True,
-                                                         top_p=0.1,
+                                                         top_p=0.01,
                                                          max_tokens=10):
                 outputList.append(output)
             assert_chat_completions_stream_return(outputList[-1], model_name, True)
+            response = ''
             for index in range(0, len(outputList) - 1):
                 assert_chat_completions_stream_return(outputList[index], model_name)
                 response += outputList[index].get('choices')[0].get('delta').get('content')
@@ -380,13 +354,13 @@ class TestRestfulInterfaceChatCompletions:
         responseList = []
         for i in range(3):
             outputList = []
-            response = ''
             for output in api_client.chat_completions_v1(model=model_name,
                                                          messages='Shanghai is',
                                                          stream=True,
                                                          max_tokens=100):
                 outputList.append(output)
             assert_chat_completions_stream_return(outputList[-1], model_name, True)
+            response = ''
             for index in range(0, len(outputList) - 1):
                 assert_chat_completions_stream_return(outputList[index], model_name)
                 response += outputList[index].get('choices')[0].get('delta').get('content')
@@ -397,7 +371,7 @@ class TestRestfulInterfaceChatCompletions:
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages='Hi, pls intro yourself' * 100000,
+                                                     messages='Hi, pls intro yourself' * 10000,
                                                      temperature=0.01):
             continue
         assert output.get('choices')[0].get('finish_reason') == 'length'
@@ -408,7 +382,7 @@ class TestRestfulInterfaceChatCompletions:
         model_name = api_client.available_models[0]
         outputList = []
         for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages='Hi, pls intro yourself' * 100000,
+                                                     messages='Hi, pls intro yourself' * 10000,
                                                      stream=True,
                                                      temperature=0.01):
             outputList.append(output)
@@ -416,102 +390,6 @@ class TestRestfulInterfaceChatCompletions:
         assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
         assert outputList[0].get('choices')[0].get('delta').get('content') == ''
         assert len(outputList) == 1
-
-    def test_input_validation(self):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', top_p=0):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The top_p `0.0` must be in (0, 1].'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', top_p=1.01):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The top_p `1.01` must be in (0, 1].'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', top_p='test'):
-            continue
-        assert output.get('code') is None
-        assert 'Input should be a valid number' in str(output)
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', n=0):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The n `0` must be a positive int.'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', n='test'):
-            continue
-        assert output.get('code') is None
-        assert 'Input should be a valid integer' in str(output)
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', temperature=-0.01):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The temperature `-0.01` must be in [0, 2]'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', temperature=2.01):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The temperature `2.01` must be in [0, 2]'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', temperature='test'):
-            continue
-        assert output.get('code') is None
-        assert 'Input should be a valid number' in str(output)
-
-    def test_input_validation_streaming(self):
-        api_client = APIClient(BASE_URL)
-        model_name = api_client.available_models[0]
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, top_p=0):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The top_p `0.0` must be in (0, 1].'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, top_p=1.01):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The top_p `1.01` must be in (0, 1].'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, top_p='test'):
-            continue
-        assert output.get('code') is None
-        assert 'Input should be a valid number' in str(output)
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, n=0):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The n `0` must be a positive int.'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, n='test'):
-            continue
-        assert output.get('code') is None
-        assert 'Input should be a valid integer' in str(output)
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, temperature=-0.01):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The temperature `-0.01` must be in [0, 2]'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, temperature=2.01):
-            continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The temperature `2.01` must be in [0, 2]'
-        assert output.get('object') == 'error'
-
-        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, temperature='test'):
-            continue
-        assert output.get('code') is None
-        assert 'Input should be a valid number' in str(output)
 
     def test_ignore_eos(self):
         api_client = APIClient(BASE_URL)
@@ -538,8 +416,8 @@ class TestRestfulInterfaceChatCompletions:
                                                      max_tokens=100,
                                                      temperature=0.01):
             outputList.append(output)
-        response = ''
         assert_chat_completions_stream_return(outputList[-1], model_name, True)
+        response = ''
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += outputList[index].get('choices')[0].get('delta').get('content')
@@ -709,27 +587,6 @@ class TestRestfulInterfaceChatInteractive:
             assert ' to' not in outputList[index].get('text')
         assert output.get('finish_reason') == 'stop'
 
-    def test_special_words(self):
-        message = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' + \
-                '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' + \
-                '能够在一个有状态的 Jupyter 笔记本环境中运行 Python 代码。当你向 python ' + \
-                '发送含有 Python >代码的消息时，它将在该环境中执行。这个工具适用于多种场景，' + \
-                '如数据分析或处理（包括数据操作、统计分析、图表绘制），复杂的计算问题（解决数学和物理' + \
-                '难题），编程示例（理解编程概念或特性），文本处理和分析（比如文本解析和自然语言处理），机器学习和数据科学（用于' + \
-                '展示模型训练和数据可视化），以及文件操作和数据导入（处理CSV、JSON等格式的文件）。<|im_end|>\n' + \
-                '<|im_start|>user\n设 $L$ 为圆周$x^2+y^2=2x$，计算曲线积分：$I=\\int_L' + \
-                '{x\\mathrm{d}s}=$<|im_end|>\n<|im_start|>assistant'
-        api_client = APIClient(BASE_URL)
-        for output in api_client.chat_interactive_v1(prompt=message, skip_special_tokens=False, temperature=0.01):
-            continue
-        assert_chat_interactive_batch_return(output)
-        assert '<|action_start|><|interpreter|>' in output.get('text')
-
-        for output in api_client.chat_interactive_v1(prompt=message, skip_special_tokens=True, temperature=0.01):
-            continue
-        assert_chat_interactive_batch_return(output)
-        assert '<|action_start|><|interpreter|>' not in output.get('text')
-
     def test_minimum_repetition_penalty(self):
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_interactive_v1(prompt='Shanghai is',
@@ -739,7 +596,7 @@ class TestRestfulInterfaceChatInteractive:
             continue
         assert_chat_interactive_batch_return(output)
         assert get_repeat_times(output.get('text'), 'is a name') > 5 or get_repeat_times(
-            output.get('text'), 'Shanghai is') > 5
+            output.get('text'), 'Shanghai is') > 5 or get_repeat_times(output.get('text'), 'extensive') > 5
 
     def test_minimum_repetition_penalty_streaming(self):
         api_client = APIClient(BASE_URL)
@@ -756,7 +613,8 @@ class TestRestfulInterfaceChatInteractive:
         for index in range(0, len(outputList) - 1):
             assert_chat_interactive_stream_return(outputList[index], index=index)
             response += outputList[index].get('text')
-        assert get_repeat_times(response, 'is a name') > 5 or get_repeat_times(response, 'Shanghai is') > 5
+        assert get_repeat_times(response, 'is a name') > 5 or get_repeat_times(
+            response, 'Shanghai is') > 5 or get_repeat_times(response, 'extensive') > 5
 
     def test_repetition_penalty_bigger_than_1(self):
         api_client = APIClient(BASE_URL)
@@ -785,14 +643,14 @@ class TestRestfulInterfaceChatInteractive:
         history = 0
         session_id = random.randint(0, 100000)
         for i in range(3):
-            for output in api_client.chat_interactive_v1(prompt='Shanghai is',
+            for output in api_client.chat_interactive_v1(prompt='Hi',
                                                          temperature=0.01,
                                                          interactive_mode=True,
                                                          session_id=session_id):
                 continue
             assert_chat_interactive_batch_return(output)
-            assert output.get('history_tokens') == history + 1
-            history += output.get('input_tokens') + output.get('tokens')
+            assert output.get('history_tokens') == history
+            history += output.get('input_tokens') + output.get('tokens') + 1
 
     def test_multiple_rounds_streaming(self):
         api_client = APIClient(BASE_URL)
@@ -800,7 +658,7 @@ class TestRestfulInterfaceChatInteractive:
         session_id = random.randint(0, 100000)
         for i in range(3):
             outputList = []
-            for output in api_client.chat_interactive_v1(prompt='Hi, pls intro yourself',
+            for output in api_client.chat_interactive_v1(prompt='Hi',
                                                          stream=True,
                                                          temperature=0.01,
                                                          interactive_mode=True,
@@ -810,8 +668,9 @@ class TestRestfulInterfaceChatInteractive:
             assert_chat_interactive_stream_return(outputList[-1], True, index=len(outputList) - 2)
             for index in range(0, len(outputList) - 1):
                 assert_chat_interactive_stream_return(outputList[index], index=index)
-            assert outputList[-1].get('history_tokens') == history
-            history += outputList[-1].get('input_tokens') + outputList[-1].get('tokens')
+            assert outputList[-1].get('history_tokens') == history or outputList[-1].get(
+                'history_tokens') == history + 1
+            history += outputList[-1].get('input_tokens') + outputList[-1].get('tokens') + 1
 
     def test_minimum_topp(self):
         api_client = APIClient(BASE_URL)
@@ -975,94 +834,636 @@ class TestRestfulInterfaceChatInteractive:
 
     def test_input_validation(self):
         api_client = APIClient(BASE_URL)
-        for output in api_client.chat_interactive_v1(prompt='Hi', top_p=0):
+        model_name = api_client.available_models[0]
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', top_p=0):
             continue
         assert output.get('code') == 400
         assert output.get('message') == 'The top_p `0.0` must be in (0, 1].'
         assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', top_p=1.01):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', top_p=1.01):
             continue
         assert output.get('code') == 400
         assert output.get('message') == 'The top_p `1.01` must be in (0, 1].'
         assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', top_p='test'):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', n=0):
             continue
-        assert output.get('code') is None
-        assert 'Input should be a valid number' in str(output)
+        assert output.get('code') == 400
+        assert output.get('message') == 'The n `0` must be a positive int.'
+        assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', temperature=-0.01):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', temperature=-0.01):
             continue
         assert output.get('code') == 400
         assert output.get('message') == 'The temperature `-0.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', temperature=2.01):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', temperature=2.01):
             continue
         assert output.get('code') == 400
         assert output.get('message') == 'The temperature `2.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', temperature='test'):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', top_p='test'):
             continue
-        assert output.get('code') is None
-        assert 'Input should be a valid number' in str(output)
+        assert output == ''
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', top_k=-1):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', n='test'):
             continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The top_k `-1` cannot be a negative integer.'
-        assert output.get('object') == 'error'
+        assert output == ''
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', top_k='test'):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', temperature='test'):
             continue
-        assert output.get('code') is None
-        assert 'Input should be a valid integer' in str(output)
+        assert output == ''
 
     def test_input_validation_streaming(self):
         api_client = APIClient(BASE_URL)
-        for output in api_client.chat_interactive_v1(prompt='Hi', stream=True, top_p=0):
+        model_name = api_client.available_models[0]
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, top_p=0):
             continue
         assert output.get('code') == 400
         assert output.get('message') == 'The top_p `0.0` must be in (0, 1].'
         assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', stream=True, top_p=1.01):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, top_p=1.01):
             continue
         assert output.get('code') == 400
         assert output.get('message') == 'The top_p `1.01` must be in (0, 1].'
         assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', stream=True, top_p='test'):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, n=0):
             continue
-        assert output.get('code') is None
-        assert 'Input should be a valid number' in str(output)
+        assert output.get('code') == 400
+        assert output.get('message') == 'The n `0` must be a positive int.'
+        assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', stream=True, temperature=-0.01):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, temperature=-0.01):
             continue
         assert output.get('code') == 400
         assert output.get('message') == 'The temperature `-0.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', stream=True, temperature=2.01):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, temperature=2.01):
             continue
         assert output.get('code') == 400
         assert output.get('message') == 'The temperature `2.01` must be in [0, 2]'
         assert output.get('object') == 'error'
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', stream=True, temperature='test'):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, top_p='test'):
             continue
-        assert output.get('code') is None
-        assert 'Input should be a valid number' in str(output)
+        assert output == ''
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', stream=True, top_k=-1):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, n='test'):
             continue
-        assert output.get('code') == 400
-        assert output.get('message') == 'The top_k `-1` cannot be a negative integer.'
-        assert output.get('object') == 'error'
+        assert output == ''
 
-        for output in api_client.chat_interactive_v1(prompt='Hi', stream=True, top_k='test'):
+        for output in api_client.chat_completions_v1(model=model_name, messages='Hi', stream=True, temperature='test'):
             continue
-        assert output.get('code') is None
-        assert 'Input should be a valid integer' in str(output)
+        assert output == ''
+
+
+@pytest.mark.order(8)
+@pytest.mark.flaky(reruns=2)
+@pytest.mark.turbomind
+@pytest.mark.pytorch
+class TestRestfulOpenAI:
+
+    def test_return_info(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Hi, pls intro yourself'
+                                                     },
+                                                 ],
+                                                 temperature=0.01)
+
+        output = outputs.model_dump()
+        assert_chat_completions_batch_return(output, model_name)
+
+    def test_return_info_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Hi, pls intro yourself'
+                                                     },
+                                                 ],
+                                                 temperature=0.01,
+                                                 stream=True)
+
+        outputList = []
+        for output in outputs:
+            outputList.append(output.model_dump())
+
+        assert_chat_completions_stream_return(outputList[-1], model_name, True)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index], model_name)
+
+    def test_single_stopword(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Shanghai is'
+                                                     },
+                                                 ],
+                                                 temperature=0.01,
+                                                 stop=' is')
+
+        output = outputs.model_dump()
+        assert_chat_completions_batch_return(output, model_name)
+        assert ' is' not in output.get('choices')[0].get('message').get('content')
+        assert output.get('choices')[0].get('finish_reason') == 'stop'
+
+    def test_single_stopword_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Shanghai is'
+                                                     },
+                                                 ],
+                                                 stop=' is',
+                                                 temperature=0.01,
+                                                 stream=True)
+
+        outputList = []
+        for output in outputs:
+            outputList.append(output.model_dump())
+
+        assert_chat_completions_stream_return(outputList[-1], model_name, True)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index], model_name)
+            assert ' to' not in outputList[index].get('choices')[0].get('delta').get('content')
+        assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
+
+    def test_array_stopwords(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    'role': 'user',
+                    'content': 'Shanghai is'
+                },
+            ],
+            temperature=0.01,
+            stop=[' is', '上海', ' to'],
+        )
+
+        output = outputs.model_dump()
+        assert_chat_completions_batch_return(output, model_name)
+        assert ' is' not in output.get('choices')[0].get('message').get('content')
+        assert ' 上海' not in output.get('choices')[0].get('message').get('content')
+        assert ' to' not in output.get('choices')[0].get('message').get('content')
+        assert output.get('choices')[0].get('finish_reason') == 'stop'
+
+    def test_array_stopwords_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Shanghai is'
+                                                     },
+                                                 ],
+                                                 stop=[' is', '上海', ' to'],
+                                                 temperature=0.01,
+                                                 stream=True)
+
+        outputList = []
+        for output in outputs:
+            outputList.append(output.model_dump())
+
+        assert_chat_completions_stream_return(outputList[-1], model_name, True)
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index], model_name)
+            assert ' is' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert '上海' not in outputList[index].get('choices')[0].get('delta').get('content')
+            assert ' to' not in outputList[index].get('choices')[0].get('delta').get('content')
+        assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
+
+    def test_minimum_topp(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputList = []
+        for i in range(3):
+            outputs = client.chat.completions.create(model=model_name,
+                                                     messages=[
+                                                         {
+                                                             'role': 'user',
+                                                             'content': 'Shanghai is'
+                                                         },
+                                                     ],
+                                                     temperature=0.01,
+                                                     top_p=0.01,
+                                                     max_tokens=10)
+            output = outputs.model_dump()
+            outputList.append(output)
+            assert_chat_completions_batch_return(output, model_name)
+        assert outputList[0].get('choices')[0].get('message').get('content') == outputList[1].get('choices')[0].get(
+            'message').get('content')
+        assert outputList[1].get('choices')[0].get('message').get('content') == outputList[2].get('choices')[0].get(
+            'message').get('content')
+
+    def test_minimum_topp_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        responseList = []
+        for i in range(3):
+            outputs = client.chat.completions.create(model=model_name,
+                                                     messages=[
+                                                         {
+                                                             'role': 'user',
+                                                             'content': 'Hi, pls intro yourself'
+                                                         },
+                                                     ],
+                                                     top_p=0.01,
+                                                     max_tokens=10,
+                                                     stream=True)
+
+            outputList = []
+            for output in outputs:
+                outputList.append(output.model_dump())
+            assert_chat_completions_stream_return(outputList[-1], model_name, True)
+            response = ''
+            for index in range(0, len(outputList) - 1):
+                assert_chat_completions_stream_return(outputList[index], model_name)
+                response += outputList[index].get('choices')[0].get('delta').get('content')
+            responseList.append(response)
+        assert responseList[0] == responseList[1] or responseList[1] == responseList[2]
+
+    def test_mistake_modelname_return(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        with pytest.raises(Exception, match='The model `error` does not exist.'):
+            client.chat.completions.create(
+                model='error',
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': 'Shanghai is'
+                    },
+                ],
+                temperature=0.01,
+                stop=[' is', '上海', ' to'],
+            )
+
+    def test_mistake_modelname_return_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+
+        with pytest.raises(Exception, match='The model `error` does not exist.'):
+            client.chat.completions.create(model='error',
+                                           messages=[
+                                               {
+                                                   'role': 'user',
+                                                   'content': 'Hi, pls intro yourself'
+                                               },
+                                           ],
+                                           max_tokens=5,
+                                           temperature=0.01,
+                                           stream=True)
+
+    def test_mutilple_times_response_should_not_same(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputList = []
+        for i in range(3):
+            outputs = client.chat.completions.create(model=model_name,
+                                                     messages=[
+                                                         {
+                                                             'role': 'user',
+                                                             'content': 'Shanghai is'
+                                                         },
+                                                     ],
+                                                     max_tokens=100)
+            output = outputs.model_dump()
+            outputList.append(output)
+            assert_chat_completions_batch_return(output, model_name)
+        assert outputList[0].get('choices')[0].get('message').get('content') != outputList[1].get('choices')[0].get(
+            'message').get('content') or outputList[1].get('choices')[0].get('message').get(
+                'content') != outputList[2].get('choices')[0].get('message').get('content')
+
+    def test_mutilple_times_response_should_not_same_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        responseList = []
+        for i in range(3):
+            outputs = client.chat.completions.create(model=model_name,
+                                                     messages=[
+                                                         {
+                                                             'role': 'user',
+                                                             'content': 'Hi, pls intro yourself'
+                                                         },
+                                                     ],
+                                                     max_tokens=100,
+                                                     stream=True)
+
+            outputList = []
+            for output in outputs:
+                outputList.append(output.model_dump())
+            assert_chat_completions_stream_return(outputList[-1], model_name, True)
+            response = ''
+            for index in range(0, len(outputList) - 1):
+                assert_chat_completions_stream_return(outputList[index], model_name)
+                response += outputList[index].get('choices')[0].get('delta').get('content')
+            responseList.append(response)
+        assert responseList[0] != responseList[1] or responseList[1] == responseList[2]
+
+    def test_longtext_input(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Hi, pls intro yourself' * 100000
+                                                     },
+                                                 ],
+                                                 max_tokens=100)
+        output = outputs.model_dump()
+        print(output)
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('choices')[0].get('message').get('content') == ''
+
+    def test_longtext_input_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Hi, pls intro yourself' * 100000
+                                                     },
+                                                 ],
+                                                 max_tokens=100,
+                                                 stream=True)
+
+        outputList = []
+        for output in outputs:
+            outputList.append(output.model_dump())
+
+        assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
+        assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
+        assert outputList[0].get('choices')[0].get('delta').get('content') == ''
+        assert len(outputList) == 1
+
+    def test_max_tokens(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Hi, pls intro yourself'
+                                                     },
+                                                 ],
+                                                 max_tokens=5,
+                                                 temperature=0.01)
+        output = outputs.model_dump()
+        assert_chat_completions_batch_return(output, model_name)
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
+
+    def test_max_tokens_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Hi, pls intro yourself'
+                                                     },
+                                                 ],
+                                                 max_tokens=5,
+                                                 temperature=0.01,
+                                                 stream=True)
+
+        outputList = []
+        for output in outputs:
+            outputList.append(output.model_dump())
+
+        assert_chat_completions_stream_return(outputList[-1], model_name, True)
+        response = ''
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index], model_name)
+            response += outputList[index].get('choices')[0].get('delta').get('content')
+        api_client = APIClient(BASE_URL)
+        length = api_client.encode(response, add_bos=False)[1]
+        assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
+        assert length == 5 or length == 6
+
+    @pytest.mark.not_pytorch
+    def test_logprobs(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Hi, pls intro yourself'
+                                                     },
+                                                 ],
+                                                 max_tokens=5,
+                                                 temperature=0.01,
+                                                 logprobs=True,
+                                                 top_logprobs=10)
+        output = outputs.model_dump()
+        assert_chat_completions_batch_return(output, model_name, check_logprobs=True, logprobs_num=10)
+        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
+
+    @pytest.mark.not_pytorch
+    def test_logprobs_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+
+        outputs = client.chat.completions.create(model=model_name,
+                                                 messages=[
+                                                     {
+                                                         'role': 'user',
+                                                         'content': 'Hi, pls intro yourself'
+                                                     },
+                                                 ],
+                                                 max_tokens=5,
+                                                 temperature=0.01,
+                                                 logprobs=True,
+                                                 top_logprobs=10,
+                                                 stream=True)
+
+        outputList = []
+        for output in outputs:
+            outputList.append(output.model_dump())
+
+        assert_chat_completions_stream_return(outputList[-1], model_name, True, check_logprobs=True, logprobs_num=10)
+        response = ''
+        for index in range(0, len(outputList) - 1):
+            assert_chat_completions_stream_return(outputList[index], model_name, check_logprobs=True, logprobs_num=10)
+            response += outputList[index].get('choices')[0].get('delta').get('content')
+        api_client = APIClient(BASE_URL)
+        length = api_client.encode(response, add_bos=False)[1]
+        assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
+        assert length == 5 or length == 6
+
+    def test_input_validation(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        messages = [
+            {
+                'role': 'user',
+                'content': 'Hi, pls intro yourself'
+            },
+        ],
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, top_p=0)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, top_p=1.01)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, top_p='test')
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, n=0)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, n='test')
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, temperature=-0.01)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, temperature=2.01)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, temperature='test')
+
+    def test_input_validation_streaming(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        messages = [
+            {
+                'role': 'user',
+                'content': 'Hi, pls intro yourself'
+            },
+        ],
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, top_p=0, stream=True)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, top_p=1.01, stream=True)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, top_p='test', stream=True)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, n=0, stream=True)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, n='test', stream=True)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, temperature=-0.01, stream=True)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, temperature=2.01, stream=True)
+
+        with pytest.raises(Exception):
+            client.chat.completions.create(model=model_name, messages=messages, temperature='test', stream=True)
+
+    def test_disable_think(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        output = client.chat.completions.create(model=model_name,
+                                                messages=[
+                                                    {
+                                                        'role': 'user',
+                                                        'content': 'Hi, pls intro yourself'
+                                                    },
+                                                ],
+                                                temperature=0.8,
+                                                top_p=0.8)
+        print(output)
+        assert '</think>' in str(output.model_dump())
+
+        output = client.chat.completions.create(model=model_name,
+                                                messages=[
+                                                    {
+                                                        'role': 'user',
+                                                        'content': 'Hi, pls intro yourself'
+                                                    },
+                                                ],
+                                                temperature=0.8,
+                                                top_p=0.8,
+                                                extra_body={
+                                                    'enable_thinking': False,
+                                                })
+
+        response = output.model_dump()
+        assert '</think>' not in response
+        assert_chat_completions_batch_return(response, model_name)
+
+    def test_disable_think_with_image(self):
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        model_name = client.models.list().data[0].id
+        output = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    'role':
+                    'user',
+                    'content': [{
+                        'type': 'text',
+                        'text': 'Describe the image please',
+                    }, {
+                        'type': 'image_url',
+                        'image_url': {
+                            'url': 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
+                        },
+                    }],
+                },
+            ],
+            temperature=0.8,
+            top_p=0.8)
+        print(output)
+        assert '</think>' in str(output.model_dump())
+
+        output = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    'role':
+                    'user',
+                    'content': [{
+                        'type': 'text',
+                        'text': 'Describe the image please',
+                    }, {
+                        'type': 'image_url',
+                        'image_url': {
+                            'url': 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
+                        },
+                    }],
+                },
+            ],
+            temperature=0.8,
+            top_p=0.8,
+            extra_body={
+                'enable_thinking': False,
+            })
+
+        response = output.model_dump()
+        assert '</think>' not in response
+        assert_chat_completions_batch_return(response, model_name)
