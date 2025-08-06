@@ -198,7 +198,7 @@ class PrometheusStatLogger(StatLoggerBase):
                 name='lmdeploy:time_per_output_token_seconds',
                 documentation='Histogram of time per output token in seconds.',
                 buckets=[
-                    0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
+                    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
                     0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0, 40.0, 80.0
                 ],
                 labelnames=labelnames).labels(*labelvalues)
@@ -208,7 +208,7 @@ class PrometheusStatLogger(StatLoggerBase):
                 name='lmdeploy:iter_token_latency',
                 documentation='Histogram of inter-token latency',
                 buckets=[
-                    0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
+                    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
                     0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0, 40.0, 80.0
                 ],
                 labelnames=labelnames).labels(*labelvalues)

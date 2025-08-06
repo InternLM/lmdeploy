@@ -469,7 +469,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(lmdeploy:time_per_output_token_seconds_bucket_sum{model_name=\"$model_name\"}[$__rate_interval])\n/\nrate(lmdeploy:time_per_output_token_seconds_count{model_name=\"$model_name\"}[$__rate_interval])",
+          "expr": "rate(lmdeploy:time_per_output_token_seconds_sum{model_name=\"$model_name\"}[$__rate_interval])\n/\nrate(lmdeploy:time_per_output_token_seconds_count{model_name=\"$model_name\"}[$__rate_interval])",
           "hide": false,
           "instant": false,
           "legendFormat": "Mean",
@@ -635,7 +635,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(lmdeploy:iter_token_latency_bucket_sum{model_name=\"$model_name\"}[$__rate_interval])\n/\nrate(lmdeploy:iter_token_latency_count{model_name=\"$model_name\"}[$__rate_interval])",
+          "expr": "rate(lmdeploy:iter_token_latency_sum{model_name=\"$model_name\"}[$__rate_interval])\n/\nrate(lmdeploy:iter_token_latency_count{model_name=\"$model_name\"}[$__rate_interval])",
           "hide": false,
           "instant": false,
           "legendFormat": "Mean",
@@ -728,38 +728,6 @@
         }
       },
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "disableTextWrap": false,
-          "editorMode": "builder",
-          "expr": "lmdeploy:num_requests_finished{model_name=\"$model_name\"}",
-          "fullMetaSearch": false,
-          "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "Num Finished",
-          "range": true,
-          "refId": "A",
-          "useBackend": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "disableTextWrap": false,
-          "editorMode": "builder",
-          "expr": "lmdeploy:num_requests_unfinished{model_name=\"$model_name\"}",
-          "fullMetaSearch": false,
-          "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "Num Unfinished",
-          "range": true,
-          "refId": "B",
-          "useBackend": false
-        },
         {
           "datasource": {
             "type": "prometheus",
