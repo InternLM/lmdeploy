@@ -551,7 +551,8 @@ private:
     Reference reference_;
 };
 
-enum class TestPreset : int {
+enum class TestPreset : int
+{
     kANY_bf16_bf16_bf16_TNN,
     kANY_e4m3_e4m3_bf16_TNN,
 };

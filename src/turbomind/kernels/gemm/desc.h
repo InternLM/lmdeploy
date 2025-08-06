@@ -79,7 +79,8 @@ inline std::string to_string(const GemmDesc& d)
     return ss.str();
 }
 
-enum class OpClass {
+enum class OpClass
+{
     kSIMT,
     kMMA_s884,
     kMMA_s16816,

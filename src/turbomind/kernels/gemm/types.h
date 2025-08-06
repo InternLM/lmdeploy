@@ -131,6 +131,7 @@ enum class Epilogue : int
 struct QuantDesc {
     QuantType type;
     int       group_size;
+
     operator bool() const noexcept
     {
         return (int)type || group_size;
