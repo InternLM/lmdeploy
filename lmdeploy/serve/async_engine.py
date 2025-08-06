@@ -830,7 +830,7 @@ class AsyncEngine(LogitsMixin):
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
-                    yield GenOut(response='internal error happened',
+                    yield GenOut(response=f'internal error happened, status code {outputs.status}',
                                  history_token_len=self.id2step[session_id],
                                  input_token_len=len(input_ids),
                                  generate_token_len=0,

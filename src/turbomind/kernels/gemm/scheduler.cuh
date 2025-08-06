@@ -74,7 +74,7 @@ template<Order order,
          bool is_grouped_gemm>
 struct TileScheduler {
 
-    static constexpr bool is_dynamic = is_grouped_gemm;
+    static constexpr bool is_dynamic = 1;  // is_grouped_gemm;
     static constexpr int  Stages     = Stages_;
 
     static constexpr int2 tile_{tile_m, tile_n};
@@ -123,7 +123,6 @@ struct TileScheduler {
         int group_idx;
         int m0;
         int m1;
-        int m;
     };
 
     using Tile = std::conditional_t<is_grouped_gemm, Tile1, Tile0>;
@@ -152,7 +151,7 @@ struct TileScheduler {
 
     struct ProducerState {
         PipelineState  pipe;
-        int            group_idx;
+        int            group_id_offset;
         int            cluster_idx;
         Storage&       store;
         TileScheduler& sched;
@@ -252,14 +251,13 @@ public:
 
     TM_DEVICE ProducerState init_producer(Storage& store)
     {
-        int group_id   = -1;
         int cluster_id = 0;
         if constexpr (!is_dynamic) {
             cluster_id = (int)cute::cluster_id_in_grid().x;
         }
         return {
             PipelineState{0, 1, 0},
-            group_id,
+            0,
             cluster_id,
             store,
             *this,
@@ -322,36 +320,39 @@ public:
     }
 
     TM_DEVICE bool update_sync(int   cluster_idx,
+                               int&  group_id_offset,
                                int&  group_idx,
                                int&  group_beg,
                                int&  group_m0,
                                int&  group_m1,
-                               int&  group_m,
                                int2& tiled_shape,
                                int2& cluster_tiles,
                                int2& swizzled_tiles) const
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        uint32_t mask = 0;
-
-        for (int g = lane_id + group_idx; mask == 0; g += WARP_SIZE) {
-            int pred  = g < gemm_shape_.w && cluster_idx < get_start_index(g + 1);
-            mask      = __ballot_sync((uint32_t)-1, pred);
-            group_idx = g;
+        uint32_t mask;
+        while (true) {
+            int e    = group_id_offset + lane_id;
+            int pred = e > gemm_shape_.w || cluster_idx < get_start_index(e);
+            mask     = __ballot_sync((uint32_t)-1, pred);
+            if (mask) {
+                break;
+            }
+            group_id_offset += WARP_SIZE;
         }
 
-        // NOTE: __ffs = BREV + FLO, try __clz(int)
-        group_idx = __shfl_sync((uint32_t)-1, group_idx, __ffs(mask) - 1);
+        // 32 - clz(~mask) - 1
+        group_idx = group_id_offset + 31 - __clz(~mask);
 
         group_m0 = __ldg(&offsets_[group_idx]);
         group_m1 = __ldg(&offsets_[group_idx + 1]);
-        group_m  = group_m1 - group_m0;
+        int m    = group_m1 - group_m0;
 
         group_beg = get_start_index(group_idx);
 
-        tiled_shape.x   = cdiv(group_m, tile_.x);
-        cluster_tiles.x = cdiv(group_m, cluster_tile_.x);
+        tiled_shape.x   = cdiv(m, tile_.x);
+        cluster_tiles.x = cdiv(m, cluster_tile_.x);
 
         swizzled_tiles = get_swizzled_shape(cluster_tiles, log_tile_);
 
@@ -394,20 +395,20 @@ public:
         const int alive = cluster_idx < clusters_;
 
         if (alive) {
+            int  group_id      = 0;
             int  group_beg     = 0;
             int  group_m0      = 0;
             int  group_m1      = 0;
-            int  group_m       = 0;
             auto cta_tiles     = tiled_shape_;
             auto cluster_tiles = cluster_tiles_;
             auto swizzle_tiles = swizzled_cluster_tiles_;
             if constexpr (is_grouped_gemm) {
                 update_sync(cluster_idx,  //
-                            state.group_idx,
+                            state.group_id_offset,
+                            group_id,
                             group_beg,
                             group_m0,
                             group_m1,
-                            group_m,
                             cta_tiles,
                             cluster_tiles,
                             swizzle_tiles);
@@ -419,12 +420,10 @@ public:
                           cta_tiles,
                           cluster_tiles,
                           swizzle_tiles);
-                // tile->group_idx = state.group_idx;
                 if constexpr (is_grouped_gemm) {
-                    tile->group_idx = state.group_idx;
+                    tile->group_idx = group_id;
                     tile->m0        = group_m0;
                     tile->m1        = group_m1;
-                    tile->m         = group_m;
                 }
             }
         }
@@ -445,6 +444,16 @@ public:
         ++pipe;
 
         return alive;
+    }
+
+    TM_DEVICE void tail(ProducerState& state)
+    {
+        if constexpr (Cluster::size > 1) {
+            for (int i = 0; i < Stages; ++i) {
+                cutlass::arch::ClusterBarrier::wait(&state.store.consumer_bar[state.pipe.index()], state.pipe.phase());
+                ++state.pipe;
+            }
+        }
     }
 
     TM_DEVICE bool acquire(ConsumerState& state, Tile*& tile)

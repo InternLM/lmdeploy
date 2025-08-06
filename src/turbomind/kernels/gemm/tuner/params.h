@@ -14,7 +14,7 @@ struct TuningParams {
     int max_waves  = 10;
 
     // Swizzling params
-    std::vector<int> swizzle{3};
+    std::vector<int> swizzle{0, 3};
 
     // Sampling params
     float top_k    = 0;

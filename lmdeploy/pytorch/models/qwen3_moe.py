@@ -8,8 +8,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding,
-                                 build_rotary_params)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.eplb import EPLBManager
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
@@ -338,23 +337,7 @@ class Qwen3MoeModel(nn.Module):
 
     def _build_rotary_embedding(self, config: PretrainedConfig):
         """Build rotary embedding."""
-
-        emb_type = RopeType.LinearScaling
-        rope_dim = config.head_dim
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        rotary_params = dict(
-            dim=rope_dim,
-            max_position_embeddings=rope_max_pos_emb,
-            base=rope_base,
-            emb_type=emb_type,
-        )
-
-        update_params = build_rotary_params(config)
-        rotary_params.update(update_params)
-
-        # default implementation
-        return build_rotary_embedding(**rotary_params)
+        return build_rotary_embedding_from_config(config)
 
     def forward(
         self,

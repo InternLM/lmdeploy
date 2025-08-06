@@ -478,11 +478,12 @@ class Engine:
         window_size = self.cache_config.window_size
         if window_size > 0 and window_size <= max_tokens:
             max_tokens = (1 << 63) - 1
+        max_tokens -= self.cache_config.block_size
         if session_len is None:
             session_len = max_tokens
         else:
             session_len = min(max_tokens, session_len)
-        return session_len - self.cache_config.block_size
+        return session_len
 
     def _on_add_session(self, reqs: List[Request], **kwargs):
         """On add session callback."""
@@ -1189,7 +1190,7 @@ class Engine:
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
         except Exception as e:
-            logger.error(f'exception happened: {type(e)} {e}')
+            logger.exception(f'exception happened: {type(e)} {e}')
         finally:
             self._loop_finally()
 

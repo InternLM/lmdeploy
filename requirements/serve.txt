@@ -1,2 +1,3 @@
 gradio
+prometheus_client
 protobuf

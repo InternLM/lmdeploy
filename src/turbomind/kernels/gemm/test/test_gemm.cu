@@ -20,8 +20,8 @@ int main()
 
     // test->Initialize(1536 / 4, 8192 * 16, 2048, 0, 1, core::Context::stream().handle());
     // test->Initialize(2048, 8192 * 16, 1536 / 4, 0, 1, core::Context::stream().handle());
-    // test->Initialize(384, 128, 1024, core::Context::stream().handle());
-    test->Initialize(8192 * 4, 8192 * 4, 8192 * 4, 0, 1, core::Context::stream().handle());
+    // test->Initialize(128 * 1, 128 * 1, 1024, 1, 1, core::Context::stream().handle());
+    // test->Initialize(8192 * 4, 8192 * 4, 8192 * 4, 0, 1, core::Context::stream().handle());
     // test->Initialize(384, 128, 1024, 1, 1, core::Context::stream().handle());
     // test->Initialize(8192 * 2, 8192 * 2, 8192 * 2, 0, 1, core::Context::stream().handle());
     // test->Initialize(8192 * 4, 1, 8192 * 4, core::Context::stream().handle());p
@@ -38,16 +38,16 @@ int main()
     const int bs = 16384;
 
     // deepseek-v3
-    // test->Initialize(2048 / tp * 2, bs, 7168, 256, 8, core::Context::stream().handle());
+    test->Initialize(2048 / tp * 2, bs, 7168, 256, 8, core::Context::stream().handle());
     // test->Initialize(7168, bs, 2048 / tp, 256, 8, core::Context::stream().handle());
 
     // qwen3-30-a3
-    // test->Initialize(768 / tp, bs, 2048, 128, 8, core::Context::stream().handle());
+    // test->Initialize(768 / tp * 2, bs, 2048, 128, 8, core::Context::stream().handle());
     // test->Initialize(2048, bs, 768 / tp, 128, 8, core::Context::stream().handle());
 
     // qwen3-235-a22
-    // test->Initialize(1536 / tp, 16384, 4096, 128, 8, core::Context::stream().handle());
-    // test->Initialize(4096, 4096, 1536 / tp, 128, 8, core::Context::stream().handle());
+    // test->Initialize(1536 / tp, bs, 4096, 128, 8, core::Context::stream().handle());
+    // test->Initialize(4096, bs, 1536 / tp, 128, 8, core::Context::stream().handle());
 
     // test->Initialize(1536, 77, 4096, 8, 2, core::Context::stream().handle());
     // test->Initialize(1536, 256, 4096, 8, 2, core::Context::stream().handle());
