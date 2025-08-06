@@ -4,7 +4,7 @@ from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
-MODEL = 'internlm/internlm2_5-20b'
+MODEL = 'internlm/intern-S1'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 

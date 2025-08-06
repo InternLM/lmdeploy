@@ -143,6 +143,7 @@ jobs:
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/models:/mnt/models
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -227,6 +228,7 @@ jobs:
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/models:/mnt/models
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -325,6 +327,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/models:/mnt/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -354,13 +357,13 @@ jobs:
       - name: Start restful api turbomind
         if: matrix.backend == 'turbomind'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
       - name: Start restful api pytorch
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 --backend pytorch > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api
@@ -375,13 +378,13 @@ jobs:
       - name: Start restful api turbomind - base
         if: matrix.backend == 'turbomind'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 120s
       - name: Start restful api pytorch - base
         if: matrix.backend == 'pytorch'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 --backend pytorch > restful.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api - base
@@ -415,6 +418,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/models:/mnt/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -474,6 +478,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/models:/mnt/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -535,6 +540,7 @@ jobs:
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/models:/mnt/models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts

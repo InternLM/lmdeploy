@@ -216,18 +216,18 @@ def test_restful_chat_fallback_backend_tp1(config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('prepare_environment', [
     {
-        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
         'cuda_prefix': None,
         'tp_num': 2
     },
     {
-        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
         'cuda_prefix': None,
         'tp_num': 2,
         'extra': ' --communicator native'
     },
     {
-        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
         'cuda_prefix': None,
         'tp_num': 2,
         'extra': ' --quant-policy 8 --communicator native'
