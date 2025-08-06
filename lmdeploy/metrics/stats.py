@@ -69,9 +69,9 @@ class RequestState:
         self.lastest_token_time: float = 0.0
         # Time when a request finishes generation. It will be updated by IterationStats.update_from_output.
         self.finish_time: float = 0.0
-        self.finish_reason: 'ResponseType' = None
+        self.finish_reason: ResponseType = None
 
-    def update_from_events(self, engine_events: List['EngineEvent']):
+    def update_from_events(self, engine_events: List[EngineEvent]):
         # Avoid circular dependency
         from lmdeploy.messages import EventType
 
@@ -136,7 +136,7 @@ class RequestState:
 @dataclass
 class FinishedRequestStats:
     """Stats associated with a finished request."""
-    finish_reason: 'ResponseType'
+    finish_reason: ResponseType
     e2e_latency: float = 0.0
     prompt_tokens: int = 0
     generation_tokens: int = 0
@@ -190,7 +190,7 @@ class IterationStats:
         """Calculate an interval relative to this iteration's timestamp."""
         return self.iteration_timestamp - start
 
-    def update_from_output(self, outputs: 'EngineOutput', req_state: RequestState):
+    def update_from_output(self, outputs: EngineOutput, req_state: RequestState):
         """Update the iteration statistics based on the engine output and
         request state.
 
