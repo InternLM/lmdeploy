@@ -442,22 +442,18 @@ def _get_logprobs(outputs, output_logprobs: int):
     return _func
 
 
-def _get_metrics(outputs):
+def _get_metrics(metrics):
     import time
 
     from lmdeploy.messages import EngineEvent, EventType, RequestMetrics
 
-    metrics = outputs['metrics']
-    req_metrics_tensor = _tm.from_dlpack(metrics)
-
-    def _func(out: EngineOutput, step: int, prev_len: int = None, **kwargs):
-        if prev_len:
+    def _func(out: EngineOutput, step: int, is_first_token: bool = False, **kwargs):
+        if not is_first_token:
             out.req_metrics = RequestMetrics(token_timestamp=time.time())
         else:
-            req_metrics = _tm.RequestMetrics(req_metrics_tensor)
             events = [
-                EngineEvent(EventType.QUEUED, req_metrics.enque_time),
-                EngineEvent(EventType.SCHEDULED, req_metrics.scheduled_time),
+                EngineEvent(EventType.QUEUED, metrics.enque_time / 1000000),
+                EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
             ]
             out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)
 
@@ -522,7 +518,7 @@ class TurboMindInstance:
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
-                                     input_len: int):
+                                     input_len: int, metrics: '_tm.RequestMetrics'):
 
         def _get_offset(type):
             return input_len - 1 if type == 'generation' else 0
@@ -537,7 +533,7 @@ class TurboMindInstance:
         if gen_config.logprobs:
             fs.append(_get_logprobs(outputs, gen_config.logprobs))
         if self.tm_model.engine_config.enable_metrics:
-            fs.append(_get_metrics(outputs))
+            fs.append(_get_metrics(metrics))
         return fs
 
     def prepare_embeddings(self, input_embeddings=None, input_embedding_ranges=None):
@@ -679,12 +675,12 @@ class TurboMindInstance:
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)
 
-        outputs, shared_state = self.model_inst.forward(inputs, session, gen_cfg, stream_output,
-                                                        self.tm_model.engine_config.enable_metrics, signal_cb)
+        outputs, shared_state, metrics = self.model_inst.forward(inputs, session, gen_cfg, stream_output,
+                                                                 self.tm_model.engine_config.enable_metrics, signal_cb)
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
-        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len)
+        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len, metrics)
 
         output_ids_buf = outputs['output_ids']
 
@@ -717,7 +713,7 @@ class TurboMindInstance:
                 output = EngineOutput(status, output_ids, output_len)
 
                 for f in extra_fs:
-                    f(output, seq_len, prev_len=prev_len)
+                    f(output, seq_len, is_first_token=prev_len == step + input_len)
 
                 prev_len = seq_len
 

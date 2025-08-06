@@ -19,14 +19,14 @@ struct ScheduleMetrics {
 };
 
 struct RequestMetrics {
-    int64_t enque_time;      // when a request is enqued
-    int64_t scheduled_time;  // when a request is scheduled for inference
+    int64_t enque_time{};      // when a request is enqued
+    int64_t scheduled_time{};  // when a request is scheduled for inference
 
     static int64_t timestamp()
     {
-        // Get current timestamp in milliseconds and microseconds since Unix epoch
+        // Get current timestamp in microseconds since Unix epoch
         // system_clock uses wall-clock time (matches Python's time.time())
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
+        return std::chrono::duration_cast<std::chrono::microseconds>(
                    std::chrono::system_clock::now().time_since_epoch())
             .count();
     }
@@ -41,6 +41,15 @@ inline std::ostream& operator<<(std::ostream& os, const ScheduleMetrics& m)
     os << ", total_blocks=" << m.total_blocks;
     os << ", cached_blocks=" << m.cached_blocks;
     os << ", free_blocks=" << m.free_blocks;
+    os << " }";
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const RequestMetrics& m)
+{
+    os << "RequestMetrics { ";
+    os << "enque_time=" << m.enque_time;
+    os << ", scheduled_time=" << m.scheduled_time;
     os << " }";
     return os;
 }

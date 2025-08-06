@@ -292,16 +292,12 @@ struct ScopedGIL {
 
 PYBIND11_MODULE(_turbomind, m)
 {
-    py::class_<ft::RequestMetrics>(m, "RequestMetrics")
-        .def(py::init([](Tensor metrics_tensor) {
-                 ft::RequestMetrics* ptr = (ft::RequestMetrics*)metrics_tensor.data<int8_t>();
-                 return *ptr;
-             }),
-             "metrics_tensor"_a)
+    py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
+        .def(py::init())
         .def_readwrite("enque_time", &ft::RequestMetrics::enque_time)
         .def_readwrite("scheduled_time", &ft::RequestMetrics::scheduled_time);
 
-    py::class_<ft::ScheduleMetrics>(m, "ScheduleMetrics")
+    py::class_<ft::ScheduleMetrics, std::shared_ptr<ft::ScheduleMetrics>>(m, "ScheduleMetrics")
         .def(py::init())
         .def_readwrite("total_seqs", &ft::ScheduleMetrics::total_seqs)
         .def_readwrite("active_seqs", &ft::ScheduleMetrics::active_seqs)
@@ -469,7 +465,7 @@ PYBIND11_MODULE(_turbomind, m)
                         std::cerr << e.what() << std::endl;
                     }
                 });
-                return std::make_tuple(std::move(ret.tensors), std::move(ret.state));
+                return std::make_tuple(std::move(ret.tensors), std::move(ret.state), std::move(ret.metrics));
             },
             py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,

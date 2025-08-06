@@ -34,6 +34,7 @@ public:
     struct OutputParam {
         std::shared_ptr<TensorMap>          tensors;
         std::shared_ptr<AtomicRequestState> state;
+        std::shared_ptr<RequestMetrics>     metrics;
     };
 
     OutputParam Forward(InputParam param, std::function<void()> cb);

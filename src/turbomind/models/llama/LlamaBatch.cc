@@ -1871,8 +1871,11 @@ void LlamaBatch::UpdateMetrics()
         if (!state_->requests[i]) {
             continue;
         }
-        auto metrics_ptr            = (RequestMetrics*)state_->requests[i]->outputs["metrics"].data<int8_t>();
-        metrics_ptr->scheduled_time = RequestMetrics::timestamp();
+        auto& metrics = state_->requests[i]->metrics;
+        if (!metrics || metrics->scheduled_time != 0) {
+            continue;
+        }
+        metrics->scheduled_time = RequestMetrics::timestamp();
     }
 }
 

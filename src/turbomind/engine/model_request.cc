@@ -95,13 +95,6 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
         add(outputs_, "logprob_nums", data_type_v<int>, kCPU, max_out_len);
     }
 
-    if (param.enable_metrics) {
-        add(outputs_, "metrics", data_type_v<int8_t>, kCPU, (int)sizeof(RequestMetrics));
-        // record enque time
-        auto metric_ptr        = (RequestMetrics*)(*outputs_)["metrics"].data<int8_t>();
-        metric_ptr->enque_time = RequestMetrics::timestamp();
-    }
-
     auto r = std::make_shared<Request>();
 
     for (const auto& [k, v] : *inputs_) {
@@ -113,6 +106,12 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     auto state = std::make_shared<AtomicRequestState>();
 
+    auto metrics = param.enable_metrics ? std::make_shared<RequestMetrics>() : nullptr;
+    if (metrics) {
+        metrics->enque_time     = RequestMetrics::timestamp();
+        metrics->scheduled_time = 0;  // will be set later
+    }
+
     if (param.session.start_flag) {
         session_id_ = param.session.id;
     }
@@ -123,6 +122,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->stream_output = param.stream_output;
     r->forward_cb    = std::move(cb);
     r->state         = state;
+    r->metrics       = metrics;
 
     r->output_ids      = outputs_->at("output_ids");
     r->sequence_length = outputs_->at("sequence_length");
@@ -132,7 +132,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     gateway_->push({std::move(r)});
 
-    return OutputParam{outputs_, state};
+    return OutputParam{outputs_, state, metrics};
 }
 
 }  // namespace turbomind
