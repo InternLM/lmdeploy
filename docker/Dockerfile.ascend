@@ -1,0 +1,29 @@
+ARG CANN_TAG=8.1.RC1-python3.11-oe2403lts
+
+FROM openeuler/cann:${CANN_TAG} AS builder
+ARG PYTHON_VERSION=3.10
+
+RUN --mount=type=cache,target=/root/.cache \
+    pip install -v uv && \
+    uv venv -v -p python${PYTHON_VERSION} --seed /opt/py3
+
+ENV PATH=/opt/py3/bin:$PATH
+ENV LMDEPLOY_TARGET_DEVICE=ascend
+
+COPY . /opt/lmdeploy
+WORKDIR /opt/lmdeploy
+
+RUN --mount=type=cache,target=/root/.cache \
+    pip install --upgrade pip build && \
+    python -m build -w -o /wheels -v .
+
+FROM openeuler/cann:${CANN_TAG} AS final
+COPY --from=builder /root/.local /root/.local
+COPY --from=builder /opt/py3 /opt/py3
+ENV PATH=/opt/py3/bin:$PATH
+
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=cache,target=/wheels,from=builder,source=/wheels \
+    pip install /wheels/*.whl
+
+ENTRYPOINT []
