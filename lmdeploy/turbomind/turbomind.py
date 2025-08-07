@@ -493,6 +493,20 @@ class TurboMindInstance:
 
         self.config = config
         self.lock = None
+        # error code map from csrc (refer to `struct Request` in src/turbomind/engine/request.h)
+        # to lmdeploy.messages.ResponseType
+        self.errcode_map = {
+            0: ResponseType.SUCCESS,
+            1: ResponseType.SESSION_NOT_EXIST,
+            2: ResponseType.SESSION_REPEAT,
+            3: ResponseType.SESSION_REPEAT,
+            4: ResponseType.INTERNAL_ENGINE_ERROR,
+            5: ResponseType.INTERNAL_ENGINE_ERROR,
+            6: ResponseType.INPUT_LENGTH_ERROR,
+            7: ResponseType.FINISH,
+            8: ResponseType.FINISH,
+            -1: ResponseType.INTERNAL_ENGINE_ERROR,
+        }
 
     @property
     def model_inst(self):
@@ -685,7 +699,7 @@ class TurboMindInstance:
                     finish, status = True, 0
                 elif status:
                     logger.error(f'internal error. status_code {status}')
-                    yield self._get_error_output()
+                    yield self._get_error_output(status)
                     break
 
                 if seq_len == prev_len and not finish:
@@ -712,7 +726,7 @@ class TurboMindInstance:
         except Exception as e:
             logger.error(f'[async_stream_infer] {type(e).__name__} {e}')
             self.model_inst.cancel()
-            yield self._get_error_output()
+            yield self._get_error_output(-1)
         finally:
             # Contract: `cb` won't be called again if status is non-zero
             # wait for status to be set as `finish` or `error`
@@ -721,8 +735,8 @@ class TurboMindInstance:
                 state = shared_state.consume()
             logger.info(f'[async_stream_infer] session {session_id} done')
 
-    def _get_error_output(self):
-        return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR, token_ids=[], num_token=0)
+    def _get_error_output(self, status):
+        return EngineOutput(status=self.errcode_map[status], token_ids=[], num_token=0)
 
     def _get_generation_config(self, cfg: GenerationConfig):
         c = _tm.GenerationConfig()
