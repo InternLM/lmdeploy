@@ -360,7 +360,7 @@ class PytorchEngineConfig:
     enable_eplb: bool = False
     enable_mp_engine: bool = False
     model_format: str = None
-    enable_metrics: bool = True
+    enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
 
