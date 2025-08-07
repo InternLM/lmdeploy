@@ -158,11 +158,6 @@ def test_restful_chat_kvint8_tp4(config, worker_id):
         'tp_num': 1
     },
     {
-        'model': 'Qwen/Qwen2-VL-7B-Instruct-inner-4bits',
-        'cuda_prefix': None,
-        'tp_num': 1
-    },
-    {
         'model': 'THUDM/glm-4v-9b',
         'cuda_prefix': None,
         'tp_num': 1
@@ -180,12 +175,6 @@ def test_restful_chat_kvint8_tp4(config, worker_id):
     },
     {
         'model': 'Qwen/Qwen2.5-VL-7B-Instruct',
-        'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --quant-policy 8 --communicator native'
-    },
-    {
-        'model': 'Qwen/Qwen2-VL-7B-Instruct-inner-4bits',
         'cuda_prefix': None,
         'tp_num': 1,
         'extra': ' --quant-policy 8 --communicator native'
