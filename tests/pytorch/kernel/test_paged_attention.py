@@ -287,6 +287,9 @@ class TestPagedAttention:
                             kv_layout=layout)
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
 
+
+class TestPagedAttentionSink(TestPagedAttention):
+
     @pytest.fixture
     def sinks(self, num_heads_q, dtype):
         yield torch.rand(num_heads_q, dtype=dtype, device='cuda')
