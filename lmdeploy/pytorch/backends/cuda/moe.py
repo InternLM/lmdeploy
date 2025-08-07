@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -55,7 +55,10 @@ class TritonFusedMoEImpl(FusedMoEImpl):
                 topk_ids: torch.LongTensor,
                 gate_up_weights: torch.Tensor,
                 down_weights: torch.Tensor,
-                expert_list: List[int] = None):
+                gate_up_bias: torch.Tensor = None,
+                down_bias: torch.Tensor = None,
+                expert_list: List[int] = None,
+                act_func: Callable = None):
         """forward."""
         expert_offset = 0
         num_experts = None
@@ -68,9 +71,12 @@ class TritonFusedMoEImpl(FusedMoEImpl):
                          topk_weights=topk_weights,
                          topk_ids=topk_ids,
                          topk=self.top_k,
+                         w1_bias=gate_up_bias,
+                         w2_bias=down_bias,
                          expert_offset=expert_offset,
                          num_experts=num_experts,
-                         renormalize=self.renormalize)
+                         renormalize=self.renormalize,
+                         act_func=act_func)
 
 
 class TritonFusedMoEBuilder(FusedMoEBuilder):

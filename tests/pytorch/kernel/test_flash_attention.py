@@ -31,7 +31,7 @@ def _make_bias(q_seqlens, history_lens, neg_val, causal):
         return (~mask).float() * neg_val
 
 
-def _naive_attention(batched_q, batched_kv, bias):
+def _naive_attention(batched_q, batched_kv, bias, sinks=None):
     batched_k, batched_v = batched_kv
 
     num_heads_q = batched_q.shape[2]
@@ -49,7 +49,16 @@ def _naive_attention(batched_q, batched_kv, bias):
 
     qk = torch.matmul(q, k) / math.sqrt(head_dim)
     attn_weight = qk + bias[:, None]
-    attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
+    if sinks is None:
+        attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
+    else:
+        sinks = sinks[None, :, None, None].to(torch.float32)
+        sinks = sinks.expand(attn_weight.shape[0], -1, attn_weight.shape[2], -1)
+        attn_weight = attn_weight.to(torch.float32)
+        combined_logits = torch.cat([attn_weight, sinks], dim=-1)
+        combined_logits = combined_logits - combined_logits.max(dim=-1, keepdim=True).values
+        attn_weight = torch.softmax(combined_logits, dim=-1, dtype=torch.float32)
+        attn_weight = attn_weight[..., :-1]
     attn_weight = attn_weight.to(q.dtype)
     attn_output = torch.matmul(attn_weight, v)
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -236,3 +245,41 @@ class TestFlashAttention:
                             max_seqlen=max_seq_len,
                             window_size=win_size)
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
+
+    @pytest.fixture
+    def sinks(self, num_heads_q, dtype):
+        yield torch.rand(num_heads_q, dtype=dtype, device='cuda')
+
+    @pytest.fixture
+    def sink_gt(self, batched_q, batched_kv, mask, sinks):
+        yield _naive_attention(batched_q, batched_kv, mask, sinks)
+
+    @pytest.fixture
+    def conti_sink_gt(self, sink_gt, q_seqlens):
+        yield _conti_input(sink_gt, q_seqlens)
+
+    @pytest.mark.parametrize('head_dim_k', [32], indirect=True)
+    @pytest.mark.parametrize('head_dim_v', [32], indirect=True)
+    @pytest.mark.parametrize('num_heads_q', [8], indirect=True)
+    @pytest.mark.parametrize('num_heads_k', [2], indirect=True)
+    @pytest.mark.parametrize('causal', [True], indirect=True)
+    @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [([30, 50, 70, 90], [50, 40, 30, 20])], indirect=True)
+    def test_sinks(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens, head_dim_v, causal, sinks,
+                   conti_sink_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
+        max_seq_len = q_seqlens.max().item()
+
+        conti_k, conti_v = conti_kv
+        out = conti_q.new_empty(*conti_q.shape[:-1], head_dim_v)
+        flash_attention_fwd(conti_q,
+                            conti_k,
+                            conti_v,
+                            out,
+                            q_start_loc=q_start_loc,
+                            q_seqlens=q_seqlens,
+                            kv_start_loc=kv_start_loc,
+                            kv_seqlens=kv_seqlens,
+                            max_seqlen=max_seq_len,
+                            sinks=sinks,
+                            causal=causal)
+        torch.testing.assert_close(out, conti_sink_gt, atol=1e-3, rtol=1e-5)

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from collections import defaultdict
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 from torch import nn
@@ -63,24 +63,40 @@ class LinearWeights(nn.Module):
                  weight_type: str,
                  dtype: torch.dtype,
                  device: torch.device,
+                 bias: bool = False,
                  expert_list: List[int] = None,
                  ep: bool = False):
         super().__init__()
         weight = torch.empty((num_experts, out_features, in_features), dtype=dtype, device=device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
         self.register_parameter('weight', weight)
+
+        if bias:
+            bias = torch.empty((num_experts, out_features), dtype=dtype, device=device)
+            bias = torch.nn.Parameter(bias, requires_grad=False)
+            self.register_parameter('bias', bias)
+        else:
+            self.bias = None
+
         self.ep = ep
         self.expert_list = expert_list
         self.weight_type = weight_type
         self.half_out = out_features // 2
 
+        self.setup_weight_loader()
+
+    def setup_weight_loader(self):
+        """Setup weight loader."""
         if self.ep:
             self.expert_map = defaultdict(list)
-            for idx, eid in enumerate(expert_list):
+            for idx, eid in enumerate(self.expert_list):
                 self.expert_map[eid].append(idx)
             self.weight.weight_loader = self.weight_loader_ep
         else:
             self.weight.weight_loader = self.weight_loader_tp
+
+        if self.bias is not None:
+            self.bias.weight_loader = self.weight_loader_ep if self.ep else self.weight_loader_tp
 
     def update_weight(self, weight: torch.Tensor):
         """Update weight."""
@@ -102,7 +118,11 @@ class LinearWeights(nn.Module):
             param_data = param.data[expert_id]
             # weight is not contiguous, chunk and copy in cpu is slow
             weight = loaded_weight.to(param_data.device)
-            weight = weight.chunk(world_size, dim=1)[rank]
+            if weight.dim() > 1:
+                weight = weight.chunk(world_size, dim=1)[rank]
+            elif weight.dim() == 1 and rank != 0:
+                # bias with rank>0 should be 0
+                weight = torch.zeros_like(weight)
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
@@ -198,11 +218,13 @@ class FusedMoE(nn.Module):
                  ffn_dim: int,
                  num_experts: int,
                  top_k: int,
+                 bias: bool = False,
                  renormalize: bool = False,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
-                 enable_ep: bool = False):
+                 enable_ep: bool = False,
+                 act_func: Callable = None):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -227,6 +249,7 @@ class FusedMoE(nn.Module):
                                      weight_type='gate_up',
                                      dtype=dtype,
                                      device=device,
+                                     bias=bias,
                                      expert_list=expert_list,
                                      ep=enable_ep)
         self.down = LinearWeights(
@@ -236,6 +259,7 @@ class FusedMoE(nn.Module):
             weight_type='down',
             dtype=dtype,
             device=device,
+            bias=bias,
             expert_list=expert_list,
             ep=enable_ep,
         )
@@ -250,6 +274,7 @@ class FusedMoE(nn.Module):
             all_reduce = False
         self.all_reduce = all_reduce
         self.enable_ep = enable_ep
+        self.act_func = act_func
 
     def update_weights(self):
         """Update weights."""
@@ -261,8 +286,15 @@ class FusedMoE(nn.Module):
         hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states, topk_weights, topk_ids,
                                                                    self.enable_ep)
 
-        ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.down.weight,
-                                self.expert_list)
+        ret = self.impl.forward(hidden_states,
+                                topk_weights,
+                                topk_ids,
+                                self.gate_up.weight,
+                                self.down.weight,
+                                self.gate_up.bias,
+                                self.down.bias,
+                                self.expert_list,
+                                act_func=self.act_func)
         if self.all_reduce:
             ret = _moe_reduce(ret, self.enable_ep)
         return ret
@@ -747,6 +779,7 @@ def build_fused_moe(
     ffn_dim: int,
     num_experts: int,
     top_k: int,
+    bias: bool = False,
     renormalize: bool = False,
     dtype: Optional[torch.dtype] = None,
     device: Optional[torch.device] = None,
@@ -754,6 +787,7 @@ def build_fused_moe(
     enable_ep: bool = False,
     quant_config: Any = None,
     layer_idx: int = 0,
+    act_func: Callable = None,
 ):
     """Fused moe builder."""
 
@@ -763,13 +797,17 @@ def build_fused_moe(
             ffn_dim=ffn_dim,
             num_experts=num_experts,
             top_k=top_k,
+            bias=bias,
             renormalize=renormalize,
             dtype=dtype,
             device=device,
             all_reduce=all_reduce,
             enable_ep=enable_ep,
+            act_func=act_func,
         )
 
+    assert not bias, 'Quant model does not support bias for now.'
+    assert act_func is None, ('Quant model does not support activation function for now.')
     quant_method = quant_config['quant_method']
     if quant_method == 'smooth_quant':
         quant_dtype = eval('torch.' + quant_config.get('quant_dtype', 'int8'))

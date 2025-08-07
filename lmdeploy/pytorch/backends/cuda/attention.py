@@ -102,6 +102,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         attn_metadata: TritonAttentionMetadata,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        learnable_sink: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -145,54 +146,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         o_shape = q_shape[:-1] + (self.v_head_size, )
         attn_output = query.new_empty(o_shape)
         is_decoding = attn_metadata.is_decoding
-        if not self.alibi:
-            if is_decoding:
-                self.paged_attention_fwd(
-                    query,
-                    k_cache,
-                    v_cache,
-                    attn_output,
-                    block_offsets,
-                    kv_seqlens=kv_seqlens,
-                    k_scales_zeros=k_scales_zeros,
-                    v_scales_zeros=v_scales_zeros,
-                    quant_policy=quant_policy,
-                    window_size=self.sliding_window,
-                    sm_scale=self.scale,
-                    logit_softcapping=self.logit_softcapping,
-                )
-            else:
-                BLOCK_BS = k_cache.size(1)
-                # pad one more block to avoid invalid kv visit
-                out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
-                flatten_k, flatten_v = self.flatten_kv_cache(
-                    k_cache,
-                    v_cache,
-                    kv_seqlens,
-                    block_offsets,
-                    start_loc=kv_start_loc,
-                    out_size=out_size,
-                    out_dtype=query.dtype,
-                    k_scales_zeros=k_scales_zeros,
-                    v_scales_zeros=v_scales_zeros,
-                    quant_policy=quant_policy,
-                )
-                self.flash_attention_fwd(
-                    query,
-                    flatten_k,
-                    flatten_v,
-                    attn_output,
-                    q_start_loc=q_start_loc,
-                    q_seqlens=q_seqlens,
-                    kv_start_loc=kv_start_loc,
-                    kv_seqlens=kv_seqlens,
-                    max_seqlen=max_q_seqlen,
-                    window_size=self.sliding_window,
-                    sm_scale=self.scale,
-                    logit_softcapping=self.logit_softcapping,
-                    causal=self.causal,
-                )
-        else:
+
+        if self.alibi:
             self.alibi_paged_attention_fwd(
                 query,
                 k_cache,
@@ -208,6 +163,56 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
+            )
+            return attn_output
+
+        if is_decoding:
+            self.paged_attention_fwd(
+                query,
+                k_cache,
+                v_cache,
+                attn_output,
+                block_offsets,
+                kv_seqlens=kv_seqlens,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
+                window_size=self.sliding_window,
+                sm_scale=self.scale,
+                logit_softcapping=self.logit_softcapping,
+                sinks=learnable_sink,
+            )
+        else:
+            BLOCK_BS = k_cache.size(1)
+            # pad one more block to avoid invalid kv visit
+            out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
+            flatten_k, flatten_v = self.flatten_kv_cache(
+                k_cache,
+                v_cache,
+                kv_seqlens,
+                block_offsets,
+                start_loc=kv_start_loc,
+                out_size=out_size,
+                out_dtype=query.dtype,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
+            )
+            self.flash_attention_fwd(
+                query,
+                flatten_k,
+                flatten_v,
+                attn_output,
+                q_start_loc=q_start_loc,
+                q_seqlens=q_seqlens,
+                kv_start_loc=kv_start_loc,
+                kv_seqlens=kv_seqlens,
+                max_seqlen=max_q_seqlen,
+                window_size=self.sliding_window,
+                sm_scale=self.scale,
+                logit_softcapping=self.logit_softcapping,
+                sinks=learnable_sink,
+                causal=self.causal,
             )
 
         return attn_output
@@ -486,6 +491,9 @@ class FA3Impl(TritonAttentionImpl):
                 quant_policy=quant_policy,
                 flatten_kv_layout='shd',
             )
+            sliding_window = (-1, -1) if self.sliding_window is None else self.sliding_window
+            if isinstance(sliding_window, int):
+                sliding_window = (sliding_window, sliding_window)
             attn_output, _ = self.flash_attn_varlen_func_v3(
                 q=query,
                 k=flatten_k,
@@ -496,7 +504,7 @@ class FA3Impl(TritonAttentionImpl):
                 max_seqlen_k=kv_flatten_size,
                 softmax_scale=self.scale,
                 causal=self.causal,
-                window_size=(-1, -1) if self.sliding_window is None else self.sliding_window,
+                window_size=sliding_window,
                 softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
             )
         return attn_output
@@ -517,6 +525,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         logical_softcapping: float = None,
         causal: bool = True,
         use_flash_mla: bool = False,
+        learnable_sink: bool = False,
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
@@ -531,7 +540,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                 logical_softcapping=logical_softcapping,
                                 causal=causal,
                                 **kwargs)
-        elif use_fa3 and not alibi:
+        elif use_fa3 and not alibi and not learnable_sink:
             return FA3Impl(num_heads,
                            head_size,
                            scale=scale,
