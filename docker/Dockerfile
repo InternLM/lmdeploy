@@ -35,10 +35,11 @@ ENV CUDA_VERSION_SHORT=cu118
 FROM ${CUDA_VERSION}-base AS final
 ARG PYTHON_VERSION=3.10
 
-COPY --from=builder /wheels /wheels
 COPY docker/install.sh /tmp/install.sh
 
-RUN --mount=type=cache,target=/root/.cache /tmp/install.sh
+RUN --mount=type=cache,target=/root/.cache \
+    --mount=type=cache,target=/wheels,from=builder,source=/wheels \
+    /tmp/install.sh
 
 COPY --from=builder /usr/local/gdrcopy /usr/local/gdrcopy
 
