@@ -445,6 +445,7 @@ class LinearWeightsBlockedF8(LinearWeights):
                  block_size: int,
                  dtype: torch.dtype,
                  device: torch.device,
+                 bias: bool = False,
                  expert_list: List[int] = None,
                  ep: bool = False):
         super().__init__(
@@ -454,6 +455,7 @@ class LinearWeightsBlockedF8(LinearWeights):
             weight_type=weight_type,
             dtype=dtype,
             device=device,
+            bias=bias,
             expert_list=expert_list,
             ep=ep,
         )
@@ -528,13 +530,15 @@ class FusedMoEBlockedF8(nn.Module):
                  ffn_dim: int,
                  num_experts: int,
                  top_k: int,
+                 bias: bool = False,
                  renormalize: bool = False,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
                  enable_ep: bool = False,
-                 layer_idx: int = 0):
+                 layer_idx: int = 0,
+                 act_func: Callable = None):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -551,7 +555,8 @@ class FusedMoEBlockedF8(nn.Module):
                                        ep_size=self.ep_size,
                                        ep_group=dist_ctx.ep_gpu_group,
                                        out_dtype=dtype,
-                                       layer_idx=layer_idx)
+                                       layer_idx=layer_idx,
+                                       custom_gateup_act=act_func is not None)
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
@@ -568,6 +573,7 @@ class FusedMoEBlockedF8(nn.Module):
                                               block_size=self.block_size,
                                               dtype=fp8_dtype,
                                               device=device,
+                                              bias=bias,
                                               expert_list=expert_list,
                                               ep=self.ep_size > 1)
         self.down = LinearWeightsBlockedF8(
@@ -578,6 +584,7 @@ class FusedMoEBlockedF8(nn.Module):
             block_size=self.block_size,
             dtype=fp8_dtype,
             device=device,
+            bias=bias,
             expert_list=expert_list,
             ep=self.ep_size > 1,
         )
@@ -591,6 +598,7 @@ class FusedMoEBlockedF8(nn.Module):
         if world_size == 1:
             all_reduce = False
         self.all_reduce = all_reduce
+        self.act_func = act_func
 
     def update_weights(self):
         """Update weights."""
@@ -713,9 +721,17 @@ class FusedMoEBlockedF8(nn.Module):
                 'moe_type': state['moe_type']
             }
         else:  # MoeType.Default
-            hidden_states = self.impl.forward(state['hidden_states'], state['topk_weights'], state['topk_idx'],
-                                              self.gate_up.weight, self.gate_up.weight_scale_inv, self.down.weight,
-                                              self.down.weight_scale_inv, self.expert_list)
+            hidden_states = self.impl.forward(state['hidden_states'],
+                                              state['topk_weights'],
+                                              state['topk_idx'],
+                                              self.gate_up.weight,
+                                              self.gate_up.weight_scale_inv,
+                                              self.down.weight,
+                                              self.down.weight_scale_inv,
+                                              gate_up_bias=self.gate_up.bias,
+                                              down_bias=self.down.bias,
+                                              expert_list=self.expert_list,
+                                              act_func=self.act_func)
             gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
         return gemm_state
 
@@ -806,10 +822,10 @@ def build_fused_moe(
             act_func=act_func,
         )
 
-    assert not bias, 'Quant model does not support bias for now.'
-    assert act_func is None, ('Quant model does not support activation function for now.')
     quant_method = quant_config['quant_method']
     if quant_method == 'smooth_quant':
+        assert not bias, 'Quant model does not support bias for now.'
+        assert act_func is None, ('Quant model does not support activation function for now.')
         quant_dtype = eval('torch.' + quant_config.get('quant_dtype', 'int8'))
         return FusedMoEW8A8(
             hidden_dim=hidden_dim,
@@ -836,6 +852,7 @@ def build_fused_moe(
             ffn_dim=ffn_dim,
             num_experts=num_experts,
             top_k=top_k,
+            bias=bias,
             renormalize=renormalize,
             fp8_dtype=fp8_dtype,
             dtype=dtype,
@@ -843,6 +860,7 @@ def build_fused_moe(
             all_reduce=all_reduce,
             enable_ep=enable_ep,
             layer_idx=layer_idx,
+            act_func=act_func,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')

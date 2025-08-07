@@ -215,7 +215,10 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                 gate_up_scale: torch.Tensor,
                 down_weights: torch.Tensor,
                 down_scale: torch.Tensor,
-                expert_list: List[int] = None):
+                gate_up_bias: torch.Tensor = None,
+                down_bias: torch.Tensor = None,
+                expert_list: List[int] = None,
+                act_func: Callable = None):
         """forward."""
         input_size = hidden_states.shape
         hidden_states = hidden_states.flatten(0, -2)
@@ -235,10 +238,13 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                                        topk_weights=topk_weights,
                                        topk_ids=topk_ids,
                                        topk=self.top_k,
+                                       w1_bias=gate_up_bias,
+                                       w2_bias=down_bias,
                                        out_dtype=hidden_states.dtype,
                                        expert_offset=expert_offset,
                                        num_experts=num_experts,
-                                       renormalize=self.renormalize)
+                                       renormalize=self.renormalize,
+                                       act_func=act_func)
         output = output.unflatten(0, input_size[:-1])
         return output
 
@@ -618,7 +624,11 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 gate_up_scale: torch.Tensor,
                 down_weights: torch.Tensor,
                 down_scale: torch.Tensor,
-                expert_list: List[int] = None):
+                gate_up_bias: torch.Tensor = None,
+                down_bias: torch.Tensor = None,
+                expert_list: List[int] = None,
+                act_func: Callable = None,
+                **kwargs):
         """forward."""
         topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
@@ -657,9 +667,11 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
               ep_size: int = 1,
               ep_group: dist.ProcessGroup = None,
               out_dtype: torch.dtype = torch.float16,
-              layer_idx: int = 0):
+              layer_idx: int = 0,
+              custom_gateup_act: bool = False):
         """Build from mlp."""
         if ep_size > 1:
+            assert custom_gateup_act is False, 'Custom gate up activation is not supported in EP MoE.'
             return FusedDeepEpMoEBlockedF8Impl(ep_size=ep_size,
                                                ep_group=ep_group,
                                                top_k=top_k,

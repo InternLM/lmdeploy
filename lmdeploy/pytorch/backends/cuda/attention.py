@@ -263,6 +263,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         attn_metadata: TritonAttentionMetadata,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        learnable_sink: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -419,6 +420,7 @@ class FA3Impl(TritonAttentionImpl):
         attn_metadata: TritonAttentionMetadata,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        learnable_sink: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
