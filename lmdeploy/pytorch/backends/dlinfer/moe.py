@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import List
+from typing import Callable, List
 
 import torch
 
@@ -50,8 +50,13 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                 topk_ids: torch.LongTensor,
                 gate_up_weights: torch.Tensor,
                 down_weights: torch.Tensor,
-                expert_list: List[int] = None):
+                gate_up_bias: torch.Tensor = None,
+                down_bias: torch.Tensor = None,
+                expert_list: List[int] = None,
+                act_func: Callable = None):
         """forward."""
+        assert gate_up_bias is None
+        assert down_bias is None
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
                          self.renormalize)
 

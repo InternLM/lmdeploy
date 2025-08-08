@@ -14,7 +14,7 @@ logger = get_logger('lmdeploy')
 TRITON_VERSION = version.parse(triton.__version__)
 VERSION_300 = version.parse('3.0.0')
 VERSION_320 = version.parse('3.2.0')
-assert TRITON_VERSION >= version.parse('2.2.0')
+assert TRITON_VERSION >= VERSION_300
 
 # TODO: fast op might not work on non-nv device
 tanh = tl.extra.cuda.libdevice.tanh
@@ -148,9 +148,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
 
 
 # @triton.autotune(list(configs),
-#                  key=['head_dim_k', 'head_dim_v'],
-#                  warmup=10,
-#                  rep=25)
+#                  key=['head_dim_k', 'head_dim_v'])
 @triton.jit
 def _flash_prefill_fwd_kernel(
     q_ptr,
@@ -161,6 +159,7 @@ def _flash_prefill_fwd_kernel(
     q_seqlens_ptr,
     kv_start_loc_ptr,
     kv_seqlens_ptr,
+    sinks,
     sm_scale,
     stride_qs: tl.constexpr,
     stride_qh: tl.constexpr,
@@ -326,6 +325,10 @@ def _flash_prefill_fwd_kernel(
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
     # epilogue
+    if sinks is not None:
+        sink = tl.load(sinks + head_id).to(l_i.dtype)
+        l_i = l_i + tl.exp2(sink * tl_log2(math.e) - m_i)
+
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
 
@@ -435,6 +438,7 @@ def flash_attention_fwd(
     window_size: int = None,
     sm_scale: float = None,
     logit_softcapping: float = None,
+    sinks: Tensor = None,
     causal: bool = True,
     kv_layout: str = 'hsd',
 ):
@@ -478,6 +482,10 @@ def flash_attention_fwd(
     num_kv_heads = k_states.size(h_dim)
     kv_group_num = num_heads // num_kv_heads
 
+    if sinks is not None:
+        assert sinks.is_contiguous()
+        assert sinks.numel() == num_heads
+
     BLOCK_DK, BLOCK_DK1, BLOCK_DV = _get_block_d(head_dim_k, head_dim_v)
 
     shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
@@ -505,6 +513,7 @@ def flash_attention_fwd(
         q_seqlens,
         kv_start_loc,
         kv_seqlens,
+        sinks,
         sm_scale=sm_scale,
         stride_qs=q_states.stride(0),
         stride_qh=q_states.stride(1),

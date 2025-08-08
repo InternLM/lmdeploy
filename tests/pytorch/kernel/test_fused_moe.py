@@ -54,6 +54,10 @@ class TestFusedMoEKernelLauncher:
         yield (ret - 0.5) / 2
 
     @pytest.fixture
+    def bias(self, num_experts, N, device, dtype):
+        yield torch.rand(num_experts, N, device=device, dtype=dtype) - 0.5
+
+    @pytest.fixture
     def router_weights(self, M, num_experts, device, dtype):
         yield torch.rand(M, num_experts, device=device, dtype=dtype)
 
@@ -94,24 +98,25 @@ class TestFusedMoEKernelLauncher:
         yield True
 
     @pytest.fixture
-    def gt(self, A, B, top_k, topk_idx, enable_weights, weights):
+    def gt(self, A, B, bias, top_k, topk_idx, enable_weights, weights):
         M = A.size(0)
         N = B.size(1)
         E = B.size(0)
         C = B.new_empty(M, top_k, N)
         for eid in range(E):
             EB = B[eid].t()
+            Ebias = bias[eid]
             token_idx, k_idx = torch.where(topk_idx == eid)
             if len(token_idx) == 0:
                 continue
-            EC = A[token_idx] @ EB
+            EC = A[token_idx] @ EB + Ebias
             C[token_idx, k_idx] = EC
         if enable_weights:
             C = C * weights[..., None]
         yield C.flatten(0, 1)
 
     @torch.inference_mode()
-    def test_launcher(self, A, B, sorted_idx, exp_start, exp_end, weights, enable_weights, top_k, M, gt):
+    def test_launcher(self, A, B, bias, sorted_idx, exp_start, exp_end, weights, enable_weights, top_k, M, gt):
         from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
@@ -124,11 +129,12 @@ class TestFusedMoEKernelLauncher:
             exp_start,
             exp_end,
             weights,
+            bias=bias,
             enable_weights=enable_weights,
             top_k=top_k,
             num_tokens=M,
         )
-        torch.testing.assert_close(C, gt)
+        torch.testing.assert_close(C, gt, atol=1e-3, rtol=1e-3)
 
 
 def _mlp_forward(hidden_states, gate_proj, up_proj, down_proj):

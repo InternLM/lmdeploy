@@ -430,6 +430,7 @@ def _fwd_grouped_split_quant_kernel(
 def _reduce_split_kernel(
     Acc,
     Out,
+    sinks,
     stride_ak,
     stride_abs,
     stride_ah,
@@ -465,6 +466,10 @@ def _reduce_split_kernel(
 
     acc = tl.sum(acc_k, 0)
     l_sum = tl.sum(l_k, 0)
+
+    if sinks is not None:
+        sink = tl.load(sinks + cur_head).to(l_sum.dtype)
+        l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
     acc = acc / l_sum
 
     out_offs = (cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od)
@@ -527,6 +532,7 @@ def paged_attention_fwd(
     window_size: int = None,
     sm_scale: float = None,
     logit_softcapping: float = None,
+    sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
     """Paged Attention forward.
@@ -583,6 +589,10 @@ def paged_attention_fwd(
         sm_scale = 1.0 / (Lq**0.5)
     batch, head = kv_seqlens.shape[0], q.shape[-2]
     kv_group_num = q.shape[-2] // k.shape[h_dim]
+
+    if sinks is not None:
+        assert sinks.is_contiguous()
+        assert sinks.numel() == head
 
     BLOCK = k.size(s_dim)
     assert BLOCK >= 16
@@ -716,6 +726,7 @@ def paged_attention_fwd(
         BLOCK_DV *= 2
     _reduce_split_kernel[grid](acc,
                                o,
+                               sinks,
                                stride_ak=acc.stride(2),
                                stride_abs=acc.stride(0),
                                stride_ah=acc.stride(1),

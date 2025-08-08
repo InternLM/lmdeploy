@@ -48,7 +48,181 @@ def _make_B(E, K, N, group_size, out_dtype, device='cuda'):
     B = B.reshape(E, N, K)
     quant_B = quant_B.reshape(E, N, K).to(out_dtype)
     scale = scale.reshape(E, N // group_size, K // group_size)
-    return B, quant_B, scale
+    bias = torch.rand(E, N, dtype=torch.float32, device=device) - 0.5
+    return B, quant_B, scale, bias
+
+
+def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
+    flatten_topk_idx = topk_idx.flatten()
+    sorted_ids = flatten_topk_idx.argsort()
+    exp_range = torch.arange(0, num_experts, device=topk_idx.device)
+    exp_tok_cnt = (flatten_topk_idx[None, :] == exp_range[:, None]).sum(1)
+    return sorted_ids, exp_tok_cnt
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
+class TestFusedMoEFP8KernelLauncher:
+
+    @pytest.fixture
+    def dtype(self):
+        yield torch.float16
+
+    @pytest.fixture
+    def quant_dtype(self):
+        yield torch.float8_e4m3fn
+
+    @pytest.fixture
+    def device(self):
+        yield torch.device('cuda')
+
+    @pytest.fixture
+    def N(self):
+        yield 512
+
+    @pytest.fixture
+    def K(self):
+        yield 1024
+
+    @pytest.fixture
+    def M(self):
+        yield 256
+
+    @pytest.fixture
+    def num_experts(self):
+        yield 64
+
+    @pytest.fixture
+    def top_k(self):
+        yield 6
+
+    @pytest.fixture
+    def group_size(self):
+        yield 128
+
+    @pytest.fixture
+    def build_A(self, M, K, group_size, quant_dtype, device):
+        yield _make_A(M, K, group_size=group_size, out_dtype=quant_dtype, device=device)
+
+    @pytest.fixture
+    def A(self, build_A, dtype):
+        yield build_A[0].to(dtype)
+
+    @pytest.fixture
+    def A_quant(self, build_A):
+        yield build_A[1]
+
+    @pytest.fixture
+    def A_scale(self, build_A):
+        yield build_A[2]
+
+    @pytest.fixture
+    def build_B(self, num_experts, N, K, group_size, quant_dtype, device):
+        yield _make_B(num_experts, K, N, group_size=group_size, out_dtype=quant_dtype, device=device)
+
+    @pytest.fixture
+    def B(self, build_B, dtype):
+        yield build_B[0].to(dtype)
+
+    @pytest.fixture
+    def B_quant(self, build_B):
+        yield build_B[1]
+
+    @pytest.fixture
+    def B_scale(self, build_B):
+        yield build_B[2]
+
+    @pytest.fixture
+    def bias(self, build_B, dtype):
+        yield build_B[3].to(dtype)
+        # yield None
+
+    @pytest.fixture
+    def router_weights(self, M, num_experts, device, dtype):
+        yield torch.rand(M, num_experts, device=device, dtype=dtype)
+
+    @pytest.fixture
+    def topk_weights(self, router_weights, top_k):
+        yield router_weights.topk(top_k, dim=-1)
+
+    @pytest.fixture
+    def weights(self, topk_weights):
+        yield topk_weights[0]
+
+    @pytest.fixture
+    def topk_idx(self, topk_weights):
+        yield topk_weights[1]
+
+    @pytest.fixture
+    def sort_and_cnt(self, topk_idx, num_experts):
+        yield _get_sorted_idx(topk_idx, num_experts)
+
+    @pytest.fixture
+    def sorted_idx(self, sort_and_cnt):
+        yield sort_and_cnt[0]
+
+    @pytest.fixture
+    def exp_tok_cnt(self, sort_and_cnt):
+        yield sort_and_cnt[1]
+
+    @pytest.fixture
+    def exp_end(self, exp_tok_cnt):
+        yield exp_tok_cnt.cumsum(0)
+
+    @pytest.fixture
+    def exp_start(self, exp_end, exp_tok_cnt):
+        yield exp_end - exp_tok_cnt
+
+    @pytest.fixture
+    def enable_weights(self):
+        yield True
+
+    @pytest.fixture
+    def gt(self, A, B, bias, top_k, sorted_idx, exp_start, exp_end, weights, enable_weights, M):
+        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe_kernel_launcher
+        N = B.size(1)
+        C = B.new_empty(M * top_k, N)
+        fused_moe_kernel_launcher(
+            A,
+            B,
+            C,
+            sorted_idx,
+            exp_start,
+            exp_end,
+            weights,
+            bias=bias,
+            enable_weights=enable_weights,
+            top_k=top_k,
+            num_tokens=M,
+        )
+
+        yield C
+
+    @torch.inference_mode()
+    def test_launcher(self, A_quant, A_scale, B, B_quant, B_scale, bias, sorted_idx, exp_start, exp_end, weights,
+                      enable_weights, top_k, M, gt):
+        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8_kernel_launcher
+        N = B.size(1)
+        C = B.new_empty(M * top_k, N)
+        fused_moe_blocked_fp8_kernel_launcher(
+            A=A_quant,
+            A_scale=A_scale,
+            B=B_quant,
+            B_scale=B_scale,
+            C=C,
+            sorted_idx=sorted_idx,
+            exp_start=exp_start,
+            exp_end=exp_end,
+            weights=weights,
+            bias=bias,
+            enable_weights=enable_weights,
+            top_k=top_k,
+            num_tokens=M,
+        )
+
+        gt_max = gt.abs().max()
+        C = C / gt_max
+        gt = gt / gt_max
+        torch.testing.assert_close(C, gt, atol=4e-3, rtol=1e-3)
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')

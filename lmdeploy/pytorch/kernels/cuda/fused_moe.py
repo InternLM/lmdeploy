@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+from typing import Callable
+
 import torch
 import triton
 import triton.language as tl
@@ -72,6 +74,7 @@ def _config_prune_func(config: dict, *args, **kwargs):
 def fused_moe_kernel(
     A,
     B,
+    bias,
     C,
     SortedIdx,
     ExpStart,
@@ -86,6 +89,8 @@ def fused_moe_kernel(
     stride_bk: tl.constexpr,
     stride_cm: tl.constexpr,
     stride_cn: tl.constexpr,
+    stride_bie: tl.constexpr,
+    stride_bin: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
@@ -151,6 +156,11 @@ def fused_moe_kernel(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
+    if bias is not None:
+        bias_ptrs = bias + exp_id * stride_bie + offs_bn * stride_bin
+        bias_val = tl.load(bias_ptrs).to(accumulator.dtype)
+        accumulator += bias_val[None]
+
     if ENABLE_WEIGHTS:
         weight = tl.load(Weights + sid, mask=mask_sid)
         accumulator = accumulator * weight[:, None].to(accumulator.dtype)
@@ -173,6 +183,7 @@ def fused_moe_kernel_launcher(
     exp_start: torch.Tensor,
     exp_end: torch.Tensor,
     weights: torch.Tensor,
+    bias: torch.Tensor = None,
     enable_weights: bool = False,
     top_k: int = 1,
     num_tokens: int = None,
@@ -195,11 +206,13 @@ def fused_moe_kernel_launcher(
 
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
+    enable_bias = bias is not None
 
     grid = _grid_fn
     fused_moe_kernel[grid](
         A,
         B,
+        bias,
         C,
         sorted_idx,
         exp_start,
@@ -214,6 +227,8 @@ def fused_moe_kernel_launcher(
         stride_bk=B.stride(2),
         stride_cm=C.stride(0),
         stride_cn=C.stride(1),
+        stride_bie=bias.stride(0) if enable_bias else 0,
+        stride_bin=bias.stride(1) if enable_bias else 0,
         ENABLE_WEIGHTS=enable_weights,
         tune_hint=tune_hint,
         top_k=top_k,
@@ -411,9 +426,12 @@ def fused_moe(hidden_states: torch.Tensor,
               topk_weights: torch.Tensor,
               topk_ids: torch.Tensor,
               topk: int,
+              w1_bias: torch.Tensor = None,
+              w2_bias: torch.Tensor = None,
               expert_offset: int = 0,
               num_experts: int = None,
-              renormalize: bool = False) -> torch.Tensor:
+              renormalize: bool = False,
+              act_func: Callable = None) -> torch.Tensor:
     """Fused moe."""
     M = hidden_states.size(0)
     E, N, _ = w1.shape
@@ -437,6 +455,7 @@ def fused_moe(hidden_states: torch.Tensor,
         exp_start=exp_start,
         exp_end=exp_end,
         weights=topk_weights,
+        bias=w1_bias,
         enable_weights=False,
         top_k=topk,
         num_tokens=M,
@@ -448,7 +467,11 @@ def fused_moe(hidden_states: torch.Tensor,
     # activate
     unflat_size = intermediate_cache1.shape[:-1]
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
-    gate_cache = silu_and_mul(intermediate_cache1)
+
+    if act_func is None:
+        gate_cache = silu_and_mul(intermediate_cache1)
+    else:
+        gate_cache = act_func(intermediate_cache1)
     gate_cache = gate_cache.unflatten(0, unflat_size)
 
     intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]),
@@ -464,6 +487,7 @@ def fused_moe(hidden_states: torch.Tensor,
         exp_start=exp_start,
         exp_end=exp_end,
         weights=topk_weights,
+        bias=w2_bias,
         enable_weights=True,
         top_k=1,
         num_tokens=M,

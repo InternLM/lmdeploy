@@ -2075,6 +2075,47 @@ class InternS1(InternVL2_5):
             return 'intern-s1'
 
 
+@MODELS.register_module(name='gpt-oss')
+class GptOss(BaseChatTemplate):
+
+    def __init__(self,
+                 system='<|start|>system<|message|>',
+                 meta_instruction=(
+                     'You are ChatGPT, a large language model trained by OpenAI.\n'
+                     'Knowledge cutoff: 2024-06\nCurrent date: 2025-08-06\n\n'
+                     'Reasoning: medium\n\n'
+                     '# Valid channels: analysis, commentary, final. Channel must be included for every message.'),
+                 user='<|start|>user<|message|>',
+                 assistant='<|start|>assistant',
+                 eosys='<|end|>',
+                 eoh='<|end|>',
+                 eoa='<|end|>',
+                 separator='',
+                 stop_words=['<|return|>'],
+                 **kwargs):
+        super().__init__(system=system,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'gpt-oss' in path:
+            return 'gpt-oss'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 
