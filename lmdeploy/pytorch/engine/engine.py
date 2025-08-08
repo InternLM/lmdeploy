@@ -806,7 +806,6 @@ class Engine:
         self.update_running(running, next_token_ids, stopped, model_metas)
 
         # generate output
-        scheduler_stats = self.scheduler.make_stats()
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
@@ -820,7 +819,7 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
-            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, scheduler_stats)
+            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
