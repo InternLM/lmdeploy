@@ -1,14 +1,16 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <algorithm>
+#include <iostream>
+#include <numeric>
+#include <sstream>
+
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include <algorithm>
-#include <iostream>
-#include <numeric>
-#include <sstream>
+#include "src/turbomind/kernels/gemm/utils.h"
 
 namespace turbomind::gemm {
 
@@ -130,12 +132,12 @@ std::string Kernel::GetName() const
 
     ss << "sm" << desc_.arch / 10;
     ss << "_" << to_string(desc_.type_a);  //
-    if ((int)desc_.quant_a.type) {
-        ss << "g" << desc_.quant_a.group_size;
+    if (desc_.quant_a) {
+        ss << to_string(desc_.quant_a);
     }
     ss << "_" << to_string(desc_.type_b);  //
-    if ((int)desc_.quant_b.type) {
-        ss << "g" << desc_.quant_b.group_size;
+    if (desc_.quant_b) {
+        ss << to_string(desc_.quant_b);
     }
     ss << "_" << to_string(desc_.type_c);
     ss << "_"                                        //
@@ -157,6 +159,85 @@ std::string Kernel::GetName() const
        << "_" << desc_.policy_a << desc_.policy_b;
 
     return ss.str();
+}
+
+class TransposedKernel: public Kernel {
+public:
+    explicit TransposedKernel(Kernel& kernel): kernel_(&kernel)
+    {
+        desc_ = kernel.desc();
+
+        desc_.transpose = !desc_.transpose;
+
+        chunk_size_k_ = kernel_->chunk_size_k();
+        smem_size_    = kernel_->smem_size();
+        name_         = kernel_->name();
+    }
+
+    int Launch(const Operation&    operation,
+               float               alpha,
+               const void*         A,
+               const MatrixLayout& Adesc,
+               const void*         U,
+               const MatrixLayout& Udesc,
+               const void*         B,
+               const MatrixLayout& Bdesc,
+               const void*         V,
+               const MatrixLayout& Vdesc,
+               float               beta,
+               const void*         C,
+               const MatrixLayout& Cdesc,
+               void*               D,
+               const MatrixLayout& Ddesc,
+               int                 swizzle,
+               int                 splits,
+               Workspace&          workspace,
+               cudaStream_t        stream) override
+    {
+        return kernel_->Launch(transpose(operation),
+                               alpha,
+                               B,
+                               transpose(Bdesc),
+                               V,
+                               transpose(Vdesc),
+                               A,
+                               transpose(Adesc),
+                               U,
+                               transpose(Udesc),
+                               beta,
+                               C,
+                               transpose(Cdesc),
+                               D,
+                               transpose(Ddesc),
+                               swizzle,
+                               splits,
+                               workspace,
+                               stream);
+    }
+
+    bool is_feasible(const GemmDesc& desc) const noexcept override
+    {
+        return kernel_->is_feasible(transpose(desc));
+    }
+
+    int GetMaxSplits(const int4& shape, int64_t tiles, size_t bsize, size_t psize) const override
+    {
+        auto [m, n, k, l] = shape;
+        return kernel_->GetMaxSplits({n, m, k, l}, tiles, bsize, psize);
+    }
+
+    int GetSwizzle(int m, int n, int k, int splits, int swizzle) const override
+    {
+        return kernel_->GetSwizzle(n, m, k, splits, swizzle);
+    }
+
+private:
+    Kernel* kernel_;
+};
+
+std::unique_ptr<Kernel> transpose(Kernel& kernel)
+{
+    return std::make_unique<TransposedKernel>(kernel);
 }
 
 template<class Op>

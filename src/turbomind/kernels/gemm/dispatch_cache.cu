@@ -52,6 +52,8 @@ static inline decltype(auto) as_tuple(const KernelDesc& d)
                     d.c_tile,
                     d.stages,
                     d.split_k,
+                    d.backend,
+                    d.transpose,
                     d.sched);
 }
 
@@ -139,7 +141,9 @@ void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc,
                     k.policy_b,
                     k.c_tile.x,
                     k.c_tile.y,
-                    k.split_k);
+                    k.split_k,
+                    k.backend,
+                    k.transpose);
         // Runtime params
         export_impl(os, spec.swizzle, spec.splits);
         os << std::endl;
@@ -217,7 +221,9 @@ void ImportDispatchCache(std::istream&                                 is,
                     k.policy_b,
                     k.c_tile.x,
                     k.c_tile.y,
-                    k.split_k);
+                    k.split_k,
+                    k.backend,
+                    k.transpose);
         LaunchSpec spec{};
         import_impl(ss, spec.swizzle, spec.splits);
         for (const auto& p : kernels) {

@@ -98,9 +98,28 @@ inline const char* to_string(Striding striding)
 
 enum class QuantType : int
 {
-    kNone,
-    kDefault,
+    kNone    = 0,
+    kK       = 1,
+    kM       = 2,
+    kB       = 3,
+    kDefault = kK,
 };
+
+inline const char* to_string(QuantType q)
+{
+    switch (q) {
+        case QuantType::kNone:
+            return "none";
+        case QuantType::kK:
+            return "k";
+        case QuantType::kM:
+            return "m";
+        case QuantType::kB:
+            return "b";
+        default:
+            return "unknown";
+    }
+}
 
 enum class Epilogue : int
 {
@@ -112,7 +131,22 @@ enum class Epilogue : int
 struct QuantDesc {
     QuantType type;
     int       group_size;
+
+    operator bool() const noexcept
+    {
+        return (int)type || group_size;
+    }
 };
+
+inline std::string to_string(QuantDesc desc)
+{
+    if (desc) {
+        return to_string(desc.type) + std::to_string(desc.group_size);
+    }
+    else {
+        return to_string(desc.type);
+    }
+}
 
 enum class DispatchPolicy : int
 {
@@ -151,6 +185,13 @@ struct Operation {
     Context*       context;
     void*          reserved;
 };
+
+inline Operation transpose(Operation o)
+{
+    std::swap(o.quant_a, o.quant_b);
+    o.batch_dim = 1 - o.batch_dim;
+    return o;
+}
 
 struct MatrixLayout {
     DataType type;

@@ -591,6 +591,9 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
+        # pre-allocate buffer
+        self.fusedmoe_build(True)
+
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         if get_dist_manager().current_context().dist_config.enable_eplb:

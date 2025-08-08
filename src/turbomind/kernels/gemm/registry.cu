@@ -23,6 +23,8 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
 
     sm90_s64n32_dynamic();
 
+    cublas_float();
+
     // u4g128_f16_f16_nnn_sm80_s16816();
 }
 
@@ -36,15 +38,15 @@ bool Registry::Add(std::unique_ptr<Kernel> kernel)
         is_valid = false;
     }
     // if (is_valid) {
-    // std::cout << "register: " << kernel->name()                                        //
-    //           << ", shared: " << (kernel->smem_size() >> 10) << " KB"                  //
-    //           << ", regs: " << kernel->desc().attr.numRegs                             //
-    //           << ", local: " << (float)kernel->desc().attr.localSizeBytes << " bytes"  //
-    //           << ", max_active_ctas: " << kernel->desc().max_active_ctas * is_valid << " \n";
+    //     std::cout << "register: " << kernel->name()                                        //
+    //               << ", shared: " << (kernel->smem_size() >> 10) << " KB"                  //
+    //               << ", regs: " << kernel->desc().attr.numRegs                             //
+    //               << ", local: " << (float)kernel->desc().attr.localSizeBytes << " bytes"  //
+    //               << ", max_active_ctas: " << kernel->desc().max_active_ctas * is_valid << " \n";
     // }
     if (is_valid) {
-        kernels_.push_back(std::move(kernel));
-        ptrs_.push_back(kernels_.back().get());
+        ptrs_.push_back(kernels_.emplace_back(transpose(*kernel)).get());
+        ptrs_.push_back(kernels_.emplace_back(std::move(kernel)).get());
     }
     return true;
 }
