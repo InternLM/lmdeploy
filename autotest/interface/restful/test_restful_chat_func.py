@@ -374,7 +374,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      messages='Hi, pls intro yourself' * 10000,
                                                      temperature=0.01):
             continue
-        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('choices')[0].get('finish_reason') == 'error'
         assert output.get('choices')[0].get('message').get('content') == ''
 
     def test_longtext_input_streaming(self):
@@ -387,7 +387,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             outputList.append(output)
         assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
-        assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
+        assert outputList[0].get('choices')[0].get('finish_reason') == 'error'
         assert outputList[0].get('choices')[0].get('delta').get('content') == ''
         assert len(outputList) == 1
 
@@ -768,7 +768,7 @@ class TestRestfulInterfaceChatInteractive:
         api_client = APIClient(BASE_URL)
         for output in api_client.chat_interactive_v1(prompt='Hi, pls intro yourself' * 100000, temperature=0.01):
             continue
-        assert output.get('finish_reason') == 'length'
+        assert output.get('finish_reason') == 'error'
         assert output.get('text') == ''
 
     def test_longtext_input_streaming(self):
@@ -778,7 +778,7 @@ class TestRestfulInterfaceChatInteractive:
                                                      stream=True,
                                                      temperature=0.01):
             outputList.append(output)
-        assert outputList[0].get('finish_reason') == 'length', outputList
+        assert outputList[0].get('finish_reason') == 'error', outputList
         assert outputList[0].get('text') == ''
         assert len(outputList) == 1
 
@@ -1194,7 +1194,7 @@ class TestRestfulOpenAI:
                                                  max_tokens=100)
         output = outputs.model_dump()
         print(output)
-        assert output.get('choices')[0].get('finish_reason') == 'length'
+        assert output.get('choices')[0].get('finish_reason') == 'error'
         assert output.get('choices')[0].get('message').get('content') == ''
 
     def test_longtext_input_streaming(self):
@@ -1216,7 +1216,7 @@ class TestRestfulOpenAI:
             outputList.append(output.model_dump())
 
         assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
-        assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
+        assert outputList[0].get('choices')[0].get('finish_reason') == 'error'
         assert outputList[0].get('choices')[0].get('delta').get('content') == ''
         assert len(outputList) == 1
 
