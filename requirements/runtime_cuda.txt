@@ -9,6 +9,7 @@ outlines
 partial_json_parser
 peft<=0.14.0
 pillow
+prometheus_client
 protobuf
 pydantic>2.0.0
 pynvml

@@ -802,7 +802,8 @@ class BaseModelAgent:
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
-            out['new_token_timestamp'] = time.perf_counter()
+            # MUST be a wall-clock time
+            out['new_token_timestamp'] = time.time()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
         return out

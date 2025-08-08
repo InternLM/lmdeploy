@@ -487,4 +487,26 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     return outcome;
 }
 
+int SequenceManager::active_seqs() const noexcept
+{
+    int num = 0;
+    for (auto iter = sequences_.begin(); iter != sequences_.end(); ++iter) {
+        if (iter->second.status == Sequence::kActive) {
+            ++num;
+        }
+    }
+    return num;
+}
+
+int SequenceManager::cached_seqs() const noexcept
+{
+    int num = 0;
+    for (auto iter = sequences_.begin(); iter != sequences_.end(); ++iter) {
+        if (iter->second.status == Sequence::kCached) {
+            ++num;
+        }
+    }
+    return num;
+}
+
 }  // namespace turbomind

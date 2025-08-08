@@ -28,11 +28,13 @@ public:
         GenerationConfig gen_cfg;
 
         bool stream_output;
+        bool enable_metrics;
     };
 
     struct OutputParam {
         std::shared_ptr<TensorMap>          tensors;
         std::shared_ptr<AtomicRequestState> state;
+        std::shared_ptr<RequestMetrics>     metrics;
     };
 
     OutputParam Forward(InputParam param, std::function<void()> cb);

@@ -80,6 +80,7 @@ struct EngineParam {
     float cache_max_block_count;
     int   cache_chunk_size;
     bool  enable_prefix_caching;
+    bool  enable_metrics;
 
     // chunking params
     int max_forward_token_num;
