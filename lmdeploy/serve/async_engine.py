@@ -248,6 +248,8 @@ class AsyncEngine(LogitsMixin):
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
+        backend_config = backend_config or (TurbomindEngineConfig()
+                                            if backend == 'turbomind' else PytorchEngineConfig())
         self.model_name = model_name if model_name else model_path
         chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
@@ -260,20 +262,21 @@ class AsyncEngine(LogitsMixin):
 
         self.tokenizer = Tokenizer(model_path)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
-        self.arch, _ = get_model_arch(model_path)
-
+        self.arch, cfg = get_model_arch(model_path)
+        self.session_len = (_get_and_verify_max_len(cfg, None)
+                            if backend_config.session_len is None else backend_config.session_len)
+        backend_config.session_len = self.session_len
         # build backend engine
         if backend == 'turbomind':
-            self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
         elif backend == 'pytorch':
-            self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
         else:
             raise ValueError(f'unsupported backend {backend}')
-
+        self.backend_config = self.engine.engine_config
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
-        self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
         if self.stop_words is not None:
             self.stop_words = self.stop_words[0][0].tolist()
@@ -318,12 +321,10 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        self.engine = tm.TurboMind.from_pretrained(model_path,
-                                                   tokenizer=self.tokenizer,
-                                                   engine_config=backend_config,
-                                                   **kwargs)
-        self.backend_config = self.engine.engine_config
-        self.hf_tm_cfg = self.engine.config
+        return tm.TurboMind.from_pretrained(model_path,
+                                            tokenizer=self.tokenizer,
+                                            engine_config=backend_config,
+                                            **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
@@ -331,9 +332,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        self.engine = Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
-        self.backend_config = self.engine.engine_config
-        self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
+        return Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []
