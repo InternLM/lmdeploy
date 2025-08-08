@@ -68,6 +68,7 @@ pytorch_base_model:
 turbomind_quatization:
     no_awq:
         - OpenGVLab/InternVL3-8B
+        - OpenGVLab/InternVL3-2B-Instruct
     gptq:
         - empty
     no_kvint4:

@@ -177,7 +177,7 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
 
     result = True
 
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=url)
+    client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{url}/v1")
     model_name = client.models.list().data[0].id
 
     messages = []
