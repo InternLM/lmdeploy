@@ -106,6 +106,17 @@ public:
     {
         throw std::runtime_error("not implemented");
     }
+
+    virtual void Broadcast(const void*  sendbuff,  //
+                           void*        recvbuff,
+                           size_t       count,
+                           DataType     type,
+                           int          root,
+                           int          group,
+                           cudaStream_t stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
 };
 
 class DeviceComm {
