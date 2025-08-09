@@ -353,6 +353,11 @@ class MPExecutor(ExecutorBase):
         ret = self.collective_rpc('get_free_mem')
         return ret
 
+    def gather_runtime_mem(self):
+        """Gather available memory."""
+        ret = self.collective_rpc('get_runtime_mem_size')
+        return ret
+
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
         self.collective_rpc('set_cache_config', args=(cache_config, ))

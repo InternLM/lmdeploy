@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import dataclasses
+
 import torch
 
 
@@ -34,3 +36,14 @@ def chunk_aligned(weight: torch.Tensor, chunks: int, dim: int, align: int):
     sections = [align_per_chunk + int(c < remain) for c in range(chunks)]
     sections = [sec * align for sec in sections]
     return weight.split(sections, dim=dim)
+
+
+@dataclasses.dataclass
+class RuntimeEstimateInfo:
+    """Runtime estimate info."""
+    max_prefill_token_num: int = 0
+    max_batches: int = 0
+
+    def __post_init__(self):
+        """Post init."""
+        self.max_prefill_token_num = max(self.max_batches, self.max_prefill_token_num)
