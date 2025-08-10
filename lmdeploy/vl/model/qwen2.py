@@ -74,6 +74,8 @@ class Qwen2VLModel(VisonModel):
                 config = self.hf_config
                 # disable accelerate check_tied_parameters_in_config for Qwen2-VL-2B-Instruct
                 config.tie_word_embeddings = False
+                if hasattr(config, 'text_config'):
+                    config.text_config.tie_word_embeddings = False
                 model = AutoModelCls._from_config(config)
                 if hasattr(AutoModelCls, 'visual'):
                     # transformers >= 4.52.0 modified model structure
