@@ -64,7 +64,7 @@ jobs:
   test_ascend_docker_image:
     permissions:
       pull-requests: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-arm
     env:
       PYTHON_VERSION: '3.10'
     steps:
@@ -84,8 +84,6 @@ jobs:
           haskell: true
           large-packages: true
           swap-storage: false
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Get docker info
@@ -95,11 +93,11 @@ jobs:
           git config --local --unset "http.https://github.com/.extraheader"
       - name: Build Docker image
         run: |
-          docker build . -t lmdeploy:ascend -f docker/Dockerfile.ascend --platform linux/arm64 --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+          docker build . -t lmdeploy:ascend -f docker/Dockerfile.ascend --build-arg PYTHON_VERSION=${PYTHON_VERSION}
       - name: Test image with lmdeploy check_env
         run: |
           docker images
-          docker run --rm --platform linux/arm64 lmdeploy:ascend lmdeploy check_env
+          docker run --rm lmdeploy:ascend lmdeploy check_env
       - name: Dive
         uses: MaxymVlasov/dive-action@v1.5.0
         with:

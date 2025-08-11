@@ -94,3 +94,98 @@ jobs:
           echo $RELEASE_TAG
           docker tag $TAG $RELEASE_TAG
           docker push $RELEASE_TAG
+
+  publish_dev_docker_image:
+    runs-on: ubuntu-latest
+    environment: 'prod'
+    env:
+      TAG_PREFIX: "openmmlab/lmdeploy"
+      TAG: "openmmlab/lmdeploy:dev"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{github.event.inputs.repo_ref}}
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+      - name: Get docker info
+        run: |
+          docker info
+          # remove http extraheader
+          git config --local --unset "http.https://github.com/.extraheader"
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Update docker TAG from workflow input
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          export TAG=$TAG_PREFIX:${{github.event.inputs.image_tag}}-dev
+          echo $TAG
+          echo "TAG=${TAG}" >> $GITHUB_ENV
+      - name: Build and push Docker image
+        run: |
+          echo $TAG
+          docker build . -f docker/Dockerfile -t ${TAG} --build-arg IMAGE_TYPE=dev
+          docker push $TAG
+
+  publish_ascend_docker_image:
+    runs-on: ubuntu-latest
+    environment: 'prod'
+    env:
+      TAG_PREFIX: "openmmlab/lmdeploy"
+      TAG: "openmmlab/lmdeploy:ascend"
+      PYTHON_VERSION: '3.10'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{github.event.inputs.repo_ref}}
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Get docker info
+        run: |
+          docker info
+          # remove http extraheader
+          git config --local --unset "http.https://github.com/.extraheader"
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Update docker TAG from workflow input
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          export TAG=$TAG_PREFIX:${{github.event.inputs.image_tag}}-ascend
+          echo $TAG
+          echo "TAG=${TAG}" >> $GITHUB_ENV
+      - name: Build and push Docker image
+        run: |
+          echo $TAG
+          docker build . -t lmdeploy:ascend -f docker/Dockerfile.ascend --platform linux/arm64 --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+          docker push $TAG
