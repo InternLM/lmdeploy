@@ -192,7 +192,7 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         response = client.chat.completions.create(model=model_name, messages=messages, temperature=0.01, top_p=0.8)
 
         output_content = response.choices[0].message.content
-        file.writelines('output:' + response + '\n')
+        file.writelines('output:' + output_content + '\n')
         messages.append({'role': 'assistant', 'content': output_content})
 
         case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
