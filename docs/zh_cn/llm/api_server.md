@@ -343,26 +343,6 @@ hostname -I
 
 ## 接入 WebUI
 
-LMDeploy 提供 gradio 和 [OpenAOE](https://github.com/InternLM/OpenAOE) 两种方式，为 api_server 接入 WebUI。
-
-### 方式一：通过 gradio 接入
-
-```shell
-# api_server_url 就是 api_server 产生的，比如 http://localhost:23333
-# server_name 和 server_port 是用来提供 gradio ui 访问服务的
-# 例子: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
-lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
-```
-
-### 方式二：通过 OpenAOE 接入
-
-```shell
-pip install -U openaoe
-openaoe -f /path/to/your/config-template.yaml
-```
-
-具体信息请参考 [部署说明](https://github.com/InternLM/OpenAOE/blob/main/docs/tech-report/model_serving_by_lmdeploy/model_serving_by_lmdeploy.md).
-
 ## FAQ
 
 1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。如需调整会话支持的最大长度，可以通过启动`api_server`时，设置`--session_len`参数大小。

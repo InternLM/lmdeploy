@@ -242,13 +242,6 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
 
 ## Integrate with WebUI
 
-```shell
-# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
-# server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
-lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
-```
-
 ## Launch multiple api servers
 
 Following are two steps to launch multiple api servers through torchrun. Just create a python script with the following codes.
