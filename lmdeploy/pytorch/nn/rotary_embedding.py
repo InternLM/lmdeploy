@@ -144,7 +144,6 @@ def build_rotary_embedding(dim: int,
 
 def build_rotary_embedding_from_config(config: PretrainedConfig) -> nn.Module:
     """Build rotary embedding op from config."""
-    # import pdb; pdb.set_trace()
     emb_type = RopeType.LinearScaling
     rope_dim = getattr(config, 'head_dim', None)
     if rope_dim is None:
@@ -154,7 +153,6 @@ def build_rotary_embedding_from_config(config: PretrainedConfig) -> nn.Module:
     rope_params = dict(emb_type=emb_type, dim=rope_dim, max_position_embeddings=rope_max_pos_emb, base=rope_base)
     update_params = build_rotary_params(config)
     rope_params.update(update_params)
-    # import pdb; pdb.set_trace()  # noqa
     return build_rotary_embedding(**rope_params)
 
 
