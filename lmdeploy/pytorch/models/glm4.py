@@ -9,7 +9,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
                                         build_rowwise_linear)
-from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
+from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
 
@@ -419,11 +419,13 @@ class Glm4ForCausalLM(nn.Module, CudaGraphMixin):
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 
-            # original weights is already packed
-            # use default_weight_loader instead of sharded version
+            # loaded weights of GLM4 gate up proj is already packed
             if '.gate_up_proj' in name:
                 param = params_dict[name]
-                default_weight_loader(param, loaded_weight)
+                gate_w, up_w = torch.chunk(loaded_weight, 2, dim=0)
+                # load each part with the correct shard_id
+                load_weight(param, gate_w, shard_id=0)
+                load_weight(param, up_w, shard_id=1)
                 continue
 
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
