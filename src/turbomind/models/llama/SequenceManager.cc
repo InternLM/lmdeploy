@@ -487,26 +487,20 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     return outcome;
 }
 
-int SequenceManager::active_seqs() const noexcept
+std::tuple<int, int, int> SequenceManager::seq_stats() const noexcept
 {
-    int num = 0;
-    for (auto iter = sequences_.begin(); iter != sequences_.end(); ++iter) {
-        if (iter->second.status == Sequence::kActive) {
-            ++num;
+    int total = static_cast<int>(sequences_.size());
+    int active = 0;
+    int cached = 0;
+    for (const auto& p : sequences_) {
+        if (p.second.status == Sequence::kActive) {
+            ++active;
+        }
+        else if (p.second.status == Sequence::kCached) {
+            ++cached;
         }
     }
-    return num;
-}
-
-int SequenceManager::cached_seqs() const noexcept
-{
-    int num = 0;
-    for (auto iter = sequences_.begin(); iter != sequences_.end(); ++iter) {
-        if (iter->second.status == Sequence::kCached) {
-            ++num;
-        }
-    }
-    return num;
+    return std::make_tuple(total, active, cached);
 }
 
 }  // namespace turbomind

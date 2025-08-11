@@ -294,17 +294,18 @@ PYBIND11_MODULE(_turbomind, m)
 {
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
-        .def_readwrite("enque_time", &ft::RequestMetrics::enque_time)
-        .def_readwrite("scheduled_time", &ft::RequestMetrics::scheduled_time);
+        .def_readonly("enque_time", &ft::RequestMetrics::enque_time)
+        .def_readonly("scheduled_time", &ft::RequestMetrics::scheduled_time);
 
     py::class_<ft::ScheduleMetrics, std::shared_ptr<ft::ScheduleMetrics>>(m, "ScheduleMetrics")
         .def(py::init())
-        .def_readwrite("total_seqs", &ft::ScheduleMetrics::total_seqs)
-        .def_readwrite("active_seqs", &ft::ScheduleMetrics::active_seqs)
-        .def_readwrite("waiting_seqs", &ft::ScheduleMetrics::waiting_seqs)
-        .def_readwrite("total_blocks", &ft::ScheduleMetrics::total_blocks)
-        .def_readwrite("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
-        .def_readwrite("free_blocks", &ft::ScheduleMetrics::free_blocks);
+        .def_readonly("total_seqs", &ft::ScheduleMetrics::total_seqs)
+        .def_readonly("active_seqs", &ft::ScheduleMetrics::active_seqs)
+        .def_readonly("waiting_seqs", &ft::ScheduleMetrics::waiting_seqs)
+        .def_readonly("total_blocks", &ft::ScheduleMetrics::total_blocks)
+        .def_readonly("active_blocks", &ft::ScheduleMetrics::active_blocks)
+        .def_readonly("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
+        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks);
 
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step, bool start, bool end) {

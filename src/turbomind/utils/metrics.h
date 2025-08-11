@@ -14,6 +14,7 @@ struct ScheduleMetrics {
 
     // kv block usage
     int total_blocks;   // the number of kv blocks
+    int active_blocks;  // the number of active kv blocks
     int cached_blocks;  // the number of cached kv blocks
     int free_blocks;    // the number of free kv blocks
 };

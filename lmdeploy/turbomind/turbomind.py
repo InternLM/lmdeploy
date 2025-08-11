@@ -393,6 +393,7 @@ class TurboMind:
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
+                               active_blocks=tm_metrics.active_blocks,
                                free_blocks=tm_metrics.free_blocks)
 
 

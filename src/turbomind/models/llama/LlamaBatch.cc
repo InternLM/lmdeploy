@@ -1901,26 +1901,29 @@ void LlamaBatch::DestroyCommunicators()
 
 void LlamaBatch::UpdateMetrics()
 {
-    if (!param_.enable_metrics) {
-        return;
-    }
-    // update schedule metrics
-    schedule_metrics_.total_seqs    = sequence_manager_->total_seqs();
-    schedule_metrics_.active_seqs   = sequence_manager_->active_seqs();
-    schedule_metrics_.waiting_seqs  = sequence_manager_->total_seqs() - sequence_manager_->active_seqs();
-    schedule_metrics_.total_blocks  = sequence_manager_->max_block_count();
-    schedule_metrics_.cached_blocks = sequence_manager_->cached_count();
-    schedule_metrics_.free_blocks   = sequence_manager_->free_count();
-    // update request metrics
-    for (int i = 0; i < state_->active_size; ++i) {
-        if (!state_->requests[i]) {
-            continue;
+    if (tp_rank_ == 0 && param_.enable_metrics) {
+        // update schedule metrics
+        int total_seqs, active_seqs, cached_seqs;
+
+        std::tie(total_seqs, active_seqs, cached_seqs) = sequence_manager_->seq_stats();
+        schedule_metrics_.total_seqs   = total_seqs;
+        schedule_metrics_.active_seqs  = active_seqs;
+        schedule_metrics_.waiting_seqs  = total_seqs - active_seqs;
+        schedule_metrics_.total_blocks  = sequence_manager_->total_count();
+        schedule_metrics_.active_blocks = sequence_manager_->active_count();
+        schedule_metrics_.cached_blocks = sequence_manager_->cached_count();
+        schedule_metrics_.free_blocks   = sequence_manager_->free_count();
+        // update request metrics
+        for (int i = 0; i < state_->active_size; ++i) {
+            if (!state_->requests[i]) {
+                continue;
+            }
+            auto& metrics = state_->requests[i]->metrics;
+            if (!metrics || metrics->scheduled_time != 0) {
+                continue;
+            }
+            metrics->scheduled_time = RequestMetrics::timestamp();
         }
-        auto& metrics = state_->requests[i]->metrics;
-        if (!metrics || metrics->scheduled_time != 0) {
-            continue;
-        }
-        metrics->scheduled_time = RequestMetrics::timestamp();
     }
 }
 
