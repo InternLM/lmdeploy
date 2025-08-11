@@ -83,8 +83,6 @@ LMDeployは、[MMRazor](https://github.com/open-mmlab/mmrazor)および[MMDeploy
 
 - **簡単な分散サーバー**：リクエスト分散サービスを活用することで、LMDeployは複数のマシンおよびカードにわたるマルチモデルサービスのデプロイを容易にします。
 
-- **インタラクティブな推論モード**：マルチラウンドの対話プロセス中にアテンションのk/vをキャッシュすることで、エンジンは対話履歴を記憶し、履歴セッションの繰り返し処理を回避します。
-
 - **優れた互換性**：LMDeployは、[KV Cache Quant](docs/en/quantization/kv_quant.md)、[AWQ](docs/en/quantization/w4a16.md)、および[Automatic Prefix Caching](docs/en/inference/turbomind_config.md)を同時に使用することをサポートします。
 
 # パフォーマンス

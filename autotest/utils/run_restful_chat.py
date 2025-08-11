@@ -1,7 +1,5 @@
 import json
 import os
-import random
-import string
 import subprocess
 from time import sleep, time
 
@@ -160,13 +158,6 @@ def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PO
         with assume:
             assert restful_result, msg
 
-        with allure.step(case + ' step3 - restful_test - interactive chat'):
-            active_result, interactive_log, msg = interactive_test(config, case, case_info, model, http_url, worker_id)
-            allure.attach.file(interactive_log, attachment_type=allure.attachment_type.TEXT)
-
-        with assume:
-            assert active_result, msg
-
 
 def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
     log_path = config.get('log_path')
@@ -203,47 +194,6 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
             result = result & case_result
     file.close()
     return result, restful_log, msg
-
-
-def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
-    log_path = config.get('log_path')
-
-    interactive_log = os.path.join(log_path, 'interactive_' + model + worker_id + '_' + case + '.log')
-
-    result = True
-
-    file = open(interactive_log, 'w')
-
-    api_client = APIClient(url)
-    file.writelines('available_models:' + ','.join(api_client.available_models) + '\n')
-
-    # Randomly generate 6 characters and concatenate them into a string.
-    characters = string.digits
-    random_chars = ''.join(random.choice(characters) for i in range(6))
-
-    messages = []
-    msg = ''
-    for prompt_detail in case_info:
-        prompt = list(prompt_detail.keys())[0]
-        new_prompt = {'role': 'user', 'content': prompt}
-        messages.append(new_prompt)
-        file.writelines('prompt:' + prompt + '\n')
-
-        for output in api_client.chat_interactive_v1(prompt=prompt,
-                                                     interactive_mode=True,
-                                                     session_id=random_chars,
-                                                     top_k=1,
-                                                     request_output_len=256):
-            output_content = output.get('text')
-            file.writelines('output:' + output_content + '\n')
-
-            case_result, reason = assert_result(output_content, prompt_detail.values(), model)
-            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
-            if not case_result:
-                msg += reason
-            result = result & case_result
-    file.close()
-    return result, interactive_log, msg
 
 
 def health_check(url):

@@ -47,7 +47,6 @@ class APIClient:
 
     def __init__(self, api_server_url: str, api_key: Optional[str] = None, **kwargs):
         self.api_server_url = api_server_url
-        self.chat_intractive_v1_url = f'{api_server_url}/v1/chat/interactive'
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
         self.completions_v1_url = f'{api_server_url}/v1/completions'
         self.models_v1_url = f'{api_server_url}/v1/models'
@@ -168,70 +167,6 @@ class APIClient:
                     output = json_loads(decoded)
                     yield output
 
-    def chat_interactive_v1(self,
-                            prompt: Union[str, List[Dict[str, str]]],
-                            image_url: Optional[Union[str, List[str]]] = None,
-                            session_id: int = -1,
-                            interactive_mode: bool = False,
-                            stream: bool = False,
-                            stop: Optional[Union[str, List[str]]] = None,
-                            request_output_len: Optional[int] = None,
-                            top_p: float = 0.8,
-                            top_k: int = 40,
-                            temperature: float = 0.8,
-                            repetition_penalty: float = 1.0,
-                            ignore_eos: bool = False,
-                            skip_special_tokens: Optional[bool] = True,
-                            adapter_name: Optional[str] = None,
-                            **kwargs):
-        """Interactive completions.
-
-        - On interactive mode, the chat history is kept on the server. Please
-        set `interactive_mode = True`.
-        - On normal mode, no chat history is kept on the server. Set
-        `interactive_mode = False`.
-
-        Args:
-            prompt: the prompt to use for the generation.
-            image_url (str | List[str] | None): the image url or base64 encoded
-                string for VL models.
-            session_id: determine which instance will be called.
-                If not specified with a value other than -1, using random value
-                directly.
-            interactive_mode (bool): turn on interactive mode or not. On
-                interactive mode, session history is kept on the server (and
-                vice versa).
-            stream: whether to stream the results or not.
-            stop (str | List[str] | None): To stop generating further tokens.
-                Only accept stop words that's encoded to one token idex.
-            request_output_len (int): output token nums. If not specified,
-                will use maximum possible number for a session.
-            top_p (float): If set to float < 1, only the smallest set of most
-                probable tokens with probabilities that add up to top_p or
-                higher are kept for generation.
-            top_k (int): The number of the highest probability vocabulary
-                tokens to keep for top-k-filtering
-            temperature (float): to modulate the next token probability
-            repetition_penalty (float): The parameter for repetition penalty.
-                1.0 means no penalty
-            ignore_eos (bool): indicator for ignoring eos
-            skip_special_tokens (bool): Whether or not to remove special tokens
-                in the decoding. Default to be True.
-            adapter_name (str): For slora inference. Choose which lora to do
-                the inference.
-
-        Yields:
-            json objects consist of text, tokens, input_tokens,
-                history_tokens, finish_reason
-        """
-        pload = {k: v for k, v in locals().copy().items() if k[:2] != '__' and k not in ['self']}
-        response = requests.post(self.chat_intractive_v1_url, headers=self.headers, json=pload, stream=stream)
-        for chunk in response.iter_lines(chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
-            if chunk:
-                decoded = chunk.decode('utf-8')
-                output = json_loads(decoded)
-                yield output
-
     def completions_v1(
             self,
             model: str,
@@ -303,73 +238,6 @@ class APIClient:
                     output = json_loads(decoded)
                     yield output
 
-    def chat(self,
-             prompt: str,
-             session_id: int,
-             image_url: Optional[Union[str, List[str]]] = None,
-             request_output_len: int = 512,
-             stream: bool = False,
-             top_p: float = 0.8,
-             top_k: int = 40,
-             temperature: float = 0.8,
-             repetition_penalty: float = 1.0,
-             ignore_eos: bool = False):
-        """Chat with a unique session_id.
-
-        Args:
-            prompt: the prompt to use for the generation.
-            session_id: determine which instance will be called.
-                If not specified with a value other than -1, using random value
-                directly.
-            image_url (str | List[str] | None): the image url or base64 encoded
-                string for VL models.
-            stream: whether to stream the results or not.
-            stop: whether to stop the session response or not.
-            request_output_len (int): output token nums
-            top_p (float): If set to float < 1, only the smallest set of most
-                probable tokens with probabilities that add up to top_p or
-                higher are kept for generation.
-            top_k (int): The number of the highest probability vocabulary
-                tokens to keep for top-k-filtering
-            temperature (float): to modulate the next token probability
-            repetition_penalty (float): The parameter for repetition penalty.
-                1.0 means no penalty
-            ignore_eos (bool): indicator for ignoring eos
-
-        Yields:
-            text, tokens, finish_reason
-        """
-        assert session_id != -1, 'please set a value other than -1'
-        for outputs in self.chat_interactive_v1(prompt,
-                                                session_id=session_id,
-                                                image_url=image_url,
-                                                request_output_len=request_output_len,
-                                                interactive_mode=True,
-                                                stream=stream,
-                                                top_k=top_k,
-                                                top_p=top_p,
-                                                temperature=temperature,
-                                                repetition_penalty=repetition_penalty,
-                                                ignore_eos=ignore_eos):
-            if outputs['finish_reason'] == 'length' and outputs['tokens'] == 0:
-                print('WARNING: exceed session max length.'
-                      ' Please end the session.')
-            yield outputs['text'], outputs['tokens'], outputs['finish_reason']
-
-    def end_session(self, session_id: int):
-        """End the session with a unique session_id.
-
-        Args:
-            session_id: determine which instance will be called.
-                If not specified with a value other than -1, using random value
-                directly.
-        """
-        for out in self.chat_interactive_v1(prompt='',
-                                            session_id=session_id,
-                                            request_output_len=0,
-                                            interactive_mode=False):
-            pass
-
 
 def input_prompt():
     """Input a prompt in the consolo interface."""
@@ -411,32 +279,3 @@ def get_streaming_response(prompt: str,
             tokens = data.pop('tokens', 0)
             finish_reason = data.pop('finish_reason', None)
             yield output, tokens, finish_reason
-
-
-def main(api_server_url: str = 'http://0.0.0.0:23333', session_id: int = 0, api_key: Optional[str] = None):
-    """Main function to chat in terminal."""
-    if not api_server_url.startswith('http://'):
-        print(f'[WARNING] api_server_url of the api_server should '
-              f'start with "http://", but got "{api_server_url}"')
-        api_server_url = 'http://' + api_server_url.strip()
-    api_client = APIClient(api_server_url, api_key=api_key)
-    while True:
-        prompt = input_prompt()
-        if prompt in ['exit', 'end']:
-            api_client.end_session(session_id)
-            if prompt == 'exit':
-                exit(0)
-        else:
-            for text, tokens, finish_reason in api_client.chat(prompt,
-                                                               session_id=session_id,
-                                                               request_output_len=512,
-                                                               stream=True):
-                if finish_reason == 'length':
-                    continue
-                print(text, end='')
-
-
-if __name__ == '__main__':
-    import fire
-
-    fire.Fire(main)

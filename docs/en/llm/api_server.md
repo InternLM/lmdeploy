@@ -56,8 +56,6 @@ LMDeploy's RESTful API is compatible with the following three OpenAI interfaces:
 - /v1/models
 - /v1/completions
 
-Additionally, LMDeploy also defines `/v1/chat/interactive` to support interactive inference. The feature of interactive inference is that there's no need to pass the user conversation history as required by `v1/chat/completions`, since the conversation history will be cached on the server side. This method boasts excellent performance during multi-turn long context inference.
-
 You can overview and try out the offered RESTful APIs by the website `http://0.0.0.0:23333` as shown in the below image after launching the service successfully.
 
 ![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)
@@ -204,18 +202,6 @@ curl http://{server_ip}:{server_port}/v1/completions \
   "model": "llama",
   "prompt": "two steps to build a house:"
 }'
-```
-
-- interactive chat `v1/chat/interactive`
-
-```bash
-curl http://{server_ip}:{server_port}/v1/chat/interactive \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Hello! How are you?",
-    "session_id": 1,
-    "interactive_mode": true
-  }'
 ```
 
 ## Integrate with WebUI

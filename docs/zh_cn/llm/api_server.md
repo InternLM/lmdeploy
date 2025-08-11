@@ -76,9 +76,6 @@ LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
 - /v1/models
 - /v1/completions
 
-此外，LMDeploy 还定义了 `/v1/chat/interactive`，用来支持交互式推理。交互式推理的特点是不用像`v1/chat/completions`传入用户对话历史，因为对话历史会被缓存在服务端。
-这种方式在多轮次的长序列推理时，拥有很好的性能。
-
 服务启动后，你可以在浏览器中打开网页 http://0.0.0.0:23333，通过 Swagger UI 查看接口的详细说明，并且也可以直接在网页上操作，体验每个接口的用法，如下图所示。
 
 ![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)
@@ -224,18 +221,6 @@ curl http://{server_ip}:{server_port}/v1/completions \
 }'
 ```
 
-- 交互式对话 `v1/chat/interactive`
-
-```bash
-curl http://{server_ip}:{server_port}/v1/chat/interactive \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Hello! How are you?",
-    "session_id": 1,
-    "interactive_mode": true
-  }'
-```
-
 ## 同时启动多个 api_server
 
 两步直接启动多机多卡服务。先用下面的代码创建一个启动脚本。然后：
@@ -327,10 +312,6 @@ hostname -I
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `backend_config` 的 `cache_max_entry_count` 大小
 
-3. 当同一个 `session_id` 的请求给 `/v1/chat/interactive` 函数后，出现返回空字符串和负值的 `tokens`，应该是 `session_id` 混乱了，可以先将交互模式关闭，再重新开启。
+3. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
 
-4. `/v1/chat/interactive` api 支持多轮对话, 但是默认关闭。`messages` 或者 `prompt` 参数既可以是一个简单字符串表示用户的单词提问，也可以是一段对话历史。
-
-5. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
-
-6. 自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)
+4. 自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)
