@@ -138,9 +138,12 @@ public:
 
     void Warmup();
 
-    ScheduleMetrics getScheduleMetrics() const noexcept
+    ScheduleMetrics getScheduleMetrics()
     {
-        return schedule_metrics_;
+        auto cur_metrics = schedule_metrics_.exchange(nullptr);
+        auto res         = cur_metrics.get();
+        schedule_metrics_.exchange(cur_metrics.release());
+        return *res;
     }
 
 private:
@@ -299,7 +302,8 @@ private:
     std::thread internal_thread_;
 
     bool            enable_metrics_;
-    ScheduleMetrics schedule_metrics_;
+    // ScheduleMetrics schedule_metrics_;
+    AtomicScheduleMetrics schedule_metrics_;
 };
 
 using Engine = LlamaBatch;
