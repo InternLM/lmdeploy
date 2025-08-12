@@ -55,20 +55,20 @@ void Module::remove_parameter(Tensor& param)
     TM_CHECK(0) << "param " << &param << " not found";
 }
 
-TensorMap Module::get_parameters() const
+std::unordered_map<std::string, Tensor*> Module::get_parameters() const
 {
-    TensorMap m;
+    std::unordered_map<std::string, Tensor*> m;
     get_parameters_impl({}, m);
     return m;
 }
 
-void Module::get_parameters_impl(std::string prefix, TensorMap& m) const
+void Module::get_parameters_impl(std::string prefix, std::unordered_map<std::string, Tensor*>& m) const
 {
     if (!prefix.empty()) {
         prefix += ".";
     }
     for (const auto& [k, v] : params_) {
-        m.emplace(prefix + k, *v);
+        m.emplace(prefix + k, v);
     }
     for (const auto& [k, v] : modules_) {
         v->get_parameters_impl(prefix + k, m);

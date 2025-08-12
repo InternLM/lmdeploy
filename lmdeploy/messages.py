@@ -8,7 +8,7 @@ import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
-from lmdeploy.pytorch.disagg.request import MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 
 from .tokenizer import Tokenizer
 from .utils import get_logger
@@ -327,6 +327,8 @@ class PytorchEngineConfig:
         model_format (str): weight quantization policy, options: ['fp8'].
         hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
             It can be used to override the default config of the model,
+        disable_vision_encoder (bool): Whether to disable loading vision
+            encoder. Default to False.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -358,6 +360,7 @@ class PytorchEngineConfig:
     model_format: str = None
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
+    disable_vision_encoder: bool = False
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
@@ -376,6 +379,8 @@ class PytorchEngineConfig:
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
+        assert self.block_size >= 16 and (self.block_size & (self.block_size - 1)) == 0, \
+            f'block_size must be >= 16 and a power of 2, but got {self.block_size}'
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'

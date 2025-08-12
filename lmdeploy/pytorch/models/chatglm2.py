@@ -10,13 +10,14 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding,
+                                 build_rotary_params)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 LANGUAGE_TOKEN_TYPE = 0
 VISION_TOKEN_TYPE = 1
@@ -492,6 +493,7 @@ class GLU(nn.Module):
         return x
 
 
+@vlm_model
 class EVA2CLIPModel(nn.Module):
     """Vision model."""
 
@@ -546,12 +548,13 @@ class ChatGLMModel(nn.Module):
                       config.num_attention_heads if config.kv_channels is None else config.kv_channels)
         rope_max_pos_emb = 1 << 20
         rope_base = 10000 * getattr(config, 'rope_ratio', 1.0)
-        self.rotary_pos_emb = build_rotary_embedding(
-            rotary_dim // 2,
-            rope_max_pos_emb,
-            rope_base,
-            emb_type=emb_type,
-        )
+        rope_params = dict(emb_type=emb_type,
+                           dim=rotary_dim // 2,
+                           max_position_embeddings=rope_max_pos_emb,
+                           base=rope_base)
+        update_params = build_rotary_params(config)
+        rope_params.update(update_params)
+        self.rotary_pos_emb = build_rotary_embedding(**rope_params)
 
         # build encoder
         self.encoder = GLMTransformer(config, dtype=dtype, device=device)

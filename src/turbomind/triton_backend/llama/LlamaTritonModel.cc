@@ -106,9 +106,18 @@ static void parse_llama3_rope_param(const YAML::Node& node, RopeParam& param)
     param.llama3.original_max_position_embeddings = node["original_max_position_embeddings"].as<int>();
 }
 
+static void parse_mrope_rope_param(const YAML::Node& node, RopeParam& param)
+{
+    parse_default_rope_param(node, param);
+    auto mrope_section = node["mrope_section"].as<std::vector<int>>();
+    FT_CHECK(mrope_section.size() == 3);
+    param.mrope.section = {mrope_section[0], mrope_section[1], mrope_section[2]};
+}
+
 static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
 {
     rope.type = GetRoPEType(node["type"].as<std::string>());
+
     switch (rope.type) {
         case RopeType::kDefault:
             parse_default_rope_param(node, rope);
@@ -124,6 +133,9 @@ static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
             break;
         case RopeType::kLlama3:
             parse_llama3_rope_param(node, rope);
+            break;
+        case RopeType::kMrope:
+            parse_mrope_rope_param(node, rope);
             break;
         default:
             FT_CHECK(0);
@@ -439,7 +451,12 @@ void LlamaTritonModel::createSharedWeights(int device_id, int rank)
 
 TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 {
-    return TM_CHECK_NOTNULL(weights_[rank])->get_parameters();
+    const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[rank])->get_parameters();
+    TensorMap   params;
+    for (const auto& [name, tensor_ptr] : tensor_ptr_map) {
+        params[name] = *tensor_ptr;
+    }
+    return params;
 }
 
 void LlamaTritonModel::processWeights(int device_id, int rank)
@@ -540,6 +557,48 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
     h_comm->Sync();
 
     engine.Start();
+}
+
+void LlamaTritonModel::sleep(int device_id, int level)
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+
+    if (level == 2) {
+        // free weights
+        weights_[device_id]->release();
+    }
+    else {
+        // offload weights to CPU
+        weights_[device_id]->to_device(kCPU);
+    }
+
+    // free kv cache
+    engines_[device_id]->FreeBufferAndKVCache();
+}
+
+void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tags)
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+
+    std::set<std::string> keys(tags.begin(), tags.end());
+
+    if (keys.find("weights") != keys.end()) {
+        TM_CHECK(weights_[device_id] != nullptr);
+        if (weights_[device_id]->is_initialized()) {
+            weights_[device_id]->to_device(kDEVICE);
+        }
+        else {
+            weights_[device_id]->initialize();
+        }
+    }
+
+    if (keys.find("kv_cache") != keys.end()) {
+        engines_[device_id]->InitializeBufferAndKVCache();
+    }
 }
 
 std::string LlamaTritonModel::toString()

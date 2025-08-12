@@ -43,9 +43,16 @@ struct LoraWeight {
     void*      b;
 };
 
+using gemm::QuantDesc;
+using gemm::MatrixLayout;
+using gemm::Epilogue;
+
 struct LlamaDenseWeight: public core::Module {
 
-    LlamaDenseWeight(): data_type{}, weight_type{}, lora{}, k_desc{}, q_desc{} {}
+    LlamaDenseWeight():
+        data_type{}, weight_type{}, input_type{}, weight_quant{}, input_quant{}, epilogue{}, k_desc{}, q_desc{}
+    {
+    }
 
     void emplace(int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size);
 
@@ -67,9 +74,6 @@ struct LlamaDenseWeight: public core::Module {
     int output_dim = 0;
     int group_size = 1;
 
-    DataType data_type;
-    DataType weight_type;
-
     Tensor weight;
     Tensor bias;
 
@@ -78,10 +82,18 @@ struct LlamaDenseWeight: public core::Module {
 
     Tensor scales_zeros;
 
-    LoraWeight lora;
+    DataType data_type;
 
-    gemm::MatrixLayout k_desc;
-    gemm::MatrixLayout q_desc;
+    DataType weight_type;
+    DataType input_type;
+
+    QuantDesc weight_quant;
+    QuantDesc input_quant;
+
+    Epilogue epilogue;
+
+    MatrixLayout k_desc;
+    MatrixLayout q_desc;
 };
 
 struct LlamaAttentionWeight: public core::Module {
@@ -140,6 +152,8 @@ struct LlamaFfnWeight: core::Module {
 
     int  inter_size{};
     bool is_fused_silu{};
+
+    int tp_rank{};
 };
 
 struct MoeFfnWeight: core::Module {

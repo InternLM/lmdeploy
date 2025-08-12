@@ -532,7 +532,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     // release preempted blocks -> cached
     if (!schedule.victims.empty()) {
-        TM_LOG_WARNING("[SeqMgr] #victim: %d", (int)schedule.victims.size());
+        TM_LOG_INFO("[SeqMgr] #victim: %d", (int)schedule.victims.size());
         for (const auto& p : schedule.victims) {
             UpdateAndSetUnlock(*p);
         }

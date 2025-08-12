@@ -4,7 +4,6 @@ import asyncio
 import atexit
 import concurrent.futures
 import dataclasses
-import os
 import random
 from contextlib import asynccontextmanager, closing
 from copy import deepcopy
@@ -24,29 +23,13 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, R
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestState
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
+                                                   DistServeInitRequest)
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 logger = get_logger('lmdeploy')
-
-
-def get_names_from_model(model_path: str, model_name: str = None):
-    """Get model name and chat template name from workspace model."""
-    triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
-    if not os.path.exists(triton_model_path):
-        chat_template_name = best_match_model(model_path)
-    else:
-        # `model_path` refers to a turbomind model, reading
-        # chat_template_name from the config
-        config_path = os.path.join(triton_model_path, 'config.yaml')
-        with open(config_path, 'r') as f:
-            import yaml
-            config = yaml.safe_load(f)
-        chat_template_name = config['model_config']['chat_template']
-    model_name = model_name if model_name else model_path
-    return model_name, chat_template_name
 
 
 @dataclasses.dataclass
@@ -140,7 +123,7 @@ class Session:
         for user, assistant in self.history:
             if isinstance(user, list):
                 user = str(user)
-            res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
+            res += f'USER: \n{user}\nASSISTANT: \n{assistant}\n'
         return res
 
     def __enter__(self):
@@ -265,7 +248,10 @@ class AsyncEngine(LogitsMixin):
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
-        self.model_name, chat_template_name = get_names_from_model(model_path, model_name)
+        backend_config = backend_config or (TurbomindEngineConfig()
+                                            if backend == 'turbomind' else PytorchEngineConfig())
+        self.model_name = model_name if model_name else model_path
+        chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
             chat_template_config = ChatTemplateConfig(chat_template_name)
         elif chat_template_config.model_name is None:
@@ -276,20 +262,21 @@ class AsyncEngine(LogitsMixin):
 
         self.tokenizer = Tokenizer(model_path)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
-        self.arch, _ = get_model_arch(model_path)
-
+        self.arch, cfg = get_model_arch(model_path)
+        self.session_len = (_get_and_verify_max_len(cfg, None)
+                            if backend_config.session_len is None else backend_config.session_len)
+        backend_config.session_len = self.session_len
         # build backend engine
         if backend == 'turbomind':
-            self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
         elif backend == 'pytorch':
-            self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
         else:
             raise ValueError(f'unsupported backend {backend}')
-
+        self.backend_config = self.engine.engine_config
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
-        self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
         if self.stop_words is not None:
             self.stop_words = self.stop_words[0][0].tolist()
@@ -334,12 +321,10 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        self.engine = tm.TurboMind.from_pretrained(model_path,
-                                                   tokenizer=self.tokenizer,
-                                                   engine_config=backend_config,
-                                                   **kwargs)
-        self.backend_config = self.engine.engine_config
-        self.hf_tm_cfg = self.engine.config
+        return tm.TurboMind.from_pretrained(model_path,
+                                            tokenizer=self.tokenizer,
+                                            engine_config=backend_config,
+                                            **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
@@ -347,9 +332,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        self.engine = Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
-        self.backend_config = self.engine.engine_config
-        self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
+        return Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []
@@ -427,6 +410,24 @@ class AsyncEngine(LogitsMixin):
         finally:
             self._get_free_insts().put_nowait(inst)
 
+    def sleep(self, level: int = 1):
+        """Sleep the model.
+
+        Args:
+            level (int): The sleep level. Level 1 sleep will offload the model
+                weights and discard the kv cache. Level 2 sleep will
+                discard both the model weights and the kv cache.
+        """
+        self.engine.sleep(level)
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wake up the model.
+
+        Args:
+            tags (List[str]): The tags to wake up. Values must be in `("weights", "kv_cache")`
+        """
+        self.engine.wakeup(tags)
+
     def _get_limiter(self):
         if not self.limiter:
             self.limiter = asyncio.Semaphore(self.instance_num)
@@ -470,7 +471,8 @@ class AsyncEngine(LogitsMixin):
 
         loop = loop or self.internal_thread.loop
         # submit the coroutine to async world
-        asyncio.run_coroutine_threadsafe(_infer(), loop).add_done_callback(lambda x: x.result())
+        asyncio.run_coroutine_threadsafe(_infer(),
+                                         loop).add_done_callback(lambda f: None if f.cancelled() else f.result())
 
         return iter(que.get, None)
 
@@ -811,8 +813,7 @@ class AsyncEngine(LogitsMixin):
                     if outputs.last_hidden_state is not None:
                         out.last_hidden_state = outputs.last_hidden_state
                         if hit_stop_token:
-                            out.last_hidden_state = \
-                                out.last_hidden_state[:-hit_stop_token]
+                            out.last_hidden_state = out.last_hidden_state[:-hit_stop_token]
                     if outputs.logits is not None:
                         out.logits = outputs.logits
                         if hit_stop_token:
@@ -842,7 +843,7 @@ class AsyncEngine(LogitsMixin):
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
-                    yield GenOut(response='internal error happened',
+                    yield GenOut(response=f'internal error happened, status code {outputs.status}',
                                  history_token_len=self.id2step[session_id],
                                  input_token_len=len(input_ids),
                                  generate_token_len=0,
@@ -971,5 +972,8 @@ class AsyncEngine(LogitsMixin):
 
     def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
         return self.engine.p2p_connect(conn_request)
+
+    def p2p_drop_connect(self, drop_conn_request: List[DistServeDropConnectionRequest]):
+        return self.engine.p2p_drop_connect(drop_conn_request)
 
     """ DistServe Async Engine API End """

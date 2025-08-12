@@ -26,7 +26,7 @@ cd lmdeploy
 
 ### 环境准备
 
-Docker 版本应不低于 18.09。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
+Docker 版本应不低于 18.09。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/600/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
 
 > \[!CAUTION\]
 > 如果在后续容器内出现`libascend_hal.so: cannot open shared object file`错误，说明Ascend Docker Runtime没有被正确安装。
@@ -57,7 +57,7 @@ DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:latest \
 docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-ascend:latest lmdeploy check_env
 ```
 
-关于在昇腾设备上运行`docker run`命令的详情，请参考这篇[文档](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc1/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)。
+关于在昇腾设备上运行`docker run`命令的详情，请参考这篇[文档](https://www.hiascend.com/document/detail/zh/mindx-dl/600/clusterscheduling/dockerruntimeug/dlruntime_ug_013.html)。
 
 ## 离线批处理
 

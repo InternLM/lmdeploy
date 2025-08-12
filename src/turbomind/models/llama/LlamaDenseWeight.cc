@@ -19,6 +19,7 @@ void LlamaDenseWeight::emplace(
     int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size)
 {
     this->data_type   = data_type;
+    this->input_type  = data_type;
     this->weight_type = weight_type;
     this->input_dim   = input_dim;
     this->output_dim  = output_dim;
@@ -35,13 +36,17 @@ void LlamaDenseWeight::emplace(
     }
 
     if (weight_type == kFloat8_e4m3) {
-        scales = Tensor{{cdiv(input_dim, 128), cdiv(output_dim, 128)}, kFloat, kDEVICE};
+        scales       = Tensor{{cdiv(input_dim, 128), cdiv(output_dim, 128)}, kFloat, kDEVICE};
+        input_type   = kFloat8_e4m3;
+        weight_quant = QuantDesc{gemm::QuantType::kB, 128};
+        input_quant  = QuantDesc{gemm::QuantType::kK, 128};
         register_parameter("scales", scales);
     }
     else if (is_qweight) {
         TM_CHECK(input_dim % group_size == 0) << input_dim << " " << group_size;
-        scales = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
-        zeros  = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
+        scales       = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
+        zeros        = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
+        weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
         register_parameter("scales", scales);
         register_parameter("zeros", zeros);
     }
@@ -119,6 +124,11 @@ static void convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
     using namespace gemm;
 
     if (!is_fused_moe) {
+        dense.k_desc = {dense.weight.dtype(),  //
+                        kRowMajor,
+                        dense.input_dim,
+                        dense.output_dim,
+                        (int)dense.weight.stride(0)};
         return;
     }
 
@@ -296,12 +306,12 @@ LlamaFfnWeight::LlamaFfnWeight(int      hidden_dim,
     inter_size /= tp_size;
 
     this->inter_size = inter_size;
+    this->tp_rank    = tp_rank;
 
     gating.emplace(hidden_dim, inter_size, data_type, false, weight_type, group_size);
 
     intermediate.emplace(hidden_dim, inter_size, data_type, false, weight_type, group_size);
 
-    // fused_gating_intermediate = {hidden_dim, inter_size * 2, data_type, weight_type, group_size};
     is_fused_silu = fuse_silu_act;
 
     output.emplace(inter_size, hidden_dim, data_type, false, weight_type, group_size);
@@ -430,9 +440,11 @@ void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
                                   false,
                                   gating.weight_type,
                                   gating.group_size);
+        register_module("w1w3", fused_up_and_gate, this->tp_rank);
 
         if (is_fused_silu) {
             interleave(fused_up_and_gate, gating, intermediate, data_type, stream);
+            fused_up_and_gate.epilogue = gemm::Epilogue::kGatedSilu;
         }
         else {
             chunk(fused_up_and_gate, gating, intermediate, data_type, stream);
@@ -494,6 +506,9 @@ void MoeFfnWeight::prepare(bool use_simt)
 {
     const auto fused_moe = method == MoeParam::kFused;
 
+    gate.prepare(false, use_simt);
+    shared_gate.prepare(false, use_simt);
+
     for (auto& e : experts) {
         e->prepare(fused_moe, use_simt);
     }
@@ -531,9 +546,13 @@ void MoeFfnWeight::prepare(bool use_simt)
             m.output_dim        = e.output_dim;
             m.group_size        = e.group_size;
             m.data_type         = e.data_type;
+            m.input_type        = e.input_type;
             m.weight_type       = e.weight_type;
+            m.input_quant       = e.input_quant;
+            m.weight_quant      = e.weight_quant;
             m.k_desc            = e.k_desc;
             m.q_desc            = e.q_desc;
+            m.epilogue          = e.epilogue;
         }
 
         // Dummy tensors to hold the blocked ptrs
@@ -541,12 +560,17 @@ void MoeFfnWeight::prepare(bool use_simt)
             TM_CHECK_EQ(quant_ptrs.size(), n_expert);
             m.weight = Tensor{make_blocked_ptr(weight_ptrs), {n_expert}, m.weight_type, kDEVICE};
             m.scales = Tensor{make_blocked_ptr(quant_ptrs), {n_expert}, kFloat, kDEVICE};
+            // This is needed to be recognized as blocked striding mode
+            m.k_desc.offsets = m.q_desc.offsets = (int*)1;
         }
         else {
             m.weight = Tensor{make_strided_ptr(weight_ptrs), {n_expert}, m.weight_type, kDEVICE};
+            // pre-90 grouped gemm need `ld == 0` to resolve strided_ptr
+            m.k_desc.ld = 0;
             if (!quant_ptrs.empty()) {
                 TM_CHECK_EQ(quant_ptrs.size(), n_expert);
                 m.scales_zeros = Tensor{make_strided_ptr(quant_ptrs), {n_expert}, m.data_type, kDEVICE};
+                m.q_desc.ld    = 0;
             }
         }
 

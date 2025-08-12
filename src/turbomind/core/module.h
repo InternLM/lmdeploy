@@ -21,10 +21,10 @@ public:
     void remove_module(Module& module);
     void remove_parameter(Tensor& param);
 
-    TensorMap get_parameters() const;
+    std::unordered_map<std::string, Tensor*> get_parameters() const;
 
 private:
-    void get_parameters_impl(std::string prefix, TensorMap& m) const;
+    void get_parameters_impl(std::string prefix, std::unordered_map<std::string, Tensor*>& m) const;
 
 protected:
     Module* parent_;

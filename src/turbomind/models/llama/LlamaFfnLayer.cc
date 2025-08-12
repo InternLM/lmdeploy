@@ -46,9 +46,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
     Tensor inter;
 
     if (mlp.fused_gating_intermediate.weight) {
-        const auto type = mlp.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm;
-
-        auto mix = linear_.forward(param.input, mlp.fused_gating_intermediate, type);
+        auto mix = linear_.Forward(param.input, mlp.fused_gating_intermediate);
         sync_check_cuda_error();
 
         gating = mix.slice({0, 0}, {(int)token_num, inter_size});
@@ -57,11 +55,11 @@ void LlamaFfnLayer::forward(ForwardParam param)
         }
     }
     else {
-        gating = linear_.forward(param.input, mlp.gating, LlamaLinear::kGemm);
+        gating = linear_.Forward(param.input, mlp.gating);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("w1", layer_id), 3);
 
-        inter = linear_.forward(param.input, mlp.intermediate, LlamaLinear::kGemm);
+        inter = linear_.Forward(param.input, mlp.intermediate);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(inter, Concat("w3", layer_id), 3);
     }
@@ -75,7 +73,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.forward(gating, mlp.output, LlamaLinear::kGemm, param.output);
+        linear_.Forward(gating, mlp.output, param.output);
         sync_check_cuda_error();
     }
 }

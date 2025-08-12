@@ -301,7 +301,7 @@ class ArgumentHelper:
         import logging
         return parser.add_argument('--log-level',
                                    type=str,
-                                   default='ERROR',
+                                   default='WARNING',
                                    choices=list(logging._nameToLevel.keys()),
                                    help='Set the log level')
 
@@ -592,6 +592,14 @@ class ArgumentHelper:
                                    default='DLSlime',
                                    choices=['DLSlime', 'Mooncake'],
                                    help='kvcache migration management backend when PD disaggregation')
+
+    @staticmethod
+    def disable_vision_encoder(parser):
+        """Disable loading vision encoder."""
+        parser.add_argument('--disable-vision-encoder',
+                            action='store_true',
+                            default=False,
+                            help='enable metrics system')
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

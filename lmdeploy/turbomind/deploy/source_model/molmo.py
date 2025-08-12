@@ -11,7 +11,7 @@ from .llama import LlamaModel, LlamaReader
 
 class MolmoReader(LlamaReader):
     attn_layer_prefix = 'model.transformer.blocks'
-    attn_layer_patten = r'model.transformer.blocks.([0-9]+).'
+    attn_layer_patten = r'model\.transformer\.blocks\.([0-9]+).'
     norm_weight_key = 'model.transformer.ln_f.weight'
     output_weight_key = 'model.transformer.ff_out.weight'
 

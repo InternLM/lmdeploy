@@ -15,10 +15,4 @@ try:
 except ImportError:
     logger.warning('Disable Mooncake Backend')
 
-try:
-    logger.debug('Registering InfiniStoreBackend Backend')
-    from .infinistore import InfiniStoreBackend
-except ImportError:
-    logger.warning('Disable InfiniStoreBackend Backend')
-
-__all__ = ['DLSlimeBackend', 'MooncakeBackend', 'InfiniStoreBackend']
+__all__ = ['DLSlimeBackend', 'MooncakeBackend']

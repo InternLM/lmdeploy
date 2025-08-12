@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
+import contextlib
 from typing import Any, Dict, List
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
 
@@ -27,6 +28,10 @@ class ExecutorBase:
                  device_type: str = 'cuda'):
         """Initialize Executor."""
         cache_config.window_size = model_config.sliding_window
+        if cache_config.window_size is not None and cache_config.window_size > 0:
+            # do not support sliding window prefix caching
+            logger.warning('Sliding window prefix caching is not supported.')
+            cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config
@@ -104,7 +109,7 @@ class ExecutorBase:
         """Init rdma link."""
         raise NotImplementedError('Not implemented')
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+    def p2p_connect(self, conn_request: List[DistServeKVTransferEndpointInfo]):
         """rdma_connect."""
         raise NotImplementedError('Not Implemented')
 
@@ -118,10 +123,11 @@ class ExecutorBase:
         """Find best prefill num."""
         cache_max_entry_count = self.cache_config.cache_max_entry_count
         max_prefill_token_num = self.cache_config.max_prefill_token_num
+        max_batches = self.cache_config.max_batches
         runtime_cache_size = 0
         while max_prefill_token_num > 0:
-            # lm_head output(2) + to float(4) + estimated misc(1) = 7
-            runtime_cache_size = int(max_prefill_token_num * vocal_size * 7)
+            # estimate runtime mem size
+            runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocal_size * 2)
             num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
             if int(num_available) // cache_block_size >= 16:
                 break
@@ -183,3 +189,12 @@ class ExecutorBase:
         self.build_cache_engine()
         logger.info('Warming up model.')
         self.warmup()
+
+    @contextlib.contextmanager
+    def remote_log(self, msg: str):
+        """Send log for debugging.
+
+        Do not use it in production.
+        """
+        # Different executor may have different log sending logic.
+        yield
