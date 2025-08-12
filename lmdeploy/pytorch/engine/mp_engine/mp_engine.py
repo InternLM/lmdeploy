@@ -3,7 +3,7 @@ import asyncio
 import pickle
 import signal
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Any
 
 import torch.multiprocessing as mp
 
@@ -187,6 +187,7 @@ class MPEngine:
         server.register_method('p2p_drop_connect', engine.p2p_drop_connect)
         server.register_method('sleep', engine.sleep)
         server.register_method('wakeup', engine.wakeup)
+        server.register_method('update_params', engine.update_params)
         server.register_method('instance_async_end', instance_pool.async_end)
         server.register_method('instance_async_cancel', instance_pool.async_cancel)
         server.register_method('instance_async_stream_infer', instance_pool.async_stream_infer)
@@ -230,6 +231,10 @@ class MPEngine:
     def wakeup(self, tags: Optional[list[str]] = None):
         """Wakeup."""
         return self._collective_rpc('wakeup', tags)
+
+    def update_params(self, request: Any):
+        """Update params."""
+        return self._collective_rpc('update_params', request)
 
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
