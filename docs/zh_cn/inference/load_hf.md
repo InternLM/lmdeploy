@@ -25,8 +25,6 @@ model_name=internlm-chat-20b
 # Inference by TurboMind
 lmdeploy chat $repo_id --model-name $model_name
 
-# Serving with gradio
-lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
 lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
@@ -44,9 +42,6 @@ model_name=qwen-7b
 
 # Inference by TurboMind
 lmdeploy chat $repo_id --model-name $model_name
-
-# Serving with gradio
-lmdeploy serve gradio $repo_id --model-name $model_name
 
 # Serving with Restful API
 lmdeploy serve api_server $repo_id --model-name $model_name --tp 1

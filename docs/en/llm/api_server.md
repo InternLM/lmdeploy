@@ -7,8 +7,6 @@ In the following sections, we will first introduce methods for starting the serv
 
 Next, we focus on the definition of the service's RESTful API, explore the various ways to interact with the interface, and demonstrate how to try the service through the Swagger UI or LMDeploy CLI tools.
 
-Finally, we showcase how to integrate the service into a WebUI, providing you with a reference to easily set up a demonstration demo.
-
 ## Launch Service
 
 Take the [internlm2_5-7b-chat](https://huggingface.co/internlm/internlm2_5-7b-chat) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
@@ -238,15 +236,6 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
     "session_id": 1,
     "interactive_mode": true
   }'
-```
-
-## Integrate with WebUI
-
-```shell
-# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
-# server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
-lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
 ## Launch multiple api servers
