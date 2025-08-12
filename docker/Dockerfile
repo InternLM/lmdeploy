@@ -60,8 +60,6 @@ RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/wheels,from=builder,source=/wheels \
     /tmp/install.sh
 
-COPY --from=builder /usr/local/gdrcopy /usr/local/gdrcopy
-
 # explicitly set ptxas path for triton
 ENV PATH=/opt/py3/bin:$PATH
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas

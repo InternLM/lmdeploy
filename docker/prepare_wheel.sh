@@ -20,7 +20,6 @@ if [[ ${PYTHON_VERSION} = "3.13" ]]; then
     pip wheel -v --no-build-isolation --no-deps -w /wheels --use-deprecated=legacy-resolver outlines_core==0.1.26
 fi
 
-mkdir -p /usr/local/gdrcopy
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     FLASH_MLA_VERSION=9edee0c
 
@@ -30,17 +29,8 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
         DEEP_GEMM_VERSION=1876566
     fi
 
-    GDRCOPY_VERSION=2.4.4
     DEEP_EP_VERSION=26cf250
     pip install nvidia-nvshmem-cu12
-
-    pushd /tmp >/dev/null
-        curl -sSL "https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v${GDRCOPY_VERSION}.tar.gz" | tar xz
-        pushd gdrcopy-${GDRCOPY_VERSION} >/dev/null
-            make prefix=/usr/local/gdrcopy -j $(nproc) install
-        popd >/dev/null
-        rm -rf gdrcopy-${GDRCOPY_VERSION}
-    popd >/dev/null
 
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
