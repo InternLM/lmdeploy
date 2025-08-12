@@ -7,8 +7,6 @@ In the following sections, we will first introduce methods for starting the serv
 
 Next, we focus on the definition of the service's RESTful API, explore the various ways to interact with the interface, and demonstrate how to try the service through the Swagger UI or LMDeploy CLI tools.
 
-Finally, we showcase how to integrate the service into a WebUI, providing you with a reference to easily set up a demonstration demo.
-
 ## Launch Service
 
 Take the [internlm2_5-7b-chat](https://huggingface.co/internlm/internlm2_5-7b-chat) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
@@ -239,8 +237,6 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
     "interactive_mode": true
   }'
 ```
-
-## Integrate with WebUI
 
 ## Launch multiple api servers
 

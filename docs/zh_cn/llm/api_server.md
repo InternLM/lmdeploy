@@ -6,8 +6,6 @@
 
 其次，我们重点介绍服务的 RESTful API 定义，以及接口使用的方式，并展示如何通过 Swagger UI、LMDeploy CLI 工具体验服务功能
 
-最后，向大家演示把服务接入到 WebUI 的方式，你可以参考它简单搭建一个演示 demo。
-
 ## 启动服务
 
 以 huggingface hub 上的 [internlm2_5-7b-chat](https://huggingface.co/internlm/internlm2_5-7b-chat) 模型为例，你可以任选以下方式之一，启动推理服务。
@@ -340,8 +338,6 @@ InternLM/internlm2-chat-1_8b 8 http://${MASTER_IP}:${PROXY_PORT}
 echo "Host IP addresses:"
 hostname -I
 ```
-
-## 接入 WebUI
 
 ## FAQ
 
