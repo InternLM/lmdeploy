@@ -7,7 +7,7 @@ import sys
 import time
 from contextlib import contextmanager
 from logging import Logger, LogRecord
-from typing import List, Optional, TypeVar, Union
+from typing import List, Optional, Union
 
 from transformers import PretrainedConfig
 
@@ -264,19 +264,15 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
 
 # modified from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
 def _get_and_verify_max_len(
-    hf_tm_config: Union[PretrainedConfig, TypeVar('TurbomindModelConfig')],
+    hf_config: PretrainedConfig,
     max_model_len: Optional[int],
 ) -> int:
     """Get and verify the model's maximum length."""
-    if hasattr(hf_tm_config, 'session_len'):
-        # `hf_tm_config` is TurbomindModelConfig
-        session_len = getattr(hf_tm_config, 'session_len')
-        return max_model_len if max_model_len else session_len
 
     # vl configs hide session-len inside llm configs
     llm_keys = ['language_config', 'llm_config', 'text_config']
     for key in llm_keys:
-        hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
+        hf_config = getattr(hf_config, key, hf_config)
 
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
@@ -298,7 +294,7 @@ def _get_and_verify_max_len(
     ]
     max_len_key = None
     for key in possible_keys:
-        max_len = getattr(hf_tm_config, key, None)
+        max_len = getattr(hf_config, key, None)
         if max_len is not None:
             max_len_key = key if max_len < derived_max_model_len \
                 else max_len_key
@@ -321,7 +317,7 @@ def _get_and_verify_max_len(
         # Some models might have a separate key for specifying model_max_length
         # that will be bigger than derived_max_model_len. We compare user input
         # with model_max_length and allow this override when it's smaller.
-        model_max_length = getattr(hf_tm_config, 'model_max_length', None)
+        model_max_length = getattr(hf_config, 'model_max_length', None)
         if model_max_length is not None and max_model_len <= model_max_length:
             pass
         else:
@@ -439,3 +435,12 @@ def serialize_state_dict(state_dict: dict) -> str:
     ForkingPickler(buf).dump(data)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode('utf-8')
+
+
+def is_dlblas_installed():
+    is_dlblas_installed = True
+    try:
+        import dlblas  # noqa: F401
+    except Exception:
+        is_dlblas_installed = False
+    return is_dlblas_installed

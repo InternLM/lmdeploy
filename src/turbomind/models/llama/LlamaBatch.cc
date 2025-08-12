@@ -11,6 +11,7 @@
 #include <memory>
 #include <memory_resource>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <thread>
@@ -337,6 +338,22 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
                     seq.input_embedding_ranges.emplace_back(begin + seq.tokens.size(), end + seq.tokens.size());
                     emb_tensor_ptr += count;
                 }
+            }
+        }
+
+        // copy mrope input meta
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            TM_CHECK(r->session.start_flag) << "Mrope doesn't support interactive chat";
+            if (r->inputs.count("mrope_position_ids")) {
+                core::Copy(r->inputs.at("mrope_position_ids").data<int>(),
+                           input_length * 3,
+                           state.mrope.position_ids.data() + idx * state.mrope.position_ids.shape(1));
+                core::Copy(
+                    r->inputs.at("mrope_position_delta").data<int>(), 1, state.mrope.position_delta.data() + idx);
+                core::Copy(r->inputs.at("mrope_length").data<int>(), 1, state.mrope.length.data() + idx);
+            }
+            else {
+                check_cuda_error(cudaMemsetAsync(state.mrope.length.data() + idx, 0, sizeof(int), stream_));
             }
         }
 
@@ -673,6 +690,16 @@ void LlamaBatch::CopyState(const std::vector<std::tuple<BatchState*, BatchState*
                     d_idx,
                     std::tuple{s->output_ids.data(), d->output_ids.data(), session_len_},
                     std::tuple{(curandState_t*)s->curand_state.data(), (curandState_t*)d->curand_state.data(), 1});
+
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            IndexedCopy(s_idx,
+                        d_idx,
+                        std::tuple{s->mrope.position_ids.data(),
+                                   d->mrope.position_ids.data(),
+                                   (int)s->mrope.position_ids.shape(1)},
+                        std::tuple{s->mrope.position_delta.data(), d->mrope.position_delta.data(), 1},
+                        std::tuple{s->mrope.length.data(), d->mrope.length.data(), 1});
+        }
     }
 
     for (const auto& [s, d, si, di] : desc) {
@@ -743,6 +770,14 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
 
         s.curand_state = {{batch_size, sizeof(curandState_t)}, kDEVICE};
         Clear(s.curand_state.buffer());
+
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            s.mrope.position_ids   = {{batch_size, session_len_ * 3}, kDEVICE};
+            s.mrope.position_delta = {batch_size, kDEVICE};
+            s.mrope.length         = {batch_size, kDEVICE};
+            Clear(s.mrope.position_delta);
+            Clear(s.mrope.length);
+        }
     }
 
     h_input_length_buf_ = {batch_size, kCPUpinned};
@@ -795,7 +830,7 @@ LlamaBatch::~LlamaBatch()
     cudaStreamSynchronize(stream_);
 
     model_.reset();
-    sequence_manager_.reset();
+    FreeBufferAndKVCache();
     context_.reset();  // This destroy all objects in context except for `stream`
 }
 
@@ -825,70 +860,37 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
     comm_(context_->comm),
     session_len_(param.session_len)
 {
-    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
-
-    const int dbits = byte_size(data_type, 8);
-
-    const auto quant_policy = model_->param_.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
-
-    SequenceManager::BlockConfig block_config{
-        (int)model_->size_per_head_,
-        (int)model_->local_kv_head_num_,
-        cache_block_seq_len,
-        elem_bits == dbits ? 0 : dbits,
-        elem_bits,
-    };
-
-    const auto get_free_size = [&] {  //
-        size_t free{}, total{};
-        check_cuda_error(cudaMemGetInfo(&free, &total));
-        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
-    };
-
-    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
-                                                block_config,
-                                                param.cache_max_block_count,
-                                                param.cache_chunk_size,
-                                                param.enable_prefix_caching,
-                                                tp_rank_,
-                                                core::Context::alloc(kDEVICE),
-                                                get_free_size});
-
-    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
-    if (max_session_len < session_len_) {
-        if (tp_rank_ == 0) {
-            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
-                           session_len_,
-                           max_session_len);
-        }
-        session_len_ = max_session_len;
-    }
-
-    FT_CHECK(max_context_token_num_ >= session_len_);
-    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
-
-    for (auto& s : states_) {
-        s.requests.resize(max_batch_size_);
-        s.sequences.resize(max_batch_size_);
-        s.seq_len_limit.resize(max_batch_size_);
-        s.errors.resize(max_batch_size_);
-    }
-
-    state_    = &states_[0];
-    back_     = &states_[1];
-    incoming_ = &states_[2];
 
     symm_alloc_ = core::SimpleAllocator::Create([this](ssize_t size) { return SymmAlloc(size, true); },
                                                 [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
                                                 kDEVICE);
 
-    AllocSymmBuffers();
-
-    AllocateBuffer(max_batch_size_, session_len_, cache_block_seq_len);
+    InitializeBufferAndKVCache();
 
     // Wait for allocations
     check_cuda_error(cudaStreamSynchronize(stream_));
+}
+
+void LlamaBatch::FreeBuffer()
+{
+    input_ids_buf_       = {};
+    decoder_output_buf_  = {};
+    input_length_buf_    = {};
+    context_length_buf_  = {};
+    init_context_length_ = {};
+    sequence_lengths_    = {};
+    cu_block_counts_     = {};
+    block_ptrs_          = {};
+    sampled_logprobs_    = {};
+    sampled_indexes_     = {};
+    sampled_nums_        = {};
+    token_ids_buf_       = {};
+    sampling_logits_     = {};
+    finished_buf_        = {};
+    seq_limit_len_       = {};
+    rope_theta_          = {};
+    d_random_seed_       = {};
+    d_curand_state_      = {};
 }
 
 void LlamaBatch::InitializeSampling(const GenerationState& g)
@@ -1522,6 +1524,14 @@ bool LlamaBatch::Forward(GenerationState& g)
             }
         }
 
+        MropeRope mrope;
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            mrope.stride         = state_->mrope.position_ids.shape(1);
+            mrope.position_ids   = state_->mrope.position_ids.slice(first, mini_batch_size);
+            mrope.position_delta = state_->mrope.position_delta.slice(first, mini_batch_size);
+            mrope.length         = state_->mrope.length.slice(first, mini_batch_size);
+        }
+
         // Synchronize batch token num with sync DP ranks
         auto local_token_nums = AllGather(comm_.h_dp_group, sum_q);
         auto global_token_num = std::accumulate(local_token_nums.begin(), local_token_nums.end(), 0);
@@ -1536,6 +1546,7 @@ bool LlamaBatch::Forward(GenerationState& g)
                         h_input_length_buf_.slice(first, mini_batch_size),
                         state_->h_context_length.slice(first, mini_batch_size),
                         rope_theta_.slice(first, mini_batch_size),
+                        &mrope,
                         finished_buf_.slice(first, mini_batch_size),
                         Buffer(local_token_nums.data(), local_token_nums.size(), kCPU),
                         lora_mask_buf_,
@@ -1617,7 +1628,7 @@ bool LlamaBatch::Forward(GenerationState& g)
         cudaStreamSynchronize(stream_);
         std::stringstream scurr;
         for (int k = 0; k < curr.size(); ++k) {
-            scurr << std::setw(6) << curr[k];
+            scurr << std::setw(10) << curr[k];
         }
         TM_LOG_INFO("[Forward] step = %d, [%s]", g.step - 1, scurr.str().c_str());
     }
@@ -1682,6 +1693,10 @@ void LlamaBatch::Warmup()
     // remove bs that is too large
     bss.erase(std::remove_if(bss.begin(), bss.end(), [&](auto x) { return x > max_forward_token_num_; }), bss.end());
 
+    if (bss.empty() || bss.back() < max_forward_token_num_) {
+        bss.push_back(max_forward_token_num_);
+    }
+
     if (tp_rank_ == 0) {
         auto str = Join(bss.begin(), bss.end(), ", ");
         TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
@@ -1689,13 +1704,14 @@ void LlamaBatch::Warmup()
 
     if (!bss.empty()) {
         const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
-        std::vector<int>                   input_ids(max_bs);
+        Buffer_<int>                       input_ids(max_bs, kCPU);
+        Buffer_<int>                       input_ids_buf(max_bs, kDEVICE);
         std::mt19937                       g{};
         std::uniform_int_distribution<int> d{0, (int)model_->vocab_size_ - 1};
         for (auto& x : input_ids) {
             x = d(g);
         }
-        core::Copy(input_ids.data(), max_bs, input_ids_buf_.data());
+        Copy(input_ids, input_ids_buf);
         check_cuda_error(cudaStreamSynchronize(stream_));
 
         TuningContext context{linear, stream_};
@@ -1714,7 +1730,7 @@ void LlamaBatch::Warmup()
             const auto bsz = 1;
 
             // A single sequence containing `token_num` prefill tokens
-            model_->Forward(input_ids_buf_.slice(0, token_num),
+            model_->Forward(input_ids_buf.slice(0, token_num),
                             symm_hidden_states_buf_.slice(0, token_num * param_.attn_dp_size),
                             decoder_output_buf_.slice(0, bsz),
                             block_ptrs_,
@@ -1722,6 +1738,7 @@ void LlamaBatch::Warmup()
                             Buffer{&input_length, 1, kCPU},
                             Buffer{&input_length, 1, kCPU},
                             rope_theta_.slice(0, bsz),
+                            nullptr,  // mrope
                             finished_buf_.slice(0, bsz),
                             Buffer{local_token_nums.data(), (int)local_token_nums.size(), kCPU},
                             Buffer{},
@@ -1749,6 +1766,84 @@ void LlamaBatch::Warmup()
             TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
         }
     }
+}
+
+void LlamaBatch::InitializeBufferAndKVCache()
+{
+    // initialize kvcache, BatchState and persist buffers
+    core::ContextGuard guard{context_->core_stream, context_->allocator, Allocator{kCPUpinned}};
+
+    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
+
+    const int dbits = byte_size(data_type_, 8);
+
+    const auto quant_policy = model_->param_.quant_policy;
+    const int  elem_bits    = quant_policy ? quant_policy : dbits;
+
+    SequenceManager::BlockConfig block_config{
+        (int)model_->size_per_head_,
+        (int)model_->local_kv_head_num_,
+        cache_block_seq_len,
+        elem_bits == dbits ? 0 : dbits,
+        elem_bits,
+    };
+
+    const auto get_free_size = [&] {  //
+        size_t free{}, total{};
+        check_cuda_error(cudaMemGetInfo(&free, &total));
+        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
+    };
+
+    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
+                                                block_config,
+                                                param_.cache_max_block_count,
+                                                param_.cache_chunk_size,
+                                                param_.enable_prefix_caching,
+                                                tp_rank_,
+                                                core::Context::alloc(kDEVICE),
+                                                get_free_size});
+
+    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
+    if (max_session_len < session_len_) {
+        if (tp_rank_ == 0) {
+            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
+                           session_len_,
+                           max_session_len);
+        }
+        session_len_ = max_session_len;
+    }
+
+    FT_CHECK(max_context_token_num_ >= session_len_);
+    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
+
+    for (auto& s : states_) {
+        s.requests.resize(max_batch_size_);
+        s.sequences.resize(max_batch_size_);
+        s.seq_len_limit.resize(max_batch_size_);
+        s.errors.resize(max_batch_size_);
+    }
+    state_    = &states_[0];
+    back_     = &states_[1];
+    incoming_ = &states_[2];
+
+    AllocSymmBuffers();
+
+    AllocateBuffer(max_batch_size_, session_len_, model_->attn_param_.cache_block_seq_len);
+}
+
+void LlamaBatch::FreeBufferAndKVCache()
+{
+    sequence_manager_.reset();
+
+    for (auto& s : states_) {
+        s = {};
+    }
+
+    FreeSymmBuffers();
+    FreeBuffer();
+
+    cudaStreamSynchronize(stream_);
+    context_->allocator->trim(0);
 }
 
 void* LlamaBatch::SymmAlloc(size_t size, bool register_)

@@ -38,6 +38,7 @@ class RMSNorm(nn.Module):
         backend = get_backend()
 
         w8a8_flag, quant_dtype = _is_w8a8(quant_config)
+
         if w8a8_flag:
             builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
         else:

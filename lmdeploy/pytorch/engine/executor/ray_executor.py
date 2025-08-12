@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -16,9 +17,9 @@ from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
 from .base_worker import WorkerWrapperBase
@@ -190,6 +191,39 @@ def get_ascend_device_rank_mapping(master_addr):
     return rank_mapping, worker_ips, envs
 
 
+def _update_env_cuda_alloc_conf(env_vars: Dict):
+    """Update runtime env for CUDA alloc conf."""
+    cuda_alloc_conf = os.getenv('PYTORCH_CUDA_ALLOC_CONF', None)
+    if cuda_alloc_conf is None:
+        return
+
+    # check and update conf, skip expandable_segments
+    cuda_alloc_conf = cuda_alloc_conf.split(',')
+    new_cuda_alloc_conf = []
+    for conf in cuda_alloc_conf:
+        if 'expandable_segments' in conf:
+            if 'True' in conf:
+                logger.warning('"expandable_segments:True" is not supported.')
+            continue
+        new_cuda_alloc_conf.append(conf)
+    if len(new_cuda_alloc_conf) == 0:
+        new_cuda_alloc_conf = ['expandable_segments:False']
+    cuda_alloc_conf = ','.join(new_cuda_alloc_conf)
+
+    # update env_vars
+    env_vars['PYTORCH_CUDA_ALLOC_CONF'] = cuda_alloc_conf
+
+
+def _update_runtime_envs(runtime_env: Dict):
+    """Update runtime envs."""
+    new_envs = _envs.get_all_envs()
+    env_vars: Dict = runtime_env.get('env_vars', {})
+    env_vars.update(new_envs)
+    _update_env_cuda_alloc_conf(env_vars)
+    runtime_env['env_vars'] = env_vars
+    return runtime_env
+
+
 def _update_runtime_env_nsys(runtime_env: Dict):
     """Update runtime env for nsys."""
     nsight_env = {
@@ -204,13 +238,27 @@ def _update_runtime_env_nsys(runtime_env: Dict):
     return runtime_env
 
 
-def _update_runtime_env_lmdeploy(runtime_env: Dict[str, Any]):
-    """Update runtime env for lmdeploy package."""
-    if log_file := os.getenv('LMDEPLOY_LOG_FILE'):
-        env_vars = runtime_env.get('env_vars', {})
-        env_vars['LMDEPLOY_LOG_FILE'] = log_file
-        runtime_env['env_vars'] = env_vars
-    return runtime_env
+class RemoteLogger:
+    """Remote logger."""
+
+    def __init__(self):
+        self._records = dict()
+        self._next_handle = 0
+
+    def start(self, msg: str):
+        """Start remote log."""
+        record = torch.profiler.record_function(msg)
+        record.__enter__()
+        handle = self._next_handle
+        self._records[handle] = record
+        self._next_handle += 1
+        return handle
+
+    def end(self, handle: int):
+        """End remote log."""
+        record = self._records.pop(handle, None)
+        if record is not None:
+            record.__exit__(None, None, None)
 
 
 class RayWorkerWrapper(WorkerWrapperBase):
@@ -229,10 +277,15 @@ class RayWorkerWrapper(WorkerWrapperBase):
         log_level: int = 30,
     ):
         init_backend(device_type)
+        try_import_deeplink(device_type)
 
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
-        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, dist_config=dist_config)
+        model_config = ModelConfig.from_pretrained(model_path,
+                                                   dtype=dtype,
+                                                   hf_overrides=misc_config.hf_overrides,
+                                                   dist_config=dist_config)
+
         super().__init__(
             model_path=model_path,
             cache_config=cache_config,
@@ -246,6 +299,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             log_level=log_level,
         )
         self.node_ip = ray.util.get_node_ip_address()
+        self._remote_logger = RemoteLogger()
 
     def set_device(self, local_rank):
         """Set worker local rank."""
@@ -274,8 +328,19 @@ class RayWorkerWrapper(WorkerWrapperBase):
         """Pack output."""
         for k, v in output.items():
             if isinstance(v, torch.Tensor):
+                # fix numpy do not have BFloat16 type
+                if v.dtype is torch.bfloat16:
+                    v = v.to(torch.float16)
                 output[k] = v.numpy()
         return output
+
+    def remote_log_start(self, msg: str):
+        """Remote log start."""
+        return self._remote_logger.start(msg)
+
+    def remote_log_end(self, handle: int):
+        """Remote log end."""
+        return self._remote_logger.end(handle)
 
     def exit(self):
         """Exit actor."""
@@ -438,7 +503,7 @@ class RayExecutor(ExecutorBase):
         self.remote_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
         logger.info('Starting async task RayPrefetchOutput loop.')
-        self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
+        self._prefetch_task = event_loop.create_task(self._prefetch_outputs(), name='RayExecutorPrefetchOutput')
         self._prefetch_task.add_done_callback(self._prefetch_task_callback)
 
     def stop(self):
@@ -487,14 +552,22 @@ class RayExecutor(ExecutorBase):
         inputs = ray.put(inputs)
         # make sure in order
         outs = self.dag.execute(inputs)
-        await asyncio.sleep(0)
         ray.get(outs)
 
     async def get_output_async(self):
         """Get output async."""
-        if self.remote_outs.qsize() > 0:
-            return self.remote_outs.get_nowait()
         return await self.remote_outs.get()
+
+    @contextlib.contextmanager
+    def remote_log(self, msg: str):
+        """Send log for debugging.
+
+        Do not use it in production.
+        """
+        handle_ref = self.workers[0].remote_log_start.remote(msg)
+        yield
+        handle = ray.get(handle_ref)
+        ray.get(self.workers[0].remote_log_end.remote(handle))
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """Sort workers by ip."""
@@ -567,7 +640,7 @@ class RayExecutor(ExecutorBase):
 
             if device_str == 'GPU':
                 runtime_env = dict()
-                runtime_env = _update_runtime_env_lmdeploy(runtime_env)
+                runtime_env = _update_runtime_envs(runtime_env)
                 if _envs.ray_nsys_enable:
                     runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
@@ -617,9 +690,12 @@ class RayExecutor(ExecutorBase):
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.collective_rpc('p2p_initialize', (init_request, ))
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
         """Rdma connect."""
-        return self.collective_rpc('p2p_connect', (conn_request, ))
+        return self.collective_rpc('p2p_connect', (
+            remote_engine_id,
+            conn_request,
+        ))
 
     async def migrate(self, batch: MigrationExecutionBatch):
         jobs = (worker.migrate.remote(batch) for worker in self.workers)

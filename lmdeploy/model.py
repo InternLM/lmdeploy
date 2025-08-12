@@ -965,8 +965,7 @@ class Qwen7BChat(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         model_path = model_path.lower()
-        if ('qwen' in model_path and 'qwen2.5' not in model_path and 'qwen3' not in model_path
-                and 'qwq' not in model_path):
+        if 'qwen' in model_path and not any(keyword in model_path for keyword in ('qwen2.5', 'qwq', 'qwen3')):
             return 'qwen'
         if 'minicpm-v-2_6' in model_path:
             return 'minicpmv-2d6'
@@ -1038,11 +1037,11 @@ class Qwen2d5Chat(Qwen7BChat):
         for index, message in enumerate(messages):
             if (message['role'] == 'user' or (message['role'] == 'system' and index != 0)
                     or (message['role'] == 'assistant' and message.get('tool_calls') is None)):
-                ret += f"{box_map[message['role']]}{message['content']}{self.eosys}"
+                ret += f"{box_map[message['role']]}{get_text(message['content'])}{self.eosys}"
             elif message['role'] == 'assistant':
                 ret += '<|im_start|>assistant'
                 if message.get('content') is not None:
-                    ret += f"{self.separator}{message['content']}"
+                    ret += f"{self.separator}{get_text(message['content'])}"
 
                 if message.get('tool_calls') is not None:
                     tool_calls = message['tool_calls']
@@ -1966,6 +1965,116 @@ class Llama4(BaseChatTemplate):
             return 'llama4'
 
 
+@MODELS.register_module(name='intern-s1')
+@MODELS.register_module(name='interns1')
+class InternS1(InternVL2_5):
+
+    def __init__(
+            self,
+            tool='\n\nYour response should consist of a reasoning step (**thought**) followed immediately by a function call in valid JSON format. Wrap each function call using the `<|action_start|><|plugin|>` and `<|action_end|>` tags.\n\n**Format example:**\n\n```\n(Your thought goes here...)\n\n<|action_start|><|plugin|>\n{\n    "name": "tool_name",\n    "parameters": {\n        "parameter1": "value1",\n        "parameter2": "value2"\n    }\n}\n<|action_end|>\n```\n\n# External Tools\nYou have access to these tools:\n',  # noqa: E501
+            eotool='',
+            meta_instruction='You are an expert reasoner with extensive experience in all areas. You approach problems through systematic thinking and rigorous reasoning. Your response should reflect deep understanding and precise logical thinking, making your solution path and reasoning clear to others. Please put your thinking process within <think>...</think> tags.',  # noqa: E501
+            **kwargs):
+        super(InternVL2_5, self).__init__(meta_instruction=meta_instruction, **kwargs)
+
+        self.tool = tool or ''
+        self.eotool = eotool or ''
+
+    def messages2prompt(self, messages, sequence_start=True, tools=None, enable_thinking=None, **kwargs):
+        """Return the prompt that is concatenated with other elements in the
+        chat template.
+
+        Args:
+            messages (str | List): user's input prompt
+        Returns:
+            str: the concatenated prompt
+        """
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        box_map = dict(user=self.user,
+                       assistant=self.assistant,
+                       system=self.system,
+                       environment=self.environment,
+                       tool=self.environment)
+        eox_map = dict(user=self.eoh,
+                       assistant=self.eoa + self.separator,
+                       system=self.eosys,
+                       environment=self.eoenv,
+                       tool=self.eoenv)
+        name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
+
+        ret = ''
+
+        if tools:
+            tools_prompt = dict(
+                role='system',
+                name='plugin',  # only support internlm2
+                content=f'{self.tool}{json.dumps(tools, ensure_ascii=False, indent=2)}{self.eotool}')
+
+            if messages[0]['role'] == 'system':
+                tools_prompt['content'] = messages[0]['content'] + tools_prompt['content']
+                messages[0] = tools_prompt
+            else:
+                if self.meta_instruction is not None and sequence_start and enable_thinking is not False:
+                    tools_prompt['content'] = self.meta_instruction + tools_prompt['content']
+                else:
+                    tools_prompt['content'] = tools_prompt['content'].lstrip('\n')
+                messages.insert(0, tools_prompt)
+        elif self.meta_instruction is not None and sequence_start:
+            if len(messages):
+                if messages[0]['role'] != 'system' and enable_thinking is not False:
+                    ret += f'{self.system}{self.meta_instruction}{eox_map["system"]}'
+        # find index of last user input section
+        last_user_idx = -1
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx]['role'] == 'user':
+                last_user_idx = idx
+                break
+
+        for idx, message in enumerate(messages):
+            role = message['role']
+            content = get_text(message['content'])
+            if last_user_idx != -1 and idx > last_user_idx and message.get('reasoning_content', None) is not None:
+                content = f'<think>\n{message["reasoning_content"]}\n</think>\n{content}'
+            if role == 'assistant' and message.get('tool_calls', None) is not None:
+                for tool_call in message['tool_calls']:
+                    function = tool_call.get('function', {})
+                    function['name'] = function.get('name', '')
+                    function['parameters'] = function.get('parameters', function.get('arguments', ''))
+                    function.pop('arguments')
+                    if isinstance(function['parameters'], str):
+                        function['parameters'] = json.loads(function['parameters'])
+                    content += f'<|action_start|><|plugin|>\n{json.dumps(function, ensure_ascii=False)}\n<|action_end|>'
+
+            if 'name' in message:
+                begin = box_map[role].strip()
+                if message['name'] in name_map:
+                    begin = begin + f" name={name_map[message['name']]}\n"
+                elif role == 'tool':
+                    begin = begin + f" name={name_map['plugin']}\n"
+            else:
+                begin = box_map[role]
+            ret += f'{begin}{content}{eox_map[role]}'
+        if len(messages) and messages[-1]['role'] == 'assistant':
+            return ret[:-len(eox_map['assistant'])]  # prefix of response
+        ret += f'{self.assistant}'
+
+        if enable_thinking is not False:
+            ret += '<think>'
+        return ret
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'intern-s1' in path or 'interns1' in path:
+            return 'intern-s1'
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 
@@ -1976,7 +2085,8 @@ def best_match_model(query: str) -> Optional[str]:
         str: the possible model name.
     """
     for name, model in MODELS.module_dict.items():
-        if model.match(query):
-            return model.match(query)
+        matched_name = model.match(query)  # cache the result to avoid matching twice
+        if matched_name:
+            return matched_name
     logger.warning(f'Did not find a chat template matching {query}.')
     return 'base'

@@ -22,10 +22,7 @@ public:
         buffer_ = Buffer(layout_.cosize(), dtype, alloc);
     }
 
-    Tensor(Buffer buffer, Layout layout): layout_{std::move(layout)}, buffer_{std::move(buffer)}
-    {
-        TM_CHECK_LE(layout_.cosize(), buffer_.size());
-    }
+    Tensor(Buffer buffer, Layout layout): layout_{std::move(layout)}, buffer_{buffer.slice(0, layout_.cosize())} {}
 
     Tensor(Buffer buffer): layout_{buffer.size()}, buffer_{buffer} {}
 
@@ -204,9 +201,14 @@ private:
     Buffer buffer_;
 };
 
-static Tensor empty_like(const Tensor& tensor, std::optional<Device> device = {})
+inline Tensor empty_like(const Tensor& tensor, std::optional<Device> device = {})
 {
     return Tensor{tensor.layout(), tensor.dtype(), device ? *device : tensor.device()};
+}
+
+inline Tensor empty_like(const Tensor& tensor, DataType dtype)
+{
+    return Tensor{tensor.layout(), dtype, tensor.device()};
 }
 
 void Copy(const Tensor& src, Ref<Tensor> dst_, const Stream& stream);
@@ -216,6 +218,8 @@ void Copy(const Tensor& src, Ref<Tensor> dst_);
 void Clear(Ref<Tensor> a_, const Stream& stream);
 
 void Clear(Ref<Tensor> a_);
+
+Tensor to_device(const Tensor& src, const Device& device);
 
 #if 0
 

@@ -189,10 +189,10 @@ LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomin
 
 ## 安装
 
-我们推荐在一个干净的conda环境下（python3.8 - 3.12），安装 lmdeploy：
+我们推荐在一个干净的conda环境下（python3.9 - 3.12），安装 lmdeploy：
 
 ```shell
-conda create -n lmdeploy python=3.8 -y
+conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
 pip install lmdeploy
 ```

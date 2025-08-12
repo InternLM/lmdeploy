@@ -77,7 +77,7 @@ public:
         tie(Pa, Pu)     = tie(c.pa, c.pu);
         tie(Pb, Pv)     = tie(c.pb, c.pv);
 
-        workspace.tensormaps_size = 4096 * sizeof(CUtensorMap);
+        workspace.tensormaps_size = 8192 * sizeof(CUtensorMap);
         cudaMalloc(&workspace.tensormaps, workspace.tensormaps_size);
         cudaMalloc(&workspace.flags, sizeof(int));
         // TM_CHECK_NOTNULL(workspace.flags);
@@ -141,8 +141,22 @@ public:
         rng_.NormalFloat(b_, 1., 1.);
 
         if (Ta == kFloat8_e4m3) {
-            QuantizeSymmBlock(a_q_, a_s_, a_, stream);
-            DequantizeSymmBlock(a_f_, a_q_, a_s_, stream);
+            if (expert_num_ == 0) {
+                QuantizeSymmBlock(a_q_, a_s_, a_, stream);
+                DequantizeSymmBlock(a_f_, a_q_, a_s_, stream);
+            }
+            else {
+                a_q_          = empty_like(a_, kFloat8_e4m3);
+                a_f_          = empty_like(a_);
+                const int m_s = cdiv(M, 128);
+                a_s_          = Tensor_<float>({m_s * expert_num_, cdiv(K, 128)}, kDEVICE);
+                for (int i = 0; i < expert_num_; ++i) {
+                    auto a_s = a_s_.slice(i * m_s, m_s);
+                    QuantizeSymmBlock(a_q_.slice(i * M, M), a_s, a_.slice(i * M, M), stream);
+                    DequantizeSymmBlock(a_f_.slice(i * M, M), a_q_.slice(i * M, M), a_s, stream);
+                }
+            }
+
             a_q_desc_ = {a_q_.dtype(), kRowMajor, M, K, (int)a_q_.stride(0)};
             u_desc_   = {a_s_.dtype(), kRowMajor, (int)a_s_.shape(0), (int)a_s_.shape(1), (int)a_s_.stride(0)};
             tie(a_x_, a_desc_x_) = std::make_tuple(&a_q_, &a_q_desc_);
@@ -152,6 +166,8 @@ public:
                 std::cout << "a_s " << a_s_ << "\n";
                 std::cout << "a_f " << a_f_ << "\n";
             }
+
+            quant_a_ = {QuantType::kB, 128};
         }
 
         if (Tb == kFloat8_e4m3) {  // b is k-major & b_s is n-major
@@ -166,6 +182,8 @@ public:
                 std::cout << "b_s " << b_s_ << "\n";
                 std::cout << "b_f " << b_f_ << "\n";
             }
+
+            quant_b_ = {QuantType::kK, 128};
         }
 
         if (expert_num) {
@@ -221,8 +239,8 @@ public:
         for (int i = 0; i < expert_num_; ++i) {
             a_ptrs[i] = reinterpret_cast<uint64_t>(a_x_->slice(m_offset[i]).raw_data());
             if (a_s_) {
-                TM_CHECK(m_offset[i] % 128 == 0);
-                u_ptrs[i] = reinterpret_cast<uint64_t>(a_s_.slice(m_offset[i] / 128).raw_data());
+                const int m_s = cdiv(M, 128);
+                u_ptrs[i]     = reinterpret_cast<uint64_t>(a_s_.slice(i * m_s).raw_data());
             }
         }
 
@@ -309,9 +327,9 @@ public:
     {
         const Operation operation{get_dispatch_policy(),  //
                                   Epilogue::kNone,
-                                  {QuantType::kDefault, 128},
-                                  {QuantType::kDefault, 128},
-                                  0};
+                                  quant_a_,
+                                  quant_b_,
+                                  1};
 
         auto C = &c_x_;
         auto V = &b_s_;
@@ -477,6 +495,9 @@ private:
 
     int expert_num_;
     int e_;
+
+    QuantDesc quant_a_{};
+    QuantDesc quant_b_{};
 
     Buffer_<int>   m_offset_;
     Buffer_<int>   n_offset_;

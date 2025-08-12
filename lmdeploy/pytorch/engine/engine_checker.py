@@ -89,3 +89,10 @@ class EngineChecker(BaseChecker):
             self.log_and_exit(mod_name='Engine',
                               message='max_batch_size should be'
                               f' greater than 0, but got {engine_config.max_batch_size}')
+
+        num_gpu_blocks = engine_config.num_gpu_blocks
+        if num_gpu_blocks > 0 and num_gpu_blocks < 16:
+            self.log_and_exit(mod_name='Engine',
+                              message='num_gpu_blocks should be greater than 16, '
+                              f'but got {num_gpu_blocks}. Set num_gpu_blocks to 0 to automatically '
+                              'determine the number of GPU blocks based on the model size and device memory.')

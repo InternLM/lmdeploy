@@ -18,7 +18,7 @@ project(TurboMind LANGUAGES CXX CUDA)
 if (MSVC)
     # use standard conformant preprocessor
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus")
 endif ()
 
 find_package(CUDAToolkit REQUIRED)
@@ -52,6 +52,7 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
   GIT_TAG        v3.9.2
   GIT_SHALLOW ON
+  EXCLUDE_FROM_ALL
 )
 
 set(CUTLASS_ENABLE_SM90_EXTENDED_MMA_SHAPES ON CACHE BOOL "Enable extended GMMA shapes")
@@ -63,6 +64,8 @@ FetchContent_Declare(
   yaml-cpp
   GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
   GIT_TAG 0.8.0
+  PATCH_COMMAND git apply ${CMAKE_CURRENT_SOURCE_DIR}/cmake/yaml-cpp_cmake_policy.patch
+  UPDATE_DISCONNECTED 1
 )
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
 FetchContent_MakeAvailable(yaml-cpp)
@@ -119,18 +122,21 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl") # -Xptxas -v
 
 # TODO: build for sm_72 & sm_87 on aarch64 platform (Jetson devices)
 if (NOT CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 70-real 75-real)
+  set(CMAKE_CUDA_ARCHITECTURES 70-real 75-real)  # V100, 2080
   if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 80-real)
+    list(APPEND CMAKE_CUDA_ARCHITECTURES 80-real) # A100
   endif ()
   if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.1")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 86-real)
+    list(APPEND CMAKE_CUDA_ARCHITECTURES 86-real) # 3090
   endif ()
   if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.8")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real)
+    list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real) # 4090
   endif ()
   if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.0")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 90a-real)
+    list(APPEND CMAKE_CUDA_ARCHITECTURES 90a-real) # H100
+  endif ()
+  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.8")
+    list(APPEND CMAKE_CUDA_ARCHITECTURES 120a-real) # 5090
   endif ()
   if (MSVC)
     list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real)
@@ -230,5 +236,9 @@ add_subdirectory(src)
 
 # install python api
 if (BUILD_PY_FFI)
-  install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+  if (CALL_FROM_SETUP_PY)
+    install(TARGETS _turbomind DESTINATION ${CMAKE_INSTALL_PREFIX})
+  else()
+    install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+  endif()
 endif ()

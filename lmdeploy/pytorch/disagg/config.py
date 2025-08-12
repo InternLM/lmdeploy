@@ -42,24 +42,6 @@ class MigrationBackend(enum.Enum):
 
     DLSlime = enum.auto()
     Mooncake = enum.auto()
-    InfiniStore = enum.auto()
-
-
-class MigrationProtocol(enum.Enum):
-    """Migration Transport Protocol.
-
-    Attributes:
-        TCP: TCP for General Purpose Transport Protocol.
-        RDMA: IB or RoCEv1/v2.
-        NVLINK: High device-to-device link.
-
-    Warning: By now, only `GPU Directed RDMA` is supported in DistServe.
-        We preserve several protocol and will be implemented in the future.
-    """
-
-    TCP = enum.auto()
-    RDMA = enum.auto()
-    NVLINK = enum.auto()
 
 
 class RDMALinkType(enum.Enum):
@@ -127,11 +109,9 @@ class DistServeEngineConfig(BaseModel):
     num_gpu_blocks: int
 
 
-class DistServeConfig(BaseModel):
-    """DistServe Config."""
+class MooncakeEngineConfig(DistServeEngineConfig):
+    """Mooncake Transfer Engine Config.
 
-    serving_strategy: ServingStrategy
-    distserve_transport_protocol: MigrationProtocol
-    rdma_config: Optional[DistServeRDMAConfig] = None
-    nvlink_config: Optional[DistServeNVLinkConfig] = None
-    tcp_config: Optional[DistServeTCPConfig] = None
+    TODO: Support more specific config for Mooncake.
+    """
+    pass

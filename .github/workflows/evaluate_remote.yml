@@ -45,7 +45,7 @@ env:
   TRANSFORMERS_OFFLINE: 1
   LMDEPLOY_USE_MODELSCOPE: false
   HF_HUB_OFFLINE: 1
-  OUTPUT_FOLDER: cuda12.1_dist_${{ github.run_id }}
+  OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
   CONDA_PATH: /fs-computility/llm/qa-llm-cicd/miniconda3
   PIP_CACHE_PATH: /fs-computility/llm/qa-llm-cicd/.cache/pip
   REPORT_ROOT: /fs-computility/llm/qa-llm-cicd/eval_report/lmdeploy_regression
@@ -87,7 +87,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.1
+      DOCKER_TAG: cuda12.4
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -143,6 +143,7 @@ jobs:
             . ${{env.CONDA_PATH}}/bin/activate
             conda create -y --name ${{env.CONDA_ENV}} python=3.10
             conda activate ${{env.CONDA_ENV}}
+            unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
             pip install -r /fs-computility/llm/qa-llm-cicd/config/requirements.txt --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install opencompass*.whl --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install opencompass[lmdeploy] --cache-dir ${{env.PIP_CACHE_PATH}}
@@ -208,6 +209,7 @@ jobs:
             . ${{env.CONDA_PATH}}/bin/activate
             conda activate ${{env.CONDA_ENV}}
             conda info --envs
+            unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
             echo "models = sorted(models, key=lambda x: x['run_cfg']['num_gpus'])" >> opencompass/eval_regression_${{matrix.regression_func}}.py
             cd opencompass
             opencompass eval_regression_${{matrix.regression_func}}.py --work-dir ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}} --reuse --dump-eval-details

@@ -13,7 +13,7 @@ from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .phi3 import Phi3ForCausalLM, Phi3Model
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 CLIP_VIT_LARGE_PATCH14_336_CONFIG = CLIPVisionConfig(attention_dropout=0.0,
                                                      dropout=0.0,
@@ -31,6 +31,7 @@ CLIP_VIT_LARGE_PATCH14_336_CONFIG = CLIPVisionConfig(attention_dropout=0.0,
                                                      projection_dim=768)
 
 
+@vlm_model
 class Phi3ImageEmbedding(nn.Module):
     """Image embedding."""
 

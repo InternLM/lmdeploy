@@ -31,16 +31,15 @@ class ModelChecker(BaseChecker):
     def check_trans_version(self, config, trans_version):
         """Check transformers version."""
         model_path = self.model_path
-        try:
-            model_trans_version = getattr(config, 'transformers_version', None)
-            if model_trans_version is not None:
-                model_trans_version = version.parse(model_trans_version)
-                assert trans_version >= model_trans_version, ('Version mismatch.')
-        except Exception as e:
-            message = (f'model `{model_path}` requires '
-                       f'transformers version {model_trans_version} '
-                       f'but transformers {trans_version} is installed.')
-            self.log_and_exit(e, 'transformers', message=message)
+        logger = self.get_logger()
+        model_trans_version = getattr(config, 'transformers_version', None)
+        if model_trans_version is not None:
+            model_trans_version = version.parse(model_trans_version)
+            if trans_version < model_trans_version:
+                message = (f'model `{model_path}` requires '
+                           f'transformers version {model_trans_version} '
+                           f'but transformers {trans_version} is installed.')
+                logger.warning(message)
 
     def check_dtype(self, config):
         """Check dtype."""

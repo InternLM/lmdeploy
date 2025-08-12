@@ -2,8 +2,10 @@
 import asyncio
 import base64
 import functools
+import time
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
+from os import getenv
 from typing import Any, Dict
 
 import torch
@@ -19,7 +21,7 @@ from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
 from ..model_inputs import ModelInputs, step_ctx_manager
-from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
+from ..models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
@@ -274,6 +276,15 @@ class BaseModelAgent:
         self.cache_engine = None
         self.profiler: AgentProfiler = None
 
+        # microbatch
+        self.enable_microbatch = self.dist_ctx.dist_config.enable_microbatch
+        self.enable_microbatch_prefill_batchsize_threshold = \
+            int(getenv('ENABLE_MICROBATCH_PREFILL_BATCHSIZE_THRESHOLD', 2))
+        self.enable_microbatch_prefill_token_threshold = \
+            int(getenv('ENABLE_MICROBATCH_PREFILL_TOKEN_THRESHOLD', 2))
+        self.enable_microbatch_decode_batchsize_threshold = \
+            int(getenv('ENABLE_MICROBATCH_DECODE_BATCHSIZE_THRESHOLD', 2))
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -378,7 +389,7 @@ class BaseModelAgent:
             return tmp_out
 
         # make long context inputs
-        is_long_context = inputs.input_ids.numel() > max_prefill_token_num
+        is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
         max_seqlen = 0
         if is_long_context:
             seq_len = inputs.seq_length
@@ -517,6 +528,17 @@ class BaseModelAgent:
             # gather dp forward metadata
             batch_size = inputs.seq_length.numel()
             dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
+            # check enable_microbatch
+            if self.enable_microbatch:
+                tokens_num = inputs.input_ids.numel()
+                if is_decoding:
+                    enable_microbatch = batch_size >= \
+                        self.enable_microbatch_decode_batchsize_threshold
+                else:
+                    enable_microbatch = batch_size >= \
+                        self.enable_microbatch_prefill_batchsize_threshold and \
+                        tokens_num >= self.enable_microbatch_prefill_token_threshold
+                dp_forward_meta.append(int(enable_microbatch))
             gathered_meta = DistGatherScalar(dp_forward_meta, dp, device='cuda')
 
             yield
@@ -542,6 +564,10 @@ class BaseModelAgent:
                 all_sync_flags = gathered_meta[:, 3].bool()
                 sync_long_context = all_sync_flags.any()
                 logger.debug(f'sync_long_context={sync_long_context}')
+
+            # update if enable_microbatch
+            if self.enable_microbatch and gathered_meta[:, 4].all():
+                inputs.enable_microbatch = True
 
             # update dp meta
             inputs.build_dp_meta()
@@ -776,6 +802,7 @@ class BaseModelAgent:
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
+            out['new_token_timestamp'] = time.perf_counter()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
         return out
@@ -790,9 +817,11 @@ class BaseModelAgent:
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
+        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder)
         patched_model = build_patched_model(self.model_config,
                                             device=device,
-                                            model_format=self.misc_config.model_format)
+                                            model_format=self.misc_config.model_format,
+                                            build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
             load_model_weights(patched_model, model_path, device=device)

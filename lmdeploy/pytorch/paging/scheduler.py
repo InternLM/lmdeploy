@@ -5,6 +5,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
+from lmdeploy.messages import EngineCoreEventType
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
@@ -135,6 +136,8 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
+        seq.record_event(EngineCoreEventType.QUEUED)
+
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
         running_migration: SeqList = []
@@ -226,6 +229,8 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
+            seq.record_event(EngineCoreEventType.SCHEDULED)
+
         return running, swap_in_map, swap_out_map, copy_map
 
     @logging_timer('ScheduleDecoding', logger)
@@ -240,8 +245,15 @@ class Scheduler:
         swap_in_map: Dict[int, int] = dict()
         copy_map: Dict[int, int] = dict()
 
-        def __evict_for_seq(seq: SchedulerSequence):
+        def __evict_for_seq(seq: SchedulerSequence, num_required_blocks: int):
             """Evict until can append."""
+            if num_required_blocks == 0:
+                # No need to evict, just return True.
+                return True
+            elif num_required_blocks < self.block_manager.get_num_free_gpu_blocks():
+                # Enough free blocks, just return True.
+                return True
+
             from itertools import chain
             hanging = reversed(self.hanging)
             waiting = reversed(self.waiting)
@@ -252,7 +264,8 @@ class Scheduler:
         for seq in running:
             # token + n
 
-            if len(seq.logical_blocks) > self.block_manager.num_gpu_blocks:
+            num_required_blocks = self.block_manager.num_required_blocks(seq, prealloc_size)
+            if len(seq.logical_blocks) + num_required_blocks > self.block_manager.num_gpu_blocks:
                 # Reach max gpu cache size.
                 logger.warning(f'session[{seq.session_id}] '
                                f'sequence[{seq.seq_id}] '
@@ -262,7 +275,7 @@ class Scheduler:
                 seq.set_step(0)
                 continue
 
-            if not __evict_for_seq(seq):
+            if not __evict_for_seq(seq, num_required_blocks):
                 self._set_message_status(seq, MessageStatus.WAITING)
                 continue
 
@@ -334,6 +347,9 @@ class Scheduler:
     def has_waiting(self):
         return self.num_waiting() > 0
 
+    def has_to_be_migrated(self):
+        return self.num_to_be_migrated() > 0
+
     def has_migration_running(self):
         return self.num_running() > 0
 
@@ -354,6 +370,14 @@ class Scheduler:
     def num_waiting(self):
         """Num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING)
+
+    def num_to_be_migrated(self):
+        """Num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.TO_BE_MIGRATED)
+
+    def num_migration_locked(self):
+        """Num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_LOCKED)
 
     def num_migration_running(self):
         """Num migration running."""
@@ -398,3 +422,13 @@ class Scheduler:
         migration_done = self.migration_done
         for seq in migration_done:
             self._set_message_status(seq, MessageStatus.RUNNING)
+
+    def make_stats(self):
+        """Make stats."""
+        return {
+            'running': self.num_running(),
+            'waiting': self.num_waiting(),
+            'locked': self.num_locked(),
+            'free_gpu_blocks': self.block_manager.get_num_free_gpu_blocks(),
+            'total_gpu_blocks': self.block_manager.num_gpu_blocks
+        }

@@ -14,7 +14,7 @@ from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -28,7 +28,6 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
-from .utils import ModelSource, get_model_source
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
@@ -127,7 +126,6 @@ class TurboMind:
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
-                 model_source: ModelSource = ModelSource.WORKSPACE,
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
@@ -144,19 +142,16 @@ class TurboMind:
 
         self.gpu_count = _engine_config.device_num
         self.devices = _engine_config.devices
+        self._engine_created = False
 
         self.tokenizer = tokenizer
-        if model_source == ModelSource.WORKSPACE:
-            self.model_comm = self._from_workspace(model_path=model_path, engine_config=_engine_config)
-        else:
-            if not osp.exists(model_path):
-                model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
-            self.model_comm = self._from_hf(model_source=model_source,
-                                            model_path=model_path,
-                                            engine_config=_engine_config)
+
+        if not osp.exists(model_path):
+            model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
+        self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config)
 
         if not _engine_config.empty_init:
-            self._load_weights(model_source)
+            self._load_weights()
             self._process_weights()
             self._create_engine()
 
@@ -169,10 +164,8 @@ class TurboMind:
             logger.warning('the model may not be loaded successfully '
                            f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
 
-    def _load_weights(self, model_source: ModelSource):
+    def _load_weights(self):
         """Load weights."""
-        if model_source == ModelSource.WORKSPACE:
-            return
 
         with torch.cuda.device(self.devices[0]):
             self._tm_model.export()
@@ -192,6 +185,7 @@ class TurboMind:
             ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
             for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks):
                 pass
+        self._engine_created = True
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -259,10 +253,8 @@ class TurboMind:
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
-    def _from_hf(self, model_source: ModelSource, model_path: str, engine_config: TurbomindEngineConfig):
+    def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
-        assert model_source == ModelSource.HF_MODEL, \
-            f'{model_source} is not supported'
         assert is_supported(model_path), (f'turbomind does not support {model_path}. '
                                           'Plz try pytorch engine instead.')
 
@@ -286,28 +278,19 @@ class TurboMind:
         logger.warning(f'get {len(tm_params)} model params')
         return model_comm
 
-    def _from_workspace(self, model_path: str, engine_config: TurbomindEngineConfig):
-        """Load model which is converted by `lmdeploy convert`"""
-        config_path = osp.join(model_path, 'triton_models', 'weights', 'config.yaml')
-        # load TurbomindModelConfig from config file
-        with open(config_path, 'r') as f:
-            _cfg = yaml.safe_load(f)
-        cfg = TurbomindModelConfig.from_dict(_cfg)
+    def sleep(self, level: int = 1):
+        """Sleep the model."""
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            for _ in e.map(self.model_comm.sleep, range(self.gpu_count), [level] * self.gpu_count):
+                pass
 
-        # always use tp in converted model (config.yaml)
-        assert cfg.model_config.attn_tp_size == engine_config.attn_tp_size, \
-            f'tp size mismatch ({cfg.model_config.attn_tp_size} vs {engine_config.attn_tp_size})'
-
-        self._postprocess_config(cfg, engine_config)
-
-        weight_dir = osp.join(model_path, 'triton_models', 'weights')
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
-                                                                     config=yaml.safe_dump(self.config_dict),
-                                                                     weight_type=self.config.weight_type)
-
-        # create weight and load params
-        self._create_weight(model_comm)
-        return model_comm
+    def wakeup(self, tags: Optional[list[str]] = None):
+        """Wakeup the model."""
+        if tags is None:
+            tags = ['weights', 'kv_cache']
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count):
+                pass
 
     def update_params(self, request: UpdateParamsRequest):
         """Update params.
@@ -347,7 +330,8 @@ class TurboMind:
         if request.finished:
             self._check_unloaded_tm_params()
             self._process_weights()
-            self._create_engine()
+            if self._engine_created is False:
+                self._create_engine()
 
     @classmethod
     def from_pretrained(cls,
@@ -376,14 +360,11 @@ class TurboMind:
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
         """
-        model_source = get_model_source(pretrained_model_name_or_path)
-        logger.info(f'model_source: {model_source}')
         return cls(model_path=pretrained_model_name_or_path,
                    tokenizer=tokenizer,
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,
-                   model_source=model_source,
                    **kwargs)
 
     def close(self):
@@ -394,6 +375,7 @@ class TurboMind:
             del self._export_iter
         if self.model_comm is not None:
             self.model_comm = None
+        self._engine_created = False
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -511,6 +493,20 @@ class TurboMindInstance:
 
         self.config = config
         self.lock = None
+        # error code map from csrc (refer to `struct Request` in src/turbomind/engine/request.h)
+        # to lmdeploy.messages.ResponseType
+        self.errcode_map = {
+            0: ResponseType.SUCCESS,
+            1: ResponseType.SESSION_NOT_EXIST,
+            2: ResponseType.SESSION_REPEAT,
+            3: ResponseType.SESSION_REPEAT,
+            4: ResponseType.INTERNAL_ENGINE_ERROR,
+            5: ResponseType.INTERNAL_ENGINE_ERROR,
+            6: ResponseType.INPUT_LENGTH_ERROR,
+            7: ResponseType.FINISH,
+            8: ResponseType.FINISH,
+            -1: ResponseType.INTERNAL_ENGINE_ERROR,
+        }
 
     @property
     def model_inst(self):
@@ -566,7 +562,7 @@ class TurboMindInstance:
             if item and isinstance(item[0], np.ndarray):
                 item = [torch.from_numpy(x).squeeze() for x in item]
             # convert to lookup table type
-            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16)
+            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16, fp8=torch.bfloat16)
             dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
             item = [x.to(dtype=dtype) for x in item]
             item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
@@ -583,11 +579,19 @@ class TurboMindInstance:
 
         return input_embeddings, input_embedding_ranges
 
+    def prepare_mrope(self, input_meta: Dict[str, Any], input_len: int):
+        mrope_position_ids = input_meta['mrope_position_ids']
+        mrope_position_delta = input_meta['mrope_position_delta']
+        assert mrope_position_ids.size(-1) == input_len
+        mrope_position_ids = mrope_position_ids.t().contiguous()
+        return mrope_position_ids, mrope_position_delta
+
     def prepare_inputs(self,
                        input_ids,
                        gen_config: GenerationConfig,
                        input_embeddings=None,
-                       input_embedding_ranges=None):
+                       input_embedding_ranges=None,
+                       input_meta: Dict[str, Any] = None):
         """Convert inputs format."""
         assert isinstance(input_ids, Sequence)
 
@@ -600,6 +604,12 @@ class TurboMindInstance:
         if input_embeddings is not None:
             inputs['input_embeddings'] = input_embeddings.cpu()
             inputs['input_embedding_ranges'] = input_embedding_ranges
+
+        if input_meta and 'mrope_position_ids' in input_meta:
+            mrope_position_ids, mrope_position_delta = self.prepare_mrope(input_meta, input_len)
+            inputs['mrope_position_ids'] = mrope_position_ids.type(torch.int32)
+            inputs['mrope_position_delta'] = mrope_position_delta.type(torch.int32)
+            inputs['mrope_length'] = torch.IntTensor([mrope_position_ids.shape[0]])
 
         return inputs, input_len
 
@@ -625,6 +635,7 @@ class TurboMindInstance:
                                  input_ids,
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
+                                 input_meta: Dict[str, Any] = None,
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
@@ -653,6 +664,7 @@ class TurboMindInstance:
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
                                                 input_embeddings=input_embeddings,
                                                 input_embedding_ranges=input_embedding_ranges,
+                                                input_meta=input_meta,
                                                 gen_config=gen_config)
 
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
@@ -686,7 +698,8 @@ class TurboMindInstance:
                 if status in [7, 8]:  # finish / canceled
                     finish, status = True, 0
                 elif status:
-                    yield self._get_error_output()
+                    logger.error(f'internal error. status_code {status}')
+                    yield self._get_error_output(status)
                     break
 
                 if seq_len == prev_len and not finish:
@@ -713,7 +726,7 @@ class TurboMindInstance:
         except Exception as e:
             logger.error(f'[async_stream_infer] {type(e).__name__} {e}')
             self.model_inst.cancel()
-            yield self._get_error_output()
+            yield self._get_error_output(-1)
         finally:
             # Contract: `cb` won't be called again if status is non-zero
             # wait for status to be set as `finish` or `error`
@@ -722,8 +735,8 @@ class TurboMindInstance:
                 state = shared_state.consume()
             logger.info(f'[async_stream_infer] session {session_id} done')
 
-    def _get_error_output(self):
-        return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR, token_ids=[], num_token=0)
+    def _get_error_output(self, status):
+        return EngineOutput(status=self.errcode_map[status], token_ids=[], num_token=0)
 
     def _get_generation_config(self, cfg: GenerationConfig):
         c = _tm.GenerationConfig()
