@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import requests
 
@@ -237,45 +237,3 @@ class APIClient:
                     decoded = chunk.decode('utf-8')
                     output = json_loads(decoded)
                     yield output
-
-
-def input_prompt():
-    """Input a prompt in the consolo interface."""
-    print('\ndouble enter to end input >>> ', end='')
-    sentinel = ''  # ends when this string is seen
-    return '\n'.join(iter(input, sentinel))
-
-
-def get_streaming_response(prompt: str,
-                           api_url: str,
-                           session_id: int,
-                           request_output_len: int = 512,
-                           stream: bool = True,
-                           interactive_mode: bool = False,
-                           ignore_eos: bool = False,
-                           cancel: bool = False,
-                           top_p: float = 0.8,
-                           temperature: float = 0.7,
-                           api_key: Optional[str] = None) -> Iterable[List[str]]:
-    headers = {'User-Agent': 'Test Client'}
-    if api_key is not None:
-        headers['Authorization'] = f'Bearer {api_key}'
-    pload = {
-        'prompt': prompt,
-        'stream': stream,
-        'session_id': session_id,
-        'request_output_len': request_output_len,
-        'interactive_mode': interactive_mode,
-        'ignore_eos': ignore_eos,
-        'cancel': cancel,
-        'top_p': top_p,
-        'temperature': temperature
-    }
-    response = requests.post(api_url, headers=headers, json=pload, stream=stream)
-    for chunk in response.iter_lines(chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
-        if chunk:
-            data = json_loads(chunk.decode('utf-8'))
-            output = data.pop('text', '')
-            tokens = data.pop('tokens', 0)
-            finish_reason = data.pop('finish_reason', None)
-            yield output, tokens, finish_reason
