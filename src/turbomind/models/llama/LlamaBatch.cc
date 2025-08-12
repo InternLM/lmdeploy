@@ -1906,16 +1906,15 @@ void LlamaBatch::UpdateMetrics()
         int total_seqs, active_seqs, cached_seqs;
         std::tie(total_seqs, active_seqs, cached_seqs) = sequence_manager_->seq_stats();
 
-        auto metrics           = new ScheduleMetrics;
-        metrics->total_seqs    = total_seqs;
-        metrics->active_seqs   = active_seqs;
-        metrics->waiting_seqs  = total_seqs - active_seqs;
-        metrics->total_blocks  = sequence_manager_->total_count();
-        metrics->active_blocks = sequence_manager_->active_count();
-        metrics->cached_blocks = sequence_manager_->cached_count();
-        metrics->free_blocks   = sequence_manager_->free_count();
+        const std::lock_guard<std::mutex> lock(metrics_mutex_);
 
-        schedule_metrics_.exchange(metrics);
+        schedule_metrics_.total_seqs    = total_seqs;
+        schedule_metrics_.active_seqs   = active_seqs;
+        schedule_metrics_.waiting_seqs  = total_seqs - active_seqs;
+        schedule_metrics_.total_blocks  = sequence_manager_->total_count();
+        schedule_metrics_.active_blocks = sequence_manager_->active_count();
+        schedule_metrics_.cached_blocks = sequence_manager_->cached_count();
+        schedule_metrics_.free_blocks   = sequence_manager_->free_count();
 
         // update request metrics
         for (int i = 0; i < state_->active_size; ++i) {

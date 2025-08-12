@@ -140,10 +140,8 @@ public:
 
     ScheduleMetrics getScheduleMetrics()
     {
-        auto cur_metrics = schedule_metrics_.exchange(nullptr);
-        auto res         = cur_metrics.get();
-        schedule_metrics_.exchange(cur_metrics.release());
-        return *res;
+        const std::lock_guard<std::mutex> lock(metrics_mutex_);
+        return schedule_metrics_;
     }
 
 private:
@@ -302,8 +300,8 @@ private:
     std::thread internal_thread_;
 
     bool            enable_metrics_;
-    // ScheduleMetrics schedule_metrics_;
-    AtomicScheduleMetrics schedule_metrics_;
+    ScheduleMetrics schedule_metrics_;
+    std::mutex      metrics_mutex_;
 };
 
 using Engine = LlamaBatch;

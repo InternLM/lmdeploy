@@ -19,23 +19,6 @@ struct ScheduleMetrics {
     int free_blocks;    // the number of free kv blocks
 };
 
-struct AtomicScheduleMetrics {
-
-    std::atomic<ScheduleMetrics*> data_;
-
-    static_assert(std::atomic<ScheduleMetrics*>::is_always_lock_free);
-
-    ~AtomicScheduleMetrics()
-    {
-        auto data = exchange(nullptr);
-    }
-
-    std::unique_ptr<ScheduleMetrics> exchange(ScheduleMetrics* data)
-    {
-        return std::unique_ptr<ScheduleMetrics>{data_.exchange(data, std::memory_order_acq_rel)};
-    }
-};
-
 struct RequestMetrics {
     int64_t enque_time{};      // when a request is enqued
     int64_t scheduled_time{};  // when a request is scheduled for inference
