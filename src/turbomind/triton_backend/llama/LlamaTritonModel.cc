@@ -562,8 +562,6 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
 ScheduleMetrics LlamaTritonModel::getScheduleMetrics(int device_id, int rank)
 {
-    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
-
     auto& engine = *engines_[device_id];
 
     return engine.getScheduleMetrics();
