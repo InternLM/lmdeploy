@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from contextlib import contextmanager
-
 import torch
 import triton
 import triton.language as tl
@@ -122,7 +120,7 @@ def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3
 
 def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
     """Quant fp8 tma."""
-    from deep_gemm.jit_kernels.utils import ceil_div, get_m_alignment_for_contiguous_layout
+    from lmdeploy.pytorch.third_party.deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2
     M, K = A.shape
     assert K % group_size == 0
@@ -444,38 +442,16 @@ def blocked_gemm_fp8(A: Tensor,
     return C
 
 
-@contextmanager
-def _log_jit_build(M: int, N: int, K: int):
-    from deep_gemm.jit.runtime import RuntimeCache
-
-    if hasattr(RuntimeCache, 'get'):
-        func_name = 'get'
-    else:
-        func_name = '__getitem__'
-    origin_func = getattr(RuntimeCache, func_name)
-
-    def __patched_func(self, *args, **kwargs):
-        ret = origin_func(self, *args, **kwargs)
-        if ret is None:
-            logger.warning(f'DeepGemm build <gemm_fp8_fp8_bf16_nt>: M={M}, N={N}, K={K}. Please waiting.')
-        return ret
-
-    setattr(RuntimeCache, func_name, __patched_func)
-    yield
-    setattr(RuntimeCache, func_name, origin_func)
-
-
 def deep_gemm_fp8(A: Tensor,
                   A_scale: Tensor,
                   B: Tensor,
                   B_scale: torch.Tensor,
                   out_dtype: torch.dtype = torch.bfloat16):
     """Deepgemm fp8."""
-    from deep_gemm.jit_kernels.gemm import gemm_fp8_fp8_bf16_nt
-    M, K = A.shape
+    from lmdeploy.pytorch.third_party.deep_gemm import fp8_gemm_nt
+    M, _ = A.shape
     N, _ = B.shape
     assert out_dtype == torch.bfloat16, 'DeepGemm requires bf16 output.'
     C = A.new_empty(M, N, dtype=out_dtype)
-    with _log_jit_build(M, N, K):
-        gemm_fp8_fp8_bf16_nt((A, A_scale), (B, B_scale), C)
+    fp8_gemm_nt((A, A_scale), (B, B_scale), C, None)
     return C

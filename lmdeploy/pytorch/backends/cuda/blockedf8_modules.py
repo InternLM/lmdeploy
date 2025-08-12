@@ -92,7 +92,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         """warmup."""
         import random
 
-        from deep_gemm.jit_kernels.utils import get_m_alignment_for_contiguous_layout
+        from lmdeploy.pytorch.third_party.deep_gemm import get_m_alignment_for_contiguous_layout
         device = 'cuda'
         max_num_tokens = warmup_meta.max_num_tokens
         alignment = get_m_alignment_for_contiguous_layout()
