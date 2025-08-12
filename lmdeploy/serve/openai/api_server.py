@@ -289,7 +289,7 @@ def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, fl
 
 
 @router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
-async def chat_completions_v1(raw_request: Request = None):
+async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -350,7 +350,6 @@ async def chat_completions_v1(raw_request: Request = None):
     - frequency_penalty (replaced with repetition_penalty)
     """
     json_request = await raw_request.json()
-    request = ChatCompletionRequest.model_validate(json_request)
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
     preserve_cache = json_request.pop('preserve_cache', False)
@@ -615,7 +614,7 @@ async def chat_completions_v1(raw_request: Request = None):
 
 
 @router.post('/v1/completions', dependencies=[Depends(check_api_key)])
-async def completions_v1(raw_request: Request = None):
+async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Go to `https://platform.openai.com/docs/api-reference/completions/create`
@@ -662,7 +661,6 @@ async def completions_v1(raw_request: Request = None):
     - frequency_penalty (replaced with repetition_penalty)
     """
     json_request = await raw_request.json()
-    request = CompletionRequest.model_validate(json_request)
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
     preserve_cache = json_request.pop('preserve_cache', False)
