@@ -80,13 +80,6 @@ LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
 
 ![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)
 
-也可以使用 LMDeploy 自带的 CLI 工具，在控制台验证服务的正确性。
-
-```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client ${api_server_url}
-```
-
 若需要把服务集成到自己的项目或者产品中，我们推荐以下用法：
 
 ### 使用 openai 接口

@@ -11,7 +11,6 @@ from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
-from utils.run_client_chat import command_line_test
 
 from lmdeploy.serve.openai.api_client import APIClient
 from lmdeploy.utils import is_bf16_supported
@@ -144,13 +143,6 @@ def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PO
             continue
 
         case_info = cases_info.get(case)
-
-        with allure.step(case + ' step1 - command chat regression'):
-            chat_result, chat_log, msg = command_line_test(config, case, case_info, model, 'api_client', http_url,
-                                                           worker_id)
-            allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
-        with assume:
-            assert chat_result, msg
 
         with allure.step(case + ' step2 - restful_test - openai chat'):
             restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, worker_id)

@@ -60,13 +60,6 @@ You can overview and try out the offered RESTful APIs by the website `http://0.0
 
 ![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)
 
-Or, you can use the LMDeploy's built-in CLI tool to verify the service correctness right from the console.
-
-```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client ${api_server_url}
-```
-
 If you need to integrate the service into your own projects or products, we recommend the following approach:
 
 ### Integrate with `OpenAI`
