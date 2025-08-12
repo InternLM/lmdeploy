@@ -489,7 +489,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
 std::tuple<int, int, int> SequenceManager::seq_stats() const noexcept
 {
-    int total = static_cast<int>(sequences_.size());
+    int total  = static_cast<int>(sequences_.size());
     int active = 0;
     int cached = 0;
     for (const auto& p : sequences_) {
