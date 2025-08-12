@@ -461,8 +461,11 @@ def _get_metrics(metrics):
 
     from lmdeploy.messages import EngineEvent, EventType, RequestMetrics
 
+    is_first = True
+
     def _func(out: EngineOutput, step: int, is_first_token: bool = False, **kwargs):
-        if not is_first_token:
+        nonlocal is_first
+        if not is_first:
             out.req_metrics = RequestMetrics(token_timestamp=time.time())
         else:
             events = [
@@ -470,6 +473,7 @@ def _get_metrics(metrics):
                 EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
             ]
             out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)
+            is_first = False
 
     return _func
 
@@ -727,7 +731,7 @@ class TurboMindInstance:
                 output = EngineOutput(status, output_ids, output_len)
 
                 for f in extra_fs:
-                    f(output, seq_len, is_first_token=prev_len == step + input_len)
+                    f(output, seq_len)
 
                 prev_len = seq_len
 
