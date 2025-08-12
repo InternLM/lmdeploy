@@ -301,5 +301,4 @@ class SubCliServe:
     @staticmethod
     def add_parsers():
         SubCliServe.add_parser_api_server()
-        SubCliServe.add_parser_api_client()
         SubCliServe.add_parser_proxy()
