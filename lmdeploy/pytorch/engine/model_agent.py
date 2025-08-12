@@ -923,16 +923,12 @@ class BaseModelAgent:
             torch.cuda.empty_cache()
 
     @torch.inference_mode()
-    def sleep(self, tags: Optional[List[str]] = None):
+    def sleep(self, level: int = 1):
         """Sleep."""
-        if tags is None:
-            tags = ['weights', 'kv_cache']
-        if 'weights' in tags:
-            # TODO: find better way to avoid reset graph
-            self.reset_graph_runner()
-            self.patched_model.get_model().cpu()
-        if 'kv_cache' in tags:
-            self.cache_engine = None
+        self.cache_engine = None
+        self.reset_graph_runner()
+        device = 'cpu' if level == 1 else 'meta'
+        self.patched_model.get_model().to(device=device)
         torch.cuda.empty_cache()
 
     @torch.inference_mode()
@@ -941,7 +937,17 @@ class BaseModelAgent:
         if tags is None:
             tags = ['weights', 'kv_cache']
         if 'weights' in tags:
-            self.patched_model.get_model().to(torch.cuda.current_device())
+            device = next(self.patched_model.get_model().parameters()).device
+            assert device.type in ['cpu', 'meta']
+            if device.type == 'cpu':
+                self.patched_model.get_model().to(torch.cuda.current_device())
+            else:
+                # user should update weights after wakeup
+                old_empty_init = self.misc_config.empty_init
+                self.misc_config.empty_init = True
+                self.build_model()
+                self.build_graph_runner()
+                self.misc_config.empty_init = old_empty_init
         if 'kv_cache' in tags:
             self.build_cache_engine()
 

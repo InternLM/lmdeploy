@@ -1159,9 +1159,9 @@ class Engine:
         """Update params."""
         self.executor.update_params(request)
 
-    def sleep(self, tags: Optional[List[str]] = None):
+    def sleep(self, level: int = 1):
         """Sleep."""
-        self.executor.sleep(tags)
+        self.executor.sleep(level)
 
     def wakeup(self, tags: Optional[List[str]] = None):
         """Wakeup."""

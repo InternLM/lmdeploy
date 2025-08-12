@@ -470,9 +470,9 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
-    def sleep(self, tags: Optional[List[str]] = None):
+    def sleep(self, level: int = 1):
         """Sleep."""
-        self.collective_rpc('sleep', (tags, ))
+        self.collective_rpc('sleep', (level, ))
 
     def wakeup(self, tags: Optional[List[str]] = None):
         """Wakeup."""

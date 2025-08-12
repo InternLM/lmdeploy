@@ -75,7 +75,7 @@ class ExecutorBase:
         """warmup."""
         raise NotImplementedError('Not Implemented.')
 
-    def sleep(self, tags: Optional[List[str]] = None):
+    def sleep(self, level: int = 1):
         """Sleep."""
         raise NotImplementedError('Not Implemented.')
 
