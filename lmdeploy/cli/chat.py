@@ -44,7 +44,7 @@ def build_pipe(model_path, backend, **kwargs):
 
 
 def build_gen_config(**kwargs):
-    gen_config = GenerationConfig(max_new_tokens=1024, top_k=40, top_p=0.8, temperature=0.8, repetition_penalty=1.0)
+    gen_config = GenerationConfig(do_sample=True, max_new_tokens=4096)
     for key, value in kwargs.items():
         if hasattr(GenerationConfig, key):
             setattr(gen_config, key, value)
@@ -60,7 +60,7 @@ def main(model_path, backend, **kwargs):
     gen_config = build_gen_config(**kwargs)
 
     quit = False
-    while True:
+    while not quit:
         with pipe.session(gen_config) as sess:
             while True:
                 try:
@@ -82,10 +82,8 @@ def main(model_path, backend, **kwargs):
                         print(resp.text, end='', flush=True)
                 except KeyboardInterrupt:
                     sess.stop()
-
-        if quit:
-            print('exiting...')
-            break
+    else:
+        print('exiting...')
 
 
 if __name__ == '__main__':
