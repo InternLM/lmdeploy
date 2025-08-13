@@ -4,7 +4,8 @@
 
 namespace turbomind {
 
-enum class ActivationType {
+enum class ActivationType
+{
     kSilu,
     kSiluGptOss
 };
