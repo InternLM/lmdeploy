@@ -58,7 +58,7 @@ def _make_blocked_cache(batched_k,
     return blocked_k, blocked_v
 
 
-def _naive_attention(batched_q, batched_kv, bias):
+def _naive_attention(batched_q, batched_kv, bias, sinks=None):
     batched_k, batched_v = batched_kv
 
     num_heads_q = batched_q.shape[2]
@@ -76,7 +76,16 @@ def _naive_attention(batched_q, batched_kv, bias):
 
     qk = torch.matmul(q, k) / math.sqrt(head_dim)
     attn_weight = qk + bias[:, None]
-    attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
+    if sinks is None:
+        attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
+    else:
+        sinks = sinks[None, :, None, None].to(torch.float32)
+        sinks = sinks.expand(attn_weight.shape[0], -1, attn_weight.shape[2], -1)
+        attn_weight = attn_weight.to(torch.float32)
+        combined_logits = torch.cat([attn_weight, sinks], dim=-1)
+        combined_logits = combined_logits - combined_logits.max(dim=-1, keepdim=True).values
+        attn_weight = torch.softmax(combined_logits, dim=-1, dtype=torch.float32)
+        attn_weight = attn_weight[..., :-1]
     attn_weight = attn_weight.to(q.dtype)
     attn_output = torch.matmul(attn_weight, v)
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -277,6 +286,44 @@ class TestPagedAttention:
                             window_size=win_size,
                             kv_layout=layout)
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
+
+
+class TestPagedAttentionSink(TestPagedAttention):
+
+    @pytest.fixture
+    def sinks(self, num_heads_q, dtype):
+        yield torch.rand(num_heads_q, dtype=dtype, device='cuda')
+
+    @pytest.fixture
+    def sink_gt(self, batched_q, batched_kv, mask, sinks):
+        yield _naive_attention(batched_q, batched_kv, mask, sinks)
+
+    @pytest.fixture
+    def conti_sink_gt(self, sink_gt, seq_lens):
+        yield _conti_input(sink_gt, seq_lens)
+
+    @pytest.mark.parametrize('feat_dim', [32], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [32], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2)], indirect=True)
+    @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
+    def test_sink(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, layout, sinks, conti_sink_gt):
+        from lmdeploy.pytorch.kernels import paged_attention_fwd
+        kv_seq_lens = 1 + history_lens
+
+        blocked_k, blocked_v = blocked_kv
+        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
+
+        paged_attention_fwd(conti_q,
+                            blocked_k,
+                            blocked_v,
+                            out,
+                            block_offsets=block_offsets,
+                            kv_seqlens=kv_seq_lens,
+                            sinks=sinks,
+                            kv_layout=layout)
+        torch.testing.assert_close(out, conti_sink_gt, atol=1e-3, rtol=1e-5)
 
 
 def quant(kv: torch.Tensor, nbits: int = 8):

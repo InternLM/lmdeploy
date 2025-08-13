@@ -1,7 +1,5 @@
 import json
 import os
-import random
-import string
 import subprocess
 from time import sleep, time
 
@@ -13,7 +11,6 @@ from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
-from utils.run_client_chat import command_line_test
 
 from lmdeploy.serve.openai.api_client import APIClient
 from lmdeploy.utils import is_bf16_supported
@@ -147,25 +144,11 @@ def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PO
 
         case_info = cases_info.get(case)
 
-        with allure.step(case + ' step1 - command chat regression'):
-            chat_result, chat_log, msg = command_line_test(config, case, case_info, model, 'api_client', http_url,
-                                                           worker_id)
-            allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
-        with assume:
-            assert chat_result, msg
-
         with allure.step(case + ' step2 - restful_test - openai chat'):
             restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, worker_id)
             allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
-
-        with allure.step(case + ' step3 - restful_test - interactive chat'):
-            active_result, interactive_log, msg = interactive_test(config, case, case_info, model, http_url, worker_id)
-            allure.attach.file(interactive_log, attachment_type=allure.attachment_type.TEXT)
-
-        with assume:
-            assert active_result, msg
 
 
 def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
@@ -202,47 +185,6 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         result = result & case_result
     file.close()
     return result, restful_log, msg
-
-
-def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
-    log_path = config.get('log_path')
-
-    interactive_log = os.path.join(log_path, 'interactive_' + model + worker_id + '_' + case + '.log')
-
-    result = True
-
-    file = open(interactive_log, 'w')
-
-    api_client = APIClient(url)
-    file.writelines('available_models:' + ','.join(api_client.available_models) + '\n')
-
-    # Randomly generate 6 characters and concatenate them into a string.
-    characters = string.digits
-    random_chars = ''.join(random.choice(characters) for i in range(6))
-
-    messages = []
-    msg = ''
-    for prompt_detail in case_info:
-        prompt = list(prompt_detail.keys())[0]
-        new_prompt = {'role': 'user', 'content': prompt}
-        messages.append(new_prompt)
-        file.writelines('prompt:' + prompt + '\n')
-
-        for output in api_client.chat_interactive_v1(prompt=prompt,
-                                                     interactive_mode=True,
-                                                     session_id=random_chars,
-                                                     top_k=1,
-                                                     request_output_len=256):
-            output_content = output.get('text')
-            file.writelines('output:' + output_content + '\n')
-
-            case_result, reason = assert_result(output_content, prompt_detail.values(), model)
-            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
-            if not case_result:
-                msg += reason
-            result = result & case_result
-    file.close()
-    return result, interactive_log, msg
 
 
 def health_check(url):

@@ -324,6 +324,7 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     engine_param_.cache_max_block_count = engine_reader["cache_max_entry_count"].as<float>(0);
     engine_param_.cache_chunk_size      = engine_reader["cache_chunk_size"].as<int>(0);
     engine_param_.enable_prefix_caching = engine_reader["enable_prefix_caching"].as<bool>(false);
+    engine_param_.enable_metrics        = engine_reader["enable_metrics"].as<bool>(false);
 
     engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
@@ -557,6 +558,13 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
     h_comm->Sync();
 
     engine.Start();
+}
+
+ScheduleMetrics LlamaTritonModel::getScheduleMetrics(int device_id, int rank)
+{
+    auto& engine = *engines_[device_id];
+
+    return engine.getScheduleMetrics();
 }
 
 void LlamaTritonModel::sleep(int device_id, int level)
