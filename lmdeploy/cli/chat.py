@@ -13,10 +13,6 @@ def input_prompt():
 
 
 def build_pipe(model_path, backend, **kwargs):
-    # # set enable_prefix_cache
-    # disable_prefix_cache = kwargs.pop('disable_prefix_cache', False)
-    # kwargs.update(enable_prefix_caching=not disable_prefix_cache)
-    # set engine config
     engine_config = None
     if backend == 'turbomind':
         engine_config = TurbomindEngineConfig()

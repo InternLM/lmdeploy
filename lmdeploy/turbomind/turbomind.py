@@ -731,7 +731,6 @@ class TurboMindInstance:
                 ret_status = ResponseType.SUCCESS
 
                 if status in [7, 8]:  # finish / canceled
-                    print(f'[turbomind] status {status}')
                     finish = True
                     ret_status = ResponseType.FINISH if status == 7 else ResponseType.CANCEL
                 elif status:
