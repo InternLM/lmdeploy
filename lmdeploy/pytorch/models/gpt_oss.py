@@ -123,7 +123,6 @@ class GptOssAttention(nn.Module):
             inplace=True,
         )
 
-        # TODO: add sinks
         # attention
         attn_output = self.attn_fwd(
             query_states,
@@ -199,7 +198,6 @@ class GptOssExperts(nn.Module):
         self.limit = 7.0
         self._gateup_act = GateupAct.build(self.limit, self.alpha)
 
-        # TODO: new activate
         self.experts = build_fused_moe(
             self.hidden_size,
             self.expert_dim,
