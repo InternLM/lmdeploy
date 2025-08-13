@@ -19,20 +19,17 @@ def command_line_test(config,
                       worker_id: str = ''):
     dst_path = config.get('dst_path')
 
-    if type == 'api_client':
-        cmd = 'lmdeploy serve api_client ' + extra
-    else:
-        cmd = get_command_with_extra('lmdeploy chat ' + dst_path + '/workspace_' + model_case,
-                                     config,
-                                     model_case,
-                                     cuda_prefix=cuda_prefix)
-        if type == 'turbomind':
-            if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
-                cmd += ' --model-format awq'
-            elif 'gptq' in model_case.lower():
-                cmd += ' --model-format gptq'
-        if case == 'base_testcase':
-            cmd += ' --chat-template ' + TEMPLATE
+    cmd = get_command_with_extra('lmdeploy chat ' + dst_path + '/workspace_' + model_case,
+                                 config,
+                                 model_case,
+                                 cuda_prefix=cuda_prefix)
+    if type == 'turbomind':
+        if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
+            cmd += ' --model-format awq'
+        elif 'gptq' in model_case.lower():
+            cmd += ' --model-format gptq'
+    if case == 'base_testcase':
+        cmd += ' --chat-template ' + TEMPLATE
     return command_test(config, [cmd], model_case, case, case_info, type == 'turbomind', worker_id=worker_id)
 
 

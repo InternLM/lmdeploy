@@ -37,9 +37,8 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponse, CompletionResponseChoice,
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-                                            GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, PoolingRequest, PoolingResponse, TopLogprob,
-                                            UpdateParamsRequest, UsageInfo)
+                                            GenerateRequest, LogProbs, ModelCard, ModelList, ModelPermission,
+                                            PoolingRequest, PoolingResponse, TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -985,142 +984,9 @@ async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONRespo
 
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
 async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = None):
-    """Generate completion for the request.
-
-    - On interactive mode, the chat history is kept on the server. Please set
-    `interactive_mode = True`.
-    - On normal mode, no chat history is kept on the server. Set
-    `interactive_mode = False`.
-
-    The request should be a JSON object with the following fields:
-    - prompt: the prompt to use for the generation.
-    - image_url(str | List[str] | None): the image url or base64 encoded string
-        for VL models.
-    - session_id: determine which instance will be called. If not specified
-        with a value other than -1, using random value directly.
-    - interactive_mode (bool): turn on interactive mode or not. On interactive
-        mode, session history is kept on the server (and vice versa).
-    - stream: whether to stream the results or not.
-    - stop (str | List[str] | None): To stop generating further
-        tokens. Only accept stop words that's encoded to one token idex.
-    - request_output_len (int): output token nums. If not specified, will use
-        maximum possible number for a session.
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - top_k (int): The number of the highest probability vocabulary
-        tokens to keep for top-k-filtering
-    - temperature (float): to modulate the next token probability
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
-    - ignore_eos (bool): indicator for ignoring eos
-    - skip_special_tokens (bool): Whether or not to remove special tokens
-        in the decoding. Default to be True.
-    - spaces_between_special_tokens (bool): Whether or not to add spaces
-        around special tokens. The behavior of Fast tokenizers is to have
-        this to False. This is setup to True in slow tokenizers.
-    - adapter_name (str): For slora inference. Choose which lora to do the
-        inference.
-    - min_new_tokens (int): To generate at least numbers of tokens.
-    - min_p (float): Minimum token probability, which will be scaled by the
-        probability of the most likely token. It must be a value between
-        0 and 1. Typical values are in the 0.01-0.2 range, comparably
-        selective as setting `top_p` in the 0.99-0.8 range (use the
-        opposite of normal `top_p` values)
-    """
-    if request.cancel:
-        if request.session_id != -1:
-            await VariableInterface.async_engine.stop_session(request.session_id)
-            return {'text': '', 'tokens': 0, 'input_tokens': 0, 'history_tokens': 0, 'finish_reason': 'stop'}
-        else:
-            return create_error_response(HTTPStatus.BAD_REQUEST, 'please set a session_id to cancel a request')
-    error_check_ret = await check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-    if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
-
-    async_engine = VariableInterface.async_engine
-    sequence_start = async_engine.id2step.get(request.session_id, 0) == 0
-    sequence_end = not request.interactive_mode
-    if isinstance(request.stop, str):
-        request.stop = [request.stop]
-
-    end_session = sequence_end and request.prompt == '' and request.request_output_len == 0
-    if end_session:
-        await async_engine.end_session(request.session_id)
-        return JSONResponse(dict(text='', tokens=0, input_tokens=0, history_tokens=0, finish_reason='stop'))
-
-    random_seed = request.seed if request.seed else None
-
-    gen_config = GenerationConfig(max_new_tokens=request.request_output_len,
-                                  do_sample=True,
-                                  top_p=request.top_p,
-                                  top_k=request.top_k,
-                                  temperature=request.temperature,
-                                  repetition_penalty=request.repetition_penalty,
-                                  ignore_eos=request.ignore_eos,
-                                  stop_words=request.stop,
-                                  skip_special_tokens=request.skip_special_tokens,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
-                                  min_new_tokens=request.min_new_tokens,
-                                  min_p=request.min_p,
-                                  random_seed=random_seed)
-    if request.image_url:
-        from lmdeploy.vl import load_image
-        if isinstance(request.image_url, List):
-            request.prompt = (request.prompt, [load_image(url) for url in request.image_url])
-        else:
-            request.prompt = (request.prompt, load_image(request.image_url))
-        if not hasattr(async_engine, '_convert_prompts'):
-            return create_error_response(HTTPStatus.BAD_REQUEST, '`image_url` argument only works for VL model')
-        request.prompt = async_engine._convert_prompts(request.prompt)
-    generation = async_engine.generate(
-        request.prompt,
-        request.session_id,
-        gen_config=gen_config,
-        stream_response=True,  # always use stream to enable batching
-        sequence_start=sequence_start,
-        sequence_end=sequence_end,
-        adapter_name=request.adapter_name)
-
-    # Streaming case
-    async def stream_results() -> AsyncGenerator[bytes, None]:
-        async for out in generation:
-            chunk = GenerateResponse(text=out.response,
-                                     tokens=out.generate_token_len,
-                                     input_tokens=out.input_token_len,
-                                     history_tokens=out.history_token_len,
-                                     finish_reason=out.finish_reason)
-            data = chunk.model_dump_json()
-            yield f'{data}\n'
-
-    if request.stream:
-        return StreamingResponse(stream_results(), media_type='text/event-stream')
-    else:
-        ret = {}
-        text = ''
-        tokens, input_tokens, history_tokens = 0, 0, 0
-        finish_reason = None
-        async for out in generation:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await async_engine.stop_session(request.session_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-            text += out.response
-            tokens = out.generate_token_len
-            input_tokens = out.input_token_len
-            history_tokens = out.history_token_len
-            finish_reason = out.finish_reason
-        ret = {
-            'text': text,
-            'tokens': tokens,
-            'input_tokens': input_tokens,
-            'history_tokens': history_tokens,
-            'finish_reason': finish_reason
-        }
-        return JSONResponse(ret)
+    return create_error_response(
+        HTTPStatus.BAD_REQUEST, 'v1/chat/interactive is deprecated, please launch server with --enable-prefix-cache '
+        'and use /v1/chat/completions instead.')
 
 
 def handle_torchrun():

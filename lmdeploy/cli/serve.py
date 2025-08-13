@@ -140,22 +140,6 @@ class SubCliServe:
         ArgumentHelper.vision_max_batch_size(vision_group)
 
     @staticmethod
-    def add_parser_api_client():
-        """Add parser for api_client command."""
-        parser = SubCliServe.subparsers.add_parser('api_client',
-                                                   formatter_class=DefaultsAndTypesHelpFormatter,
-                                                   description=SubCliServe.api_client.__doc__,
-                                                   help=SubCliServe.api_client.__doc__)
-        parser.set_defaults(run=SubCliServe.api_client)
-        parser.add_argument('api_server_url', type=str, help='The URL of api server')
-        parser.add_argument('--api-key',
-                            type=str,
-                            default=None,
-                            help='api key. Default to None, which means no '
-                            'api key will be used')
-        ArgumentHelper.session_id(parser)
-
-    @staticmethod
     def add_parser_proxy():
         """Add parser for proxy server command."""
         parser = SubCliServe.subparsers.add_parser('proxy',
@@ -310,13 +294,6 @@ class SubCliServe:
                           tool_call_parser=args.tool_call_parser)
 
     @staticmethod
-    def api_client(args):
-        """Interact with restful api server in terminal."""
-        from lmdeploy.serve.openai.api_client import main as run_api_client
-        kwargs = convert_args(args)
-        run_api_client(**kwargs)
-
-    @staticmethod
     def proxy(args):
         """Proxy server that manages distributed api_server nodes."""
         from lmdeploy.serve.proxy.proxy import proxy
@@ -326,5 +303,4 @@ class SubCliServe:
     @staticmethod
     def add_parsers():
         SubCliServe.add_parser_api_server()
-        SubCliServe.add_parser_api_client()
         SubCliServe.add_parser_proxy()
