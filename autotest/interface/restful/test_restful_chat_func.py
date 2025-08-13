@@ -1,6 +1,5 @@
 import pytest
 from openai import OpenAI
-from tqdm import tqdm
 from utils.restful_return_check import (assert_chat_completions_batch_return, assert_chat_completions_stream_return,
                                         get_repeat_times)
 

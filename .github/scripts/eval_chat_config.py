@@ -307,8 +307,6 @@ for model in [v for k, v in locals().items() if '_batch1' in k]:
 for model in [
         v for k, v in locals().items() if k.startswith('turbomind_qwen3_32b') or k.startswith('pytorch_qwen3_32b')
 ]:
-    model['abbr'] = 'qwen3_32b_turbomind'
-    model['path'] = 'Qwen/Qwen3-32B'
     model['run_cfg']['num_gpus'] = 2
     model['engine_config']['tp'] = 2
     model['engine_config']['max_batch_size'] = 1024
@@ -318,8 +316,6 @@ for model in [
         v for k, v in locals().items()
         if k.startswith('turbomind_qwen3_30b_a3b') or k.startswith('pytorch_qwen3_30b_a3b')
 ]:
-    model['abbr'] = 'qwen3_30b_a3b_turbomind'
-    model['path'] = 'Qwen/Qwen3-30B-A3B'
     model['run_cfg']['num_gpus'] = 2
     model['engine_config']['tp'] = 2
     model['engine_config']['max_batch_size'] = 1024
@@ -327,28 +323,12 @@ for model in [
 
 for model in [
         v for k, v in locals().items()
-        if k.startswith('turbomind_qwen3_30b_a3b_fp8') or k.startswith('pytorch_qwen3_30b_a3b_fp8')
-]:
-    model['abbr'] = 'qwen3_30b_a3b_fp8_turbomind'
-    model['path'] = 'Qwen/Qwen3-30B-A3B-FP8'
-
-for model in [
-        v for k, v in locals().items()
         if k.startswith('turbomind_qwen3_235b_a22b') or k.startswith('pytorch_qwen3_235b_a22b')
 ]:
-    model['abbr'] = 'qwen3_235b_a22b_turbomind'
-    model['path'] = 'Qwen/Qwen3-235B-A22B'
     model['run_cfg']['num_gpus'] = 8
     model['engine_config']['tp'] = 8
     model['engine_config']['max_batch_size'] = 1024
     model['batch_size'] = 2048
-
-for model in [
-        v for k, v in locals().items()
-        if k.startswith('turbomind_qwen3_235b_a22b_fp8') or k.startswith('pytorch_qwen3_235b_a22b_fp8')
-]:
-    model['abbr'] = 'qwen3_235b_a22b_fp8_turbomind'
-    model['path'] = 'Qwen/Qwen3-235B-A22B-FP8'
 
 turbomind_qwen3_235b_a22b_fp8['engine_config']['cache_max_entry_count'] = 0.6
 turbomind_qwen3_235b_a22b_fp8['engine_config']['tp'] = 4
