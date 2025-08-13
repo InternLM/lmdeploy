@@ -141,6 +141,29 @@ public:
         return block_manager_->max_block_count();
     }
 
+    int total_count() const noexcept
+    {
+        return block_manager_->total_count();
+    }
+
+    int active_count() const noexcept
+    {
+        return block_manager_->active_count();
+    }
+
+    int free_count() const noexcept
+    {
+        return block_manager_->free_count();
+    }
+
+    int cached_count() const noexcept
+    {
+        return block_manager_->cached_count();
+    }
+
+    // return #total_seq, #active_seq, #cached_seq
+    std::tuple<int, int, int> seq_stats() const noexcept;
+
 private:
     void Erase(std::map<uint64_t, Sequence>::iterator& it);
 

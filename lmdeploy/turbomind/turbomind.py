@@ -22,7 +22,7 @@ import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
+from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
@@ -387,11 +387,20 @@ class TurboMind:
         """
         return TurboMindInstance(self, self.config, cuda_stream_id)
 
+    def get_schedule_metrics(self):
+        # TODO: support dp
+        tm_metrics = self.model_comm.get_schedule_metrics(0, 0)
+        return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
+                               waiting_seqs=tm_metrics.waiting_seqs,
+                               total_blocks=tm_metrics.total_blocks,
+                               active_blocks=tm_metrics.active_blocks,
+                               free_blocks=tm_metrics.free_blocks)
+
 
 def _get_logits(outputs, offset: int):
     logits = outputs['logits']
 
-    def _func(out: EngineOutput, step: int):
+    def _func(out: EngineOutput, step: int, **kwargs):
         out.logits = logits[:step - offset - 1, :]
 
     return _func
@@ -400,7 +409,7 @@ def _get_logits(outputs, offset: int):
 def _get_last_hidden_state(outputs, offset: int):
     last_hidden_state = outputs['last_hidden_state']
 
-    def _func(out: EngineOutput, step: int):
+    def _func(out: EngineOutput, step: int, **kwargs):
         out.last_hidden_state = last_hidden_state[:step - offset - 1, :]
 
     return _func
@@ -440,9 +449,31 @@ def _get_logprobs(outputs, output_logprobs: int):
 
     logprobs = []
 
-    def _func(out: EngineOutput, step: int):
+    def _func(out: EngineOutput, step: int, **kwargs):
         _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs, logprobs)
         out.logprobs = logprobs
+
+    return _func
+
+
+def _get_metrics(metrics):
+    import time
+
+    from lmdeploy.messages import EngineEvent, EventType, RequestMetrics
+
+    is_first = True
+
+    def _func(out: EngineOutput, step: int, is_first_token: bool = False, **kwargs):
+        nonlocal is_first
+        if not is_first:
+            out.req_metrics = RequestMetrics(token_timestamp=time.time())
+        else:
+            events = [
+                EngineEvent(EventType.QUEUED, metrics.enque_time / 1000000),
+                EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
+            ]
+            out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)
+            is_first = False
 
     return _func
 
@@ -519,7 +550,7 @@ class TurboMindInstance:
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
-                                     input_len: int):
+                                     input_len: int, metrics: '_tm.RequestMetrics'):
 
         def _get_offset(type):
             return input_len - 1 if type == 'generation' else 0
@@ -533,6 +564,8 @@ class TurboMindInstance:
             fs.append(_get_last_hidden_state(outputs, offset))
         if gen_config.logprobs:
             fs.append(_get_logprobs(outputs, gen_config.logprobs))
+        if self.tm_model.engine_config.enable_metrics:
+            fs.append(_get_metrics(metrics))
         return fs
 
     def prepare_embeddings(self, input_embeddings=None, input_embedding_ranges=None):
@@ -674,11 +707,12 @@ class TurboMindInstance:
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)
 
-        outputs, shared_state = self.model_inst.forward(inputs, session, gen_cfg, stream_output, signal_cb)
+        outputs, shared_state, metrics = self.model_inst.forward(inputs, session, gen_cfg, stream_output,
+                                                                 self.tm_model.engine_config.enable_metrics, signal_cb)
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
-        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len)
+        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len, metrics)
 
         output_ids_buf = outputs['output_ids']
 

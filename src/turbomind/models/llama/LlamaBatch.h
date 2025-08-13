@@ -15,6 +15,7 @@
 #include "src/turbomind/models/llama/llama_params.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/metrics.h"
 
 namespace turbomind {
 
@@ -137,6 +138,12 @@ public:
 
     void Warmup();
 
+    ScheduleMetrics getScheduleMetrics()
+    {
+        const std::lock_guard<std::mutex> lock(metrics_mutex_);
+        return schedule_metrics_;
+    }
+
 private:
     void FindCanceledIndices(std::vector<int>& indices);
 
@@ -194,6 +201,8 @@ private:
     void SymmFree(void* ptr, size_t size, bool deregister);
 
     void DestroyCommunicators();
+
+    void UpdateMetrics();
 
 private:
     const EngineParam param_;
@@ -289,6 +298,10 @@ private:
     static constexpr int kMaxEndIdsSize      = 32;
 
     std::thread internal_thread_;
+
+    bool            enable_metrics_;
+    ScheduleMetrics schedule_metrics_;
+    std::mutex      metrics_mutex_;
 };
 
 using Engine = LlamaBatch;

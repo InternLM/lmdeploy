@@ -111,28 +111,6 @@ def assert_completions_stream_return(output,
                 assert message.get('logprobs') is None
 
 
-def assert_chat_interactive_batch_return(output):
-    assert output.get('input_tokens') > 0
-    assert output.get('tokens') > 0
-    assert output.get('history_tokens') >= 0
-    assert output.get('finish_reason') in ['stop', 'length']
-    assert len(output.get('text')) > 0
-
-
-def assert_chat_interactive_stream_return(output, is_last: bool = False, index: int = None):
-    assert output.get('input_tokens') > 0
-    if index is not None:
-        assert output.get('tokens') >= index
-    assert output.get('tokens') > 0
-    assert output.get('history_tokens') >= 0
-    if is_last:
-        assert len(output.get('text')) >= 0
-        assert output.get('finish_reason') in ['stop', 'length']
-    else:
-        assert len(output.get('text')) >= 0
-        assert output.get('finish_reason') is None
-
-
 def get_repeat_times(input, sub_input):
     time = input.count(sub_input)
     return time
