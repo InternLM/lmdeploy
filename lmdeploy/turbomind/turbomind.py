@@ -535,7 +535,7 @@ class TurboMindInstance:
             5: ResponseType.INTERNAL_ENGINE_ERROR,
             6: ResponseType.INPUT_LENGTH_ERROR,
             7: ResponseType.FINISH,
-            8: ResponseType.FINISH,
+            8: ResponseType.CANCEL,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 
@@ -728,9 +728,12 @@ class TurboMindInstance:
                 state = shared_state.consume()
 
                 status, seq_len = state.status, state.seq_len
+                ret_status = ResponseType.SUCCESS
 
                 if status in [7, 8]:  # finish / canceled
-                    finish, status = True, 0
+                    print(f'[turbomind] status {status}')
+                    finish = True
+                    ret_status = ResponseType.FINISH if status == 7 else ResponseType.CANCEL
                 elif status:
                     logger.error(f'internal error. status_code {status}')
                     yield self._get_error_output(status)
@@ -741,8 +744,7 @@ class TurboMindInstance:
 
                 output_ids += output_ids_buf[prev_len:seq_len].tolist()
                 output_len += seq_len - prev_len
-                status = ResponseType.FINISH if finish else ResponseType.SUCCESS  # noqa
-                output = EngineOutput(status, output_ids, output_len)
+                output = EngineOutput(ret_status, output_ids, output_len)
 
                 for f in extra_fs:
                     f(output, seq_len)

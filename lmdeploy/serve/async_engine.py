@@ -744,7 +744,7 @@ class AsyncEngine(LogitsMixin):
                 return
 
         def is_error(status):
-            return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
+            return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
         # used to skip / rewind stop words in interactive mode
         stop_ids = []
@@ -847,6 +847,12 @@ class AsyncEngine(LogitsMixin):
                                  finish_reason,
                                  token_ids=[],
                                  cache_block_ids=outputs.cache_block_ids)
+                    # Update a session's sequence only when it is in finished status
+                    if outputs.status == ResponseType.FINISH:
+                        if rewind_stop_tokens:
+                            # rewind the step to the token before the stop token
+                            output_len = gen_len
+                        self.id2step[session_id] += input_len + output_len
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
@@ -862,11 +868,6 @@ class AsyncEngine(LogitsMixin):
                 if self.backend == 'pytorch':
                     # manually end pytorch session
                     await inst.async_end(session_id)
-            else:
-                if rewind_stop_tokens:
-                    # rewind the step to the token before the stop token
-                    output_len = gen_len
-                self.id2step[session_id] += input_len + output_len
 
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)
@@ -908,15 +909,14 @@ class AsyncEngine(LogitsMixin):
 
         sequence_start = session._step == 0
 
-        print(f'id: {session._id}, session.step: {session._step}, prompt: {prompt}')
-
         generator = self.infer(prompt,
                                gen_config,
                                sequence_start=sequence_start,
                                sequence_end=False,
                                session_id=session._id,
                                stream_response=stream_response,
-                               multiplex=True)
+                               multiplex=True,
+                               step=session._step)
 
         def _gen():
             resp = None
