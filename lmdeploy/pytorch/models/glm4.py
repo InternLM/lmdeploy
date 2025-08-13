@@ -419,15 +419,6 @@ class Glm4ForCausalLM(nn.Module, CudaGraphMixin):
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 
-            # loaded weights of GLM4 gate up proj is already packed
-            if '.gate_up_proj' in name:
-                param = params_dict[name]
-                gate_w, up_w = torch.chunk(loaded_weight, 2, dim=0)
-                # load each part with the correct shard_id
-                load_weight(param, gate_w, shard_id=0)
-                load_weight(param, up_w, shard_id=1)
-                continue
-
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 if weight_name not in name:
                     continue
@@ -436,5 +427,13 @@ class Glm4ForCausalLM(nn.Module, CudaGraphMixin):
                 load_weight(param, loaded_weight, shard_id=shard_id)
                 break
             else:
-                param = params_dict[name]
-                load_weight(param, loaded_weight)
+                # GLM4 gate up proj weights are packed
+                if '.gate_up_proj' in name:
+                    param = params_dict[name]
+                    gate, up = param.weight_spliter(loaded_weight)
+                    load_weight(param, gate, shard_id=0)
+                    load_weight(param, up, shard_id=1)
+                    continue
+                else:
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight)
