@@ -1028,14 +1028,14 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
             const int valid_len = input_len - std::max(0, (history_len + offset) - cache_len);
 
-            TM_LOG_DEBUG("[output_logits] %d %d   %d %d  %d  %d %d",
-                history_len,
-                offset,
-                cache_len,
-                input_len,
-                valid_len,
-                std::max(0, diff),
-                std::max(0, -diff));
+            // TM_LOG_ERROR("%d %d   %d %d  %d  %d %d",
+            //              history_len,
+            //              offset,
+            //              cache_len,
+            //              input_len,
+            //              valid_len,
+            //              std::max(0, diff),
+            //              std::max(0, -diff));
 
             if (valid_len <= 0) {
                 continue;

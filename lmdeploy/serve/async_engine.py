@@ -695,8 +695,7 @@ class AsyncEngine(LogitsMixin):
         elif gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
-            logger.warning(f"n({gen_config.n}) > 1 hasn't been supported yet. "
-                           f'Fallback to 1')
+            logger.warning(f'n({gen_config.n}) > 1 hasn\'t been supported yet. Fallback to 1')
             gen_config.n = 1
         if messages:
             prompt = messages

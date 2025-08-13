@@ -60,8 +60,8 @@ std::tuple<BlockIds, UniqueIds> BlockTrie::Cache(const Sequence& seq, const std:
     std::shared_ptr<TrieNode> curr_node = root_;
     int                       idx       = 0;
 
-    BlockIds                               cache_block_ids;
-    UniqueIds                              cache_block_unique_ids;
+    BlockIds  cache_block_ids;
+    UniqueIds cache_block_unique_ids;
 
     // We don't cache the last block of the sequence, since it might not be full
     // TODO(lvhan): determine wether the last block is full or not. It is not trivial
@@ -107,7 +107,7 @@ std::tuple<BlockIds, UniqueIds> BlockTrie::Cache(const Sequence& seq, const std:
 int BlockTrie::Verify()
 {
     return DFS(root_);
-    }
+}
 
 int BlockTrie::DFS(std::shared_ptr<TrieNode>& node)
 {
@@ -115,7 +115,7 @@ int BlockTrie::DFS(std::shared_ptr<TrieNode>& node)
     for (auto it = node->children.begin(); it != node->children.end();) {
         if (block_manager_->unique_id(it->second->block_id) != it->second->block_unique_id) {
             // child invalid
-                        it = node->children.erase(it);
+            it = node->children.erase(it);
             ++invalid_count;
         }
         else {
