@@ -52,6 +52,7 @@ class BaseOutputModel(ABC):
         self.attention_config = cfg.attention_config
         self.lora_config = cfg.lora_config
         self.attn_tp_size = self.model_config.attn_tp_size
+        self.attn_cp_size = self.model_config.attn_cp_size
         self.mlp_tp_size = self.model_config.mlp_tp_size
         self.out_dir = out_dir
         self.to_file = True if out_dir else False
@@ -74,8 +75,14 @@ class BaseOutputModel(ABC):
         self.repeat_kv = 0
         if (self.attn_tp_size > self.model_config.kv_head_num
                 and self.attn_tp_size % self.model_config.kv_head_num == 0):
-            self.repeat_kv = (self.attn_tp_size // self.model_config.kv_head_num)
-            self.model_config.kv_head_num = self.attn_tp_size
+            self.attn_cp_size = self.attn_tp_size // self.model_config.kv_head_num
+            self.attn_tp_size //= self.attn_cp_size
+            self.model_config.attn_tp_size = self.attn_tp_size
+            self.model_config.attn_cp_size = self.attn_cp_size
+        # if (self.attn_tp_size > self.model_config.kv_head_num
+        #         and self.attn_tp_size % self.model_config.kv_head_num == 0):
+        #     self.repeat_kv = (self.attn_tp_size // self.model_config.kv_head_num)
+        #     self.model_config.kv_head_num = self.attn_tp_size
 
         self.model_config.verify()
         assert self.model_config.kv_head_num % self.attn_tp_size == 0

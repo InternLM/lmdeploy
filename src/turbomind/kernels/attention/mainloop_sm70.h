@@ -51,6 +51,8 @@ struct Mainloop<arch::Sm70, Impl_> {
                                int            tile_iter,
                                int            mask_iter,
                                float          qk_scale,
+                               int            cp_size,
+                               int            cp_rank,
                                SharedStorage& storage,
                                const StoreS&  store_S)
     {
@@ -93,7 +95,7 @@ struct Mainloop<arch::Sm70, Impl_> {
             }
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
+                ApplyCasualMask(frag_S, offset_Q, offset_K, cp_size, cp_rank);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -114,15 +116,27 @@ struct Mainloop<arch::Sm70, Impl_> {
         }
 
         for (; tile_iter >= 0; --tile_iter) {
-            loop(std::false_type{}, std::false_type{});
+            if (cp_size > 1) {
+                loop(std::false_type{}, std::true_type{});
+            }
+            else {
+                loop(std::false_type{}, std::false_type{});
+            }
         }
     }
 
-    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
+    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K, int cp_size, int cp_rank)
     {
         Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float& score) {
-            if (offset_Q + qi < offset_K + si) {
-                score -= std::numeric_limits<float>::infinity();
+            if constexpr (Impl::CTA_Q == 1) {  // decode
+                if (offset_Q + qi < offset_K + si) {
+                    score -= std::numeric_limits<float>::infinity();
+                }
+            }
+            else {  // prefill
+                if (offset_Q + qi < offset_K + si || (offset_K + si) % cp_size != cp_rank) {
+                    score -= std::numeric_limits<float>::infinity();
+                }
             }
         });
     }

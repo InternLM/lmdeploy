@@ -189,9 +189,11 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                      DataType     dtype,
                                                      int          group0,
                                                      int          group1,
+                                                     int          cp_size,
                                                      const int*   local_token_nums,
                                                      cudaStream_t stream)
 {
+    FT_CHECK(cp_size == 1);
     FT_CHECK(group0 * group1 == 0);
 
     const auto& g0 = groups_.at(group0);

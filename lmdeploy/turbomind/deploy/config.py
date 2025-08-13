@@ -67,6 +67,7 @@ class ModelConfig:
     weight_type: str = None
     session_len: int = None
     attn_tp_size: int = 1
+    attn_cp_size: int = 1
     mlp_tp_size: int = 1
     model_format: str = 'hf'
     expert_num: List[int] = ()

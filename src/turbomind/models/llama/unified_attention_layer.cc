@@ -34,6 +34,7 @@
 
 #include "src/turbomind/macro.h"
 
+#include "src/turbomind/models/llama/cp_utils.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
@@ -73,6 +74,9 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     param_(attn),
     model_param_(model),
     lora_param_(lora),
+    engine_param_(engine),
+    attn_cp_group_(ctx.comm.d_cp_group),
+    d_comm_(ctx.comm.d_comm),
     context_(ctx),
     stream_(ctx.stream),
     linear_(*ctx.linear),
@@ -135,6 +139,10 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
 
     cu_block_nums_ = args.at("cu_block_nums").buffer();
     kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
+
+    symm_partial_O_ = args.at("partial_O").borrow();
+    symm_partial_M_ = args.at("partial_M").borrow();
+    symm_partial_L_ = args.at("partial_L").borrow();
 
     // rotary embedding, add offest when forward
     if (rope_param_.type == RopeType::kDynamic) {
@@ -227,6 +235,43 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 }
 
 template<class T>
+void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
+{
+    auto allgather = [&](float* src, float* dst, int count) {
+        d_comm_->AllGather(src + count * engine_param_.attn_cp_rank, dst, count, kFloat32, attn_cp_group_, stream_);
+        sync_check_cuda_error();
+    };
+
+    const int token_num = attn.shape(0);
+
+    allgather(symm_partial_O_.data(),
+              symm_partial_O_.data(),
+              token_num * local_head_num_ * size_per_head_);                                 // (cp, q, h, d)
+    allgather(symm_partial_M_.data(), symm_partial_M_.data(), token_num * local_head_num_);  // (cp, q, h)
+    allgather(symm_partial_L_.data(), symm_partial_L_.data(), token_num * local_head_num_);  // (cp, q, h)
+
+    float inv_sqrt_dh = (float)std::log2(expf(1.));
+    if (param_.softmax_scale) {
+        inv_sqrt_dh *= param_.softmax_scale;
+    }
+    else {
+        inv_sqrt_dh /= std::sqrt((float)size_per_head_);
+    }
+
+    invokeCpReduce(attn.data<T>(),
+                   symm_partial_O_.data(),
+                   symm_partial_M_.data(),
+                   symm_partial_L_.data(),
+                   token_num,
+                   local_head_num_,
+                   size_per_head_,
+                   engine_param_.attn_cp_size,
+                   inv_sqrt_dh,
+                   stream_);
+    sync_check_cuda_error();
+}
+
+template<class T>
 Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights)
 {
     const auto device = qkv.device();
@@ -240,9 +285,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     Tensor attn{{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
-    Tensor tmp_kv{{2, (int)local_kv_head_num_, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
-
-    auto stream_ptr = streams_.data();
+    Tensor tmp_kv{{(int)local_kv_head_num_, 2, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
     auto CreateParams = [&](int offset, int batch_size, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
@@ -319,6 +362,18 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.locks       = barriers_.data();
         params.max_split_k = std::min(std::max(1, kMaxWorkspaceTokens / params.token_num), max_kv_splits);
 
+        // cp
+        params.cp_rank = engine_param_.attn_cp_rank;
+        params.cp_size = engine_param_.attn_cp_size;
+        if (params.cp_size > 1) {
+            const int off_O = q_count * local_head_num_ * size_per_head_ * engine_param_.attn_cp_rank;
+            const int off_M = q_count * local_head_num_ * engine_param_.attn_cp_rank;
+            const int off_L = q_count * local_head_num_ * engine_param_.attn_cp_rank;
+            params.cp_O     = symm_partial_O_.data() + off_O;
+            params.cp_M     = symm_partial_M_.data() + off_M;
+            params.cp_L     = symm_partial_L_.data() + off_L;
+        }
+
         params.arch   = arch_;
         params.stream = stream;
 
@@ -365,6 +420,10 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     if (decode_num_ && prefil_num_) {
         check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
         check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
+    }
+
+    if ((decode_num_ || prefil_num_) && !isTuning() && engine_param_.attn_cp_size > 1) {
+        cp_postprocess<T>(attn);
     }
 
     if (isTuning()) {

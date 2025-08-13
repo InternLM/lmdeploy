@@ -75,6 +75,13 @@ struct AttentionParams {
     float* partial_L;
     int*   locks;
 
+    // cp
+    int    cp_rank{0};
+    int    cp_size{1};
+    float* cp_O{nullptr};
+    float* cp_M{nullptr};
+    float* cp_L{nullptr};
+
     int          arch;
     cudaStream_t stream;
 

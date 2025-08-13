@@ -173,4 +173,7 @@ def get_tm_model(model_path,
                                                         model_cls=Transformer,
                                                         out_dir=out_dir)
 
+    engine_config.attn_tp_size = output_model.tm_config.model_config.attn_tp_size
+    engine_config.attn_cp_size = output_model.tm_config.model_config.attn_cp_size
+
     return output_model

@@ -334,6 +334,8 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     engine_param_.attn_dp_rank  = 0;
     engine_param_.attn_tp_size  = engine_reader["attn_tp_size"].as<int>();
     engine_param_.attn_tp_rank  = 0;
+    engine_param_.attn_cp_size  = engine_reader["attn_cp_size"].as<int>();
+    engine_param_.attn_cp_rank  = 0;
     engine_param_.mlp_tp_size   = engine_reader["mlp_tp_size"].as<int>();
     engine_param_.mlp_tp_rank   = 0;
 
@@ -344,7 +346,7 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + tp - 1) / tp * tp;
     }
 
-    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size;
+    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
     FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
 
     communicator_ = engine_reader["communicator"].as<std::string>();
@@ -417,13 +419,15 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     }
 
     const int device_num = engine_param_.outer_dp_size * comm_size_;
+    const int tp_cp_size = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
 
     engine_params_.resize(device_num, engine_param_);
     for (int i = 0; i < device_num; ++i) {
         auto& e         = engine_params_[i];
         e.outer_dp_rank = i / comm_size_;
-        e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
-        e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
+        e.attn_tp_rank  = i % comm_size_ % tp_cp_size % e.attn_tp_size;
+        e.attn_cp_rank  = i % comm_size_ % tp_cp_size / e.attn_tp_size;
+        e.attn_dp_rank  = i % comm_size_ / tp_cp_size;
         e.mlp_tp_rank   = i % comm_size_;
     }
 
@@ -477,11 +481,14 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
 
     const int outer_rank = rank / comm_size_;
     const int inner_rank = rank % comm_size_;
+    const int tp_cp_size = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
 
     comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
 
-    comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
-    comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
+    // dp, cp, tp
+    comm.h_tp_cp_group = comm.h_comm->Split(inner_rank / tp_cp_size, 0);
+    comm.h_tp_group    = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
+    comm.h_dp_group    = comm.h_comm->Split(inner_rank % tp_cp_size, 0);
 
     if (comm_size_ > 1) {
         comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
@@ -489,6 +496,7 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
         comm.d_tp_group = 0;
         if (engine_param_.attn_tp_size != comm_size_) {
             comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+            comm.d_cp_group = comm.d_comm->Split(inner_rank % engine_param_.attn_tp_size, 0, 0);
         }
     }
 
@@ -526,7 +534,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
     try {
         const int  dp_rank   = engine_param.outer_dp_rank * engine_param.attn_dp_size + engine_param.attn_dp_rank;
-        const bool is_driver = engine_param.attn_tp_rank == 0;
+        const bool is_driver = engine_param.attn_tp_rank == 0 && engine_param.attn_cp_rank == 0;
         engines_[device_id]  = std::make_unique<Engine>(dtype_,
                                                        engine_param,  //
                                                        std::move(model),

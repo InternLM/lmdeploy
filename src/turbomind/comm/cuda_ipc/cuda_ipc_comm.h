@@ -77,6 +77,7 @@ public:
                                         DataType     type,
                                         int          group0,
                                         int          group1,
+                                        int          cp_size,
                                         const int*   local_token_nums,
                                         cudaStream_t stream) override;
 

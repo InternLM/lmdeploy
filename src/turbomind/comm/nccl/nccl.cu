@@ -237,6 +237,7 @@ public:
                                         DataType     type,
                                         int          group0,
                                         int          group1,
+                                        int          cp_size,
                                         const int*   local_token_nums,
                                         cudaStream_t stream) override
     {
@@ -252,9 +253,8 @@ public:
         NCCLCHECK(ncclCommCount(comm0, &tp0));
         NCCLCHECK(ncclCommCount(comm1, &tp1));
 
-        const int inner_tp = std::min(tp0, tp1);
-
-        FT_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+        FT_CHECK(std::max(tp0, tp1) % std::min(tp0, tp1) == 0);
+        const int inner_tp = std::min(tp0, tp1) * cp_size;
 
         std::vector<std::tuple<int, int, int>> tasks;
         tasks.reserve(global_n_ranks_);
@@ -289,7 +289,18 @@ public:
             sync_check_cuda_error();
         }
 
-        if (tp1 > 1) {
+        if (cp_size > 1 && tp0 > tp1) {
+            NCCLCHECK(ncclGroupStart());
+            for (int i = 0; i < global_n_ranks_; ++i) {
+                if (auto& [offset, first, num] = tasks[i]; num > 0) {
+                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, i % tp0, comm0, stream));
+                }
+            }
+            NCCLCHECK(ncclGroupEnd());
+            sync_check_cuda_error();
+        }
+        else if (tp1 > 1) {
             NCCLCHECK(ncclGroupStart());
             for (int i = 0; i < global_n_ranks_; ++i) {
                 if (auto& [offset, first, num] = tasks[i]; num > 0) {

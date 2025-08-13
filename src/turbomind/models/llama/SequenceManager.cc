@@ -17,9 +17,10 @@ SequenceManager::SequenceManager(size_t             layer_num,
                                  int                chunk_size,
                                  bool               enable_prefix_caching,
                                  int                rank,
+                                 int                attn_cp_size,
                                  core::Allocator    allocator,
                                  GetFreeMemSize     get_free_size):
-    block_seq_len_(block_config.block_len_), rank_(rank)
+    block_seq_len_(block_config.block_len_), rank_(rank), attn_cp_size_(attn_cp_size)
 {
     block::Layout layout{block_config};
     // dump(layout);
@@ -346,6 +347,7 @@ std::vector<int> SequenceManager::CountRequiredBlocks(const Sequences&        se
     std::vector<int> required(sequences.size());
     for (int i = 0; i < sequences.size(); ++i) {
         int seq_len = context_lengths[i] + step_length;
+        seq_len     = (seq_len + attn_cp_size_ - 1) / attn_cp_size_;
         int count   = (seq_len + block_seq_len_ - 1) / block_seq_len_ - static_cast<int>(sequences[i]->blocks.size());
         required[i] = std::max(0, count);
     }

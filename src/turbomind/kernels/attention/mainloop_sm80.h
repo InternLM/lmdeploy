@@ -94,6 +94,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                         int            tile_iter,
                         int            mask_iter,
                         float          qk_scale,
+                        int            cp_size,
+                        int            cp_rank,
                         SharedStorage& storage,
                         const StoreS&  store_S)
     {
@@ -169,7 +171,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             });
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
+                ApplyCasualMask(frag_S, offset_Q, offset_K, cp_size, cp_rank);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -193,7 +195,12 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         PRAGMA_NO_UNROLL
         for (; tile_iter >= 0; --tile_iter) {
-            loop(false_c);
+            if (cp_size == 1) {
+                loop(false_c);
+            }
+            else {
+                loop(true_c);
+            }
         }
 
         __pipeline_commit();
@@ -214,6 +221,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                         int            tile_iter,
                         int            mask_iter,
                         float          qk_scale,
+                        int            cp_size,
+                        int            cp_rank,
                         SharedStorage& storage,
                         const StoreS&  store_S)
     {
@@ -267,7 +276,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             prefetch_K(0);
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
+                ApplyCasualMask(frag_S, offset_Q, offset_K, cp_size, cp_rank);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -287,7 +296,12 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         PRAGMA_NO_UNROLL
         for (; tile_iter >= 0; --tile_iter) {
-            loop(false_c, false_c);
+            if (cp_size == 1) {
+                loop(false_c, false_c);
+            }
+            else {
+                loop(false_c, true_c);
+            }
         }
 
         __pipeline_commit();
@@ -313,6 +327,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                         int            tile_iter,
                         int            mask_iter,
                         float          qk_scale,
+                        int            cp_size,
+                        int            cp_rank,
                         SharedStorage& storage,
                         const StoreS&  store_S)
     {
@@ -354,7 +370,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             const int offset_K = tile_iter * CTA_S;
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
+                ApplyCasualMask(frag_S, offset_Q, offset_K, cp_size, cp_rank);
             }
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
@@ -400,11 +416,21 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         PRAGMA_NO_UNROLL
         for (; tile_iter >= 1; --tile_iter) {
-            loop(false_c, false_c, false_c);
+            if (cp_size == 1) {
+                loop(false_c, false_c, false_c);
+            }
+            else {
+                loop(false_c, true_c, false_c);
+            }
         }
 
         if (tile_iter >= 0) {
-            loop(false_c, false_c, true_c);
+            if (cp_size == 1) {
+                loop(false_c, false_c, true_c);
+            }
+            else {
+                loop(false_c, true_c, true_c);
+            }
         }
 
         __pipeline_commit();
@@ -418,11 +444,18 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         Impl::Sync();
     }
 
-    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
+    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K, int cp_size, int cp_rank)
     {
         Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float& score) {
-            if (offset_Q + qi < offset_K + si) {
-                score -= std::numeric_limits<float>::infinity();
+            if constexpr (Impl::CTA_Q == 1) {  // decode
+                if (offset_Q + qi < offset_K + si) {
+                    score -= std::numeric_limits<float>::infinity();
+                }
+            }
+            else {  // prefill
+                if (offset_Q + qi < offset_K + si || (offset_K + si) % cp_size != cp_rank) {
+                    score -= std::numeric_limits<float>::infinity();
+                }
             }
         });
     }

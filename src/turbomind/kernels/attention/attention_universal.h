@@ -276,7 +276,11 @@ struct AttentionUniversal {
             }
 
             iterator.block_head_.with(
-                iterator.block_ptrs_, ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+                iterator.block_ptrs_, ti / params.cp_size, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+                    if (ti % params.cp_size != params.cp_rank) {
+                        return;
+                    }
+
                     PRAGMA_UNROLL
                     for (int c = 0; c < ITER_C; ++c) {
                         const int di = offset.x + c * Map::kDeltaC;
@@ -371,7 +375,14 @@ struct AttentionUniversal {
         const int context_len = params.cu_k_len[batch_idx + 1] - params.cu_k_len[batch_idx];
         const int history_len = context_len - input_len;
 
-        const int tile_count = (history_len + min(query_idx + CTA_Q, input_len) + CTA_S - 1) / CTA_S;
+        auto get_cp_len = [&](int length) -> int {
+            if constexpr (kProcessKV) {
+                return (length / params.cp_size + (length % params.cp_size > params.cp_rank ? 1 : 0));
+            }
+            return length;
+        };
+
+        const int tile_count = (get_cp_len(history_len) + min(query_idx + CTA_Q, input_len) + CTA_S - 1) / CTA_S;
 
         const int tile_per_split = (tile_count + split_cnt - 1) / split_cnt;
         const int iter_begin     = tile_per_split * split_idx;
@@ -406,8 +417,8 @@ struct AttentionUniversal {
 
         __syncthreads();
 
-        const int offset_Q = history_len + query_idx - iter_begin * CTA_S;
-        const int max_step = context_len - iter_begin * CTA_S;
+        const int max_step = get_cp_len(context_len) - iter_begin * CTA_S;
+        const int offset_Q = kProcessKV ? max_step - 1 : history_len + query_idx - iter_begin * CTA_S;
 
         int tile_iter = iter_end - iter_begin - 1;
         int mask_iter = (CTA_Q + CTA_S - 1) / CTA_S + 1;
@@ -425,6 +436,8 @@ struct AttentionUniversal {
                  tile_iter,
                  mask_iter,
                  params.inv_sqrt_dh,
+                 params.cp_size,
+                 params.cp_rank,
                  storage,
                  StoreS(params, query_idx, head_idx, batch_idx, context_len));
 
@@ -444,7 +457,12 @@ struct AttentionUniversal {
         }
 
         if (iter_begin == 0 && iter_end == tile_count) {
-            StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
+            if (params.cp_size > 1) {
+                StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
+            }
+            else {
+                StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
+            }
         }
         else {
             StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
@@ -478,6 +496,9 @@ struct AttentionUniversal {
                       params.partial_M,
                       params.partial_L,
                       params.partial_O,
+                      params.cp_M,
+                      params.cp_L,
+                      params.cp_O,
                       qi_begin,
                       head_idx,
                       params.num_heads,
@@ -549,7 +570,13 @@ struct AttentionUniversal {
 
         Impl::StoreO<false>(frag_O, frag_L, storage, [&](int hi, int qi, int di, const auto& vec) {
             if (qi_begin + qi < qi_end && check_h(hi)) {
-                Store(&params.partial_O[get_index(hi, qi) * kHeadDim + di], vec);
+                if (params.max_split_k > 1) {  // decode
+                    Store(&params.partial_O[get_index(hi, qi) * kHeadDim + di], vec);
+                }
+                if (params.cp_size > 1 && split_idx == 0) {
+                    const int index = ((qi_begin + qi) * params.num_heads + (head_idx + hi)) * kHeadDim + di;
+                    Store(&params.cp_O[index], vec);
+                }
             }
         });
 
@@ -557,8 +584,15 @@ struct AttentionUniversal {
             const int index = get_index(hi, qi);
             if (qi_begin + qi < qi_end && ri == 0 && check_h(hi)) {
                 // printf("ML %2d %2d %f %f\n", split_idx, head_idx + hi, M, L);
-                params.partial_M[index] = M;
-                params.partial_L[index] = L;
+                if (params.max_split_k > 1) {  // decode
+                    params.partial_M[index] = M;
+                    params.partial_L[index] = L;
+                }
+                if (params.cp_size > 1 && split_idx == 0) {
+                    const int index    = (qi_begin + qi) * params.num_heads + (head_idx + hi);
+                    params.cp_M[index] = M;
+                    params.cp_L[index] = L;
+                }
             }
         });
     }

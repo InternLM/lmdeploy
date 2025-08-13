@@ -796,6 +796,7 @@ struct TestComm {
                                                                dtype,
                                                                group0,
                                                                group1,
+                                                               1,
                                                                local_token_nums.data(),
                                                                stream);
                     });

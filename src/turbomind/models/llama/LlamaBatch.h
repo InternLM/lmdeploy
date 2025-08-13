@@ -209,6 +209,7 @@ private:
     const int      device_id_;
     const int      dp_rank_;
     const int      tp_size_;
+    const int      tp_cp_size_;
     const int      tp_rank_;
     const DataType data_type_;
     const bool     debug_;
@@ -236,6 +237,11 @@ private:
     // context decoding temp buffers
     Tensor symm_hidden_states_buf_;
     Tensor symm_logits_buf_;
+
+    // context parallel
+    Tensor_<float> symm_partial_O_;
+    Tensor_<float> symm_partial_M_;
+    Tensor_<float> symm_partial_L_;
 
     Tensor decoder_output_buf_;
 
