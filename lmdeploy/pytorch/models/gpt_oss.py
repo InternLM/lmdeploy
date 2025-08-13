@@ -213,15 +213,6 @@ class GptOssExperts(nn.Module):
             act_func=self._gateup_act,
         )
 
-    # @torch.compile(dynamic=True)
-    # def _gateup_act(self, gateup: torch.Tensor) -> torch.Tensor:
-    #     """Moe act."""
-    #     gate, up = gateup.chunk(2, dim=-1)
-    #     gate = gate.clamp(min=None, max=self.limit)
-    #     up = up.clamp(min=-self.limit, max=self.limit)
-    #     glu = gate * torch.sigmoid(gate * self.alpha)
-    #     return (up + 1) * glu
-
     def forward(self, hidden_states: torch.Tensor, router_indices, routing_weights) -> torch.Tensor:
         """forward."""
         batch_size, sequence_length, _ = hidden_states.shape
