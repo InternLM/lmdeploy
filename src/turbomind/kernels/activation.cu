@@ -1,11 +1,14 @@
 
+#include <limits>
+
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 
 #include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/activation.h"
-#include "src/turbomind/kernels/attention/quantization.h"
-#include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
-#include <limits>
 
 namespace turbomind {
 
