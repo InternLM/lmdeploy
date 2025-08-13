@@ -426,7 +426,7 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
     for (int i = 0; i < sequences.size(); i++) {
         BlockIds  block_ids;
         UniqueIds unique_ids;
-        auto& seq = const_cast<Sequence&>(*sequences[i]);
+        auto&     seq = const_cast<Sequence&>(*sequences[i]);
         if (seq.cache_len != 0) {
             // We only apply prefix-cache matching when seq.cache_len is 0,
             // which means this seq is a brand-new sequence.

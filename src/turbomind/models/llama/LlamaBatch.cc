@@ -1013,10 +1013,9 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
             auto& dst_buf = state_->requests[i]->outputs.at("logits").buffer();
 
-            const int cache_len   = state_->sequences[i]->cache_len;
-            const int history_len = !param_.enable_prefix_caching
-                ? state_->sequences[i]->tokens.size()
-                : state_->requests[i]->session.step;
+            const int cache_len = state_->sequences[i]->cache_len;
+            const int history_len =
+                !param_.enable_prefix_caching ? state_->sequences[i]->tokens.size() : state_->requests[i]->session.step;
 
             // ----------H------I-------P-----------
             //      C        C      C         C
@@ -1266,10 +1265,8 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
 auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
 {
     if (tp_rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot %d, request %llu, stop %d, end %d",
-                    index,
-                    state_->requests[index]->id,
-                    force_stop);
+        TM_LOG_INFO(
+            "[Interrupt] slot %d, request %llu, stop %d, end %d", index, state_->requests[index]->id, force_stop);
     }
 
     if (debug_ && tp_rank_ == 0) {
