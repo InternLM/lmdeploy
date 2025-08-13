@@ -34,9 +34,6 @@ struct Sequence {
 
     mutable int cache_len = 0;
 
-    // since which token of a sequence that prefix match won't apply
-    mutable int prefix_match_end_index = 0;
-
     // additional data kept round-to-round
     mutable std::vector<std::byte> random_state;  // update by user
 

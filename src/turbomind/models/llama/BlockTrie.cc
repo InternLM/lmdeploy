@@ -107,22 +107,23 @@ std::tuple<BlockIds, UniqueIds> BlockTrie::Cache(const Sequence& seq, const std:
 int BlockTrie::Verify()
 {
     return DFS(root_);
-}
+    }
 
 int BlockTrie::DFS(std::shared_ptr<TrieNode>& node)
 {
-    int valid_count = 0;
+    int invalid_count = 0;
     for (auto it = node->children.begin(); it != node->children.end();) {
         if (block_manager_->unique_id(it->second->block_id) != it->second->block_unique_id) {
             // child invalid
-            it = node->children.erase(it);
+                        it = node->children.erase(it);
+            ++invalid_count;
         }
         else {
-            valid_count += DFS(it->second);
+            invalid_count += DFS(it->second);
             it++;
         }
     }
-    return valid_count;
+    return invalid_count;
 }
 
 }  // namespace turbomind

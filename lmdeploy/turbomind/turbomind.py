@@ -536,6 +536,7 @@ class TurboMindInstance:
             6: ResponseType.INPUT_LENGTH_ERROR,
             7: ResponseType.FINISH,
             8: ResponseType.FINISH,
+            9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 

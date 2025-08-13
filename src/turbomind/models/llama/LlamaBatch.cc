@@ -296,12 +296,6 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             // TODO: truncate prompt to enable prefix caching for VLM
             seq.prompt.resize(input_length);
             std::copy_n(input_ids, input_length, seq.prompt.data());
-            seq.prefix_match_end_index = input_length;
-            if (r->gen_cfg.output_logits || r->gen_cfg.output_last_hidden_state) {
-                // when output logits or output last hidden state, prefix match can only
-                // apply to prompts[0:step)
-                seq.prefix_match_end_index = r->session.step;
-            }
         }
 
         const int elem_size = byte_size(data_type_);

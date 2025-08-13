@@ -150,7 +150,7 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
 
     std::tie(block_ids, block_unique_ids) = block_trie_->Cache(seq, seq.tokens);
     if (rank_ == 0) {
-        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, tokens %d, valid blocks %d",
+                TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, tokens %d",
                     seq.id,
                     block_ids.size(),
                     seq.tokens.size());
@@ -431,9 +431,6 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
             // We only apply prefix-cache matching when seq.cache_len is 0,
             // which means this seq is a brand-new sequence.
             // seq.cache_len is updated after every forward iter. Refer to `LlamaBatch::Forward`
-            continue;
-        }
-        if (seq.prefix_match_end_index < block_seq_len_) {
             continue;
         }
         std::tie(block_ids, unique_ids) = block_trie_->Match(seq);
