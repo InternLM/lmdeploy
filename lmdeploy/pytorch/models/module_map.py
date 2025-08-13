@@ -208,4 +208,9 @@ MODULE_MAP.update(
 # qwen2 reward model
 MODULE_MAP.update({'Qwen2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_reward.Qwen2ForRewardModel'})
 
+# gpt-oss
+MODULE_MAP.update({
+    'GptOssForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gpt_oss.GptOssForCausalLM',
+})
+
 CUSTOM_MODULE_MAP = dict()
