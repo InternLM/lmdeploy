@@ -115,7 +115,8 @@ public:
                         std::unique_ptr<Context> ctx,
                         std::shared_ptr<Gateway> gateway,
                         int                      device_id,
-                        int                      dp_rank);
+                        int                      dp_rank,
+                        bool                     is_driver);
 
     ~LlamaBatch();
 
@@ -211,6 +212,7 @@ private:
     const int      tp_rank_;
     const DataType data_type_;
     const bool     debug_;
+    const bool     is_driver_;
 
     // Refs into `Context<T>`
     cudaStream_t const stream_{};

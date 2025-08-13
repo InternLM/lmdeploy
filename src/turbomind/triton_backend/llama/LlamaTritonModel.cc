@@ -525,14 +525,16 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
     h_comm->Sync();
 
     try {
-        const int dp_rank   = engine_param.outer_dp_rank * engine_param.attn_dp_size + engine_param.attn_dp_rank;
-        engines_[device_id] = std::make_unique<Engine>(dtype_,
-                                                       engine_param_,  //
+        const int  dp_rank   = engine_param.outer_dp_rank * engine_param.attn_dp_size + engine_param.attn_dp_rank;
+        const bool is_driver = engine_param.attn_tp_rank == 0;
+        engines_[device_id]  = std::make_unique<Engine>(dtype_,
+                                                       engine_param,  //
                                                        std::move(model),
                                                        std::move(ctx),
                                                        gateway_,
                                                        engine_param_.devices[device_id],
-                                                       dp_rank);
+                                                       dp_rank,
+                                                       is_driver);
     }
     catch (const std::exception& e) {
         TM_LOG_ERROR("[Engine][Init] %s", e.what());
