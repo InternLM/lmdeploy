@@ -253,6 +253,23 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
         __device__ void Transform(int k) {}
     };
 
+    template<class Storage>
+    __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, Storage& storage)
+    {
+        static_assert(kWarpCntS == 1);
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < V_M; ++m) {
+            PRAGMA_UNROLL
+            for (int q = 0; q < 2; ++q) {
+                if constexpr (Base::kDeferReduceL) {
+                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 1);
+                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 2);
+                }
+            }
+        }
+    }
+
     template<class Prefetch, class Preload>
     __device__ static void
     ComputePV(StatePV state_PV, FragO& frag_O, int offset, Prefetch&& prefetch, Preload&& preload)

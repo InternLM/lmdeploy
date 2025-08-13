@@ -398,7 +398,7 @@ void DebugTensor(Tensor& tensor, const std::string& key, int level)
     auto invoke = [&](auto t) {
         using T = decltype(t);
         AnomalyHandler::instance().CountAndFix((T*)tensor.raw_data(), tensor.size(), key, level);
-        // Compare((T*)tensor.raw_data(), tensor.size(), key, compare_mode, core::Context::stream().handle());
+        // Compare((T*)tensor.raw_data(), tensor.size(), key, kCmpRead, core::Context::stream().handle());
     };
     TM_DISPATCH_DTYPES(tensor.dtype(), invoke, float, half_t, bfloat16_t);
 }
