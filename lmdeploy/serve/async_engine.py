@@ -114,9 +114,13 @@ class Session:
 
     def close(self):
         """Release engine storage for this session."""
-        if self._engine:
+        if self._engine and self._prompt:
             self._engine._run(coro=self._engine.end_session(self._id)).result()
             self._engine = None
+
+    def stop(self):
+        if self._engine and self._prompt:
+            self._engine._run(coro=self._engine.stop_session(self._id)).result()
 
     def __repr__(self) -> str:
         res = ''
@@ -789,7 +793,6 @@ class AsyncEngine(LogitsMixin):
                             continue
 
                     mask = slice(prev_len - output_len, output_len - hit_stop_token)
-
                     token_ids += outputs.token_ids[mask]
                     gen_len = len(token_ids) - input_len
 
@@ -904,6 +907,8 @@ class AsyncEngine(LogitsMixin):
         session._response = None
 
         sequence_start = session._step == 0
+
+        print(f'id: {session._id}, session.step: {session._step}, prompt: {prompt}')
 
         generator = self.infer(prompt,
                                gen_config,

@@ -78,12 +78,15 @@ def main(model_path, backend, **kwargs):
                 if prompt == 'exit':
                     quit = True
                     break
+                if prompt.strip() == '':
+                    continue
                 resps = sess(prompt)
                 try:
                     for resp in resps:
                         print(resp.text, end='', flush=True)
                 except KeyboardInterrupt:
                     sess.stop()
+
         if quit:
             print('exiting...')
             break
