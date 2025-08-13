@@ -1303,7 +1303,6 @@ auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
     // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
     sequence_manager_->UpdateAndSetUnlock(seq);
 
-
     if (state_->requests[index]->session.end_flag) {
         // Sequence is ending this round
         FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
