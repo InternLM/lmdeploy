@@ -449,7 +449,7 @@ class TestRestfulInterfaceChatCompletions:
 class TestRestfulOpenAI:
 
     def test_return_info(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -464,7 +464,7 @@ class TestRestfulOpenAI:
         assert_chat_completions_batch_return(output, model_name)
 
     def test_return_info_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -485,7 +485,7 @@ class TestRestfulOpenAI:
             assert_chat_completions_stream_return(outputList[index], model_name)
 
     def test_single_stopword(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -503,7 +503,7 @@ class TestRestfulOpenAI:
         assert output.get('choices')[0].get('finish_reason') == 'stop'
 
     def test_single_stopword_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -527,7 +527,7 @@ class TestRestfulOpenAI:
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     def test_array_stopwords(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(
             model=model_name,
@@ -549,7 +549,7 @@ class TestRestfulOpenAI:
         assert output.get('choices')[0].get('finish_reason') == 'stop'
 
     def test_array_stopwords_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -575,7 +575,7 @@ class TestRestfulOpenAI:
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
     def test_minimum_topp(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputList = []
         for i in range(3):
@@ -598,7 +598,7 @@ class TestRestfulOpenAI:
             'message').get('content')
 
     def test_minimum_topp_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         responseList = []
         for i in range(3):
@@ -625,7 +625,7 @@ class TestRestfulOpenAI:
         assert responseList[0] == responseList[1] or responseList[1] == responseList[2]
 
     def test_mistake_modelname_return(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         with pytest.raises(Exception, match='The model `error` does not exist.'):
             client.chat.completions.create(
                 model='error',
@@ -640,7 +640,7 @@ class TestRestfulOpenAI:
             )
 
     def test_mistake_modelname_return_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
 
         with pytest.raises(Exception, match='The model `error` does not exist.'):
             client.chat.completions.create(model='error',
@@ -655,7 +655,7 @@ class TestRestfulOpenAI:
                                            stream=True)
 
     def test_mutilple_times_response_should_not_same(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputList = []
         for i in range(3):
@@ -675,7 +675,7 @@ class TestRestfulOpenAI:
                 'content') != outputList[2].get('choices')[0].get('message').get('content')
 
     def test_mutilple_times_response_should_not_same_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         responseList = []
         for i in range(3):
@@ -701,7 +701,7 @@ class TestRestfulOpenAI:
         assert responseList[0] != responseList[1] or responseList[1] == responseList[2]
 
     def test_longtext_input(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -717,7 +717,7 @@ class TestRestfulOpenAI:
         assert output.get('choices')[0].get('message').get('content') == ''
 
     def test_longtext_input_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
 
         outputs = client.chat.completions.create(model=model_name,
@@ -740,7 +740,7 @@ class TestRestfulOpenAI:
         assert len(outputList) == 1
 
     def test_max_tokens(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -757,7 +757,7 @@ class TestRestfulOpenAI:
         assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
 
     def test_max_tokens_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
 
         outputs = client.chat.completions.create(model=model_name,
@@ -787,7 +787,7 @@ class TestRestfulOpenAI:
 
     @pytest.mark.not_pytorch
     def test_logprobs(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         outputs = client.chat.completions.create(model=model_name,
                                                  messages=[
@@ -807,7 +807,7 @@ class TestRestfulOpenAI:
 
     @pytest.mark.not_pytorch
     def test_logprobs_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
 
         outputs = client.chat.completions.create(model=model_name,
@@ -838,7 +838,7 @@ class TestRestfulOpenAI:
         assert length == 5 or length == 6
 
     def test_input_validation(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         messages = [
             {
@@ -871,7 +871,7 @@ class TestRestfulOpenAI:
             client.chat.completions.create(model=model_name, messages=messages, temperature='test')
 
     def test_input_validation_streaming(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         messages = [
             {
@@ -904,7 +904,7 @@ class TestRestfulOpenAI:
             client.chat.completions.create(model=model_name, messages=messages, temperature='test', stream=True)
 
     def test_disable_think(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         output = client.chat.completions.create(model=model_name,
                                                 messages=[
@@ -936,7 +936,7 @@ class TestRestfulOpenAI:
         assert_chat_completions_batch_return(response, model_name)
 
     def test_disable_think_with_image(self):
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f"{BASE_URL}/v1")
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
         output = client.chat.completions.create(
             model=model_name,
