@@ -869,6 +869,8 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
 
     // Wait for allocations
     check_cuda_error(cudaStreamSynchronize(stream_));
+
+    UpdateMetrics();
 }
 
 void LlamaBatch::FreeBuffer()
@@ -1245,6 +1247,9 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
         // recover full context length of partial
         state_->h_context_length[i] = g.partial_context_legnth;
     }
+
+    // Update the schedule metrics since some requests might finish the inference
+    UpdateMetrics();
 }
 
 auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
@@ -1377,6 +1382,9 @@ void LlamaBatch::InternalThreadEntry()
         }
 
         Initialize(g);
+
+        // update the schedule metrics and request metrics in every forward iter
+        UpdateMetrics();
 
         const int n_active = AllReduce(comm_.h_dp_group, state_->active_size, comm::RedOp::kSum);
 
@@ -1889,6 +1897,39 @@ void LlamaBatch::DestroyCommunicators()
 
     cudaStreamSynchronize(stream_);
     comm_.h_comm->Sync();
+}
+
+void LlamaBatch::UpdateMetrics()
+{
+    if (tp_rank_ == 0 && param_.enable_metrics) {
+        // update schedule metrics
+        int total_seqs, active_seqs, cached_seqs;
+        std::tie(total_seqs, active_seqs, cached_seqs) = sequence_manager_->seq_stats();
+
+        {
+            const std::lock_guard<std::mutex> lock(metrics_mutex_);
+
+            schedule_metrics_.total_seqs    = total_seqs;
+            schedule_metrics_.active_seqs   = active_seqs;
+            schedule_metrics_.waiting_seqs  = total_seqs - active_seqs;
+            schedule_metrics_.total_blocks  = sequence_manager_->total_count();
+            schedule_metrics_.active_blocks = sequence_manager_->active_count();
+            schedule_metrics_.cached_blocks = sequence_manager_->cached_count();
+            schedule_metrics_.free_blocks   = sequence_manager_->free_count();
+        }
+
+        // update request metrics
+        for (int i = 0; i < state_->active_size; ++i) {
+            if (!state_->requests[i]) {
+                continue;
+            }
+            auto& metrics = state_->requests[i]->metrics;
+            if (!metrics || metrics->scheduled_time != 0) {
+                continue;
+            }
+            metrics->scheduled_time = RequestMetrics::timestamp();
+        }
+    }
 }
 
 }  // namespace turbomind
