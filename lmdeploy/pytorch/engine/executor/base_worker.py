@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
@@ -129,6 +129,14 @@ class WorkerWrapperBase:
     def warmup(self):
         """warmup."""
         self.model_agent.warmup()
+
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        self.model_agent.sleep(level)
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        self.model_agent.wakeup(tags)
 
     def get_input_processor(self):
         """Build cache engine."""

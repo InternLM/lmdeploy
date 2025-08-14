@@ -4,7 +4,7 @@ import contextlib
 import json
 import os
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import ray
@@ -469,6 +469,14 @@ class RayExecutor(ExecutorBase):
     def warmup(self):
         """Build cache engine."""
         self.collective_rpc('warmup')
+
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        self.collective_rpc('sleep', (level, ))
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        self.collective_rpc('wakeup', (tags, ))
 
     def get_input_processor(self):
         """Build cache engine."""
