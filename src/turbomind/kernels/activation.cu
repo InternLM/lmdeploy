@@ -11,10 +11,14 @@ template<class T>
 struct SiluGptOss {
     __device__ T operator()(T gate, T up) const noexcept
     {
-        const T _7{7.f};
-        gate = __hmin(_7, gate);
-        up   = __hmax(-_7, __hmin(_7, up));
-        return static_cast<T>(fdividef((float)gate, 1.f + expf((float)-gate * 1.702f)) * (1.f + (float)up));
+        if constexpr (TURBOMIND_ARCH_HAS_BF16 || data_type_v<T> != kBfloat16) {
+            gate = __hmin((T)7.f, gate);
+            up   = __hmax((T)-7.f, __hmin((T)7.f, up));
+            return static_cast<T>(fdividef((float)gate, 1.f + expf((float)-gate * 1.702f)) * (1.f + (float)up));
+        }
+        else {
+            return {};
+        }
     }
 };
 
