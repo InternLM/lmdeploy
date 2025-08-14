@@ -1,9 +1,4 @@
 
-#include <limits>
-
-#include <cuda_bf16.h>
-#include <cuda_fp16.h>
-
 #include "src/turbomind/core/data_type.h"
 
 #include "src/turbomind/kernels/activation.h"
@@ -16,8 +11,9 @@ template<class T>
 struct SiluGptOss {
     __device__ T operator()(T gate, T up) const noexcept
     {
-        gate = __hmin((T)7.f, gate);
-        up   = __hmax((T)-7.f, __hmin((T)7.f, up));
+        const T _7{7.f};
+        gate = __hmin(_7, gate);
+        up   = __hmax(-_7, __hmin(_7, up));
         return static_cast<T>(fdividef((float)gate, 1.f + expf((float)-gate * 1.702f)) * (1.f + (float)up));
     }
 };
