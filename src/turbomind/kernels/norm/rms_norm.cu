@@ -440,7 +440,7 @@ void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
                                                                    num,
                                                                    dim);
         };
-        if (data_type_v<T> == kFloat) {
+        if constexpr (data_type_v<T> == kFloat) {
             TM_DISPATCH_PRIMARY_DTYPES(bias.dtype(), invoke1);
         }
         else {  // skip mixing half and bf16
