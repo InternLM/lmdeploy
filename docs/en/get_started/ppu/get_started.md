@@ -7,7 +7,6 @@ Please read the original [Get Started](../get_started.md) guide before reading t
 
 Please refer to [dlinfer installation guide](https://github.com/DeepLink-org/dlinfer#%E5%AE%89%E8%A3%85%E6%96%B9%E6%B3%95).
 
-
 ## Offline batch inference
 
 > \[!TIP\]
