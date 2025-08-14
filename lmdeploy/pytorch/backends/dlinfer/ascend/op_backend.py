@@ -19,7 +19,7 @@ logger = get_logger('lmdeploy')
 
 class SocVersion:
     Ascend310P: str = 'Ascend310P'
-    Ascend910B: str = 'Ascend910B'
+    Ascend910: str = 'Ascend910'
 
     @classmethod
     @lru_cache(maxsize=1)
@@ -38,8 +38,8 @@ class SocVersion:
         return cls.device_name().startswith(cls.Ascend310P)
 
     @classmethod
-    def is_Ascend910B(cls) -> bool:
-        return cls.device_name().startswith(cls.Ascend910B)
+    def is_Ascend910(cls) -> bool:
+        return cls.device_name().startswith(cls.Ascend910)
 
 
 class AscendKVQuantMeta:
@@ -105,7 +105,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        if SocVersion.is_Ascend910B():
+        if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
         elif SocVersion.is_Ascend310P():
             return (
@@ -123,7 +123,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        if SocVersion.is_Ascend910B():
+        if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
         elif SocVersion.is_Ascend310P():
             return (
@@ -147,7 +147,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             return cls.total_slots
 
         kv_start_indices, attention_mask = [], []
-        if SocVersion.is_Ascend910B():
+        if SocVersion.is_Ascend910():
             block_num, block_size, *_ = step_context.kv_caches[0][0].shape
         elif SocVersion.is_Ascend310P():
             block_num, _, block_size, _ = step_context.kv_caches[0][0].shape
@@ -202,7 +202,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             # prepare some params of unpaged_prefill attention stage.
             q_start_loc_cpu, kv_seqlens_cpu = None, None
             q_seqlens_cpu = step_context.q_seqlens.cpu()
-            if SocVersion.is_Ascend910B():
+            if SocVersion.is_Ascend910():
                 single_attention_mask = torch.logical_not(
                     torch.tril(
                         torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.bool).cuda(),
@@ -243,10 +243,10 @@ class AscendOpsBackend(DlinferOpsBackend):
             kv_seqlens = step_context.kv_seqlens.to(torch.int32)
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
-                    if SocVersion.is_Ascend910B():
+                    if SocVersion.is_Ascend910():
                         attention_mask = [mask.half() for mask in attention_mask]
                 else:
-                    if SocVersion.is_Ascend910B():
+                    if SocVersion.is_Ascend910():
                         attention_mask = [
                             torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
                         ]
