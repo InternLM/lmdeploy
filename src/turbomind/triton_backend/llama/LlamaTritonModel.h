@@ -55,10 +55,16 @@ public:
 
     void createEngine(int device_id, int rank);
 
+    void sleep(int device_id, int level);
+
+    void wakeup(int device_id, const std::vector<std::string>& tags);
+
     std::string toString();
 
     int getTensorParaSize();
     int getPipelineParaSize();
+
+    ScheduleMetrics getScheduleMetrics(int device_id, int rank);
 
 private:
     void handleMissingParams();

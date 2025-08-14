@@ -4,11 +4,9 @@
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
-import numpy as np
-
-from lmdeploy.metrics.stats import IterationStats, SchedulerStats
+from lmdeploy.metrics.stats import FinishedRequestStats, IterationStats, SchedulerStats
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -17,7 +15,11 @@ logger = get_logger('lmdeploy')
 class StatLoggerBase(ABC):
 
     @abstractmethod
-    def record(self, scheduler_stats: SchedulerStats, iteration_stats: Optional[IterationStats]):
+    def record_schedule(self, stats: SchedulerStats) -> None:
+        ...
+
+    @abstractmethod
+    def record_iteration(self, stats: IterationStats) -> None:
         ...
 
     def log(self):  # noqa
@@ -33,37 +35,35 @@ class LoggingStatLogger(StatLoggerBase):
 
     def _reset(self, now):
         self.last_log_time = now
+        self.total_prompt_tokens = 0
+        self.total_generation_tokens = 0
 
-        # Tracked stats over current local logging interval.
-        self.num_prompt_tokens: List[int] = []
-        self.num_generation_tokens: List[int] = []
+    def record_schedule(self, stats: SchedulerStats):
+        self.last_scheduler_stats = stats
 
-    def _track_iteration_stats(self, iteration_stats: IterationStats):
-        # Save tracked stats for token counters.
-        self.num_prompt_tokens.append(iteration_stats.num_prompt_tokens)
-        self.num_generation_tokens.append(iteration_stats.num_generation_tokens)
+    def record_iteration(self, stats: IterationStats):
+        # In the first iteration of a sequence, stats.prompt_tokens is the
+        # prompt token number of a sequence. In subsequent iterations,
+        # the value is 0. This enables cumulative counting in `total_prompt_tokens`
+        self.total_prompt_tokens += stats.prompt_tokens
+        self.total_generation_tokens += stats.new_generation_tokens
 
-    def _get_throughput(self, tracked_stats: List[int], now: float) -> float:
-        # Compute summary metrics for tracked stats
-        return float(np.sum(tracked_stats) / (now - self.last_log_time))
-
-    def record(self, scheduler_stats: SchedulerStats, iteration_stats: Optional[IterationStats]):
-        """Log Stats to standard output."""
-
-        if iteration_stats:
-            self._track_iteration_stats(iteration_stats)
-
-        self.last_scheduler_stats = scheduler_stats
+    def record_finish(self, stats: FinishedRequestStats):
+        pass
 
     def log(self):
         now = time.perf_counter()
-        prompt_throughput = self._get_throughput(self.num_prompt_tokens, now)
-        generation_throughput = self._get_throughput(self.num_generation_tokens, now)
+        if self.total_prompt_tokens == 0 and self.total_generation_tokens == 0:
+            # Not show the metrics log in console
+            self._reset(now)
+            return
+
+        prompt_throughput = self.total_prompt_tokens / (now - self.last_log_time)
+        generation_throughput = self.total_generation_tokens / (now - self.last_log_time)
 
         self._reset(now)
 
         scheduler_stats = self.last_scheduler_stats
-
         # Format and print output.
         log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} "
                    f'DP{self.dp_rank}] '
@@ -102,7 +102,7 @@ class PrometheusStatLogger(StatLoggerBase):
         labelvalues = [model_name, str(dp_rank)]
 
         #
-        # Scheduler state
+        # Scheduler stats
         #
         self.gauge_scheduler_finished = prometheus_client.Gauge(name='lmdeploy:num_requests_finished',
                                                                 documentation='Number of current finished requests.',
@@ -198,7 +198,17 @@ class PrometheusStatLogger(StatLoggerBase):
                 name='lmdeploy:time_per_output_token_seconds',
                 documentation='Histogram of time per output token in seconds.',
                 buckets=[
-                    0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
+                    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
+                    0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0, 40.0, 80.0
+                ],
+                labelnames=labelnames).labels(*labelvalues)
+
+        self.histogram_iter_token_latency = \
+            prometheus_client.Histogram(
+                name='lmdeploy:iter_token_latency',
+                documentation='Histogram of inter-token latency',
+                buckets=[
+                    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5,
                     0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0, 40.0, 80.0
                 ],
                 labelnames=labelnames).labels(*labelvalues)
@@ -238,38 +248,39 @@ class PrometheusStatLogger(StatLoggerBase):
                 buckets=request_latency_buckets,
                 labelnames=labelnames).labels(*labelvalues)
 
-    def record(self, scheduler_stats: SchedulerStats, iteration_stats: Optional[IterationStats]):
-        """Log to prometheus."""
+    def record_schedule(self, stats: SchedulerStats) -> None:
+        """Report schedule metrics to prometheus."""
+        self.gauge_scheduler_finished.set(stats.num_finished_reqs)
+        self.gauge_scheduler_unfinished.set(stats.num_total_reqs - stats.num_finished_reqs)
+        self.gauge_scheduler_running.set(stats.num_running_reqs)
+        self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
+        self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
 
-        self.gauge_scheduler_finished.set(scheduler_stats.num_finished_reqs)
-        self.gauge_scheduler_unfinished.set(scheduler_stats.num_total_reqs - scheduler_stats.num_finished_reqs)
-        self.gauge_scheduler_running.set(scheduler_stats.num_running_reqs)
-        self.gauge_scheduler_waiting.set(scheduler_stats.num_waiting_reqs)
-        self.gauge_gpu_cache_usage.set(scheduler_stats.gpu_cache_usage)
+    def record_iteration(self, stats: IterationStats) -> None:
+        """Report token-related metrics to prometheus."""
 
-        if iteration_stats is None:
-            return
+        self.counter_prompt_tokens.inc(stats.prompt_tokens)
+        self.counter_generation_tokens.inc(stats.new_generation_tokens)
+        self.histogram_iteration_tokens.observe(stats.prompt_tokens + stats.new_generation_tokens)
 
-        self.counter_prompt_tokens.inc(iteration_stats.num_prompt_tokens)
-        self.counter_generation_tokens.inc(iteration_stats.num_generation_tokens)
-        self.histogram_iteration_tokens.observe(iteration_stats.num_prompt_tokens +
-                                                iteration_stats.num_generation_tokens)
+        if stats.ttft:
+            self.histogram_time_to_first_token.observe(stats.ttft)
 
-        for ttft in iteration_stats.time_to_first_tokens_iter:
-            self.histogram_time_to_first_token.observe(ttft)
+        if stats.tpot:
+            self.histogram_time_per_output_token.observe(stats.tpot)
 
-        for tpot in iteration_stats.time_per_output_tokens_iter:
-            self.histogram_time_per_output_token.observe(tpot)
+        if stats.itl:
+            self.histogram_iter_token_latency.observe(stats.itl)
 
-        for finished_request in iteration_stats.finished_requests:
-            self.counter_request_success[finished_request.finish_reason].inc()
-            self.histogram_e2e_time_request.observe(finished_request.e2e_latency)
-            self.histogram_queue_time_request.observe(finished_request.queued_time)
-            self.histogram_prefill_time_request.observe(finished_request.prefill_time)
-            self.histogram_inference_time_request.observe(finished_request.inference_time)
-            self.histogram_decode_time_request.observe(finished_request.decode_time)
-            self.histogram_num_prompt_tokens_request.observe(finished_request.num_prompt_tokens)
-            self.histogram_num_generation_tokens_request.observe(finished_request.num_generation_tokens)
+    def record_finish(self, stats: FinishedRequestStats) -> None:
+        self.counter_request_success[stats.finish_reason].inc()
+        self.histogram_e2e_time_request.observe(stats.e2e_latency)
+        self.histogram_queue_time_request.observe(stats.queued_time)
+        self.histogram_prefill_time_request.observe(stats.prefill_time)
+        self.histogram_inference_time_request.observe(stats.inference_time)
+        self.histogram_decode_time_request.observe(stats.decode_time)
+        self.histogram_num_prompt_tokens_request.observe(stats.prompt_tokens)
+        self.histogram_num_generation_tokens_request.observe(stats.generation_tokens)
 
 
 def build_buckets(mantissa_lst: List[int], max_value: int) -> List[int]:

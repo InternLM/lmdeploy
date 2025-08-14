@@ -7,8 +7,12 @@ MODULE_MAP = dict()
 ASCEND_MODULE_MAP = dict()
 MACA_MODULE_MAP = dict()
 CAMB_MODULE_MAP = dict()
+PPU_MODULE_MAP = dict()
 
-DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP, maca=MACA_MODULE_MAP, camb=CAMB_MODULE_MAP)
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP,
+                                 maca=MACA_MODULE_MAP,
+                                 camb=CAMB_MODULE_MAP,
+                                 ppu=PPU_MODULE_MAP)
 
 # llama
 MODULE_MAP.update({
@@ -155,6 +159,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl3_hf.InternVLForConditionalGeneration'
 })
 
+# interns1-hf
+MODULE_MAP.update({
+    'InternS1ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl3_hf.InternVLForConditionalGeneration'
+})
+
 # mono-internvl
 MODULE_MAP.update({
     'InternLM2VEForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_ve.InternLM2VEForCausalLM',
@@ -197,5 +207,10 @@ MODULE_MAP.update(
 
 # qwen2 reward model
 MODULE_MAP.update({'Qwen2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_reward.Qwen2ForRewardModel'})
+
+# gpt-oss
+MODULE_MAP.update({
+    'GptOssForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gpt_oss.GptOssForCausalLM',
+})
 
 CUSTOM_MODULE_MAP = dict()

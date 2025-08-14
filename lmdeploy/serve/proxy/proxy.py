@@ -640,7 +640,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             is_dummy_prefill=node_manager.dummy_prefill).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
-        node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
+        if not node_manager.dummy_prefill:
+            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
@@ -781,6 +782,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             is_dummy_prefill=node_manager.dummy_prefill).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
+        if not node_manager.dummy_prefill:
+            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(d_url, start)

@@ -5,12 +5,12 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 
-from lmdeploy.messages import MetricsInfo, PytorchEngineConfig, ResponseType
+from lmdeploy.messages import PytorchEngineConfig, RequestMetrics, ResponseType
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
@@ -52,15 +52,20 @@ class InferOutput:
     cache_block_ids: List[int] = None
 
     # for logging
-    metrics_info: MetricsInfo = None
+    req_metrics: RequestMetrics = None
 
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """Tensorlize block_offsets."""
-    from torch.nn.utils.rnn import pad_sequence
-    block_offsets = [torch.from_numpy(off) for off in block_offsets]
-    block_offsets = pad_sequence(block_offsets, batch_first=True).to(dtype)
-    return block_offsets
+    # copy on numpy is faster than torch.nn.utils.rnn.pad_sequence
+    batch_size = len(block_offsets)
+    max_len = max([len(off) for off in block_offsets])
+    out = np.zeros((batch_size, max_len), dtype=block_offsets[0].dtype)
+
+    for idx, off in enumerate(block_offsets):
+        off_len = len(off)
+        out[idx, :off_len] = off
+    return torch.as_tensor(out, dtype=dtype)
 
 
 def _update_engine_config(engine_config: PytorchEngineConfig):
@@ -481,11 +486,12 @@ class Engine(EngineBase):
         window_size = self.cache_config.window_size
         if window_size > 0 and window_size <= max_tokens:
             max_tokens = (1 << 63) - 1
+        max_tokens -= self.cache_config.block_size
         if session_len is None:
             session_len = max_tokens
         else:
             session_len = min(max_tokens, session_len)
-        return session_len - self.cache_config.block_size
+        return session_len
 
     def _on_add_session(self, reqs: List[Request], **kwargs):
         """On add session callback."""
@@ -646,55 +652,15 @@ class Engine(EngineBase):
             return torch.int32
         return torch.int64
 
-    @torch.inference_mode()
-    @logging_timer('CreateModelInputs', logger)
-    def create_model_inputs(self, messages: SeqList, is_prefill: bool):
-        """Create model inputs from messages.
-
-        Args:
-            messages (SeqList): The input messages.
-        """
-        history_lengths = [msg.history_len for msg in messages]
-        history_lengths = torch.tensor(history_lengths)
-
-        token_ids = [msg.token_ids for msg in messages]
-
-        if isinstance(token_ids[0], int):
-            token_ids = [token_ids]
-
+    def _create_vision_model_inputs(self, messages: SeqList, model_inputs: ModelInputs):
+        """Create vision model inputs."""
         batch_size = len(messages)
-        input_ids = torch.from_numpy(np.concatenate(token_ids))
-
-        is_decoding = not is_prefill
-        if not is_decoding:
-            seq_length = [len(tokens) for tokens in token_ids]
-            seq_length = torch.tensor(seq_length, dtype=torch.long)
-        else:
-            seq_length = torch.ones(batch_size, dtype=torch.long)
-        max_q_seq_length = seq_length.max().item()
-
-        block_offsets = self.scheduler.get_block_tables(messages)
-        block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
-
-        local_adapter_ids = None
-        if self.adapter_manager.num_adapters() > 1:
-            adapter_names = [msg.adapter_name for msg in messages]
-            local_adapter_ids = self.adapter_manager.get_adapter_ids(adapter_names)
-            local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
-
-        # add batch dim [bs=1, seq_len]
-        if input_ids.ndim == 1:
-            input_ids = input_ids.unsqueeze(0)
-
-        num_ignored_history = [msg.num_ignored_history for msg in messages]
-        num_ignored_history = torch.tensor(num_ignored_history)
-
-        model_metas = [msg.model_meta for msg in messages]
 
         def __get_vlm_embeddings():
             """Get vlm input embeddings and indexings."""
+            max_q_seq_length = model_inputs.seq_length.max().item()
             input_embeddings = [[
-                emb.embeddings if isinstance(emb.embeddings, torch.Tensor) else torch.from_numpy(emb.embeddings)
+                emb.embeddings if isinstance(emb.embeddings, torch.Tensor) else torch.as_tensor(emb.embeddings)
                 for emb in msg.input_embeddings
             ] for msg in messages]
             input_embedding_ranges = [
@@ -709,60 +675,111 @@ class Engine(EngineBase):
                     input_embedding_indexing[msg_id][emb_start:emb_end] = True
             return (input_embeddings, input_embedding_indexing, input_embedding_ranges)
 
-        # for inputs with embeddings
-        history_image_nums = None
-        history_image_token_lengths = None
-
-        input_embeddings = None
-        input_embedding_indexing = None
-        input_embedding_ranges = None
-        has_embedding = any([len(msg.input_embeddings) > 0 for msg in messages])
-        if has_embedding:
-            (input_embeddings, input_embedding_indexing, input_embedding_ranges) = __get_vlm_embeddings()
-
-        input_multimodals = None
-        has_multimodal = any([not msg.history_multimodals.empty() for msg in messages])
-        if has_multimodal:
-            has_multimodal = False
-            input_multimodals = [msg.get_input_multimodals() for msg in messages]
+        def __has_values(input_multimodals):
             for input_mm in input_multimodals:
                 for val in input_mm.values():
                     if len(val) > 0:
-                        has_multimodal = True
-                        break
-                if has_multimodal:
-                    break
+                        return True
+            return False
 
-        vision_embedding_inputs = None
-        if has_embedding or has_multimodal or history_image_nums is not None:
-            vision_embedding_inputs = VisionModelInputs(history_lengths=history_lengths,
-                                                        history_image_nums=history_image_nums,
-                                                        history_image_token_lengths=history_image_token_lengths,
-                                                        input_embeddings=input_embeddings,
-                                                        input_embedding_indexing=input_embedding_indexing,
-                                                        input_embedding_ranges=input_embedding_ranges,
-                                                        input_multimodals=input_multimodals)
+        has_embedding = any([len(msg.history_embeddings) > 0 for msg in messages])
+        if has_embedding:
+            has_embedding = any([len(msg.input_embeddings) > 0 for msg in messages])
 
-        # cross
-        cross_length = torch.tensor([msg.num_cross for msg in messages])
-        history_cross_length = torch.tensor([msg.num_history_cross for msg in messages])
-        if (cross_length + history_cross_length).max().item() == 0:
-            cross_length = None
-            history_cross_length = None
+        has_multimodal = any([not msg.history_multimodals.empty() for msg in messages])
+        input_multimodals = None
+        if has_multimodal:
+            input_multimodals = [msg.get_input_multimodals() for msg in messages]
+            has_multimodal = __has_values(input_multimodals)
+            if not has_multimodal:
+                # no multimodal inputs
+                input_multimodals = None
 
-        return ModelInputs(
+        if not has_embedding and not has_multimodal:
+            # no vision inputs
+            return None
+
+        if has_embedding:
+            # for inputs with embeddings
+            (input_embeddings, input_embedding_indexing, input_embedding_ranges) = __get_vlm_embeddings()
+        else:
+            input_embeddings = None
+            input_embedding_indexing = None
+            input_embedding_ranges = None
+
+        history_lengths = model_inputs.history_lengths
+        vision_embedding_inputs = VisionModelInputs(history_lengths=history_lengths,
+                                                    input_embeddings=input_embeddings,
+                                                    input_embedding_indexing=input_embedding_indexing,
+                                                    input_embedding_ranges=input_embedding_ranges,
+                                                    input_multimodals=input_multimodals)
+        return vision_embedding_inputs
+
+    @torch.inference_mode()
+    @logging_timer('CreateModelInputs', logger)
+    def create_model_inputs(self, messages: SeqList, is_prefill: bool):
+        """Create model inputs from messages.
+
+        Args:
+            messages (SeqList): The input messages.
+        """
+        batch_size = len(messages)
+        # history lengths
+        history_lengths = torch.tensor([msg.history_len for msg in messages])
+
+        # input ids
+        token_ids = [msg.token_ids for msg in messages]
+        input_ids = torch.as_tensor(np.concatenate(token_ids))[None]
+
+        # seqlens
+        is_decoding = not is_prefill
+        if not is_decoding:
+            seq_length = [len(tokens) for tokens in token_ids]
+            seq_length = torch.tensor(seq_length, dtype=torch.long)
+        else:
+            seq_length = torch.ones(batch_size, dtype=torch.long)
+
+        # block offsets
+        block_offsets = self.scheduler.get_block_tables(messages)
+        block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
+
+        # num_ignored_history
+        num_ignored_history = torch.tensor([msg.num_ignored_history for msg in messages])
+
+        # model_metas
+        model_metas = [msg.model_meta for msg in messages]
+
+        # create model inputs for all required fields
+        model_inputs = ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
             history_lengths=history_lengths,
             block_offsets=block_offsets,
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
-            local_adapter_ids=local_adapter_ids,
-            vision_inputs=vision_embedding_inputs,
-            cross_length=cross_length,
-            history_cross_length=history_cross_length,
             model_metas=model_metas,
         )
+
+        # adapters
+        local_adapter_ids = None
+        if self.adapter_manager.num_adapters() > 1:
+            adapter_names = [msg.adapter_name for msg in messages]
+            local_adapter_ids = self.adapter_manager.get_adapter_ids(adapter_names)
+            local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
+            model_inputs.local_adapter_ids = local_adapter_ids
+
+        # cross for mllama
+        cross_length = torch.tensor([msg.num_cross for msg in messages])
+        history_cross_length = torch.tensor([msg.num_history_cross for msg in messages])
+        if (cross_length + history_cross_length).max().item() > 0:
+            model_inputs.cross_length = cross_length
+            model_inputs.history_cross_length = history_cross_length
+
+        # vision inputs
+        vision_model_inputs = self._create_vision_model_inputs(messages, model_inputs)
+        model_inputs.vision_inputs = vision_model_inputs
+
+        return model_inputs
 
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
                        model_metas: List[Dict[str, Any]]):
@@ -822,13 +839,13 @@ class Engine(EngineBase):
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
-            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
+            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
                               cache_block_ids=cache_block_ids,
-                              metrics_info=metrics_info)
+                              req_metrics=req_metrics)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -936,8 +953,7 @@ class Engine(EngineBase):
 
     async def _await_forward_event(self, forward_event: asyncio.Event):
         """Await forward event."""
-        if self.scheduler.has_unfinished():
-            await forward_event.wait()
+        await forward_event.wait()
 
     @torch.inference_mode()
     async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: RunableEventBase):
@@ -966,7 +982,7 @@ class Engine(EngineBase):
                            data=dict(token_ids=out.token_ids,
                                      logits=out.logits,
                                      cache_block_ids=out.cache_block_ids,
-                                     metrics_info=out.metrics_info))
+                                     req_metrics=out.req_metrics))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
@@ -1033,14 +1049,15 @@ class Engine(EngineBase):
                     session_id = msg.session_id
                     msg.resp.type = ResponseType.SUCCESS
                     token_ids = [msg.migration_request.remote_token_id]
-                    new_token_timestamp = time.perf_counter()
-                    metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
+                    # MUST be a wall-clock time
+                    new_token_timestamp = time.time()
+                    req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
                     out = InferOutput(
                         session_id=session_id,
                         resp=msg.resp,
                         finish=False,
                         token_ids=np.array(token_ids),
-                        metrics_info=metrics_info,
+                        metrics_info=req_metrics,
                     )
                     outputs[session_id] = out
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
@@ -1069,7 +1086,11 @@ class Engine(EngineBase):
 
         while True:
             if next_running is None:
-                await has_runable_event.wait()
+                if not scheduler.has_unfinished():
+                    forward_event.set()
+                    await has_runable_event.wait()
+                    forward_event.clear()
+
                 scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
                 if next_running is None:
@@ -1078,19 +1099,17 @@ class Engine(EngineBase):
                     logger.warning(f'no next prefill running request, Maybe cache is full, '
                                    f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
                                    f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
+                    forward_event.set()
                     await asyncio.sleep(0.1)
+                    forward_event.clear()
                     continue
+
+            forward_event.set()
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
             scheduler.lock_running(running)
             for idx in range(num_loops):
-
-                # lock forward event
-                # make sure that prefetch forward would not wait for detokenize
-                # WARNING: this might have side effect on the performance
-                if idx == num_loops // 2:
-                    forward_event.clear()
 
                 # pre-forward before get last token
                 if idx == num_loops - 1:
@@ -1103,9 +1122,11 @@ class Engine(EngineBase):
                     step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
 
-                # unlock forward event.
-                if idx == num_loops - 1:
-                    forward_event.set()
+                # lock forward event
+                # make sure that prefetch forward would not wait for detokenize
+                # WARNING: this might have side effect on the performance
+                if idx == num_loops // 2:
+                    forward_event.clear()
 
             scheduler.unlock_running(running)
             has_runable_event.set()
@@ -1142,13 +1163,20 @@ class Engine(EngineBase):
         """Update params."""
         self.executor.update_params(request)
 
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        self.executor.sleep(level)
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        self.executor.wakeup(tags)
+
     async def async_loop(self):
         try:
             event_loop = asyncio.get_event_loop()
 
             # forward task
             forward_event = CounterEvent()
-            forward_event.set()
 
             # migration task
             self.migration_event = asyncio.Event()
@@ -1192,7 +1220,7 @@ class Engine(EngineBase):
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
         except Exception as e:
-            logger.error(f'exception happened: {type(e)} {e}')
+            logger.exception(f'exception happened: {type(e)} {e}')
         finally:
             self._loop_finally()
 
@@ -1232,3 +1260,6 @@ class Engine(EngineBase):
 
     def get_engine_config(self):
         return self.engine_config
+
+    def get_schedule_metrics(self):
+        return self.scheduler.schedule_metrics

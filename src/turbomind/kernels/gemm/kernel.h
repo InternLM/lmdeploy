@@ -2,13 +2,16 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/gemm/desc.h"
-#include "src/turbomind/kernels/gemm/types.h"
 #include <array>
-#include <cuda_runtime.h>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <cuda_runtime.h>
+
+#include "src/turbomind/kernels/gemm/desc.h"
+#include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind::gemm {
 
@@ -39,7 +42,7 @@ public:
                        int                 swizzle,
                        int                 splits,
                        Workspace&          workspace,
-                       cudaStream_t        stream) const = 0;
+                       cudaStream_t        stream) = 0;
 
     // true if this kernel can be used to compute the gemm
     virtual bool is_feasible(const GemmDesc& desc) const noexcept;
@@ -110,5 +113,7 @@ struct ClusteringParam {
 };
 
 std::vector<std::vector<LaunchSpec>> Cluster(const std::vector<LaunchSpec>& specs, const ClusteringParam& param);
+
+std::unique_ptr<Kernel> transpose(Kernel& kernel);
 
 }  // namespace turbomind::gemm

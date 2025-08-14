@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType, GenerationConfig, LogitsProcessor
+from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -416,7 +416,7 @@ class HistoryMultiModals:
 
     def empty(self):
         if len(self.multimodals) == 0:
-            return 0
+            return True
 
         return all(len(vals) == 0 for vals in self.multimodals)
 
@@ -469,7 +469,7 @@ class SchedulerSequence:
     preserve_cache: bool = False
 
     # For logging
-    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
+    engine_events: List[EngineEvent] = field(default_factory=list)
 
     def __post_init__(self):
         """Post init."""
@@ -511,7 +511,7 @@ class SchedulerSequence:
         """Token ids."""
         start = self.history_len
         end = start + self._num_token_ids
-        return self.history_cache[start:end]
+        return self.history_cache._token_ids[start:end]
 
     @property
     def input_embeddings(self) -> List[InputEmbeddings]:
@@ -523,12 +523,12 @@ class SchedulerSequence:
     @property
     def history_ids(self) -> np.ndarray:
         """History ids."""
-        return self.history_cache[:self.history_len]
+        return self.history_cache._token_ids[:self.history_len]
 
     @property
     def all_ids(self) -> np.ndarray:
         """Full token ids."""
-        return self.history_cache[:self.num_all_ids]
+        return self.history_cache._token_ids[:self.num_all_ids]
 
     @property
     def num_history_ids(self):
@@ -663,7 +663,7 @@ class SchedulerSequence:
 
     def record_event(
         self,
-        event_type: EngineCoreEventType,
+        event_type: EventType,
         timestamp: Optional[float] = None,
     ) -> None:
-        self.engine_core_events.append(EngineCoreEvent.new_event(event_type, timestamp))
+        self.engine_events.append(EngineEvent.new_event(event_type, timestamp))

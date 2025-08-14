@@ -52,7 +52,7 @@ Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& ga
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
     Tensor_<float> logits{{input.shape(0), weight.shape(1)}, kDEVICE};
-    linear_.forward(input, gate, LlamaLinear::kGemm, logits);
+    linear_.Forward(input, gate, logits);
     sync_check_cuda_error();
     return logits;
 }
@@ -141,16 +141,10 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         auto& block = moe.block;
 
-        const int inter_dim = block.is_fused_silu ? inter_size_ : inter_size_ * 2;
-        Tensor    inter{{tokens * param_.experts_per_token, inter_dim}, p.input.dtype(), p.input.device()};
+        auto indices = f2n_.slice(0, tokens * param_.experts_per_token);
+        auto offsets = offsets_.slice(0, expert_num + 1);
 
-        linear_.forward_moe(inter,
-                            p.input,
-                            f2n_.data(),
-                            offsets_.data(),
-                            block.fused_gating_intermediate,
-                            block.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm,
-                            context_.get());
+        Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_, {}, context_.get());
         sync_check_cuda_error();
 
         if (!block.is_fused_silu) {
@@ -160,13 +154,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
             sync_check_cuda_error();
         }
 
-        linear_.forward_moe(temp_,
-                            inter.slice({0, 0}, {-1, inter_size_}),
-                            nullptr,
-                            offsets_.data(),
-                            block.output,
-                            LlamaLinear::kGemm,
-                            context_.get());
+        linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_, context_.get());
         sync_check_cuda_error();
     }
 

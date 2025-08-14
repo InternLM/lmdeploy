@@ -830,7 +830,7 @@ LlamaBatch::~LlamaBatch()
     cudaStreamSynchronize(stream_);
 
     model_.reset();
-    sequence_manager_.reset();
+    FreeBufferAndKVCache();
     context_.reset();  // This destroy all objects in context except for `stream`
 }
 
@@ -860,70 +860,39 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
     comm_(context_->comm),
     session_len_(param.session_len)
 {
-    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
-
-    const int dbits = byte_size(data_type, 8);
-
-    const auto quant_policy = model_->param_.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
-
-    SequenceManager::BlockConfig block_config{
-        (int)model_->size_per_head_,
-        (int)model_->local_kv_head_num_,
-        cache_block_seq_len,
-        elem_bits == dbits ? 0 : dbits,
-        elem_bits,
-    };
-
-    const auto get_free_size = [&] {  //
-        size_t free{}, total{};
-        check_cuda_error(cudaMemGetInfo(&free, &total));
-        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
-    };
-
-    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
-                                                block_config,
-                                                param.cache_max_block_count,
-                                                param.cache_chunk_size,
-                                                param.enable_prefix_caching,
-                                                tp_rank_,
-                                                core::Context::alloc(kDEVICE),
-                                                get_free_size});
-
-    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
-    if (max_session_len < session_len_) {
-        if (tp_rank_ == 0) {
-            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
-                           session_len_,
-                           max_session_len);
-        }
-        session_len_ = max_session_len;
-    }
-
-    FT_CHECK(max_context_token_num_ >= session_len_);
-    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
-
-    for (auto& s : states_) {
-        s.requests.resize(max_batch_size_);
-        s.sequences.resize(max_batch_size_);
-        s.seq_len_limit.resize(max_batch_size_);
-        s.errors.resize(max_batch_size_);
-    }
-
-    state_    = &states_[0];
-    back_     = &states_[1];
-    incoming_ = &states_[2];
 
     symm_alloc_ = core::SimpleAllocator::Create([this](ssize_t size) { return SymmAlloc(size, true); },
                                                 [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
                                                 kDEVICE);
 
-    AllocSymmBuffers();
-
-    AllocateBuffer(max_batch_size_, session_len_, cache_block_seq_len);
+    InitializeBufferAndKVCache();
 
     // Wait for allocations
     check_cuda_error(cudaStreamSynchronize(stream_));
+
+    UpdateMetrics();
+}
+
+void LlamaBatch::FreeBuffer()
+{
+    input_ids_buf_       = {};
+    decoder_output_buf_  = {};
+    input_length_buf_    = {};
+    context_length_buf_  = {};
+    init_context_length_ = {};
+    sequence_lengths_    = {};
+    cu_block_counts_     = {};
+    block_ptrs_          = {};
+    sampled_logprobs_    = {};
+    sampled_indexes_     = {};
+    sampled_nums_        = {};
+    token_ids_buf_       = {};
+    sampling_logits_     = {};
+    finished_buf_        = {};
+    seq_limit_len_       = {};
+    rope_theta_          = {};
+    d_random_seed_       = {};
+    d_curand_state_      = {};
 }
 
 void LlamaBatch::InitializeSampling(const GenerationState& g)
@@ -1278,6 +1247,9 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
         // recover full context length of partial
         state_->h_context_length[i] = g.partial_context_legnth;
     }
+
+    // Update the schedule metrics since some requests might finish the inference
+    UpdateMetrics();
 }
 
 auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
@@ -1410,6 +1382,9 @@ void LlamaBatch::InternalThreadEntry()
         }
 
         Initialize(g);
+
+        // update the schedule metrics and request metrics in every forward iter
+        UpdateMetrics();
 
         const int n_active = AllReduce(comm_.h_dp_group, state_->active_size, comm::RedOp::kSum);
 
@@ -1801,6 +1776,84 @@ void LlamaBatch::Warmup()
     }
 }
 
+void LlamaBatch::InitializeBufferAndKVCache()
+{
+    // initialize kvcache, BatchState and persist buffers
+    core::ContextGuard guard{context_->core_stream, context_->allocator, Allocator{kCPUpinned}};
+
+    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
+
+    const int dbits = byte_size(data_type_, 8);
+
+    const auto quant_policy = model_->param_.quant_policy;
+    const int  elem_bits    = quant_policy ? quant_policy : dbits;
+
+    SequenceManager::BlockConfig block_config{
+        (int)model_->size_per_head_,
+        (int)model_->local_kv_head_num_,
+        cache_block_seq_len,
+        elem_bits == dbits ? 0 : dbits,
+        elem_bits,
+    };
+
+    const auto get_free_size = [&] {  //
+        size_t free{}, total{};
+        check_cuda_error(cudaMemGetInfo(&free, &total));
+        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
+    };
+
+    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
+                                                block_config,
+                                                param_.cache_max_block_count,
+                                                param_.cache_chunk_size,
+                                                param_.enable_prefix_caching,
+                                                tp_rank_,
+                                                core::Context::alloc(kDEVICE),
+                                                get_free_size});
+
+    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
+    if (max_session_len < session_len_) {
+        if (tp_rank_ == 0) {
+            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
+                           session_len_,
+                           max_session_len);
+        }
+        session_len_ = max_session_len;
+    }
+
+    FT_CHECK(max_context_token_num_ >= session_len_);
+    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
+
+    for (auto& s : states_) {
+        s.requests.resize(max_batch_size_);
+        s.sequences.resize(max_batch_size_);
+        s.seq_len_limit.resize(max_batch_size_);
+        s.errors.resize(max_batch_size_);
+    }
+    state_    = &states_[0];
+    back_     = &states_[1];
+    incoming_ = &states_[2];
+
+    AllocSymmBuffers();
+
+    AllocateBuffer(max_batch_size_, session_len_, model_->attn_param_.cache_block_seq_len);
+}
+
+void LlamaBatch::FreeBufferAndKVCache()
+{
+    sequence_manager_.reset();
+
+    for (auto& s : states_) {
+        s = {};
+    }
+
+    FreeSymmBuffers();
+    FreeBuffer();
+
+    cudaStreamSynchronize(stream_);
+    context_->allocator->trim(0);
+}
+
 void* LlamaBatch::SymmAlloc(size_t size, bool register_)
 {
     if (auto& comm = model_->comm_->d_comm) {
@@ -1844,6 +1897,39 @@ void LlamaBatch::DestroyCommunicators()
 
     cudaStreamSynchronize(stream_);
     comm_.h_comm->Sync();
+}
+
+void LlamaBatch::UpdateMetrics()
+{
+    if (tp_rank_ == 0 && param_.enable_metrics) {
+        // update schedule metrics
+        int total_seqs, active_seqs, cached_seqs;
+        std::tie(total_seqs, active_seqs, cached_seqs) = sequence_manager_->seq_stats();
+
+        {
+            const std::lock_guard<std::mutex> lock(metrics_mutex_);
+
+            schedule_metrics_.total_seqs    = total_seqs;
+            schedule_metrics_.active_seqs   = active_seqs;
+            schedule_metrics_.waiting_seqs  = total_seqs - active_seqs;
+            schedule_metrics_.total_blocks  = sequence_manager_->total_count();
+            schedule_metrics_.active_blocks = sequence_manager_->active_count();
+            schedule_metrics_.cached_blocks = sequence_manager_->cached_count();
+            schedule_metrics_.free_blocks   = sequence_manager_->free_count();
+        }
+
+        // update request metrics
+        for (int i = 0; i < state_->active_size; ++i) {
+            if (!state_->requests[i]) {
+                continue;
+            }
+            auto& metrics = state_->requests[i]->metrics;
+            if (!metrics || metrics->scheduled_time != 0) {
+                continue;
+            }
+            metrics->scheduled_time = RequestMetrics::timestamp();
+        }
+    }
 }
 
 }  // namespace turbomind

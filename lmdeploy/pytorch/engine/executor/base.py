@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
-from typing import Any, Dict, List
+import contextlib
+from typing import Any, Dict, List, Optional
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
@@ -27,6 +28,10 @@ class ExecutorBase:
                  device_type: str = 'cuda'):
         """Initialize Executor."""
         cache_config.window_size = model_config.sliding_window
+        if cache_config.window_size is not None and cache_config.window_size > 0:
+            # do not support sliding window prefix caching
+            logger.warning('Sliding window prefix caching is not supported.')
+            cache_config.enable_prefix_caching = False
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config
@@ -68,6 +73,14 @@ class ExecutorBase:
 
     def warmup(self):
         """warmup."""
+        raise NotImplementedError('Not Implemented.')
+
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        raise NotImplementedError('Not Implemented.')
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
         raise NotImplementedError('Not Implemented.')
 
     def update_params(self, request: Any):
@@ -184,3 +197,12 @@ class ExecutorBase:
         self.build_cache_engine()
         logger.info('Warming up model.')
         self.warmup()
+
+    @contextlib.contextmanager
+    def remote_log(self, msg: str):
+        """Send log for debugging.
+
+        Do not use it in production.
+        """
+        # Different executor may have different log sending logic.
+        yield

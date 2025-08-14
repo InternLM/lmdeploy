@@ -450,7 +450,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     // release preempted blocks -> cached
     if (!schedule.victims.empty()) {
-        TM_LOG_WARNING("[SeqMgr] #victim: %d", (int)schedule.victims.size());
+        TM_LOG_INFO("[SeqMgr] #victim: %d", (int)schedule.victims.size());
         for (const auto& p : schedule.victims) {
             UpdateAndSetUnlock(*p);
         }
@@ -485,6 +485,22 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     //              block_manager_->free_count());
 
     return outcome;
+}
+
+std::tuple<int, int, int> SequenceManager::seq_stats() const noexcept
+{
+    int total  = static_cast<int>(sequences_.size());
+    int active = 0;
+    int cached = 0;
+    for (const auto& p : sequences_) {
+        if (p.second.status == Sequence::kActive) {
+            ++active;
+        }
+        else if (p.second.status == Sequence::kCached) {
+            ++cached;
+        }
+    }
+    return std::make_tuple(total, active, cached);
 }
 
 }  // namespace turbomind

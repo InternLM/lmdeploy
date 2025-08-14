@@ -13,7 +13,20 @@ WARPS_PER_SM = {
     (9, 0): 64,
     (10, 0): 64,
     (10, 1): 48,
+    (11, 0): 48,
     (12, 0): 48,
+}
+
+BLOCKS_PER_SM = {
+    (8, 0): 32,
+    (8, 6): 16,
+    (8, 7): 16,
+    (8, 9): 24,
+    (9, 0): 32,
+    (10, 0): 32,
+    (10, 1): 24,
+    (11, 0): 24,
+    (12, 0): 24,
 }
 
 
@@ -25,9 +38,11 @@ def get_device_props(device=None):
     props = torch.cuda.get_device_properties(device)
 
     warps_per_sm = WARPS_PER_SM.get((props.major, props.minor), 32)
+    blocks_per_sm = BLOCKS_PER_SM.get((props.major, props.minor), warps_per_sm // 2)
     out = dict(
         multi_processor_count=props.multi_processor_count,
         warps_per_sm=warps_per_sm,
+        blocks_per_sm=blocks_per_sm,
     )
     return out
 

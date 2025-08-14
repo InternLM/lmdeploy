@@ -27,6 +27,7 @@ add_library(gemm2
         kernel/sm80_s16816_dynamic.cu
         kernel/sm90_s16816_dynamic.cu
         kernel/sm90_q64n32.cu
+        cublas.cu
         moe_utils_v2.cu
         test/test_utils.cu
 )

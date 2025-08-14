@@ -87,8 +87,6 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 - **便捷的服务**：通过请求分发服务，LMDeploy 支持多模型在多机、多卡上的推理服务。
 
-- **有状态推理**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。显著提升长文本多轮对话场景中的效率。
-
 - **卓越的兼容性**: LMDeploy 支持 [KV Cache 量化](docs/zh_cn/quantization/kv_quant.md), [AWQ](docs/zh_cn/quantization/w4a16.md) 和 [Automatic Prefix Caching](docs/zh_cn/inference/turbomind_config.md) 同时使用。
 
 # 性能

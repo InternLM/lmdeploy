@@ -34,6 +34,10 @@ LlamaWeight::LlamaWeight(DataType           data_type,
                          const EngineParam& engine_param,
                          const LoraParam&   lora_param,
                          const MoeParam&    moe_param):
+    model_param_{model},
+    engine_param_{engine_param},
+    lora_param_{lora_param},
+    moe_param_{moe_param},
     hidden_units_(model.hidden_units),
     inter_size_(model.inter_size),
     vocab_size_(model.vocab_size),
@@ -54,32 +58,47 @@ LlamaWeight::LlamaWeight(DataType           data_type,
         TM_LOG_WARNING("pad embed size from %d to %d", embedding_size_, embedding_size_);
     }
     FT_CHECK(hidden_units_ % tp_size_ == 0);
+    TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);
+    TM_CHECK_EQ(hidden_units_ % tp_size_, 0);
 
     stream_ = core::Stream::create();
     alloca_ = core::Allocator{stream_, false};
 
+    initialize();
+}
+
+LlamaWeight::~LlamaWeight()
+{
+    release();
+}
+
+bool LlamaWeight::is_initialized() const
+{
+    return initialized_;
+}
+
+void LlamaWeight::initialize()
+{
     core::ContextGuard guard = context();
 
-    TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);
-    TM_CHECK_EQ(hidden_units_ % tp_size_, 0);
-
-    pre_decoder_embedding.emplace(embedding_size_, hidden_units_ / tp_size_, data_type, false, data_type, 1);
-    post_decoder_embedding.emplace(hidden_units_, vocab_size_padded_ / tp_size_, data_type, false, data_type, 1);
+    pre_decoder_embedding.emplace(embedding_size_, hidden_units_ / tp_size_, data_type_, false, data_type_, 1);
+    post_decoder_embedding.emplace(hidden_units_, vocab_size_padded_ / tp_size_, data_type_, false, data_type_, 1);
     register_module("tok_embeddings", pre_decoder_embedding, tp_rank_);
     register_module("output", post_decoder_embedding, tp_rank_);
 
     decoder_layer_weights.reserve(num_layer_);
     for (int i = 0; i < num_layer_; ++i) {
         decoder_layer_weights.emplace_back(
-            new LlamaDecoderLayerWeight(data_type, i, model, engine_param, lora_param, moe_param));
+            new LlamaDecoderLayerWeight(data_type_, i, model_param_, engine_param_, lora_param_, moe_param_));
         register_module("layers", *decoder_layer_weights.back(), i);
     }
 
     output_norm_weight = Tensor{{hidden_units_}, data_type_, kDEVICE};
     register_parameter("norm.weight", output_norm_weight);
+    initialized_ = true;
 }
 
-LlamaWeight::~LlamaWeight()
+void LlamaWeight::release()
 {
     core::ContextGuard guard = context();
 
@@ -95,6 +114,24 @@ LlamaWeight::~LlamaWeight()
 
     // Wait for deallocations
     core::Context::stream().Sync();
+
+    // release memory back to os
+    core::Context::device_alloc()->trim(0);
+    initialized_ = false;
+}
+
+void LlamaWeight::to_device(const core::Device& device)
+{
+    core::ContextGuard guard = context();
+
+    auto tensor_ptr_map = get_parameters();
+    for (auto& [name, tensor_ptr] : tensor_ptr_map) {
+        *tensor_ptr = core::to_device(*tensor_ptr, device);
+    }
+    core::Context::stream().Sync();
+    if (device.type == kCPU) {
+        core::Context::device_alloc()->trim(0);
+    }
 }
 
 core::ContextGuard LlamaWeight::context() const
@@ -110,6 +147,8 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
     check_cuda_error(cudaDeviceSynchronize());
 
     auto stream = core::Context::stream().handle();
+
+    post_decoder_embedding.prepare(false, false);
 
     for (auto& layer : decoder_layer_weights) {
         layer->prepare(prop, stream);

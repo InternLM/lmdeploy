@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import contextlib
 import json
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import ray
@@ -132,6 +133,29 @@ def _update_runtime_env_nsys(runtime_env: Dict):
     return runtime_env
 
 
+class RemoteLogger:
+    """Remote logger."""
+
+    def __init__(self):
+        self._records = dict()
+        self._next_handle = 0
+
+    def start(self, msg: str):
+        """Start remote log."""
+        record = torch.profiler.record_function(msg)
+        record.__enter__()
+        handle = self._next_handle
+        self._records[handle] = record
+        self._next_handle += 1
+        return handle
+
+    def end(self, handle: int):
+        """End remote log."""
+        record = self._records.pop(handle, None)
+        if record is not None:
+            record.__exit__(None, None, None)
+
+
 class RayWorkerWrapper(WorkerWrapperBase):
     """Worker wrapper."""
 
@@ -170,6 +194,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             log_level=log_level,
         )
         self.node_ip = ray.util.get_node_ip_address()
+        self._remote_logger = RemoteLogger()
 
     def set_device(self, local_rank):
         """Set worker local rank."""
@@ -203,6 +228,14 @@ class RayWorkerWrapper(WorkerWrapperBase):
                     v = v.to(torch.float16)
                 output[k] = v.numpy()
         return output
+
+    def remote_log_start(self, msg: str):
+        """Remote log start."""
+        return self._remote_logger.start(msg)
+
+    def remote_log_end(self, handle: int):
+        """Remote log end."""
+        return self._remote_logger.end(handle)
 
     def exit(self):
         """Exit actor."""
@@ -333,6 +366,14 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         self.collective_rpc('warmup')
 
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        self.collective_rpc('sleep', (level, ))
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        self.collective_rpc('wakeup', (tags, ))
+
     def get_input_processor(self):
         """Build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
@@ -412,14 +453,22 @@ class RayExecutor(ExecutorBase):
         inputs = ray.put(inputs)
         # make sure in order
         outs = self.dag.execute(inputs)
-        await asyncio.sleep(0)
         ray.get(outs)
 
     async def get_output_async(self):
         """Get output async."""
-        if self.remote_outs.qsize() > 0:
-            return self.remote_outs.get_nowait()
         return await self.remote_outs.get()
+
+    @contextlib.contextmanager
+    def remote_log(self, msg: str):
+        """Send log for debugging.
+
+        Do not use it in production.
+        """
+        handle_ref = self.workers[0].remote_log_start.remote(msg)
+        yield
+        handle = ray.get(handle_ref)
+        ray.get(self.workers[0].remote_log_end.remote(handle))
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """Sort workers by ip."""

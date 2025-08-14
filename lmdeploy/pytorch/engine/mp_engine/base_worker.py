@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
@@ -94,6 +94,18 @@ class EngineWorkerBase:
         2. TODO(JimyMa) drop RDMA Connection.
         """
         return self.engine.p2p_drop_connect(drop_conn_request)
+
+    def sleep(self, level: int = 1):
+        """sleep."""
+        return self.engine.sleep(level)
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        return self.engine.wakeup(tags)
+
+    def update_params(self, request: Any):
+        """Update params."""
+        return self.engine.update_params(request)
 
     def close(self) -> None:
         """Close engine worker."""
