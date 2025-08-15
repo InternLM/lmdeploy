@@ -353,8 +353,8 @@ class Glm4vTextModel(nn.Module):
         return hidden_states
 
 
-class Glm4VisionMlp(nn.Module):
-    """Vision mlp."""
+class Glm4VisionMLP(nn.Module):
+    """Vision MLP."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -635,7 +635,7 @@ class Glm4vVisionBlock(nn.Module):
         self.norm1 = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
         self.norm2 = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
         self.attn = Glm4vVisionAttention(config, dtype=dtype, device=device)
-        self.mlp = Glm4VisionMlp(config, bias=False, dtype=dtype, device=device)
+        self.mlp = Glm4VisionMLP(config, bias=False, dtype=dtype, device=device)
 
     def forward(self,
                 hidden_states,

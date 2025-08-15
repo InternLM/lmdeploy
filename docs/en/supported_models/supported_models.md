@@ -103,8 +103,10 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |            ChemVLM             |     8B-26B      | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |             Gemma2             |     9B-27B      | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |             Gemma3             |     1B-27B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
-|              GLM4              |       9B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|             GLM-4              |       9B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|           GLM-4-0414           |       9B        | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |             GLM-4V             |       9B        | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
+|       GLM-4.1V-Thinking        |       9B        | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |           CodeGeeX4            |       9B        | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          Phi-3.5-mini          |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
