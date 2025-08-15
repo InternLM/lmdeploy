@@ -2116,6 +2116,37 @@ class GptOss(BaseChatTemplate):
             return 'gpt-oss'
 
 
+@MODELS.register_module(name=['hf'])
+class HFChatTemplate(BaseChatTemplate):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        raise ValueError('get_prompt cannot be called when using HFChatTemplate')
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        if isinstance(messages, str):
+            raise ValueError('A list of openai-like message is expected, but got a string')
+        if not sequence_start:
+            raise ValueError(f'Unsupported squence_start value {sequence_start}')
+        return self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        from transformers import AutoTokenizer
+        cls.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        if not hasattr(cls.tokenizer, 'apply_chat_template'):
+            return False
+        try:
+            messages = [{'role': 'user', 'content': 'hi'}]
+            cls.tokenizer.apply_chat_template(messages, tokenize=False)
+        except Exception as e:
+            logger.warning(f'try apply_chat_template failed: {e}')
+            return False
+        return True
+
+
 def best_match_model(query: str) -> Optional[str]:
     """Get the model that matches the query.
 
@@ -2125,6 +2156,10 @@ def best_match_model(query: str) -> Optional[str]:
     Return:
         str: the possible model name.
     """
+    chat_template = MODELS.module_dict['hf']
+    if chat_template.match(query):
+        return 'hf'
+
     for name, model in MODELS.module_dict.items():
         matched_name = model.match(query)  # cache the result to avoid matching twice
         if matched_name:
