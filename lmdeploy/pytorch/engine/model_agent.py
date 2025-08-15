@@ -312,11 +312,10 @@ class BaseModelAgent:
         # TODO: disable for now, do not remove the comments.
         with self.all_context():
             max_batches = self.cache_config.max_batches
-            max_prefill_token_num = self.cache_config.max_prefill_token_num
             num_tokens = max_batches
 
             # warmup prefill
-            inputs = ModelInputs.make_dummy(max_prefill_token_num,
+            inputs = ModelInputs.make_dummy(max_batches,
                                             is_decoding=False,
                                             device='cuda',
                                             vocab_size=self.model_config.vocab_size)

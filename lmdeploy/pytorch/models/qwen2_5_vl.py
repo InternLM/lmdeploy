@@ -600,9 +600,17 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
 
         return new_inputs
 
+    def _get_model_metas(self, context: StepContext):
+        """Get model metas."""
+        model_metas = context.model_metas
+        if model_metas is None:
+            batch_size = context.q_seqlens.numel()
+            return [dict(mrope_delta=0)] * batch_size
+        return [dict(mrope_delta=0) if meta is None else meta for meta in model_metas]
+
     def _update_model_meta_decoding(self, context: StepContext):
         """Update model meta for decoding."""
-        model_metas = context.model_metas
+        model_metas = self._get_model_metas(context)
         position_ids = context.position_ids
 
         mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
@@ -626,7 +634,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
 
     def _update_model_meta_prefilling(self, context: StepContext):
         """Update model meta for prefilling."""
-        model_metas = context.model_metas
+        model_metas = self._get_model_metas(context)
         input_multimodals = context.input_multimodals
         if input_multimodals is None:
             input_multimodals = [None] * len(model_metas)
