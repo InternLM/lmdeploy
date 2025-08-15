@@ -148,7 +148,7 @@ class EngineInstance:
             resp = await self.req_sender.async_recv(resp)
 
             cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
-            metrics_info = resp.data.get('metrics_info', None) if resp.data else None
+            req_metrics = resp.data.get('req_metrics', None) if resp.data else None
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids)
@@ -157,7 +157,7 @@ class EngineInstance:
                                    token_ids,
                                    num_ids,
                                    cache_block_ids=cache_block_ids,
-                                   metrics_info=metrics_info)
+                                   req_metrics=req_metrics)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
@@ -169,7 +169,7 @@ class EngineInstance:
                                    num_ids,
                                    logits=logits,
                                    cache_block_ids=cache_block_ids,
-                                   metrics_info=metrics_info)
+                                   req_metrics=req_metrics)
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')

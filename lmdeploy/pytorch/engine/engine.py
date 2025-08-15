@@ -5,12 +5,12 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 
-from lmdeploy.messages import MetricsInfo, PytorchEngineConfig, ResponseType
+from lmdeploy.messages import PytorchEngineConfig, RequestMetrics, ResponseType
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
@@ -51,7 +51,7 @@ class InferOutput:
     cache_block_ids: List[int] = None
 
     # for logging
-    metrics_info: MetricsInfo = None
+    req_metrics: RequestMetrics = None
 
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
@@ -836,13 +836,13 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
-            metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
+            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
                               cache_block_ids=cache_block_ids,
-                              metrics_info=metrics_info)
+                              req_metrics=req_metrics)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -979,7 +979,7 @@ class Engine:
                            data=dict(token_ids=out.token_ids,
                                      logits=out.logits,
                                      cache_block_ids=out.cache_block_ids,
-                                     metrics_info=out.metrics_info))
+                                     req_metrics=out.req_metrics))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
@@ -1046,14 +1046,15 @@ class Engine:
                     session_id = msg.session_id
                     msg.resp.type = ResponseType.SUCCESS
                     token_ids = [msg.migration_request.remote_token_id]
-                    new_token_timestamp = time.perf_counter()
-                    metrics_info = MetricsInfo(new_token_timestamp, msg.engine_core_events, self.scheduler.make_stats())
+                    # MUST be a wall-clock time
+                    new_token_timestamp = time.time()
+                    req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
                     out = InferOutput(
                         session_id=session_id,
                         resp=msg.resp,
                         finish=False,
                         token_ids=np.array(token_ids),
-                        metrics_info=metrics_info,
+                        metrics_info=req_metrics,
                     )
                     outputs[session_id] = out
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
@@ -1159,6 +1160,14 @@ class Engine:
         """Update params."""
         self.executor.update_params(request)
 
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        self.executor.sleep(level)
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        self.executor.wakeup(tags)
+
     async def async_loop(self):
         try:
             event_loop = asyncio.get_event_loop()
@@ -1248,3 +1257,6 @@ class Engine:
 
     def get_engine_config(self):
         return self.engine_config
+
+    def get_schedule_metrics(self):
+        return self.scheduler.schedule_metrics

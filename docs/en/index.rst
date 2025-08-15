@@ -29,8 +29,6 @@ LMDeploy has the following core features:
 
 * **Effortless Distribution Server**: Leveraging the request distribution service, LMDeploy facilitates an easy and efficient deployment of multi-model services across multiple machines and cards.
 
-* **Interactive Inference Mode**: By caching the k/v of attention during multi-round dialogue processes, the engine remembers dialogue history, thus avoiding repetitive processing of historical sessions.
-
 * **Excellent Compatibility**: LMDeploy supports `KV Cache Quant <https://lmdeploy.readthedocs.io/en/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/en/latest/quantization/w4a16.html>`_ and `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/en/latest/inference/turbomind_config.html>`_ to be used simultaneously.
 
 Documentation
@@ -63,7 +61,6 @@ Documentation
    llm/api_server_tools.md
    llm/api_server_reasoning.md
    llm/api_server_lora.md
-   llm/gradio.md
    llm/proxy_server.md
 
 .. _vlm_deployment:

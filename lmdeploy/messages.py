@@ -224,7 +224,8 @@ class TurbomindEngineConfig:
         empty_init (bool): Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
         hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
-            It can be used to override the default config of the model,
+            It can be used to override the default config of the model
+        enable_metrics (bool): enable metrics system
     """
 
     dtype: str = 'auto'
@@ -255,6 +256,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
+    enable_metrics: bool = False
 
     def __post_init__(self):
         """Check input validation."""
@@ -378,7 +380,10 @@ class PytorchEngineConfig:
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
-        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
+        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb',
+                                    'ppu'], (f'invalid device_type: {self.device_type}')
+        assert self.block_size >= 16 and (self.block_size & (self.block_size - 1)) == 0, \
+            f'block_size must be >= 16 and a power of 2, but got {self.block_size}'
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
@@ -399,6 +404,7 @@ class ResponseType(enum.Enum):
     HANDLER_NOT_EXIST = enum.auto()
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
+    CANCEL = enum.auto()
 
 
 @dataclass
@@ -434,11 +440,11 @@ class Response:
     index: int = 0
 
 
-# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
-class EngineCoreEventType(enum.IntEnum):
-    """The type of engine core request event.
+# modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+class EventType(enum.IntEnum):
+    """The type of request event.
 
-    QUEUED - when the request was received by the engine core and added to the scheduler queue
+    QUEUED - when the request was enqued by the engine
     SCHEDULED - when the request was first scheduled for execution
     PREEMPTED - the request has been put back in the waiting queue in order to make room for other requests to complete.
                 It will be re-scheduled in future and re-start its prefill phase
@@ -448,29 +454,46 @@ class EngineCoreEventType(enum.IntEnum):
     PREEMPTED = 3  # FIXME, currently ignored for simplicity
 
 
-# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+# modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
 @dataclass
-class EngineCoreEvent():
-    """A timestamped engine core event associated with a request.
+class EngineEvent:
+    """A timestamped engine event associated with a request.
 
-    The timestamp is a monotonic timestamps and is used for by the engine frontend to calculate intervals between engine
-    core events. These timestamps should not be compared with timestamps from other processes.
+    Attributes:
+        type: the type of an event associated with a request during its life cycle
+        timestamp: the WALL-CLOCK time when the event happens.
     """
-    type: EngineCoreEventType
+    type: EventType
     timestamp: float
 
     @classmethod
-    def new_event(cls, event_type: EngineCoreEventType, timestamp: Optional[float] = None) -> 'EngineCoreEvent':
-        timestamp = time.perf_counter() if timestamp is None else timestamp
+    def new_event(cls, event_type: EventType, timestamp: Optional[float] = None) -> 'EngineEvent':
+        # Timestamps MUST use wall-clock time (time.time()) to maintain consistency
+        # between csrc(std::chrono::system_clock) and python
+        timestamp = time.time() if timestamp is None else timestamp
         return cls(event_type, timestamp)
 
 
 @dataclass
-class MetricsInfo:
-    """Metrics info from the inference engine."""
-    engine_core_timestamp: float = 0.0
-    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
-    scheduler_raw_info: dict = field(default_factory=dict)
+class ScheduleMetrics:
+    active_seqs: int = 0
+    waiting_seqs: int = 0
+    total_blocks: int = 0
+    active_blocks: int = 0
+    cached_blocks: int = 0
+    free_blocks: int = 0
+
+
+@dataclass
+class RequestMetrics:
+    """Basic metrics for a request.
+
+    Attributes:
+        token_timestamp: A wall-clock time when a token is generated.
+        engine_events: List of engine events during inference.
+    """
+    token_timestamp: float = 0.0
+    engine_events: List[EngineEvent] = field(default_factory=list)
 
 
 @dataclass
@@ -480,13 +503,12 @@ class EngineOutput:
     Args:
         status (ResponseType): the response type.
         token_ids (List[int]): the output token ids.
-        num_token (int): the length of output token, for turbomind, num_token
-            may not equal to the length of token_ids
+        num_token (int): the number of output tokens, which is equal to `len(token_ids)`
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
-        metrics_info (MetricsInfo): metrics info from the inference engine.
+        req_metrics (RequestMetrics): request metrics information
     """
     status: ResponseType
     token_ids: List[int]
@@ -494,9 +516,8 @@ class EngineOutput:
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
-
     cache_block_ids: Optional[List[int]] = None
-    metrics_info: Optional[MetricsInfo] = None
+    req_metrics: Optional[RequestMetrics] = None
 
 
 @dataclass

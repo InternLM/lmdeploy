@@ -6,7 +6,7 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -802,7 +802,8 @@ class BaseModelAgent:
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
-            out['new_token_timestamp'] = time.perf_counter()
+            # MUST be a wall-clock time
+            out['new_token_timestamp'] = time.time()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
         return out
@@ -921,6 +922,35 @@ class BaseModelAgent:
                     mod.update_weights()
 
             torch.cuda.empty_cache()
+
+    @torch.inference_mode()
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        self.cache_engine = None
+        self.reset_graph_runner()
+        device = 'cpu' if level == 1 else 'meta'
+        self.patched_model.get_model().to(device=device)
+        torch.cuda.empty_cache()
+
+    @torch.inference_mode()
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        if tags is None:
+            tags = ['weights', 'kv_cache']
+        if 'weights' in tags:
+            device = next(self.patched_model.get_model().parameters()).device
+            assert device.type in ['cpu', 'meta']
+            if device.type == 'cpu':
+                self.patched_model.get_model().to(torch.cuda.current_device())
+            else:
+                # user should update weights after wakeup
+                old_empty_init = self.misc_config.empty_init
+                self.misc_config.empty_init = True
+                self.build_model()
+                self.build_graph_runner()
+                self.misc_config.empty_init = old_empty_init
+        if 'kv_cache' in tags:
+            self.build_cache_engine()
 
     def release(self):
         """release."""

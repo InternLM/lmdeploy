@@ -7,8 +7,6 @@ In the following sections, we will first introduce methods for starting the serv
 
 Next, we focus on the definition of the service's RESTful API, explore the various ways to interact with the interface, and demonstrate how to try the service through the Swagger UI or LMDeploy CLI tools.
 
-Finally, we showcase how to integrate the service into a WebUI, providing you with a reference to easily set up a demonstration demo.
-
 ## Launch Service
 
 Take the [internlm2_5-7b-chat](https://huggingface.co/internlm/internlm2_5-7b-chat) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
@@ -56,18 +54,9 @@ LMDeploy's RESTful API is compatible with the following three OpenAI interfaces:
 - /v1/models
 - /v1/completions
 
-Additionally, LMDeploy also defines `/v1/chat/interactive` to support interactive inference. The feature of interactive inference is that there's no need to pass the user conversation history as required by `v1/chat/completions`, since the conversation history will be cached on the server side. This method boasts excellent performance during multi-turn long context inference.
-
 You can overview and try out the offered RESTful APIs by the website `http://0.0.0.0:23333` as shown in the below image after launching the service successfully.
 
 ![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)
-
-Or, you can use the LMDeploy's built-in CLI tool to verify the service correctness right from the console.
-
-```shell
-# restful_api_url is what printed in api_server.py, e.g. http://localhost:23333
-lmdeploy serve api_client ${api_server_url}
-```
 
 If you need to integrate the service into your own projects or products, we recommend the following approach:
 
@@ -151,28 +140,6 @@ for item in api_client.completions_v1(model=model_name, prompt='hi'):
     print(item)
 ```
 
-As for `/v1/chat/interactive`，we disable the feature by default. Please open it by setting `interactive_mode = True`. If you don't, it falls back to openai compatible interfaces.
-
-Keep in mind that `session_id` indicates an identical sequence and all requests belonging to the same sequence must share the same `session_id`.
-For instance, in a sequence with 10 rounds of chatting requests, the `session_id` in each request should be the same.
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-api_client = APIClient(f'http://{server_ip}:{server_port}')
-messages = [
-    "hi, what's your name?",
-    "who developed you?",
-    "Tell me more about your developers",
-    "Summarize the information we've talked so far"
-]
-for message in messages:
-    for item in api_client.chat_interactive_v1(prompt=message,
-                                               session_id=1,
-                                               interactive_mode=True,
-                                               stream=False):
-        print(item)
-```
-
 ### Tools
 
 May refer to [api_server_tools](./api_server_tools.md).
@@ -226,27 +193,6 @@ curl http://{server_ip}:{server_port}/v1/completions \
   "model": "llama",
   "prompt": "two steps to build a house:"
 }'
-```
-
-- interactive chat `v1/chat/interactive`
-
-```bash
-curl http://{server_ip}:{server_port}/v1/chat/interactive \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Hello! How are you?",
-    "session_id": 1,
-    "interactive_mode": true
-  }'
-```
-
-## Integrate with WebUI
-
-```shell
-# api_server_url is what printed in api_server.py, e.g. http://localhost:23333
-# server_ip and server_port here are for gradio ui
-# example: lmdeploy serve gradio http://localhost:23333 --server-name localhost --server-port 6006
-lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port ${gradio_ui_port}
 ```
 
 ## Launch multiple api servers
@@ -307,10 +253,6 @@ if __name__ == '__main__':
 
 2. When OOM appeared at the server side, please reduce the `cache_max_entry_count` of `backend_config` when launching the service.
 
-3. When the request with the same `session_id` to `/v1/chat/interactive` got a empty return value and a negative `tokens`, please consider setting `interactive_mode=false` to restart the session.
+3. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
 
-4. The `/v1/chat/interactive` api disables engaging in multiple rounds of conversation by default. The input argument `prompt` consists of either single strings or entire chat histories.
-
-5. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
-
-6. To customize a chat template, please refer to [chat_template.md](../advance/chat_template.md).
+4. To customize a chat template, please refer to [chat_template.md](../advance/chat_template.md).

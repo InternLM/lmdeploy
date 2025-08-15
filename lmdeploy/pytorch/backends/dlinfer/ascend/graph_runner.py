@@ -114,7 +114,7 @@ class AscendGraphRunner(GraphRunner):
         context: StepContext = None,
     ):
         """Prepare inputs."""
-        if self.enable_graph and SocVersion.is_Ascend910B():
+        if self.enable_graph and SocVersion.is_Ascend910():
             self._convert_kv_format(past_key_values)
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,

@@ -36,6 +36,7 @@ class Attention(nn.Module):
         logit_softcapping: float = None,
         causal: bool = True,
         use_flash_mla: bool = False,
+        learnable_sink: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -59,6 +60,7 @@ class Attention(nn.Module):
             logit_softcapping=logit_softcapping,
             causal=causal,
             use_flash_mla=use_flash_mla,
+            learnable_sink=learnable_sink,
             **kwargs,
         )
 
@@ -72,6 +74,7 @@ class Attention(nn.Module):
         attn_metadata: AttentionMetadata,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
+        s_aux: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -84,6 +87,7 @@ class Attention(nn.Module):
             attn_metadata=attn_metadata,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
+            learnable_sink=s_aux,
             inplace=inplace,
         )
 
