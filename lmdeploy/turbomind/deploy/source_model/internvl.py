@@ -2,7 +2,7 @@
 from .base import INPUT_MODELS
 from .internlm2 import InternLM2Reader
 from .llama import LlamaModel, LlamaReader
-from .qwen import Qwen3MoeReader
+from .qwen import Qwen3MoeReader, Qwen3Reader
 
 
 class InternVLReader(LlamaReader):
@@ -35,7 +35,22 @@ class InternVL2Reader(InternLM2Reader):
 
 
 class InternS1Reader(Qwen3MoeReader):
-    """InternVL3Reader for InternVL+Qwen3MoE model."""
+    """InternS1Reader for internlm/InternS1 model."""
+
+    attn_layer_prefix = 'model.language_model.layers'
+    attn_layer_patten = r'model\.language_model\.layers\.([0-9]+).'
+    tok_embeddings_key = 'model.language_model.embed_tokens.weight'
+    norm_weight_key = 'model.language_model.norm.weight'
+    output_weight_key = 'lm_head.weight'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
+        model_cfg = model_cfg.get('text_config')
+        if model_cfg is None:
+            raise ValueError(f'Miss "text_config" in model config: {model_cfg}')
+        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
+
+
+class InternS1MiniReader(Qwen3Reader):
 
     attn_layer_prefix = 'model.language_model.layers'
     attn_layer_patten = r'model\.language_model\.layers\.([0-9]+).'
@@ -60,12 +75,11 @@ class InternVLModel(LlamaModel):
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         self.llm_config = getattr(config, 'llm_config', None) or getattr(config, 'text_config', None)
         arch = self.llm_config.architectures[0]
-        relations = dict(
-            InternLM2ForCausalLM=('internlm2', InternVL2Reader),
-            LlamaForCausalLM=('llama', InternVLReader),
-            Qwen2ForCausalLM=('qwen2', InternVLReader),
-            Qwen3MoeForCausalLM=('qwen3-moe', InternS1Reader),
-        )
+        relations = dict(InternLM2ForCausalLM=('internlm2', InternVL2Reader),
+                         LlamaForCausalLM=('llama', InternVLReader),
+                         Qwen2ForCausalLM=('qwen2', InternVLReader),
+                         Qwen3MoeForCausalLM=('qwen3-moe', InternS1Reader),
+                         Qwen3ForCausalLM=('qwen3', InternS1MiniReader))
         llm_model, self.Reader = relations[arch]
         self.llm_model = INPUT_MODELS.get(llm_model)(model_path=model_path, tokenizer_path=tokenizer_path, **kwargs)
 
