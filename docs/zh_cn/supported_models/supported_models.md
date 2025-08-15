@@ -141,3 +141,28 @@
 |   InternVL3    |  1B-78B   | MLLM |       Yes        |       Yes        |      Yes      |      Yes      |      Yes       |
 |  CogVLM2-chat  |    19B    | MLLM |       Yes        |        No        |       -       |       -       |       -        |
 |     GLM4V      |    9B     | MLLM |       Yes        |        No        |       -       |       -       |       -        |
+
+## PyTorchEngine 阿里平头哥平台
+
+|     Model      |   Size    | Type | FP16/BF16(eager) | FP16/BF16(graph) |
+| :------------: | :-------: | :--: | :--------------: | :--------------: |
+|     Llama2     | 7B - 70B  | LLM  |       Yes        |       Yes        |
+|     Llama3     |    8B     | LLM  |       Yes        |       Yes        |
+|    Llama3.1    |    8B     | LLM  |       Yes        |       Yes        |
+|   InternLM2    | 7B - 20B  | LLM  |       Yes        |       Yes        |
+|  InternLM2.5   | 7B - 20B  | LLM  |       Yes        |       Yes        |
+|   InternLM3    |    8B     | LLM  |       Yes        |       Yes        |
+|    Mixtral     |   8x7B    | LLM  |       Yes        |       Yes        |
+|  QWen1.5-MoE   |   A2.7B   | LLM  |       Yes        |       Yes        |
+|   QWen2(.5)    |    7B     | LLM  |       Yes        |       Yes        |
+|    QWen2-VL    |  2B, 7B   | MLLM |        No        |        No        |
+|   QWen2.5-VL   | 3B - 72B  | MLLM |        No        |        No        |
+|   QWen2-MoE    |  A14.57B  | LLM  |       Yes        |       Yes        |
+|     QWen3      | 0.6B-235B | LLM  |       Yes        |       Yes        |
+|  DeepSeek-V2   |    16B    | LLM  |        No        |        No        |
+| InternVL(v1.5) |  2B-26B   | MLLM |       Yes        |       Yes        |
+|   InternVL2    |  1B-40B   | MLLM |       Yes        |       Yes        |
+|  InternVL2.5   |  1B-78B   | MLLM |       Yes        |       Yes        |
+|   InternVL3    |  1B-78B   | MLLM |       Yes        |       Yes        |
+|  CogVLM2-chat  |    19B    | MLLM |        -         |        -         |
+|     GLM4V      |    9B     | MLLM |        -         |        -         |
