@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # adapted from:
-# https://github.com/huggingface/transformers/blob/main/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py
+# https://github.com/huggingface/transformers/blob/main/src/transformers/models/glm4v/modeling_glm4v.py
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
