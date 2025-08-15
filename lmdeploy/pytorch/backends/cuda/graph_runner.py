@@ -34,13 +34,14 @@ def _get_capture_batch_size_impl(max_batches: int):
     """Capture batch size."""
     ret = []
     batch_size = 1
-    # power of 2, max 256
-    while batch_size <= min(256, max_batches):
+    batch_step = 256
+    # power of 2
+    while batch_size <= min(batch_step, max_batches):
         ret.append(batch_size)
         batch_size *= 2
 
-    # step 256
-    ret += list(range(batch_size, max_batches + 1, 256))
+    # step
+    ret += list(range(batch_size, max_batches + 1, batch_step))
 
     if max_batches != ret[-1]:
         ret.append(max_batches)
