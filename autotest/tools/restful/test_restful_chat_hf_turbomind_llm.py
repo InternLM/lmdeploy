@@ -258,7 +258,7 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
         'tp_num': 2
     },
     {
-        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
         'cuda_prefix': None,
         'tp_num': 2
     },
@@ -275,7 +275,7 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
         'extra': ' --communicator native'
     },
     {
-        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
         'cuda_prefix': None,
         'tp_num': 2,
         'extra': ' --communicator native'
@@ -293,7 +293,7 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
         'extra': ' --quant-policy 8 --communicator native'
     },
     {
-        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
         'cuda_prefix': None,
         'tp_num': 2,
         'extra': ' --quant-policy 8 --communicator native'
