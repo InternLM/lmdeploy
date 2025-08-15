@@ -310,13 +310,27 @@ class BaseModelAgent:
     def warmup(self):
         """warmup."""
         # TODO: disable for now, do not remove the comments.
+        with self.all_context():
+            max_batches = self.cache_config.max_batches
+            max_prefill_token_num = self.cache_config.max_prefill_token_num
+            num_tokens = max_batches
 
-        # # warmup prefill
-        # with self.all_context():
-        #     inputs = ModelInputs.make_dummy(1, False, device='cuda')
-        #     self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
-        #     inputs = ModelInputs.make_dummy(self.cache_config.max_batches, True, device='cuda')
-        #     self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+            # warmup prefill
+            inputs = ModelInputs.make_dummy(max_prefill_token_num,
+                                            is_decoding=False,
+                                            device='cuda',
+                                            vocab_size=self.model_config.vocab_size)
+            self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+
+            # warmup decoding(with cuda graph)
+            capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
+            capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
+            for num_tokens in capture_batch_sizes:
+                inputs = ModelInputs.make_dummy(num_tokens,
+                                                is_decoding=True,
+                                                device='cuda',
+                                                vocab_size=self.model_config.vocab_size)
+                self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
 
     async def _async_model_forward(
         self,

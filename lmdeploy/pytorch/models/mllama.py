@@ -17,7 +17,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwi
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 from .utils.model import DeployModelMixin
 
 MLLAMA_IMAGE_TOKEN_ID = 128256
@@ -1235,7 +1235,7 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin
             input_buffers['cross_kv_seqlens'].zero_()
         input_buffers['cross_kv_seqlens'][:batch_size] = kv_seqlens
 
-        new_batch_size = next_power_of_2(batch_size)
+        new_batch_size = graph_meta.max_batchs
         cross_attn_metadata.block_offsets = input_buffers['block_offsets'][:new_batch_size]
         cross_attn_metadata.q_start_loc = input_buffers['q_start_loc'][:new_batch_size]
         cross_attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]

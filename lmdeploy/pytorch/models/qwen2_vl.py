@@ -15,7 +15,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwi
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
 
 
@@ -793,11 +793,8 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
 
         input_ids = kwargs.get('input_ids')
-        attn_metadata = kwargs.get('attn_metadata')
-        block_offsets = attn_metadata.block_offsets
         num_tokens = input_ids.size(-1)
-        batch_size, _ = block_offsets.size()
-        new_batch_size = next_power_of_2(batch_size)
+        new_batch_size = graph_meta.max_batchs
 
         is_decoding = graph_meta.is_decoding
         input_buffers = graph_meta.input_buffers
