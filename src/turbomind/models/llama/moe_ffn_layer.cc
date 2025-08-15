@@ -2,7 +2,8 @@
 
 #include <cuda_runtime.h>
 
-#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/kernels/activation.h"
+#include "src/turbomind/kernels/norm/rms_norm.h"
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -54,6 +55,8 @@ Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& ga
     Tensor_<float> logits{{input.shape(0), weight.shape(1)}, kDEVICE};
     linear_.Forward(input, gate, logits);
     sync_check_cuda_error();
+    ApplyBias(logits, gate.bias, stream_);
+    sync_check_cuda_error();
     return logits;
 }
 
@@ -68,6 +71,8 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     FT_CHECK(expert_num);
 
     auto logits = Gate(p.input, moe.gate);
+
+    TM_DEBUG_TENSOR(logits, "logits", 2);
 
     check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, stream_));
     check_cuda_error(cudaMemsetAsync(masks_.data(), -1, sizeof(int8_t) * expert_num * padded, stream_));
@@ -147,15 +152,20 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_, {}, context_.get());
         sync_check_cuda_error();
 
+        ApplyBias(inter, block.fused_gating_intermediate.bias, offsets_.slice(0, expert_num + 1), stream_);
+
         if (!block.is_fused_silu) {
-            invokeGenericActivation_v3<SiluActivation>(inter.slice({0, 0}, {-1, inter_size_}),  //
-                                                       inter.slice({0, inter_size_}, {-1, -1}),
-                                                       stream_);
+            Activation(inter.slice({0, 0}, {-1, inter_size_}),
+                       inter.slice({0, inter_size_}, {-1, -1}),
+                       moe.block.act_type,
+                       stream_);
             sync_check_cuda_error();
         }
 
         linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_, context_.get());
         sync_check_cuda_error();
+
+        ApplyBias(temp_, block.output.bias, offsets_.slice(0, expert_num + 1), stream_);
     }
 
     if (moe.shared_gate.weight) {

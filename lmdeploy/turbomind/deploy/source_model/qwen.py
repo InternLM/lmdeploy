@@ -130,8 +130,8 @@ class Qwen2MoeReader(LlamaReader):
             result.append(tensor)
         return (*result, )
 
-    def moe_ffn_gate(self, i):
-        return self.transform(self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.gate.weight'), 'weight')
+    def moe_ffn_gate(self, i, kind):
+        return self.transform(self.params.get(f'{self.attn_layer_prefix}.{i}.mlp.gate.{kind}'), kind)
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""

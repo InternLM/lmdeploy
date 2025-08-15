@@ -190,10 +190,6 @@ struct Impl_m16k8 {
         for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
-                if constexpr (kDeferReduceL) {
-                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 1);
-                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 2);
-                }
                 inv_L[m][q] = fdividef(1.f, frag_L[m][q]);
             }
         }

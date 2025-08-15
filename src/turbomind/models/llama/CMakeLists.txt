@@ -32,6 +32,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         rms_norm
         DynamicDecodeLayer
         activation_kernels
+        activation
         attention
         decoding_kernels
         quantization_kernels

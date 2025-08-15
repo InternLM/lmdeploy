@@ -81,18 +81,22 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
                                                      attn_tp_rank_,
                                                      data_type_,
                                                      weight_type_,
-                                                     model.group_size});
+                                                     model.group_size,
+                                                     model.window_size.empty() ? 0 : model.window_size.at(layer_id),
+                                                     model.attn_sink});
     register_module("attention", *self_attn_weights);
 
     if (inter_size_) {
         ffn_weights.reset(new LlamaFfnWeight{
             hidden_units_,
             inter_size_,
+            model.mlp_bias,
             mlp_tp_size_,
             mlp_tp_rank_,
             data_type_,
             weight_type_,
             model.group_size,
+            model.act_type,
             weight_type_ == data_type_v<uint4_t> && is_fuse_silu_act(),
         });
         register_module("feed_forward", *ffn_weights);
@@ -102,11 +106,13 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
         moe_weights.reset(new MoeFfnWeight{layer_id,
                                            moe_param,
                                            hidden_units_,
+                                           model.mlp_bias,
                                            data_type_,
                                            weight_type_,
                                            model.group_size,
                                            mlp_tp_size_,
                                            mlp_tp_rank_,
+                                           model.act_type,
                                            is_fuse_silu_act()});
         register_module("moe_ffn", *moe_weights);
     }

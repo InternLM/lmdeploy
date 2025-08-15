@@ -34,6 +34,7 @@
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_request.h"
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/context.h"
@@ -298,11 +299,22 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     model_param_.mla.v_head_dim     = model_reader["v_head_dim"].as<int>();
     attn_param_.cache_block_seq_len = attention_reader["cache_block_seq_len"].as<int>(0);
     model_param_.quant_policy       = engine_reader["quant_policy"].as<int>(0);
-    YAML::Node inter_size           = model_reader["inter_size"];
+
+    auto inter_size = model_reader["inter_size"];
     for (auto it = inter_size.begin(); it != inter_size.end(); ++it) {
         model_param_.inter_size.push_back(it->as<int>());
     }
-    // Only weight classes need these
+    model_param_.attn_sink = model_reader["attn_sink"].as<bool>();
+    model_param_.mlp_bias  = model_reader["mlp_bias"].as<bool>();
+    if (model_reader["activation_type"].as<std::string>("") == "gpt-oss") {
+        model_param_.act_type = ActivationType::kSiluGptOss;
+    }
+
+    auto window_size = model_reader["window_size"];
+    for (auto it = window_size.begin(); it != window_size.end(); ++it) {
+        model_param_.window_size.push_back(it->as<int>());
+    }
+
     model_param_.attn_bias  = model_reader["attn_bias"].as<int>(0);
     model_param_.qk_norm    = model_reader["qk_norm"].as<bool>();
     model_param_.group_size = model_reader["group_size"].as<int>(0);
@@ -367,6 +379,7 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     moe_param_.topk_group        = model_reader["topk_group"].as<int>(1);
     moe_param_.topk_method       = model_reader["topk_method"].as<std::string>("greedy");
     moe_param_.n_group           = model_reader["moe_group_num"].as<int>(1);
+    moe_param_.router_bias       = model_reader["expert_router_bias"].as<bool>();
     YAML::Node expert_num        = model_reader["expert_num"];
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
         moe_param_.expert_num.push_back(it->as<int>());

@@ -198,8 +198,8 @@ struct RotaryEmbedding {
 
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            float tmp0 = cs_[i] * (float)x[i] - cs_[i + 1] * (float)x[i + 1];
-            float tmp1 = cs_[i] * (float)x[i + 1] + cs_[i + 1] * (float)x[i];
+            auto tmp0 = (T)cs_[i] * x[i] - (T)cs_[i + 1] * x[i + 1];
+            auto tmp1 = (T)cs_[i] * x[i + 1] + (T)cs_[i + 1] * x[i];
             if (is_valid_) {
                 x[i]     = (T)tmp0;
                 x[i + 1] = (T)tmp1;

@@ -7,7 +7,6 @@ import json
 import math
 import os.path as osp
 import sys
-from collections import defaultdict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -207,7 +206,7 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _get_model_params(self, model_comm, tm_params: defaultdict):
+    def _get_model_params(self, model_comm, tm_params: dict):
         """Get turbomind model params when loading from hf."""
 
         def _get_params(device_id, que):
@@ -226,7 +225,10 @@ class TurboMind:
         for _ in range(self.gpu_count):
             tensor_map = que.get()
             for k, v in tensor_map.items():
-                tm_params[k].append(v)
+                if k not in tm_params:
+                    tm_params[k] = [v]
+                else:
+                    tm_params[k].append(v)
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """Postprocess turbomind config by."""

@@ -8,6 +8,7 @@
 #include <string>
 
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/models/llama/llama_rope.h"
 
 namespace turbomind {
@@ -31,15 +32,21 @@ struct ModelParam {
     float    norm_eps;
     int      quant_policy;
     bool     attn_bias;
+    bool     attn_sink;
+    bool     mlp_bias;
     DataType weight_type;
     int      group_size;
     MLAParam mla;
     bool     qk_norm;
     int      tune_layer_num;
 
+    ActivationType act_type;
+
+    std::vector<int> window_size;
     std::vector<int> inter_size;
 };
 
+/// TODO: rename all `gate` in the context of MoE router to `router`
 struct MoeParam {
     enum Method
     {
@@ -52,6 +59,8 @@ struct MoeParam {
     bool  norm_topk_prob;
     bool  shared_gate;
     float routed_scale;
+
+    bool router_bias;
 
     int         topk_group;
     std::string topk_method;

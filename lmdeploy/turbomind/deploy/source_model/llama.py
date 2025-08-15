@@ -108,7 +108,8 @@ class LlamaModel(BaseInputModel):
         self.model_config = self.model_config.to_dict()
 
     def readers(self):
-        loader = create_loader(self.model_path, self.Reader.attn_layer_patten)
+        mappings = getattr(self.Reader, 'mappings', [])
+        loader = create_loader(self.model_path, self.Reader.attn_layer_patten, mappings)
         for i, param in loader.items():
             reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
             yield i, reader

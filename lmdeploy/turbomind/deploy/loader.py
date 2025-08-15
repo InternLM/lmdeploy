@@ -23,10 +23,11 @@ EXTRA_SAFE_WEIGHT_PATTERN = '*.safetensors'
 
 class BaseLoader(ABC):
 
-    def __init__(self, model_path: str, pattern):
+    def __init__(self, model_path: str, pattern, mappings: list):
         self.model_path = model_path
         self.pattern = pattern
         self.item_count = defaultdict(int)
+        self.mappings = mappings
 
     def get_index(self, index_name: str, file_pattern: str) -> Tuple[dict, list]:
         """Get shards and weight map (if possible) for the model."""
@@ -44,6 +45,15 @@ class BaseLoader(ABC):
             raise RuntimeError(f'failed to locate weight files for {self.model_path}')
         return sorted(shards), index
 
+    def map_key(self, key: str):
+        if self.mappings:
+            k = str(key)
+            for f in self.mappings:
+                k = f(k)
+            return k
+        else:
+            return key
+
     @abstractmethod
     def items(self) -> Iterator[Tuple[int, dict]]:
         pass
@@ -51,8 +61,8 @@ class BaseLoader(ABC):
 
 class SafetensorsLoader(BaseLoader):
 
-    def __init__(self, model_path: str, pattern: str, index_name=None, file_pattern=None):
-        super().__init__(model_path, pattern)
+    def __init__(self, model_path: str, pattern: str, mappings: list, index_name=None, file_pattern=None):
+        super().__init__(model_path, pattern, mappings)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
             # there is no model.safetensors.index.json in the model_path,
@@ -87,7 +97,7 @@ class SafetensorsLoader(BaseLoader):
                     else:
                         idx = int(match[0])
                         param = params[idx]
-                        param[k] = f.get_tensor(k)
+                        param[self.map_key(k)] = f.get_tensor(k)
                         if len(param) == self.item_count[idx]:
                             yield (idx, params.pop(idx))
                 if misc:
@@ -164,8 +174,8 @@ class StateDictLoader:
             self.que.task_done()
 
 
-def create_loader(model_path: Union[str, Queue], pattern: str) -> BaseLoader:
-    args = (model_path, pattern)
+def create_loader(model_path: Union[str, Queue], pattern: str, mappings: list) -> BaseLoader:
+    args = (model_path, pattern, mappings)
 
     if isinstance(model_path, Queue):
         # used for `update_params`

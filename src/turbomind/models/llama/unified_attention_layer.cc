@@ -287,13 +287,21 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.num_kv_heads  = local_kv_head_num_;
         params.size_per_head = size_per_head_;
 
-        // MSVC does not have M_LOG2E
-        params.inv_sqrt_dh = (float)std::log2(expf(1.));
+        double scaling = 1.;
         if (param_.softmax_scale) {  // model predefined softmax scale
-            params.inv_sqrt_dh *= param_.softmax_scale;
+            scaling *= param_.softmax_scale;
         }
         else {  // default value
-            params.inv_sqrt_dh /= std::sqrt((float)params.size_per_head);
+            scaling /= std::sqrt((float)params.size_per_head);
+        }
+        params.inv_sqrt_dh = scaling * std::log2(std::exp(1.));
+
+        params.sinks       = weights.sinks.data_or((T*)nullptr);
+        params.scale_sinks = scaling;
+
+        params.window_size = weights.window_size;
+        if (!params.window_size) {
+            params.window_size = 256 << 20;  // 256 M
         }
 
         // add offset to rope

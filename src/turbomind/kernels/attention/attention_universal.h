@@ -329,7 +329,7 @@ struct AttentionUniversal {
     operator()(const ParamType& params, CacheIteratorFactory& cache_iter_factory, const CtaMap& cta_map, char* smem_buf)
     {
         // [q, h, b]
-        const int query_idx = cta_map.query_idx() * CTA_Q;
+        const int query_idx = cta_map.query_idx() * CTA_Q;  // Q offset of this sequence
         const int batch_idx = cta_map.batch_idx();
         const int split_idx = cta_map.split_idx();
         const int split_cnt = cta_map.split_count();
@@ -371,13 +371,20 @@ struct AttentionUniversal {
         const int context_len = params.cu_k_len[batch_idx + 1] - params.cu_k_len[batch_idx];
         const int history_len = context_len - input_len;
 
-        const int tile_count = (history_len + min(query_idx + CTA_Q, input_len) + CTA_S - 1) / CTA_S;
+        const int last_K      = history_len + min(query_idx + CTA_Q, input_len);
+        const int last_K_tile = (last_K - 1) / CTA_S + 1;  // past-the-end index to past-the-end tile index conversion
 
-        const int tile_per_split = (tile_count + split_cnt - 1) / split_cnt;
+        const int first_K      = max(history_len + query_idx - (params.window_size - 1), 0);
+        const int first_K_tile = first_K / CTA_S;
+
+        const int tile_count = last_K_tile - first_K_tile;
+
+        /// FIXME: This scheme produce splits less than expected
+        const int tile_per_split = cdiv(tile_count, split_cnt);
         const int iter_begin     = tile_per_split * split_idx;
         const int iter_end       = min(iter_begin + tile_per_split, tile_count);
 
-        if (iter_begin >= tile_count) {
+        if (iter_begin >= iter_end) {
             return;
         }
 
@@ -406,13 +413,44 @@ struct AttentionUniversal {
 
         __syncthreads();
 
-        const int offset_Q = history_len + query_idx - iter_begin * CTA_S;
-        const int max_step = context_len - iter_begin * CTA_S;
+        const int offset_Q = history_len + query_idx;
+        const int offset_K = (first_K_tile + iter_end - 1) * CTA_S;
 
-        int tile_iter = iter_end - iter_begin - 1;
-        int mask_iter = (CTA_Q + CTA_S - 1) / CTA_S + 1;
+        // This is for avoiding OOB access only
+        const int max_K = min(context_len, (first_K_tile + iter_end) * CTA_S);
 
-        cache_iter.SetTile(iter_end - 1);
+        int tile_iter = iter_end - iter_begin;
+
+        //    min(Q) >= max(K)
+        // -> offset_Q >= offset_K + CTA_S - x * CTA_S
+        // -> x * CTA_S >= offset_K - offset_Q + CTA_S
+        int mask_iter_back = cdiv(max(0, offset_K - offset_Q + CTA_S), CTA_S);
+        //    max(Q) < min(K) + w
+        // -> offset_Q + CTA_Q - 1 < offset_K - tile_iter * CTA_S + x * CTA_S + w
+        // -> x * CTA_S >= offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - w
+        int mask_iter_front = cdiv(max(0, offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - params.window_size), CTA_S);
+
+#if 0
+        if (threadIdx.x == 0) {
+            printf(
+                "tile count: %d, tile per iter: %d, range_Q: [%d, %d), offset_K: %d, max_K: %d, tile_iter: %d, range_K: [%d, %d), range_K_tiles: [%d, %d), mask_iter: %d, mask_iter_front: %d\n",
+                tile_count,
+                tile_per_split,
+                offset_Q,
+                offset_Q + min(query_idx + CTA_Q, input_len),
+                offset_K,
+                max_K,
+                tile_iter,
+                first_K,
+                last_K,
+                first_K_tile * CTA_S,
+                last_K_tile * CTA_S,
+                mask_iter_back,
+                mask_iter_front);
+        }
+#endif
+
+        cache_iter.SetTile(first_K_tile + iter_end - 1);
 
         Mainloop mainloop;
         mainloop(frag_Q,
@@ -421,15 +459,25 @@ struct AttentionUniversal {
                  frag_M,
                  frag_L,
                  offset_Q,
-                 max_step,
+                 offset_K,
+                 max_K,
                  tile_iter,
-                 mask_iter,
+                 mask_iter_back,
+                 mask_iter_front,
+                 params.window_size,
                  params.inv_sqrt_dh,
                  storage,
                  StoreS(params, query_idx, head_idx, batch_idx, context_len));
 
-        if constexpr (Impl::kWarpCntS > 1) {
-            Impl::Merge(frag_O, frag_M, frag_L, params.inv_sqrt_dh, storage);
+        Impl::Merge(frag_O, frag_M, frag_L, params.inv_sqrt_dh, storage);
+
+        if (params.sinks && iter_end == tile_count) {
+            Impl::ForeachML(frag_M, frag_L, [&](int hi, int qi, int ri, float& M, float& L) {
+                if (check_h(hi) && M != -std::numeric_limits<float>::infinity()) {
+                    auto sink = (float)params.sinks[head_idx + hi];
+                    L += expf(sink - M * params.scale_sinks);
+                }
+            });
         }
 
         const bool separate_reduce = need_separate_reduce(cta_map.split_count());
@@ -448,8 +496,9 @@ struct AttentionUniversal {
         }
         else {
             StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
-            if (!separate_reduce)
+            if (!separate_reduce) {
                 Reduce(qi_begin, head_idx, split_idx, iter_end == tile_count, params, cta_map, smem_buf);
+            }
         }
     }
 
@@ -556,7 +605,6 @@ struct AttentionUniversal {
         Impl::ForeachML(frag_M, frag_L, [&](int hi, int qi, int ri, float M, float L) {
             const int index = get_index(hi, qi);
             if (qi_begin + qi < qi_end && ri == 0 && check_h(hi)) {
-                // printf("ML %2d %2d %f %f\n", split_idx, head_idx + hi, M, L);
                 params.partial_M[index] = M;
                 params.partial_L[index] = L;
             }
