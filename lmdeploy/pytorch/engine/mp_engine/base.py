@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Any, List, Optional
 
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
@@ -39,6 +40,18 @@ class MPEngine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         return self._collective_rpc('end_session', session_id)
+
+    def sleep(self, level: int):
+        """sleep."""
+        return self._collective_rpc('sleep', level)
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        return self._collective_rpc('wakeup', tags)
+
+    def update_params(self, request: Any):
+        """Update params."""
+        return self._collective_rpc('update_params', request)
 
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
