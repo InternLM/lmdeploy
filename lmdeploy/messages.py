@@ -404,6 +404,7 @@ class ResponseType(enum.Enum):
     HANDLER_NOT_EXIST = enum.auto()
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
+    PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
 
 
 @dataclass

@@ -22,27 +22,48 @@ struct TrieNode {
 
 class BlockTrie {
 public:
-    explicit BlockTrie(size_t block_len_, std::shared_ptr<BlockManager> block_manager, bool enable_prefix_caching);
+    explicit BlockTrie(size_t block_len, std::shared_ptr<BlockManager> block_manager);
 
-    bool enabled()
-    {
-        return enable_prefix_caching_;
-    }
+    /**
+     * @brief Attempt to match cached key-value (KV) blocks for a given sequence.
+     *
+     * This function iterates the tokens of the sequence and attempts
+     * to match them with the cached KV blocks. If the max prefix match is found,
+     * it returns the IDs, unique IDs of the matched blocks.
+     *
+     * @param seq The sequence whose tokens are to be matched against the cached KV blocks.
+     * @return A tuple containing the following:
+     *         - BlockIds: A list of IDs of the matched blocks.
+     *         - UniqueIds: A list of unique IDs of the matched blocks.
+     *
+     * @note If no blocks are matched, all containers in the returned tuple will be empty.
+     */
+    std::tuple<BlockIds, UniqueIds> Match(const Sequence& seq);
 
-    // get cached blocks for sequence
-    void match(Sequence& seq);
+    /**
+     * @brief Cache the key-value (KV) blocks of a given sequence.
+     *
+     * This function caches the KV blocks of the specified sequence. Only valid blocks
+     * of a sequence whose status is NOT `Sequence::kCached` are considered
+     * to be cached
+     *
+     * @param seq The sequence whose KV blocks are to be cached.
+     * @param tokens The token list corresponding to the KV blocks
+     * @return A tuple containing the following:
+     *         - BlockIds: A list of IDs of the cached blocks.
+     *         - UniqueIds: A list of unique IDs of the cached blocks.
+     */
+    std::tuple<BlockIds, UniqueIds> Cache(const Sequence& seq, const std::vector<int>& tokens);
 
-    // cache computed blocks for sequence
-    void cache(const Sequence& seq);
-
-    // remove invalid nodes, return valid count
-    int verify();
+    /**
+     * @brief remove invalid nodes, return valid count
+     */
+    int Verify();
 
 private:
-    int verify_traverse(std::shared_ptr<TrieNode>& node);
+    int DFS(std::shared_ptr<TrieNode>& node);
 
 private:
-    bool   enable_prefix_caching_;
     size_t block_seq_len_;
 
     std::shared_ptr<BlockManager> block_manager_;
