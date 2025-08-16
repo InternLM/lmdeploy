@@ -3,7 +3,7 @@ import asyncio
 import pickle
 import signal
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 import torch.multiprocessing as mp
 
@@ -185,9 +185,13 @@ class MPEngine:
         server.register_method('p2p_initialize', engine.p2p_initialize)
         server.register_method('p2p_connect', engine.p2p_connect)
         server.register_method('p2p_drop_connect', engine.p2p_drop_connect)
+        server.register_method('sleep', engine.sleep)
+        server.register_method('wakeup', engine.wakeup)
+        server.register_method('update_params', engine.update_params)
         server.register_method('instance_async_end', instance_pool.async_end)
         server.register_method('instance_async_cancel', instance_pool.async_cancel)
         server.register_method('instance_async_stream_infer', instance_pool.async_stream_infer)
+        server.register_method('get_schedule_metrics', engine.get_schedule_metrics)
 
         try:
             # run server
@@ -221,6 +225,18 @@ class MPEngine:
         """End session."""
         return self._collective_rpc('end_session', session_id)
 
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        return self._collective_rpc('sleep', level)
+
+    def wakeup(self, tags: Optional[list[str]] = None):
+        """Wakeup."""
+        return self._collective_rpc('wakeup', tags)
+
+    def update_params(self, request: Any):
+        """Update params."""
+        return self._collective_rpc('update_params', request)
+
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self._collective_rpc('p2p_initialize', conn_request)
@@ -236,6 +252,10 @@ class MPEngine:
         2. TODO(JimyMa) drop RDMA Connection.
         """
         return self._collective_rpc('p2p_drop_connect', drop_conn_request)
+
+    def get_schedule_metrics(self):
+        """Get schedule metrics."""
+        return self._collective_rpc('get_schedule_metrics')
 
     def create_instance(self, cuda_stream_id=0):
         """Create instance."""

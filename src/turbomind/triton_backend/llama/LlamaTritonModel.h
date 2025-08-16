@@ -64,6 +64,8 @@ public:
     int getTensorParaSize();
     int getPipelineParaSize();
 
+    ScheduleMetrics getScheduleMetrics(int device_id, int rank);
+
 private:
     void handleMissingParams();
 

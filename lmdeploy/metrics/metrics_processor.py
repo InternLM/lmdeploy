@@ -2,14 +2,11 @@
 import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
+from lmdeploy.messages import ResponseType, ScheduleMetrics
 from lmdeploy.utils import get_logger
 
-from .stats import IterationStats, RequestState, SchedulerStats
-
-if TYPE_CHECKING:
-    from lmdeploy.messages import EngineOutput
+from .stats import SchedulerStats
 
 logger = get_logger('lmdeploy')
 
@@ -122,21 +119,36 @@ class MetricsProcessor():
             try:
                 # fetch
                 update_data = await self.metrics_queue.get()
-                input_len, prev_len, outputs, req_state, iteration_stats = update_data
+                outputs, req_state, iteration_stats = update_data
 
-                # compute
-                self._update_stats(input_len, prev_len, outputs, req_state, iteration_stats)
+                # update request state according the engine events
+                req_state.update_from_events(outputs.req_metrics.engine_events)
 
-                # record
-                scheduler_stats = get_current_scheduler_stats()
+                # update iteration stats based on outputs and request state.
+                # some attributes of req_state will also be updated, e.g., lastest_token_time
+                iteration_stats.update_from_output(outputs, req_state)
+
+                # record iteration stats
                 for stat_logger in self.stat_loggers:
-                    stat_logger.record(scheduler_stats=scheduler_stats, iteration_stats=iteration_stats)
+                    stat_logger.record_iteration(iteration_stats)
+
+                if outputs.status == ResponseType.FINISH:
+                    # record finished request stats
+                    for stat_logger in self.stat_loggers:
+                        stat_logger.record_finish(req_state.finish_stats)
 
                 self.metrics_queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.exception(f'Metrics handler background task failed: {e}')
+
+    async def udpate_schedule_stats(self, schedule_metrics: ScheduleMetrics):
+        stats = get_current_scheduler_stats()
+        stats.update_from_schedule_metrics(schedule_metrics)
+        # record schedule stats
+        for stat_logger in self.stat_loggers:
+            stat_logger.record_schedule(stats)
 
     def queue_update(self, update_data: tuple):
         if not is_metrics_enabled() or self.metrics_queue is None:
@@ -149,39 +161,6 @@ class MetricsProcessor():
 
     def increment_finished_requests(self):
         increment_async_engine_scheduler_stats_finished_req()
-
-    def _update_stats(self, input_len: int, prev_len: int, outputs: 'EngineOutput', req_state: RequestState,
-                      iteration_stats: IterationStats):
-        from lmdeploy.messages import ResponseType
-
-        status = outputs.status
-        metrics_info = outputs.metrics_info
-        scheduler_raw_info = metrics_info.scheduler_raw_info
-
-        # update scheduler stats
-        scheduler_stats = get_current_scheduler_stats()
-        # actual running requests
-        scheduler_stats.num_running_reqs = scheduler_raw_info['locked']
-        # waiting to be scheduled + scheduled to running but haven't started yet
-        scheduler_stats.num_waiting_reqs = scheduler_raw_info['waiting'] + scheduler_raw_info['running']
-        scheduler_stats.gpu_cache_usage = 1.0 - (scheduler_raw_info['free_gpu_blocks'] /
-                                                 scheduler_raw_info['total_gpu_blocks'])
-
-        # update from per-iteration outputs
-        iteration_stats.update_from_output(engine_core_timestamp=metrics_info.engine_core_timestamp,
-                                           engine_core_events=metrics_info.engine_core_events,
-                                           num_prompt_tokens=input_len,
-                                           num_new_generation_tokens=(outputs.num_token - prev_len),
-                                           is_prefilling=(prev_len == 0),
-                                           req_stats=req_state.stats)
-
-        # update from finished request
-        if status is ResponseType.FINISH:
-            iteration_stats.update_from_finished_request(finish_reason=status,
-                                                         num_prompt_tokens=input_len,
-                                                         req_stats=req_state.stats)
-
-        req_state.is_prefilling = False  # change to decode after first update
 
 
 metrics_processor = MetricsProcessor()

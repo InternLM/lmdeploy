@@ -7,8 +7,6 @@ In the following sections, we will first introduce two methods for starting the 
 
 Next, we focus on the definition of the service's RESTful API, explore the various ways to interact with the interface, and demonstrate how to try the service through the Swagger UI or LMDeploy CLI tools.
 
-Finally, we showcase how to integrate the service into a WebUI, providing you with a reference to easily set up a demonstration demo.
-
 ## Launch Service
 
 Take the [llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.

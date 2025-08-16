@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
 
-from lmdeploy.messages import MetricsInfo, ResponseType
+from lmdeploy.messages import RequestMetrics, ResponseType
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -31,7 +31,7 @@ class Response:
     event: asyncio.Event
     data: Any = None
     err_msg: str = ''
-    metrics_info: MetricsInfo = None
+    req_metrics: RequestMetrics = None
 
 
 @dataclass

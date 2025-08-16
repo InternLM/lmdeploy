@@ -3,8 +3,7 @@
 import os
 
 from ..version import __version__
-from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter, FlexibleArgumentParser, convert_args,
-                    get_chat_template, get_lora_adapters)
+from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, FlexibleArgumentParser, convert_args
 
 
 class CLI(object):
@@ -122,7 +121,7 @@ class CLI(object):
                 env_info.pop(req)
 
         # extra important dependencies
-        extra_reqs = ['transformers', 'gradio', 'fastapi', 'pydantic', 'triton']
+        extra_reqs = ['transformers', 'fastapi', 'pydantic', 'triton']
 
         for req in extra_reqs:
             try:
@@ -167,40 +166,9 @@ class CLI(object):
 
     @staticmethod
     def chat(args):
-        """Chat with pytorch or turbomind engine."""
-        from lmdeploy.archs import autoget_backend
-
-        chat_template_config = get_chat_template(args.chat_template)
-
-        backend = args.backend
-        if backend != 'pytorch':
-            # set auto backend mode
-            backend = autoget_backend(args.model_path)
-
-        if backend == 'pytorch':
-            from lmdeploy.messages import PytorchEngineConfig
-            from lmdeploy.pytorch.chat import run_chat
-
-            adapters = get_lora_adapters(args.adapters)
-            engine_config = PytorchEngineConfig(dtype=args.dtype,
-                                                tp=args.tp,
-                                                session_len=args.session_len,
-                                                cache_max_entry_count=args.cache_max_entry_count,
-                                                adapters=adapters,
-                                                enable_prefix_caching=args.enable_prefix_caching,
-                                                device_type=args.device,
-                                                eager_mode=args.eager_mode,
-                                                quant_policy=args.quant_policy)
-            run_chat(args.model_path, engine_config, chat_template_config=chat_template_config)
-        else:
-            from lmdeploy.turbomind.chat import main as run_chat
-            kwargs = convert_args(args)
-            kwargs.pop('chat_template')
-            kwargs.pop('backend')
-            kwargs.pop('device')
-            kwargs.pop('eager_mode')
-            kwargs['chat_template_config'] = chat_template_config
-            run_chat(**kwargs)
+        from .chat import main
+        kwargs = convert_args(args)
+        main(**kwargs)
 
     @staticmethod
     def add_parsers():

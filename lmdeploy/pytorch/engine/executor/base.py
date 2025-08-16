@@ -2,7 +2,7 @@
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
 import contextlib
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
@@ -73,6 +73,14 @@ class ExecutorBase:
 
     def warmup(self):
         """warmup."""
+        raise NotImplementedError('Not Implemented.')
+
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        raise NotImplementedError('Not Implemented.')
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
         raise NotImplementedError('Not Implemented.')
 
     def update_params(self, request: Any):

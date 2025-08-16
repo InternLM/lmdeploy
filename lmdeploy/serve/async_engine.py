@@ -114,9 +114,13 @@ class Session:
 
     def close(self):
         """Release engine storage for this session."""
-        if self._engine:
+        if self._engine and self._prompt:
             self._engine._run(coro=self._engine.end_session(self._id)).result()
             self._engine = None
+
+    def stop(self):
+        if self._engine and self._prompt:
+            self._engine._run(coro=self._engine.stop_session(self._id)).result()
 
     def __repr__(self) -> str:
         res = ''
@@ -339,7 +343,7 @@ class AsyncEngine(LogitsMixin):
 
         if getattr(self.backend_config, 'enable_metrics', False):
             from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
-            dp_rank = self.backend_config.dp_rank if self.backend_config.dp else 0
+            dp_rank = self.backend_config.dp_rank if self.backend_config.dp > 1 else 0
 
             logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
             self.stat_loggers = [
@@ -349,6 +353,9 @@ class AsyncEngine(LogitsMixin):
 
             # set stats loggers of metrics processor
             metrics_processor.stat_loggers = self.stat_loggers
+
+    def get_schedule_metrics(self):
+        return self.engine.get_schedule_metrics()
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
@@ -382,7 +389,8 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def do_log_stats(self):
-        # loop through CLI logger and Prometheus logger
+        """Loop through CLI logger and Prometheus logger and output the
+        metrics."""
         for stat_logger in self.stat_loggers:
             stat_logger.log()
 
@@ -736,7 +744,7 @@ class AsyncEngine(LogitsMixin):
                 return
 
         def is_error(status):
-            return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
+            return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
         # used to skip / rewind stop words in interactive mode
         stop_ids = []
@@ -764,15 +772,15 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
-                req_state = RequestState(prompt_len=input_len)  # per-requst state
+                req_state = RequestState(prompt_tokens=input_len)  # per-requst state
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
+                    metrics_processor.queue_update((outputs, req_state, iteration_stats))
                     # decode res
                     if is_error(outputs.status):
                         break
 
                     output_len = outputs.num_token
-                    metrics_processor.queue_update((input_len, prev_len, outputs, req_state, iteration_stats))
 
                     if hit_stop_token or prev_len == output_len:
                         continue
@@ -785,7 +793,6 @@ class AsyncEngine(LogitsMixin):
                             continue
 
                     mask = slice(prev_len - output_len, output_len - hit_stop_token)
-
                     token_ids += outputs.token_ids[mask]
                     gen_len = len(token_ids) - input_len
 
@@ -840,6 +847,12 @@ class AsyncEngine(LogitsMixin):
                                  finish_reason,
                                  token_ids=[],
                                  cache_block_ids=outputs.cache_block_ids)
+                    # Update a session's sequence only when it is in finished status
+                    if outputs.status == ResponseType.FINISH:
+                        if rewind_stop_tokens:
+                            # rewind the step to the token before the stop token
+                            output_len = gen_len
+                        self.id2step[session_id] += input_len + output_len
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
@@ -855,11 +868,6 @@ class AsyncEngine(LogitsMixin):
                 if self.backend == 'pytorch':
                     # manually end pytorch session
                     await inst.async_end(session_id)
-            else:
-                if rewind_stop_tokens:
-                    # rewind the step to the token before the stop token
-                    output_len = gen_len
-                self.id2step[session_id] += input_len + output_len
 
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)
@@ -907,7 +915,8 @@ class AsyncEngine(LogitsMixin):
                                sequence_end=False,
                                session_id=session._id,
                                stream_response=stream_response,
-                               multiplex=True)
+                               multiplex=True,
+                               step=session._step)
 
         def _gen():
             resp = None

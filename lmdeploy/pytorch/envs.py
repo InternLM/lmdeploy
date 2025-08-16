@@ -103,6 +103,10 @@ with set_envs():
     # If Ray is launched from outside, it may fail to access the environment variables.
     os.getenv('DEEPEP_MAX_BATCH_SIZE', None)
 
+    # deepgemm
+    os.getenv('DG_JIT_DEBUG', '0')
+    os.getenv('DG_JIT_PRINT_COMPILER_COMMAND', '0')
+
 
 def get_all_envs():
     """Get all environment variables."""
