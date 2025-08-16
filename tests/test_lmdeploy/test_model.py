@@ -2,42 +2,41 @@ import pytest
 
 from lmdeploy.model import MODELS, best_match_model
 
-# @pytest.mark.parametrize('model_path_and_name', [
-#     ('internlm/internlm-chat-7b', ['internlm']),
-#     ('internlm/internlm2-1_8b', ['base']),
-#     ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
-#     ('Qwen/Qwen-7B-Chat', ['qwen']),
-#     ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
-#     ('Qwen/Qwen2.5-VL-7B-Instruct', ['qwen2d5-vl']),
-#     ('Qwen/Qwen3-32B', ['qwen3']),
-#     ('Qwen/Qwen3-235B-A22B', ['qwen3']),
-#     ('codellama/CodeLlama-7b-hf', ['codellama']),
-#     ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
-#     ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
-#     ('THUDM/chatglm2-6b', ['chatglm']),
-#     ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']),
-#     ('01-ai/Yi-34B-Chat', ['yi']),
-#     ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
-#     ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
-#     ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
-#     ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
-#     ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
-#     ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
-#     ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
-#     ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
-#     ('workspace', ['base']),
-#     ('OpenGVLab/InternVL2_5-1B', ['internvl2_5']),
-#     ('OpenGVLab/InternVL3-1B', ['internvl2_5']),
-# ])
-# @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
-# def test_best_match_model(model_path_and_name, suffix):
-#     if model_path_and_name[0] == 'internlm/internlm2-1_8b' and suffix:
-#         return  # internlm/internlm2-1_8b-suffix will got None
-#     deduced_name = best_match_model(model_path_and_name[0] + suffix)
-#     if deduced_name is not None:
-#         assert deduced_name in model_path_and_name[1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
-#     else:
-#         assert deduced_name in model_path_and_name[1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
+
+@pytest.mark.parametrize(
+    'model_path_and_name',
+    [
+        ('internlm/internlm-chat-7b', ['internlm']),
+        ('internlm/internlm2-1_8b', ['base']),
+        ('Qwen/Qwen-7B-Chat', ['qwen']),
+        ('Qwen/Qwen2.5-7B-Instruct', ['hf']),
+        # ('Qwen/Qwen2.5-VL-7B-Instruct', ['qwen2d5-vl']),
+        ('Qwen/Qwen3-32B', ['hf']),
+        ('Qwen/Qwen3-235B-A22B', ['hf']),
+        ('codellama/CodeLlama-7b-hf', ['codellama']),
+        ('upstage/SOLAR-0-70b-16bit', ['solar', 'solar-70b']),
+        # ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
+        ('THUDM/chatglm2-6b', ['chatglm']),
+        ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']),
+        ('01-ai/Yi-34B-Chat', ['hf']),
+        ('01-ai/Yi-6B-Chat', ['hf']),
+        ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
+        ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
+        ('deepseek-ai/deepseek-coder-6.7b-instruct', ['hf']),
+        ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
+        ('deepseek-ai/deepseek-moe-16b-chat', ['hf']),
+        ('internlm/internlm-xcomposer2-4khd-7b', ['hf']),
+        ('internlm/internlm-xcomposer2d5-7b', ['hf']),
+        # ('OpenGVLab/InternVL2_5-1B', ['internvl2_5']),
+        # ('OpenGVLab/InternVL3-1B', ['internvl2_5']),
+    ])
+def test_best_match_model(model_path_and_name):
+    deduced_name = best_match_model(model_path_and_name[0])
+    if deduced_name is not None:
+        assert deduced_name in model_path_and_name[1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
+    else:
+        assert deduced_name in model_path_and_name[1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
+
 
 # @pytest.mark.parametrize('model_name', ['llama2', 'base', 'yi', 'qwen-7b', 'vicuna'])
 # @pytest.mark.parametrize('meta_instruction', ['[fake meta_instruction]'])
@@ -50,34 +49,37 @@ from lmdeploy.model import MODELS, best_match_model
 #     else:
 #         assert meta_instruction in prompt
 
-# def test_base_model():
-#     model = MODELS.get('llama')()
-#     assert model is not None
-#     assert model.capability == 'chat'
-#     assert model.get_prompt('test') == 'test'
-#     assert model.stop_words is None
 
-#     model = MODELS.get('internlm')(capability='completion')
-#     assert model.capability == 'completion'
-#     assert model.get_prompt('hi') == 'hi'
-#     assert model.messages2prompt('test') == 'test'
+def test_base_model():
+    model = MODELS.get('llama')()
+    assert model is not None
+    assert model.capability == 'chat'
+    assert model.get_prompt('test') == 'test'
+    assert model.stop_words is None
 
-# def test_vicuna():
-#     prompt = 'hello, can u introduce yourself'
-#     model = MODELS.get('vicuna')(capability='completion')
-#     assert model.get_prompt(prompt, sequence_start=True) == prompt
-#     assert model.get_prompt(prompt, sequence_start=False) == prompt
+    model = MODELS.get('internlm')(capability='completion')
+    assert model.capability == 'completion'
+    assert model.get_prompt('hi') == 'hi'
+    assert model.messages2prompt('test') == 'test'
 
-#     model = MODELS.get('vicuna')(capability='chat', system='Provide answers in Python')
-#     assert model.get_prompt(prompt, sequence_start=True) != prompt
-#     assert model.get_prompt(prompt, sequence_start=False) != prompt
-#     assert model.system == 'Provide answers in Python'
 
-#     model = MODELS.get('vicuna')(capability='voice')
-#     _prompt = None
-#     with pytest.raises(AssertionError):
-#         _prompt = model.get_prompt(prompt, sequence_start=True)
-#         assert _prompt is None
+def test_vicuna():
+    prompt = 'hello, can u introduce yourself'
+    model = MODELS.get('vicuna')(capability='completion')
+    assert model.get_prompt(prompt, sequence_start=True) == prompt
+    assert model.get_prompt(prompt, sequence_start=False) == prompt
+
+    model = MODELS.get('vicuna')(capability='chat', system='Provide answers in Python')
+    assert model.get_prompt(prompt, sequence_start=True) != prompt
+    assert model.get_prompt(prompt, sequence_start=False) != prompt
+    assert model.system == 'Provide answers in Python'
+
+    model = MODELS.get('vicuna')(capability='voice')
+    _prompt = None
+    with pytest.raises(AssertionError):
+        _prompt = model.get_prompt(prompt, sequence_start=True)
+        assert _prompt is None
+
 
 # def test_prefix_response():
 #     model = MODELS.get('internlm2')()
@@ -237,16 +239,18 @@ from lmdeploy.model import MODELS, best_match_model
 #     expected_prompt = '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n# Tool Instructions\n- Always execute python code in messages that you share.\n- When looking for real time information use relevant functions if available else fallback to brave_search\n\n\n\nYou have access to the following functions:\n\nUse the function \'spotify_trending_songs\' to: Get top trending songs on Spotify\n{"name": "spotify_trending_songs", "description": "Get top trending songs on Spotify", "parameters": {"n": {"param_type": "int", "description": "Number of trending songs to get", "required": true}}}\n\n\nIf a you choose to call a function ONLY reply in the following format:\n<{start_tag}={function_name}>{parameters}{end_tag}\nwhere\n\nstart_tag => `<function`\nparameters => a JSON dict with the function argument name as key and function argument value as value.\nend_tag => `</function>`\n\nHere is an example,\n<function=example_function_name>{"example_name": "example_value"}</function>\n\nReminder:\n- Function calls MUST follow the specified format\n- Required parameters MUST be specified\n- Only call one function at a time\n- Put the entire function call reply on one line"\n- Always add your sources when using search results to answer the user query\n\nYou are a helpful assistant.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nCan you check the top 5 trending songs on spotify?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'  # noqa
 #     assert actual_prompt == expected_prompt
 
-# def test_baichuan():
-#     prompt = 'hello, can u introduce yourself'
-#     model = MODELS.get('baichuan2')(capability='completion')
-#     assert model.get_prompt(prompt, sequence_start=True) == prompt
-#     assert model.get_prompt(prompt, sequence_start=False) == prompt
-#     assert model.stop_words is None
 
-#     model = MODELS.get('baichuan2')(capability='chat')
-#     _prompt = model.get_prompt(prompt, sequence_start=True)
-#     assert _prompt == '<reserved_106>' + prompt + '<reserved_107>'
+def test_baichuan():
+    prompt = 'hello, can u introduce yourself'
+    model = MODELS.get('baichuan2')(capability='completion')
+    assert model.get_prompt(prompt, sequence_start=True) == prompt
+    assert model.get_prompt(prompt, sequence_start=False) == prompt
+    assert model.stop_words is None
+
+    model = MODELS.get('baichuan2')(capability='chat')
+    _prompt = model.get_prompt(prompt, sequence_start=True)
+    assert _prompt == '<reserved_106>' + prompt + '<reserved_107>'
+
 
 # def test_llama2():
 #     prompt = 'hello, can u introduce yourself'

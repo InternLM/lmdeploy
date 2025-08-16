@@ -563,50 +563,6 @@ class InternVL2_5(InternLM2Chat7B):
             return 'internvl2_5'
 
 
-@MODELS.register_module(name=['internlm-xcomposer2', 'internlm-xcomposer2d5'])
-class InternLMXComposer2Chat7B(InternLMChat7B):
-    """Chat template and generation parameters of InternLM-XComposer2-7b."""
-
-    def __init__(
-            self,
-            system='[UNUSED_TOKEN_146]system\n',
-            meta_instruction="""You are an AI assistant whose name is InternLM-XComposer (浦语·灵笔).
-- InternLM-XComposer (浦语·灵笔) is a multi-modality conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
-- InternLM-XComposer (浦语·灵笔) can understand and communicate fluently in the language chosen by the user such as English and 中文.
-- InternLM-XComposer (浦语·灵笔) is capable of comprehending and articulating responses effectively based on the provided image.""",  # noqa
-            user='[UNUSED_TOKEN_146]user\n',
-            assistant='[UNUSED_TOKEN_146]assistant\n',
-            eosys='[UNUSED_TOKEN_145]\n',
-            eoh='[UNUSED_TOKEN_145]\n',
-            eoa='[UNUSED_TOKEN_145]\n',
-            separator='\n',
-            stop_words=['[UNUSED_TOKEN_145]'],
-            **kwargs):
-        super().__init__(system=system,
-                         meta_instruction=meta_instruction,
-                         user=user,
-                         assistant=assistant,
-                         eosys=eosys,
-                         eoh=eoh,
-                         eoa=eoa,
-                         separator=separator,
-                         stop_words=stop_words,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'internlm' in path and 'xcomposer2' in path:
-            if '2d5' in path:
-                return 'internlm-xcomposer2d5'
-            return 'internlm-xcomposer2'
-
-
 @MODELS.register_module(name='baichuan2')
 class Baichuan2(BaseChatTemplate):
     """Chat template and generation parameters of Baichuan2-7B-Base and
@@ -944,40 +900,6 @@ class MistralChat(BaseChatTemplate):
                 return 'mistral'
             if 'mixtral' in model_path:
                 return 'mixtral'
-
-
-@MODELS.register_module(name=['deepseek'])
-class Deepseek(BaseChatTemplate):
-
-    def __init__(self,
-                 eosys='\n\n',
-                 user='User: ',
-                 eoh='\n\n',
-                 assistant='Assistant: ',
-                 eoa='<｜end▁of▁sentence｜>',
-                 **kwargs):
-        super().__init__(eosys=eosys, user=user, eoh=eoh, assistant=assistant, eoa=eoa, **kwargs)
-
-    def get_prompt(self, prompt, sequence_start=True):
-        if self.capability == 'chat':
-            return super().get_prompt(prompt, sequence_start)[:-1]
-        return super().get_prompt(prompt, sequence_start)
-
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
-        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'deepseek' in path and 'chat' in path and 'vl' not in path:
-            return 'deepseek'
 
 
 @MODELS.register_module(name=['internvl-zh'])
@@ -1546,7 +1468,7 @@ def best_match_model(query: str) -> Optional[str]:
         str: the possible model name.
     """
 
-    priorities = ['deepseek-vl2', 'hf']
+    priorities = ['deepseek-vl2', 'codellama', 'hf']
 
     for name in priorities:
         chat_template = MODELS.module_dict[name]
