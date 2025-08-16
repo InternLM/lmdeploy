@@ -789,12 +789,20 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
 
+    def _get_model_metas(self, context: StepContext):
+        """Get model metas."""
+        model_metas = context.model_metas
+        if model_metas is None:
+            batch_size = context.q_seqlens.numel()
+            return [dict(num_img_tokens=0)] * batch_size
+        return [dict(num_img_tokens=0) if meta is None else meta for meta in model_metas]
+
     def update_model_metas(self,
                            past_key_values: List[List[torch.Tensor]],
                            inputs_embeds: Optional[torch.Tensor] = None,
                            context: StepContext = None):
         """Update model meta."""
-        model_metas = context.model_metas
+        model_metas = self._get_model_metas(context)
         input_multimodals = context.input_multimodals
         if input_multimodals is None:
             input_imgs = [[] for _ in model_metas]
