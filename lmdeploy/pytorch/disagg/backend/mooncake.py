@@ -10,7 +10,7 @@ from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.pytorch.disagg.config import MigrationBackend, MooncakeEngineConfig
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeInitRequest, DistServeKVTransferEndpointInfo,
-                                                   MigrationProtocol)
+                                                   KVTransferProtocol)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
 from lmdeploy.utils import get_logger
 
@@ -222,7 +222,7 @@ class MooncakeMigrationManagement:
             logger.debug(f"  Remote: 0x{remote_buffer_info['addr']:x} + {task.target_offset} = 0x{remote_addr:x}")
             logger.debug(f'  Session: {self.remote_url}')
 
-            result = self.engine.transfer_sync_read(
+            result = self.engine.transfer_sync_write(
                 self.remote_url,
                 local_addr,
                 remote_addr,
@@ -245,7 +245,7 @@ class MooncakeBackend(MigrationBackendImpl):
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         self.links[register_mr_request.remote_engine_id].register_memory_region(register_mr_request)
 
-    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
+    def endpoint_info(self, remote_engine_id: int, protocol: KVTransferProtocol):
         return self.links[remote_engine_id].endpoint_info
 
     def p2p_connect(self, remote_engine_id: str, connect_request: DistServeKVTransferEndpointInfo):

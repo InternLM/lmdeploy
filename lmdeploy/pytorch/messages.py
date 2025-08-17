@@ -5,10 +5,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+
+import torch
 from torch import Tensor
 
-from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.pytorch.engine.request import Response
+from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor, RequestMetrics
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationContext
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
@@ -33,6 +36,25 @@ class InputEmbeddings:
             self.start += offset
             self.end += offset
         return self
+
+
+@dataclass
+class InferOutput:
+    """The output of the model inference."""
+
+    session_id: int
+    resp: Response
+    token_ids: List[int]
+    meta: Any = None
+    finish: bool = False
+    logits: torch.Tensor = None
+
+    # send cache blocks back for migration in Disaggregated LLM Serving
+    # when Prefill Engine is Done.
+    cache_block_ids: List[int] = None
+
+    # for logging
+    req_metrics: RequestMetrics = None
 
 
 @dataclass
@@ -136,16 +158,19 @@ class MessageStatus(enum.Enum):
     ABORTED = enum.auto()
     LOCKED = enum.auto()
 
-    # PD Disaggregation
-    # WAITING_MIGRATION: state of Unmigrated Requests
-    # in both prefill and decode engines are tagged by
-    # RUNNING_MIGRATION: state of Migrating Requests
-    # in decode engine
+    # PD Disaggregation (Prefill Engine)
     TO_BE_MIGRATED = enum.auto()
-    WAITING_MIGRATION = enum.auto()
-    RUNNING_MIGRATION = enum.auto()
-    MIGRATION_LOCKED = enum.auto()
+    # PD Disaggregation (Decode Engine)
+    META_MIGRATION_WAITING = enum.auto()
+    META_MIGRATION_RUNNING = enum.auto()
+
+    MIGRATION_WAITING = enum.auto()
+    MIGRATION_RUNNING = enum.auto()
     MIGRATION_DONE = enum.auto()
+
+    RECOMPUTION_PREEMPTION = enum.auto()
+    REMOTE_RECOMPUTING = enum.auto()
+    REMOTE_RECOMPUTED = enum.auto()
 
 
 _SEQ_COUNT = 0
@@ -230,7 +255,7 @@ class SchedulerSession:
                      return_logits: bool = False,
                      multimodals: MultiModalInputs = None,
                      input_embeddings: List[InputEmbeddings] = None,
-                     migration_request: Optional[MigrationRequest] = None,
+                     migration_context: Optional[MigrationContext] = None,
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
@@ -250,11 +275,11 @@ class SchedulerSession:
             num_new_tokens=0,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            arrive_time=time.perf_counter(),
+            arrive_time=migration_context.time_stamp.arrive_time if migration_context else time.time(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
-            migration_request=migration_request,
+            migration_context=migration_context,
             resp_cache=resp_cache,
             preserve_cache=preserve_cache,
         )
@@ -464,7 +489,7 @@ class SchedulerSequence:
     model_meta: Dict[str, Any] = None
 
     # For Disaggregation
-    migration_request: Optional[MigrationRequest] = None
+    migration_context: Optional[MigrationContext] = None
     resp_cache: bool = False
     preserve_cache: bool = False
 

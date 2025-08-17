@@ -4,13 +4,13 @@ from typing import List, Optional, Tuple
 from pydantic import BaseModel
 
 from lmdeploy.pytorch.disagg.config import DistServeNVLinkConfig, DistServeRDMAConfig, DistServeTCPConfig
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
+from lmdeploy.pytorch.disagg.conn.protocol import KVTransferProtocol
 
 
 class MigrationExecutionBatch(BaseModel):
     """Input of the Migration."""
 
-    protocol: MigrationProtocol
+    protocol: KVTransferProtocol
     requests: List[Tuple[str, List[Tuple[int, int]]]] = []
 
 
@@ -24,7 +24,7 @@ class AssignmentInstruct(BaseModel):
 
 class MigrationAssignment(BaseModel):
     """Migration Assignment."""
-    protocol: MigrationProtocol
+    protocol: KVTransferProtocol
     remote_engine_id: str
     batch: List[AssignmentInstruct]
 
@@ -32,14 +32,14 @@ class MigrationAssignment(BaseModel):
 class PDConnectionMessage(BaseModel):
     p_url: str
     d_url: str
-    protocol: MigrationProtocol = MigrationProtocol.RDMA
+    protocol: KVTransferProtocol = KVTransferProtocol.RDMA
     tcp_config: Optional[DistServeTCPConfig] = None
     rdma_config: Optional[DistServeRDMAConfig] = None
     nvlink_config: Optional[DistServeNVLinkConfig] = None
 
 
 class DistServeRegisterMRMessage(BaseModel):
-    protocol: MigrationProtocol
+    protocol: KVTransferProtocol
 
     remote_engine_id: str
     mr_key: str

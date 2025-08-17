@@ -158,7 +158,7 @@ class SubCliServe:
         parser.add_argument('--dummy-prefill', action='store_true', help='dummy prefill for performance profiler')
         parser.add_argument('--routing-strategy',
                             type=str,
-                            choices=['random', 'min_expected_latency', 'min_observed_latency'],
+                            choices=['random', 'round_robin', 'min_expected_latency', 'min_observed_latency'],
                             default='min_expected_latency',
                             help='the strategy to dispatch requests to nodes')
         parser.add_argument('--disable-cache-status',

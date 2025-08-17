@@ -5,6 +5,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
+from lmdeploy.pytorch.disagg.config import EngineRole
+
 from lmdeploy.messages import EventType, ScheduleMetrics
 from lmdeploy.utils import get_logger, logging_timer
 
@@ -79,19 +81,44 @@ class Scheduler:
     @property
     def waiting_migration(self):
         """Get migration sequence."""
-        seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING_MIGRATION)
+        seq_map = self.seq_manager.get_sequences(MessageStatus.MIGRATION_WAITING)
         return list(seq_map.values())
 
     @property
     def running_migration(self):
         """Get migration sequence."""
-        seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING_MIGRATION)
+        seq_map = self.seq_manager.get_sequences(MessageStatus.MIGRATION_RUNNING)
         return list(seq_map.values())
 
     @property
     def migration_done(self):
         """Get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.MIGRATION_DONE)
+        return list(seq_map.values())
+
+    @property
+    def meta_migration_waiting(self):
+        seq_map = self.seq_manager.get_sequences(MessageStatus.META_MIGRATION_WAITING)
+        return list(seq_map.values())
+
+    @property
+    def meta_migration_running(self):
+        seq_map = self.seq_manager.get_sequences(MessageStatus.META_MIGRATION_RUNNING)
+        return list(seq_map.values())
+
+    @property
+    def recomputation_preemption(self):
+        seq_map = self.seq_manager.get_sequences(MessageStatus.RECOMPUTION_PREEMPTION)
+        return list(seq_map.values())
+
+    @property
+    def remote_recomputing(self):
+        seq_map = self.seq_manager.get_sequences(MessageStatus.REMOTE_RECOMPUTING)
+        return list(seq_map.values())
+
+    @property
+    def remote_recomputed(self):
+        seq_map = self.seq_manager.get_sequences(MessageStatus.REMOTE_RECOMPUTED)
         return list(seq_map.values())
 
     def build_eviction_helper(self, eviction_type: str):
@@ -145,7 +172,7 @@ class Scheduler:
 
         def _to_running(seq: SchedulerSequence):
             """To running."""
-            seq.status = MessageStatus.RUNNING_MIGRATION
+            seq.status = MessageStatus.MIGRATION_RUNNING
             running_migration.append(seq)
             nonlocal migrating_token_count
             migrating_token_count += seq.num_token_ids
@@ -234,7 +261,7 @@ class Scheduler:
         return running, swap_in_map, swap_out_map, copy_map
 
     @logging_timer('ScheduleDecoding', logger)
-    def _schedule_decoding(self, prealloc_size: int = 0):
+    def _schedule_decoding(self, prealloc_size: int = 0, engine_role:EngineRole = EngineRole.Hybrid):
         """Schedule decoding."""
 
         running = self.running
@@ -257,7 +284,9 @@ class Scheduler:
             from itertools import chain
             hanging = reversed(self.hanging)
             waiting = reversed(self.waiting)
-            evictable = list(chain(hanging, waiting))
+            recompution_preemption = reversed(self.recomputation_preemption)
+            remote_recomputing = reversed(self.remote_recomputing)
+            evictable = list(chain(hanging, waiting, recompution_preemption, remote_recomputing))
             return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
 
         # 1. running
@@ -276,7 +305,10 @@ class Scheduler:
                 continue
 
             if not __evict_for_seq(seq, num_required_blocks):
-                self._set_message_status(seq, MessageStatus.WAITING)
+                if engine_role == EngineRole.Decode:
+                    self._set_message_status(seq, MessageStatus.RECOMPUTION_PREEMPTION)
+                else:
+                    self._set_message_status(seq, MessageStatus.WAITING)
                 continue
 
             self.block_manager.allocate(seq, prealloc_size)
@@ -284,12 +316,12 @@ class Scheduler:
 
         return self.running, swap_in_map, swap_out_map, copy_map
 
-    def schedule(self, is_prefill: bool, prealloc_size: int = 0):
+    def schedule(self, is_prefill: bool, prealloc_size: int = 0, engine_role: EngineRole = EngineRole.Hybrid):
         """Schedule inputs for next steps."""
         if is_prefill:
             output = self._schedule_prefill()
         else:
-            output = self._schedule_decoding(prealloc_size)
+            output = self._schedule_decoding(prealloc_size, engine_role)
         running, swap_in_map, swap_out_map, copy_map = output
 
         return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
@@ -359,6 +391,15 @@ class Scheduler:
     def has_migration_done(self):
         return self.num_migration_done() > 0
 
+    def has_recomputation_preempted(self):
+        return self.num_recomputation_preemption() > 0
+
+    def has_remote_recomputing(self):
+        return self.num_remote_recomputing() > 0
+
+    def has_remote_recomputed(self):
+        return self.num_remote_recomputed() > 0
+
     def get_block_tables(self, seqs: SeqList):
         """Get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
@@ -375,21 +416,26 @@ class Scheduler:
         """Num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.TO_BE_MIGRATED)
 
-    def num_migration_locked(self):
-        """Num waiting."""
-        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_LOCKED)
-
     def num_migration_running(self):
         """Num migration running."""
-        return self.seq_manager.num_sequences(MessageStatus.RUNNING_MIGRATION)
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_RUNNING)
 
     def num_migration_done(self):
         """Num migration done."""
         return self.seq_manager.num_sequences(MessageStatus.MIGRATION_DONE)
 
+    def num_recomputation_preemption(self):
+        return self.seq_manager.num_sequences(MessageStatus.RECOMPUTION_PREEMPTION)
+
+    def num_remote_recomputing(self):
+        return self.seq_manager.num_sequences(MessageStatus.REMOTE_RECOMPUTING)
+
+    def num_remote_recomputed(self):
+        return self.seq_manager.num_sequences(MessageStatus.REMOTE_RECOMPUTED)
+
     def num_migration_waiting(self):
         """Num waiting."""
-        return self.seq_manager.num_sequences(MessageStatus.WAITING_MIGRATION)
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_WAITING)
 
     def num_locked(self):
         """Num locked."""
@@ -405,18 +451,6 @@ class Scheduler:
         for seq in locked:
             if seq.status == MessageStatus.LOCKED:
                 self._set_message_status(seq, MessageStatus.RUNNING)
-
-    def lock_running_migration(self, running: SeqList):
-        """Lock running sequence."""
-        for seq in running:
-            if seq.status == MessageStatus.RUNNING_MIGRATION:
-                self._set_message_status(seq, MessageStatus.MIGRATION_LOCKED)
-
-    def unlock_running_migration(self, locked: SeqList):
-        """Unlock running migration."""
-        for seq in locked:
-            if seq.status == MessageStatus.MIGRATION_LOCKED:
-                self._set_message_status(seq, MessageStatus.MIGRATION_DONE)
 
     def collect_migration_done(self):
         migration_done = self.migration_done

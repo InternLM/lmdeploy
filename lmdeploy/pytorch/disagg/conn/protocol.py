@@ -8,7 +8,7 @@ from lmdeploy.pytorch.disagg.config import (DistServeEngineConfig, DistServeNVLi
                                             DistServeTCPConfig)
 
 
-class MigrationProtocol(enum.Enum):
+class KVTransferProtocol(enum.Enum):
     """Migration Transport Protocol.
 
     Attributes:
@@ -24,7 +24,7 @@ class MigrationProtocol(enum.Enum):
     NVLINK = enum.auto()
 
 
-class DistServeConnectionStatus(enum.Enum):
+class DistServeStatus(enum.Enum):
     # TODO(JimyMa): Add more connection failure handler
     SUCCESS = enum.auto()
     FAIL = enum.auto()
@@ -37,7 +37,7 @@ class DistServeInitRequest(BaseModel):
     remote_engine_id: str
     remote_engine_config: DistServeEngineConfig
 
-    protocol: MigrationProtocol
+    kvtransfer_protocol: KVTransferProtocol
 
     rank: Optional[int] = None
 
@@ -51,12 +51,12 @@ class DistServeEngineEndpointInfo(BaseModel):
 
 
 class DistServeKVTransferEndpointInfo(BaseModel):
-    protocol: MigrationProtocol
+    protocol: KVTransferProtocol
     endpoint_info: str
 
 
 class DistServeInitResponse(BaseModel):
-    status: DistServeConnectionStatus
+    status: DistServeStatus
     # the control plane initialization feedback
     engine_endpoint_info: DistServeEngineEndpointInfo
     # the KVCache Transfer initialization feedback
@@ -67,32 +67,74 @@ class DistServeInitResponse(BaseModel):
 
 
 class DistServeConnectionRequest(BaseModel):
-    protocol: MigrationProtocol
+    protocol: KVTransferProtocol
     remote_engine_id: str
     remote_engine_endpoint_info: DistServeEngineEndpointInfo
     remote_kvtransfer_endpoint_info: List[DistServeKVTransferEndpointInfo]
 
 
-class DistServeConnectionResponse(BaseModel):
-    status: DistServeConnectionStatus
-
-
-class MigrationRequest(BaseModel):
-    protocol: MigrationProtocol
-
+class DistServeDropConnectionRequest(BaseModel):
+    engine_id: str
     remote_engine_id: str
-    remote_session_id: int
-    remote_token_id: int
-    remote_block_ids: List[int]
+
+
+class DistServeConnectionResponse(BaseModel):
+    status: DistServeStatus
+
+
+class MigrationTimeStamp(BaseModel):
+    arrive_time: Optional[float] = None
+    migration_begine: Optional[float] = None
+    migration_end: Optional[float] = None
+
+    remote_recomputation_begin: Optional[List[float]] = None
+    remote_recomputation_end: Optional[List[float]] = None
+
+
+class MigrationContext(BaseModel):
+    protocol: KVTransferProtocol
+
+    decode_engine_id: str
+    decode_session_id: Optional[int]
+    decode_block_ids: Optional[List[int]]
+
+    prefill_engine_id: str
+    prefill_session_id: int
+    prefill_block_ids: List[int]
+
+    token_ids: Optional[List[int]] = None
+
+    time_stamp: Optional[MigrationTimeStamp] = None
 
     is_dummy_prefill: bool = False
 
 
+class DistServeFetchMetaRequest(BaseModel):
+    migration_context: MigrationContext
+
+
+class DistServeFetchMetaResponse(BaseModel):
+    migration_context: MigrationContext
+    status: DistServeStatus
+
+
+class DistServeProactiveMigrationRequest(BaseModel):
+    migration_context: MigrationContext
+
+
+class DistServeProactiveMigrationResponse(BaseModel):
+    migration_context: MigrationContext
+    status: DistServeStatus
+
+
 class DistServeCacheFreeRequest(BaseModel):
-    remote_engine_id: str
-    remote_session_id: int
+    migration_context: MigrationContext
 
 
-class DistServeDropConnectionRequest(BaseModel):
-    engine_id: str
-    remote_engine_id: str
+class DistServeRecomputeRequest(BaseModel):
+    migration_context: MigrationContext
+
+
+class DistServeRecomputeResponse(BaseModel):
+    migration_context: MigrationContext
+    status: DistServeStatus

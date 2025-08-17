@@ -2,7 +2,7 @@
 from abc import abstractmethod
 
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeInitRequest, DistServeKVTransferEndpointInfo,
-                                                   MigrationProtocol)
+                                                   KVTransferProtocol)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
 
 
@@ -17,7 +17,7 @@ class MigrationBackendImpl:
         raise NotImplementedError
 
     @abstractmethod
-    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
+    def endpoint_info(self, remote_engine_id: int, protocol: KVTransferProtocol):
         return NotImplementedError
 
     @abstractmethod

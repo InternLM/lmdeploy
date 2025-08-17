@@ -72,7 +72,7 @@ def cancel(req_sender: RequestSender, session_id: int):
 
 
 class EngineInstance:
-    """Instance of TurboMind.
+    """Instance of PyTorch.
 
     Args:
         engine (Engine): engine
@@ -137,7 +137,7 @@ class EngineInstance:
             sampling_param=sampling_param,
             adapter_name=adapter_name,
             input_multimodals=multimodal,
-            migration_request=gen_config.migration_request,
+            migration_context=gen_config.migration_context,
             with_cache=gen_config.with_cache,
             preserve_cache=gen_config.preserve_cache,
         )

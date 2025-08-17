@@ -27,8 +27,7 @@ from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
-                                                   DistServeDropConnectionRequest, DistServeInitRequest,
-                                                   MigrationRequest)
+                                                   DistServeDropConnectionRequest, DistServeInitRequest)
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -348,13 +347,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    json_request = await raw_request.json()
-    migration_request = json_request.pop('migration_request', None)
-    with_cache = json_request.pop('with_cache', False)
-    preserve_cache = json_request.pop('preserve_cache', False)
-    if migration_request:
-        migration_request = MigrationRequest.model_validate(migration_request)
-
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -409,9 +401,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                   min_p=request.min_p,
                                   random_seed=random_seed,
                                   spaces_between_special_tokens=request.spaces_between_special_tokens,
-                                  migration_request=migration_request,
-                                  with_cache=with_cache,
-                                  preserve_cache=preserve_cache)
+                                  migration_context=request.migration_context,
+                                  with_cache=request.with_cache,
+                                  preserve_cache=request.preserve_cache)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
@@ -587,7 +579,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     )
     choices.append(choice_data)
 
-    if with_cache:
+    if request.with_cache:
         cache_block_ids = cache_block_ids[0]
         remote_token_ids = [remote_token_ids[0][-1]]
 
@@ -605,7 +597,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         usage=usage,
     ).model_dump()
 
-    if with_cache:
+    if request.with_cache:
         response['cache_block_ids'] = cache_block_ids
         response['remote_token_ids'] = remote_token_ids
 
@@ -659,13 +651,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    json_request = await raw_request.json()
-    migration_request = json_request.pop('migration_request', None)
-    with_cache = json_request.pop('with_cache', False)
-    preserve_cache = json_request.pop('preserve_cache', False)
-    if migration_request:
-        migration_request = MigrationRequest.model_validate(migration_request)
-
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -700,9 +685,9 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                   min_p=request.min_p,
                                   random_seed=random_seed,
                                   spaces_between_special_tokens=request.spaces_between_special_tokens,
-                                  migration_request=migration_request,
-                                  with_cache=with_cache,
-                                  preserve_cache=preserve_cache)
+                                  migration_context=request.migration_context,
+                                  with_cache=request.with_cache,
+                                  preserve_cache=request.preserve_cache)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -817,7 +802,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         )
         choices[i] = choice_data
 
-        if with_cache:
+        if request.with_cache:
             cache_block_ids = cache_block_ids[0]
             remote_token_ids = [remote_token_ids[0][-1]]
 
@@ -836,7 +821,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         usage=usage,
     ).model_dump()
 
-    if with_cache:
+    if request.with_cache:
         response['cache_block_ids'] = cache_block_ids
         response['remote_token_ids'] = remote_token_ids
 
@@ -941,6 +926,17 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
 """ PD Disaggregation API Begin """
 
 
+@router.get('/distserve/cache_info')
+async def cache_info():
+    # TODO (Jimy): disaggregate Migration and Forward Process
+    raise NotImplementedError
+
+@router.get('/distserve/model_info')
+async def model_info():
+    # TODO (Jimy): disaggregate Migration and Forward Process
+    raise NotImplementedError
+
+
 @router.get('/distserve/engine_info')
 async def engine_info():
     engine_config = VariableInterface.async_engine.backend_config
@@ -955,6 +951,18 @@ async def engine_info():
                                      num_gpu_blocks=engine_config.num_gpu_blocks)
 
     return response.model_dump_json()
+
+
+@router.get('/distserve/deref_local_gpu_cache')
+async def deref_local_gpu_cache():
+    # TODO (Jimy): disaggregate Migration and Forward Process
+    raise NotImplementedError
+
+
+@router.get('/distserve/ref_remote_gpu_cache')
+async def ref_remote_gpu_cache():
+    # TODO (Jimy): disaggregate Migration and Forward Process
+    raise NotImplementedError
 
 
 @router.post('/distserve/p2p_initialize')
@@ -974,7 +982,7 @@ async def p2p_drop_connect(drop_conn_request: DistServeDropConnectionRequest):
 
 @router.post('/distserve/free_cache')
 async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONResponse:
-    session_id = cache_free_request.remote_session_id
+    session_id = cache_free_request.session_id
     VariableInterface.async_engine.free_cache(session_id)
     return {'status': 'SUCCESS'}
 

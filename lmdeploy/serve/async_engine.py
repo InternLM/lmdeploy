@@ -725,6 +725,10 @@ class AsyncEngine(LogitsMixin):
                         f'max_new_tokens={gen_config.max_new_tokens}, '
                         f'seq_start={sequence_start}, seq_end={sequence_end}, '
                         f'step={step}, prep={do_preprocess}')
+        elif gen_config.migration_context:
+            # In PD Disaggregation mode, initialize token lazily
+            input_ids = []
+            prompt_input = dict(input_ids=input_ids)
         else:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input

@@ -18,6 +18,7 @@ logger.info(f'AIOHTTP_TIMEOUT set to {AIOHTTP_TIMEOUT}. It can be modified befor
 class RoutingStrategy(enum.Enum):
     """Strategy to dispatch requests to nodes."""
     RANDOM = enum.auto()
+    ROUND_ROBIN = enum.auto()
     MIN_EXPECTED_LATENCY = enum.auto()
     MIN_OBSERVED_LATENCY = enum.auto()
 
@@ -26,6 +27,8 @@ class RoutingStrategy(enum.Enum):
         """Get strategy from string."""
         if name == 'random':
             return cls.RANDOM
+        elif name == 'round_robin':
+            return cls.ROUND_ROBIN
         elif name == 'min_expected_latency':
             return cls.MIN_EXPECTED_LATENCY
         elif name == 'min_observed_latency':

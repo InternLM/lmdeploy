@@ -324,18 +324,18 @@ class CacheEngine:
         for i, t in enumerate(self.full_gpu_cache):
             if t.numel() == 0:
                 continue
-            register_mr_request = DistServeRegisterMRMessage(protocol=migration_init_request.protocol,
+            register_mr_request = DistServeRegisterMRMessage(protocol=migration_init_request.kvtransfer_protocol,
                                                              remote_engine_id=migration_init_request.remote_engine_id,
                                                              mr_key=str(i),
                                                              addr=t.data_ptr(),
                                                              offset=t.storage_offset(),
                                                              length=t.numel() * t.itemsize)
             self.migration_backend_impl.register_memory_region(register_mr_request)
-        return DistServeKVTransferEndpointInfo(protocol=migration_init_request.protocol,
+        return DistServeKVTransferEndpointInfo(protocol=migration_init_request.kvtransfer_protocol,
                                                endpoint_info=json.dumps(
                                                    self.migration_backend_impl.endpoint_info(
                                                        migration_init_request.remote_engine_id,
-                                                       migration_init_request.protocol)))
+                                                       migration_init_request.kvtransfer_protocol)))
 
     def p2p_connect(self, remote_engine_id: str, migration_conn_request: List[DistServeKVTransferEndpointInfo]):
         self.migration_backend_impl.p2p_connect(remote_engine_id, migration_conn_request[self.tp_rank])

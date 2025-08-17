@@ -8,7 +8,7 @@ import os.path as osp
 import random
 import threading
 import time
-from collections import deque
+from collections import defaultdict, deque
 from http import HTTPStatus
 from typing import Deque, Dict, List, Literal, Optional, Union
 
@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMALinkType, ServingStrategy
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import KVTransferProtocol, MigrationContext, MigrationTimeStamp
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
@@ -30,6 +30,7 @@ from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
 from lmdeploy.serve.proxy.constants import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
 from lmdeploy.utils import get_logger
+
 
 logger = get_logger('lmdeploy')
 
@@ -105,7 +106,7 @@ class NodeManager:
         self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
 
         # For PD Disaggregation
-        self.migration_protocol = MigrationProtocol[migration_protocol]
+        self.migration_protocol = KVTransferProtocol[migration_protocol]
         self.rdma_config = DistServeRDMAConfig(with_gdr=with_gdr, link_type=RDMALinkType[link_type])
         self.pd_connection_pool = PDConnectionPool()
         self.dummy_prefill = False
@@ -276,6 +277,18 @@ class NodeManager:
             index = random.choices(range(len(all_matched_urls)), weights=weights)[0]
             url = all_matched_urls[index]
             return url
+
+        elif self.routing_strategy == RoutingStrategy.ROUND_ROBIN:
+            if not hasattr(NodeManager.get_node_url, 'rr_counter'):
+                NodeManager.get_node_url.rr_counter = {
+                    EngineRole.Hybrid: defaultdict(int),
+                    EngineRole.Prefill: defaultdict(int),
+                    EngineRole.Decode: defaultdict(int)
+                }
+            length = len(self.get_nodes(role).keys())
+            NodeManager.get_node_url.rr_counter[role] += 1
+            return list(self.get_nodes(role).keys())[NodeManager.get_node_url.rr_counter[role]%length]
+
         elif self.routing_strategy == RoutingStrategy.MIN_EXPECTED_LATENCY:
             all_matched_urls, all_the_speeds = get_matched_urls()
             if len(all_matched_urls) == 0:
@@ -590,16 +603,16 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
+        time_stamp = MigrationTimeStamp(arrive_time=time.time())
         request_dict = request.model_dump()
 
         # Prefill
         prefill_request_dict = copy.deepcopy(request_dict)
         prefill_request_dict['max_tokens'] = 1
         prefill_request_dict['stream'] = False
-        prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
 
-        prefill_info = {}
+        prefill_info = {'id':-1}
         p_url = 'dummy:dummy'
         if not node_manager.dummy_prefill:
             p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
@@ -627,17 +640,21 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                         rdma_config=node_manager.rdma_config,
                     ))
 
-        remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
-        remote_block_ids = prefill_info.get('cache_block_ids') or []
-        remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
-
-        request_dict['migration_request'] = MigrationRequest(
+        # mute messages and transfer lazily from prefill engine
+        # TODO (JimyMa): Support Batched Request
+        # Dummy messages because it can be migrated from prefill engine
+        request_dict['messages'] = [] 
+        request_dict['migration_context'] = MigrationContext(
             protocol=node_manager.migration_protocol,
-            remote_engine_id=p_url,
-            remote_session_id=remote_session_id,
-            remote_block_ids=remote_block_ids,
-            remote_token_id=remote_token_id,
-            is_dummy_prefill=node_manager.dummy_prefill).model_dump(mode='json')
+            decode_engine_id=d_url,
+            decode_session_id=None,
+            decode_block_ids=[],
+            prefill_engine_id=p_url,
+            prefill_session_id=prefill_info.get('id', -1),
+            prefill_block_ids=[],
+            token_ids=[],
+            is_dummy_prefill=node_manager.dummy_prefill,
+            time_stamp=time_stamp).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
         if not node_manager.dummy_prefill:
@@ -717,6 +734,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
+        time_stamp = MigrationTimeStamp(arrive_time=time.time())
         request_dict = request.model_dump()
 
         # Prefill
@@ -772,14 +790,23 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
         remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
         remote_block_ids = prefill_info.get('cache_block_ids') or []
-        remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
-        request_dict['migration_request'] = MigrationRequest(
+
+        # TODO (JimyMa): Support Batched request
+        # Dummy Prompt because it can be migrated from prefill engine
+        request_dict['prompt'] = ''
+        print(prefill_info)
+        
+        request_dict['migration_context'] = MigrationContext(
             protocol=node_manager.migration_protocol,
-            remote_engine_id=p_url,
-            remote_session_id=remote_session_id,
-            remote_block_ids=remote_block_ids,
-            remote_token_id=remote_token_id,
-            is_dummy_prefill=node_manager.dummy_prefill).model_dump(mode='json')
+            decode_engine_id=d_url,
+            decode_session_id=None,
+            decode_block_ids=[],
+            prefill_engine_id=p_url,
+            prefill_session_id=remote_session_id,
+            prefill_block_ids=remote_block_ids,
+            token_ids=[],
+            is_dummy_prefill=node_manager.dummy_prefill,
+            time_stamp=time_stamp).model_dump(mode='json')
 
         start = node_manager.pre_call(d_url)
         if not node_manager.dummy_prefill:
@@ -802,7 +829,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
           serving_strategy: Literal['Hybrid', 'DistServe'] = 'Hybrid',
-          routing_strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
+          routing_strategy: Literal['random', 'round_robin', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
           log_level: str = 'INFO',
@@ -818,7 +845,7 @@ def proxy(server_name: str = '0.0.0.0',
         server_port (str): the server port. Default to 8000.
         serving_strategy ('Hybrid' | 'DistServe'):  the strategy to serving. Hybrid default.
             DistServe for PD Disaggregation.
-        route_strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
+        route_strategy ('random' | 'round_robin' | 'min_expected_latency' | 'min_observed_latency'):
             the strategy to dispatch requests to nodes. Default to
             'min_expected_latency'
         api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
@@ -831,7 +858,7 @@ def proxy(server_name: str = '0.0.0.0',
     """  # noqa
     node_manager.serving_strategy = ServingStrategy[serving_strategy]
     node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)
-    node_manager.migration_protocol = MigrationProtocol[migration_protocol]
+    node_manager.migration_protocol = KVTransferProtocol[migration_protocol]
     node_manager.dummy_prefill = dummy_prefill
 
     node_manager.rdma_config = DistServeRDMAConfig(

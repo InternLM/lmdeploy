@@ -162,7 +162,7 @@ class PDConnectionPool:
 
                 # Step 2. Construct Initialize Configuration
                 prefill_init_req = DistServeInitRequest(
-                    protocol=conn_req.protocol,
+                    kvtransfer_protocol=conn_req.protocol,
                     local_engine_id=conn_req.p_url,
                     local_engine_config=prefill_engine_config,
                     remote_engine_id=conn_req.d_url,
@@ -171,7 +171,7 @@ class PDConnectionPool:
                     nvlink_config=conn_req.nvlink_config,
                 )
                 decode_init_req = DistServeInitRequest(
-                    protocol=conn_req.protocol,
+                    kvtransfer_protocol=conn_req.protocol,
                     local_engine_id=conn_req.d_url,
                     local_engine_config=decode_engine_config,
                     remote_engine_id=conn_req.p_url,
@@ -286,7 +286,7 @@ class PDConnectionPool:
         logger.warning('cache block gc triggered.')
         try:
             for session_id in self.migration_session_shelf[(left, right)]:
-                cache_free(left, DistServeCacheFreeRequest(remote_engine_id=left, remote_session_id=session_id))
+                cache_free(left, DistServeCacheFreeRequest(prefill_engine_id=left, session_id=session_id))
         except Exception as e:
             logger.warning(f'gc error, ErrorMsg: {str(e)}')
 

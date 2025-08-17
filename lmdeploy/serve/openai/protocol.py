@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import shortuuid
 from pydantic import BaseModel, Field
 
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationContext
+
 
 class ErrorResponse(BaseModel):
     """Error responses."""
@@ -138,6 +140,11 @@ class ChatCompletionRequest(BaseModel):
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
     min_p: float = 0.0
     enable_thinking: Optional[bool] = None
+
+    # For DistServe
+    with_cache: bool = False
+    preserve_cache: bool = False
+    migration_context: Optional[MigrationContext] = None
 
 
 class FunctionCall(BaseModel):
@@ -279,6 +286,11 @@ class CompletionRequest(BaseModel):
     top_k: Optional[int] = 40  # for opencompass
     seed: Optional[int] = None
     min_p: float = 0.0
+
+    # For DistServe
+    with_cache: bool = False
+    preserve_cache: bool = False
+    migration_context: Optional[MigrationContext] = None
 
 
 class CompletionResponseChoice(BaseModel):

@@ -12,7 +12,7 @@ from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, MigrationBackend
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeInitRequest, DistServeKVTransferEndpointInfo,
-                                                   MigrationProtocol)
+                                                   KVTransferProtocol)
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
 
 logger = get_logger('lmdeploy')
@@ -40,20 +40,20 @@ class DLSlimeMigrationManagement:
         self.rank = init_request.rank
         self.local_engine_config: DistServeEngineConfig = init_request.local_engine_config
         self.remote_engine_config: DistServeEngineConfig = init_request.remote_engine_config
-        self.endpoint: Dict[MigrationProtocol, RDMAEndpoint] = {
-            MigrationProtocol.TCP: None,
-            MigrationProtocol.RDMA: None,
-            MigrationProtocol.NVLINK: None,
+        self.endpoint: Dict[KVTransferProtocol, RDMAEndpoint] = {
+            KVTransferProtocol.TCP: None,
+            KVTransferProtocol.RDMA: None,
+            KVTransferProtocol.NVLINK: None,
         }
-        if init_request.protocol == MigrationProtocol.RDMA:
+        if init_request.kvtransfer_protocol == KVTransferProtocol.RDMA:
             nics = available_nic()
             device_name = nics[self.rank % len(nics)]
             logger.info(f'use device {device_name} for kv migration')
-            self.endpoint[MigrationProtocol.RDMA] = RDMAEndpoint(device_name=device_name,
+            self.endpoint[KVTransferProtocol.RDMA] = RDMAEndpoint(device_name=device_name,
                                                                  ib_port=1,
                                                                  link_type=init_request.rdma_config.link_type.name)
-        elif init_request.protocol == MigrationProtocol.NVLINK:
-            self.endpoint[MigrationProtocol.NVLINK] = NVLinkEndpoint()
+        elif init_request.kvtransfer_protocol == KVTransferProtocol.NVLINK:
+            self.endpoint[KVTransferProtocol.NVLINK] = NVLinkEndpoint()
 
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         self.endpoint[register_mr_request.protocol].register_memory_region(register_mr_request.mr_key,
@@ -64,7 +64,7 @@ class DLSlimeMigrationManagement:
     def connect(self, kvtransfer_endpoint_info: DistServeKVTransferEndpointInfo):
         self.endpoint[kvtransfer_endpoint_info.protocol].connect(json.loads(kvtransfer_endpoint_info.endpoint_info))
 
-    async def p2p_migrate(self, assignment: MigrationAssignment, async_op=False):
+    async def p2p_migrate(self, assignment: MigrationAssignment, async_op=False, proactive=True):
         batch = [
             DLSlimeAssignment(
                 mr_key=assign.mr_key,
@@ -74,20 +74,18 @@ class DLSlimeMigrationManagement:
             ) for assign in assignment.batch
         ]
 
-        if not LMDEPLOY_USE_ASYNC_MIGRATION:
-            MAX_NUM_READ_BATCH = 4096
+        MAX_NUM_READ_BATCH = 4096
 
-            def split(batch: List[DLSlimeAssignment]):
-                batch_split = []
-                for i in range(0, len(batch), MAX_NUM_READ_BATCH):
-                    batch_split.append(batch[i:i + MAX_NUM_READ_BATCH])
-                return batch_split
+        def split(batch: List[DLSlimeAssignment]):
+            batch_split = []
+            for i in range(0, len(batch), MAX_NUM_READ_BATCH):
+                batch_split.append(batch[i:i + MAX_NUM_READ_BATCH])
+            return batch_split
 
-            batch_splited = split(batch)
-            for b_split in batch_splited:
-                self.endpoint[assignment.protocol].read_batch(b_split)
-        else:
-            await read_batch_coroutine(self.endpoint[assignment.protocol], batch)
+        batch_splited = split(batch)
+        for b_split in batch_splited:
+            logger.error(b_split)
+            self.endpoint[assignment.protocol].write_batch(b_split)
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)
@@ -103,7 +101,7 @@ class DLSlimeBackend(MigrationBackendImpl):
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         self.links[register_mr_request.remote_engine_id].register_memory_region(register_mr_request)
 
-    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
+    def endpoint_info(self, remote_engine_id: int, protocol: KVTransferProtocol):
         return self.links[remote_engine_id].endpoint[protocol].endpoint_info
 
     def p2p_connect(self, remote_engine_id: str, conn_req: DistServeKVTransferEndpointInfo):
