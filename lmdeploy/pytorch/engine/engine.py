@@ -45,6 +45,7 @@ class InferOutput:
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
+    logprobs: torch.Tensor = None
 
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
@@ -813,8 +814,14 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self, new_token_timestamp: float, next_token_ids: torch.LongTensor, running: SeqList,
-                            logits: torch.Tensor, stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
+    def _make_infer_outputs(self,
+                            new_token_timestamp: float,
+                            next_token_ids: torch.LongTensor,
+                            running: SeqList,
+                            logits: torch.Tensor,
+                            stopped: torch.Tensor,
+                            model_metas: List[Dict[str, Any]],
+                            logprobs: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
         """Make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
@@ -836,13 +843,21 @@ class Engine:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
+
+            # logprobs
+            num_logprobs = msg.sampling_param.num_logprobs
+            cur_logprobs = None
+            if num_logprobs is not None:
+                cur_logprobs = (logprobs[0][idx, :num_logprobs + 1], logprobs[1][idx, :num_logprobs + 1])
+
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
                               cache_block_ids=cache_block_ids,
-                              req_metrics=req_metrics)
+                              req_metrics=req_metrics,
+                              logprobs=cur_logprobs)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -974,12 +989,21 @@ class Engine:
         def __send_resp(out: InferOutput):
             """Send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
+            cur_logprobs = out.logprobs
+            if cur_logprobs is not None:
+                # logprobs to dict
+                vals = cur_logprobs[0].tolist()
+                indices = cur_logprobs[1].tolist()
+                cur_logprobs = dict(zip(indices, vals))
+                logprobs = [] if out.resp.data is None else out.resp.data.get('logprobs', [])
+                logprobs = logprobs + [cur_logprobs]
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids,
                                      logits=out.logits,
                                      cache_block_ids=out.cache_block_ids,
-                                     req_metrics=out.req_metrics))
+                                     req_metrics=out.req_metrics,
+                                     logprobs=logprobs))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""

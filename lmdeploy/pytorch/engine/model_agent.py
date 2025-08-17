@@ -452,11 +452,13 @@ class BaseModelAgent:
             logits_processor = FusedLogitsProcessor(sampling_inputs,
                                                     ignore_eos,
                                                     self.tokenizer,
-                                                    sampling_vocab_size=self.sampling_vocab_size)
-            logits = await logits_processor(all_ids, guided_input_ids, split_logits)
+                                                    sampling_vocab_size=self.sampling_vocab_size,
+                                                    logprobs_mode=self.misc_config.logprobs_mode)
+            logits, raw_logprobs = await logits_processor(all_ids, guided_input_ids, split_logits)
             next_token_ids = logits_processor.sampling(logits)
+            logprobs = logits_processor.compute_logprobs(raw_logprobs, next_token_ids)
 
-        return next_token_ids
+        return next_token_ids, logprobs
 
     def _push_output(self, output: dict):
         """Push output."""
@@ -619,8 +621,8 @@ class BaseModelAgent:
             if need_output:
                 logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
                 # sampling
-                next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
-                                                                  inputs, num_ignore_eos > 0)
+                next_token_ids, logprobs = await self.async_sampling_logits(logits, all_ids, guided_input_ids,
+                                                                            sampling_inputs, inputs, num_ignore_eos > 0)
                 num_ignore_eos = num_ignore_eos - 1
 
                 # stopping criteria
@@ -631,6 +633,7 @@ class BaseModelAgent:
                 # as it can trigger recompilation on different ranks when using torch.compile.
                 with torch.inference_mode():
                     next_token_ids = torch.zeros_like(num_ignore_eos)
+                logprobs = None
 
             # broadcast next token for TP > 1
             need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
@@ -646,7 +649,8 @@ class BaseModelAgent:
                     dict(next_token_ids=next_token_ids,
                          logits=logits if return_logits else None,
                          stopped=stopped,
-                         model_metas=model_metas))
+                         model_metas=model_metas,
+                         logprobs=logprobs))
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
@@ -806,6 +810,9 @@ class BaseModelAgent:
             out['new_token_timestamp'] = time.time()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
+            if out['logprobs'] is not None:
+                logprobs = out['logprobs']
+                out['logprobs'] = (logprobs[0].cpu(), logprobs[1].cpu())
         return out
 
     def _build_model(self):

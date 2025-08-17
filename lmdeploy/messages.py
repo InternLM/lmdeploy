@@ -331,6 +331,7 @@ class PytorchEngineConfig:
             It can be used to override the default config of the model,
         disable_vision_encoder (bool): Whether to disable loading vision
             encoder. Default to False.
+        logprobs_mode (str): The mode of logprob, options: ['raw_logits', 'raw_logprobs']
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -363,6 +364,7 @@ class PytorchEngineConfig:
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
+    logprobs_mode: str = None
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
