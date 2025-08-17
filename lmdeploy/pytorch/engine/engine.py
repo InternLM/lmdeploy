@@ -26,6 +26,7 @@ from ..paging import Scheduler
 from .engine_checker import EngineChecker
 from .executor import build_executor
 from .logits_process import SamplingInputs
+from .model_agent import BatchedOutputs
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -814,15 +815,18 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self,
-                            new_token_timestamp: float,
-                            next_token_ids: torch.LongTensor,
-                            running: SeqList,
-                            logits: torch.Tensor,
-                            stopped: torch.Tensor,
-                            model_metas: List[Dict[str, Any]],
-                            logprobs: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+    def _make_infer_outputs(
+        self,
+        batched_outputs: BatchedOutputs,
+        running: SeqList,
+    ):
         """Make infer output."""
+        new_token_timestamp = batched_outputs.new_token_timestamp
+        next_token_ids = batched_outputs.next_token_ids
+        logits = batched_outputs.logits
+        stopped = batched_outputs.stopped
+        model_metas = batched_outputs.model_metas
+        logprobs = batched_outputs.logprobs
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
@@ -848,7 +852,7 @@ class Engine:
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
             if num_logprobs is not None:
-                cur_logprobs = (logprobs[0][idx, :num_logprobs + 1], logprobs[1][idx, :num_logprobs + 1])
+                cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
 
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
@@ -1139,8 +1143,8 @@ class Engine:
 
                 # send output
                 out = await self.executor.get_output_async()
-                if len(out) > 0:
-                    step_outputs = self._make_infer_outputs(**out, running=running)
+                if out is not None:
+                    step_outputs = self._make_infer_outputs(out, running=running)
                     resp_que.put_nowait(step_outputs)
 
                 # lock forward event

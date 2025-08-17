@@ -6,7 +6,6 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import ray
 import ray.exceptions
 import torch
@@ -326,13 +325,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
     def pack_output(self, output: Dict):
         """Pack output."""
-        for k, v in output.items():
-            if isinstance(v, torch.Tensor):
-                # fix numpy do not have BFloat16 type
-                if v.dtype is torch.bfloat16:
-                    v = v.to(torch.float16)
-                output[k] = v.numpy()
-        return output
+        return output.to_numpy()
 
     def remote_log_start(self, msg: str):
         """Remote log start."""
@@ -487,10 +480,7 @@ class RayExecutor(ExecutorBase):
             outs = await self.workers[0].get_outputs.remote()
             logger.debug(f'Receive {len(outs)} outputs from worker[0].')
             for out in outs:
-                # pack pytorch
-                for k, v in out.items():
-                    if isinstance(v, np.ndarray):
-                        out[k] = torch.from_numpy(v)
+                out = out.to_tensor()
                 self.remote_outs.put_nowait(out)
 
     def _prefetch_task_callback(self, task: asyncio.Task):

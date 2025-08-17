@@ -4,10 +4,12 @@ import base64
 import functools
 import time
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass, fields
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.profiler import ProfilerActivity, profile, record_function
@@ -28,6 +30,81 @@ from .cache_engine import CacheEngine
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
+
+
+@dataclass
+class BatchedLogProbs:
+    vals: torch.Tensor
+    indices: torch.Tensor
+
+    def to_cpu(self):
+        """To cpu."""
+        return BatchedLogProbs(vals=self.vals.cpu(), indices=self.indices.cpu())
+
+    def to_numpy(self):
+        """To numpy."""
+        if self.vals.dtype == torch.bfloat16:
+            np_vals = self.vals
+        else:
+            np_vals = self.vals.detach().numpy()
+        return BatchedLogProbs(vals=np_vals, indices=self.indices.detach().numpy())
+
+    def to_tensor(self):
+        """To tensor."""
+        if isinstance(self.vals, torch.Tensor):
+            vals = self.vals
+        else:
+            vals = torch.from_numpy(vals)
+        return BatchedLogProbs(vals=vals, indices=torch.from_numpy(self.indices))
+
+
+@dataclass
+class BatchedOutputs:
+    next_token_ids: torch.Tensor
+    stopped: torch.Tensor
+    logits: Optional[torch.Tensor] = None
+    model_metas: List[Dict[str, Any]] = None
+    logprobs: Optional[BatchedLogProbs] = None
+    new_token_timestamp: int = 0
+
+    def to_cpu(self):
+        """To cpu."""
+        out = dict()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor):
+                v = v.cpu()
+            elif hasattr(v, 'to_cpu'):
+                v = v.to_cpu()
+            out[k] = v
+        return BatchedOutputs(**out)
+
+    def to_numpy(self):
+        """To numpy."""
+        out = dict()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor) and v.dtype != torch.bfloat16:
+                v = v.detach().numpy()
+            elif hasattr(v, 'to_numpy'):
+                v = v.to_numpy()
+            out[k] = v
+        return BatchedOutputs(**out)
+
+    def to_tensor(self):
+        """To tensor."""
+        out = dict()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, np.ndarray):
+                v = torch.from_numpy(v)
+            elif hasattr(v, 'to_tensor'):
+                v = v.to_tensor()
+            out[k] = v
+        return BatchedOutputs(**out)
 
 
 class AgentProfiler:
@@ -457,15 +534,19 @@ class BaseModelAgent:
             logits, raw_logprobs = await logits_processor(all_ids, guided_input_ids, split_logits)
             next_token_ids = logits_processor.sampling(logits)
             logprobs = logits_processor.compute_logprobs(raw_logprobs, next_token_ids)
+            if logprobs is not None:
+                logprobs = BatchedLogProbs(
+                    vals=logprobs[0],
+                    indices=logprobs[1],
+                )
 
         return next_token_ids, logprobs
 
-    def _push_output(self, output: dict):
+    def _push_output(self, output: BatchedOutputs):
         """Push output."""
         event = torch.cuda.Event()
         event.record()
-        output['event'] = event
-        self._out_que.put_nowait(output)
+        self._out_que.put_nowait((output, event))
 
     def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None):
         if dist_ctx is None:
@@ -646,11 +727,11 @@ class BaseModelAgent:
             if need_output:
                 logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
                 self._push_output(
-                    dict(next_token_ids=next_token_ids,
-                         logits=logits if return_logits else None,
-                         stopped=stopped,
-                         model_metas=model_metas,
-                         logprobs=logprobs))
+                    BatchedOutputs(next_token_ids=next_token_ids,
+                                   logits=logits if return_logits else None,
+                                   stopped=stopped,
+                                   model_metas=model_metas,
+                                   logprobs=logprobs))
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
@@ -800,19 +881,12 @@ class BaseModelAgent:
         if out is None:
             return dict()
 
-        event = out.pop('event')
+        out, event = out
         while not event.query():
             await asyncio.sleep(0.001)
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
-            out['next_token_ids'] = out['next_token_ids'].cpu()
-            out['stopped'] = out['stopped'].cpu()
-            # MUST be a wall-clock time
-            out['new_token_timestamp'] = time.time()
-            if out['logits'] is not None:
-                out['logits'] = out['logits'].cpu()
-            if out['logprobs'] is not None:
-                logprobs = out['logprobs']
-                out['logprobs'] = (logprobs[0].cpu(), logprobs[1].cpu())
+            out = out.to_cpu()
+            out.new_token_timestamp = time.time()
         return out
 
     def _build_model(self):
