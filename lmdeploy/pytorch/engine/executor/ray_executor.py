@@ -524,12 +524,19 @@ class RayExecutor(ExecutorBase):
         sorted_workers = [item[0] for item in sorted_worker_ip_map]
         return sorted_workers
 
+    def _valid_bundle_id(self, bundle_id: int):
+        """Check if a bundle is valid only when self.use_external_ray=True."""
+        if (not self.ray_ctx.owned_pg and _envs.ray_external_pg_bundles
+                and bundle_id not in _envs.ray_external_pg_bundles):
+            return False
+        return True
+
     def _init_workers_ray(self, placement_group: PlacementGroup, worker_kwargs: dict):
         """Init worker ray."""
         device_str = get_device_str()
         bundle_indices = []
         for bundle_id, bundle in enumerate(placement_group.bundle_specs):
-            if bundle.get(device_str, 0):
+            if bundle.get(device_str, 0) and self._valid_bundle_id(bundle_id):
                 bundle_indices.append(bundle_id)
         bundle_indices = bundle_indices[:self.world_size]
 
@@ -556,7 +563,7 @@ class RayExecutor(ExecutorBase):
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=0,
-                    resources={device_str: 1.0},
+                    resources={device_str: 0.01},
                     scheduling_strategy=scheduling_strategy,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             workers.append(worker)
