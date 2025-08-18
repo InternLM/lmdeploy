@@ -851,7 +851,7 @@ class Engine:
             # logprobs
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
-            if num_logprobs is not None:
+            if num_logprobs >= 0:
                 cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
 
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
@@ -994,6 +994,7 @@ class Engine:
             """Send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
             cur_logprobs = out.logprobs
+            logprobs = None
             if cur_logprobs is not None:
                 # logprobs to dict
                 vals = cur_logprobs[0].tolist()
