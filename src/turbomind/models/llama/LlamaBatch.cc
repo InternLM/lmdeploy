@@ -117,6 +117,11 @@ void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_req
                 TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
                 r->ec = Request::kConflict;
             }
+            if (param_.enable_prefix_caching && !r->session.start_flag) {
+                // Prefix caching is incompatible with interactive mode
+                TM_LOG_ERROR("Skip inconsistent %s request for ID %lu", type, r->id);
+                r->ec = Request::kInconsistency;
+            }
         }
     };
 
@@ -215,11 +220,6 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
 
         if (input_length > session_len_) {
             signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
-            continue;
-        }
-        if (param_.enable_prefix_caching && !r->session.start_flag) {
-            // Prefix caching is incompatible with interactive mode
-            signals.push_back([r] { UpdateState(*r, Request::kInconsistency, 0); });
             continue;
         }
 
@@ -1353,7 +1353,8 @@ void LlamaBatch::InternalThreadEntry()
                 // Block if batch is empty AND no silbings are ready
                 gateway_->pop(req->infer, req->kill, free_slot_count, is_empty, req->abort, dp_rank_);
             }
-            // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
+            // Mark reqs to the same session_id as invalid and also interactive-mode reqs when
+            // prefix caching is enabled(which are dangerous to the engine)
             DisableInvalidRequests(req->infer, req->kill);
             FindCanceledIndices(req->cancel);
         }
