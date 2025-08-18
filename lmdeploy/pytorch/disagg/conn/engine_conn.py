@@ -71,6 +71,9 @@ class EngineP2PConnection:
 
         self.release_lock = asyncio.Lock()
 
+        self.resp_que: asyncio.Queue[InferOutput] = None
+        self.has_runable_event: asyncio.Event = None
+
     def _status_jump(self, msg: SchedulerSequence):
         _set_status = lambda msg, status: self.engine.scheduler._set_message_status(msg, status)
         _distserve_state_machine = {
@@ -118,6 +121,20 @@ class EngineP2PConnection:
         # self.zmq_disconnect(drop_conn_request.remote_engine_id)
         return {'success': True}
 
+    async def init_engine_conn_loop(self, resp_que, has_runable_event):
+        self.resp_que = resp_que
+        self.has_runable_event = has_runable_event
+        event_loop = asyncio.get_event_loop(resp_que, has_runable_event)
+        loop_tasks = []
+        loop_migration = event_loop.create_task(
+            self.engine_conn._handle_migration(resp_que, has_runable_event=has_runable_event),
+            name='MainLoopMigration',
+        )
+        loop_meta_migration = event_loop.create_task(self.engine_conn.handle_meta_migration(), name="EngineConnHandleMetaMigration")
+        loop_recomputation = event_loop.create_task(self.engine_conn.handle_recomputation(), name="HandleRecomputation")
+        loop_tasks.extend([loop_migration, loop_meta_migration, loop_recomputation])
+        return loop_tasks
+
     async def handle_meta_migration(self):
         while True:
             await self.handle_meta_migration_event.wait()
@@ -144,8 +161,6 @@ class EngineP2PConnection:
     @torch.inference_mode()
     async def _handle_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """Async loop migration."""
-        self.resp_que = resp_que
-        self.has_runable_event = has_runable_event
         while True:
             migration_running = self.engine.scheduler._schedule_migration()
             if not migration_running and not self.engine.scheduler.has_migration_waiting():

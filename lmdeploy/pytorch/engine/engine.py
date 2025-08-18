@@ -1118,14 +1118,8 @@ class Engine:
 
             if self.engine_config.role != EngineRole.Hybrid:
                 logger.info('Starting async task MigrationLoop.')
-                loop_migration = event_loop.create_task(
-                    self.engine_conn._handle_migration(resp_que, has_runable_event=has_runable_event),
-                    name='MainLoopMigration',
-                )
-                loop_tasks.append(loop_migration)
-
-                loop_tasks.append(event_loop.create_task(self.engine_conn.handle_meta_migration(), name="EngineConnHandleMetaMigration"))
-                loop_tasks.append(event_loop.create_task(self.engine_conn.handle_recomputation(), name="HandleRecomputation"))
+                engine_conn_tasks = self.engine_conn.init_engine_conn_loop(resp_que, has_runable_event)
+                loop_tasks.extend(engine_conn_tasks)
 
             # binding done callback
             self._add_loop_tasks_done_callback(loop_tasks)
