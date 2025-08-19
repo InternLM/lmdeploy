@@ -26,6 +26,10 @@ add_library(activation_kernels STATIC activation_kernels.cu)
 set_property(TARGET activation_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET activation_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+add_library(activation STATIC activation.cu)
+set_property(TARGET activation PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET activation PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
 add_library(quantization_kernels STATIC quantization.cu)
 set_property(TARGET quantization_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET quantization_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -65,9 +69,6 @@ add_library(sampling_kernels STATIC sampling_kernels.cu)
 set_property(TARGET sampling_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET sampling_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
-# if (BUILD_TEST)
-#     add_subdirectory(flash_attention)
-# endif ()
 
 add_subdirectory(attention)
 add_subdirectory(gemm)

@@ -8,8 +8,8 @@ from .llama import LlamaModel, LlamaReader
 
 class DeepSeek2Reader(LlamaReader):
 
-    def moe_ffn_gate(self, i):
-        return self.params.get(f'model.layers.{i}.mlp.gate.weight')
+    def moe_ffn_gate(self, i, kind):
+        return self.params.get(f'model.layers.{i}.mlp.gate.{kind}')
 
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:

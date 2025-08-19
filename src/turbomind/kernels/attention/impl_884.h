@@ -380,7 +380,38 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
     }
 
     template<class Func>
-    __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func){};
+    __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func)
+    {
+        /// FIXME: implement this
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int m = 0; m < V_M; ++m) {  // Q,16
+            PRAGMA_UNROLL
+            for (int q = 0; q < 2; ++q) {  // Q,2
+                const int qi = (lane_id & 1) * 1 + (lane_id & 16) / 4 + (lane_id & 8) + m * OP_M + q * 2;
+                const int ri = (lane_id & 2) / 2 + (lane_id & 4) / 2;
+                ((Func &&) func)(0, warp_id * WARP_Q + qi, ri, frag_M[m][q], frag_L[m][q]);
+            }
+        }
+    };
+
+    template<class Storage>
+    __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, Storage& storage)
+    {
+        static_assert(kWarpCntS == 1);
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < V_M; ++m) {
+            PRAGMA_UNROLL
+            for (int q = 0; q < 2; ++q) {
+                if constexpr (kDeferReduceL) {
+                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 2);
+                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 4);
+                }
+            }
+        }
+    }
 
     template<bool is_norm, class Func>
     __device__ static void StoreO(FragO& frag_O, FragL& frag_L, SharedStorage& storage, Func&& func)
@@ -390,10 +421,6 @@ struct Impl<MMA_884, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, He
         for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
-                if constexpr (kDeferReduceL) {
-                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 2);
-                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 4);
-                }
                 inv_L[m][q] = fdividef(1.f, frag_L[m][q] + 1e-8f);
             }
         }

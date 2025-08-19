@@ -938,6 +938,21 @@ def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     return JSONResponse(content=None)
 
 
+@router.post('/sleep', dependencies=[Depends(check_api_key)])
+async def sleep(raw_request: Request = None):
+    level = raw_request.query_params.get('level', '1')
+    VariableInterface.async_engine.engine.sleep(level)
+    return Response(status_code=200)
+
+
+@router.post('/wakeup', dependencies=[Depends(check_api_key)])
+async def wakeup(raw_request: Request = None):
+    tags = raw_request.query_params.getlist('tags')
+    tags = tags or None
+    VariableInterface.async_engine.engine.wakeup(tags)
+    return Response(status_code=200)
+
+
 """ PD Disaggregation API Begin """
 
 

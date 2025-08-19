@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -23,6 +23,7 @@ from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelCo
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
+from .base import EngineBase
 from .engine_checker import EngineChecker
 from .executor import build_executor
 from .logits_process import SamplingInputs
@@ -308,7 +309,7 @@ def build_inputs_maker(engine: 'Engine'):
     return InputsMakerAsync(engine)
 
 
-class Engine:
+class Engine(EngineBase):
     """The inference engine of lmdeploy pytorch.
 
     Args:
@@ -425,11 +426,13 @@ class Engine:
             trust_remote_code (bool): Trust remote code
         """
         if engine_config is not None and engine_config.enable_mp_engine:
-            from .mp_engine.mp_engine import MPEngine
-            return MPEngine(model_path=pretrained_model_name_or_path,
-                            tokenizer=tokenizer,
-                            engine_config=engine_config,
-                            trust_remote_code=trust_remote_code)
+            from .mp_engine import build_mp_engine
+            backend = engine_config.mp_engine_backend
+            return build_mp_engine(backend=backend,
+                                   model_path=pretrained_model_name_or_path,
+                                   tokenizer=tokenizer,
+                                   engine_config=engine_config,
+                                   trust_remote_code=trust_remote_code)
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
@@ -1159,6 +1162,14 @@ class Engine:
     def update_params(self, request: Any):
         """Update params."""
         self.executor.update_params(request)
+
+    def sleep(self, level: int = 1):
+        """Sleep."""
+        self.executor.sleep(level)
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wakeup."""
+        self.executor.wakeup(tags)
 
     async def async_loop(self):
         try:

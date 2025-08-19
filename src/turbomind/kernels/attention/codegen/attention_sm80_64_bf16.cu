@@ -10,7 +10,7 @@ using namespace attention;
 template void invokeAttention<typename AttentionConfig<arch::Sm80, nv_bfloat16, 64, CacheType::kLinear>::Kernel>(
     const AttentionParams<nv_bfloat16>& params);
 
-template void invokeAttention<typename AttentionConfig<arch::Sm80, nv_bfloat16, 64, CacheType::kBlock>::Kernel>(
-    const AttentionParams<nv_bfloat16>& params);
+// template void invokeAttention<typename AttentionConfig<arch::Sm80, nv_bfloat16, 64, CacheType::kBlock>::Kernel>(
+//     const AttentionParams<nv_bfloat16>& params);
 
 }  // namespace turbomind

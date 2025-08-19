@@ -13,16 +13,16 @@ def _get_backend():
         from .cuda import CudaOpsBackend
         return CudaOpsBackend
     if device_type == 'ascend':
-        from .dlinfer import AscendOpsBackend
+        from .dlinfer.ascend import AscendOpsBackend
         return AscendOpsBackend
     if device_type == 'maca':
-        from .dlinfer import MacaOpsBackend
+        from .dlinfer.maca import MacaOpsBackend
         return MacaOpsBackend
     if device_type == 'camb':
-        from .dlinfer import CambOpsBackend
+        from .dlinfer.camb import CambOpsBackend
         return CambOpsBackend
     if device_type == 'ppu':
-        from .dlinfer import PpuOpsBackend
+        from .dlinfer.ppu import PpuOpsBackend
         return PpuOpsBackend
     else:
         raise RuntimeError(f'Unsupported device type: {device_type}')

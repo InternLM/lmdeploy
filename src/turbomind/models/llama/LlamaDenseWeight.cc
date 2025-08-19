@@ -6,12 +6,11 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/data_type.h"
 
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
-
-#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
@@ -232,8 +231,12 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
                                            int      tp_rank,
                                            DataType data_type,
                                            DataType weight_type,
-                                           int      group_size)
+                                           int      group_size,
+                                           int      window_size,
+                                           bool     sink)
 {
+    this->window_size = window_size;
+
     if (mla.kv_lora_rank == 0) {
         qkv.emplace(
             hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp_size, data_type, bias, weight_type, group_size);
@@ -274,6 +277,11 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
     }
     output.emplace((head_num * head_dim) / tp_size, hidden_dim, data_type, bias, weight_type, group_size);
     register_module("wo", output, tp_rank);
+
+    if (sink) {
+        sinks = Tensor{{head_num}, data_type, kDEVICE};
+        register_parameter(std::to_string(tp_rank) + ".sinks", sinks);
+    }
 }
 
 void LlamaAttentionWeight::prepare(bool use_simt)
@@ -292,29 +300,31 @@ void LlamaAttentionWeight::prepare(bool use_simt)
     }
 }
 
-LlamaFfnWeight::LlamaFfnWeight(int      hidden_dim,
-                               int      inter_size,
-                               int      tp_size,
-                               int      tp_rank,
-                               DataType data_type,
-                               DataType weight_type,
-                               int      group_size,
-                               bool     fuse_silu_act)
+LlamaFfnWeight::LlamaFfnWeight(int            hidden_dim,
+                               int            inter_size,
+                               bool           bias,
+                               int            tp_size,
+                               int            tp_rank,
+                               DataType       data_type,
+                               DataType       weight_type,
+                               int            group_size,
+                               ActivationType act_type,
+                               bool           fuse_silu_act)
 {
     TM_CHECK(inter_size % tp_size == 0) << inter_size << " " << tp_size;
 
     inter_size /= tp_size;
 
-    this->inter_size = inter_size;
-    this->tp_rank    = tp_rank;
+    this->inter_size    = inter_size;
+    this->tp_rank       = tp_rank;
+    this->act_type      = act_type;
+    this->is_fused_silu = fuse_silu_act && this->act_type == ActivationType::kSilu;
 
-    gating.emplace(hidden_dim, inter_size, data_type, false, weight_type, group_size);
+    gating.emplace(hidden_dim, inter_size, data_type, bias, weight_type, group_size);
 
-    intermediate.emplace(hidden_dim, inter_size, data_type, false, weight_type, group_size);
+    intermediate.emplace(hidden_dim, inter_size, data_type, bias, weight_type, group_size);
 
-    is_fused_silu = fuse_silu_act;
-
-    output.emplace(inter_size, hidden_dim, data_type, false, weight_type, group_size);
+    output.emplace(inter_size, hidden_dim, data_type, bias, weight_type, group_size);
 
     register_module("w1", gating, tp_rank);
     register_module("w3", intermediate, tp_rank);
@@ -422,6 +432,16 @@ void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataTy
     else {
         TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
     }
+
+    if (a.bias) {
+        TM_CHECK(b.bias && c.bias);
+        TM_CHECK_EQ(byte_size(a.bias.dtype()), sizeof(uint16_t));
+        _chunks((uint16_t*)c.bias.raw_data(),
+                (const uint16_t*)a.bias.raw_data(),
+                (const uint16_t*)b.bias.raw_data(),
+                1,
+                sizeof(uint16_t) * a.output_dim);
+    }
 }
 
 void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
@@ -437,12 +457,13 @@ void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
         fused_up_and_gate.emplace(gating.input_dim,  //
                                   gating.output_dim * 2,
                                   gating.data_type,
-                                  false,
+                                  (bool)gating.bias,
                                   gating.weight_type,
                                   gating.group_size);
         register_module("w1w3", fused_up_and_gate, this->tp_rank);
 
         if (is_fused_silu) {
+            TM_CHECK(!gating.bias);
             interleave(fused_up_and_gate, gating, intermediate, data_type, stream);
             fused_up_and_gate.epilogue = gemm::Epilogue::kGatedSilu;
         }
@@ -466,11 +487,13 @@ void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
 MoeFfnWeight::MoeFfnWeight(int             layer_id,
                            const MoeParam& param,
                            int             hidden_dim,
+                           bool            mlp_bias,
                            DataType        data_type,
                            DataType        weight_type,
                            int             group_size,
                            int             tp_size,
                            int             tp_rank,
+                           ActivationType  act_type,
                            bool            fuse_silu_act)
 {
     if ((int)param.expert_num.size() <= layer_id) {
@@ -483,16 +506,24 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
         return;
     }
 
-    gate.emplace(hidden_dim, expert_num, data_type, false, data_type, 1);
+    gate.emplace(hidden_dim, expert_num, data_type, param.router_bias, data_type, 1);
     register_module("gate", gate);
 
     method        = param.method;
-    fuse_silu_act = fuse_silu_act && method == MoeParam::kFused && weight_type != kFloat8_e4m3;
+    fuse_silu_act = fuse_silu_act && method == MoeParam::kFused && weight_type != kFloat8_e4m3 && !mlp_bias;
 
     experts.reserve(expert_num);
     for (int i = 0; i < expert_num; ++i) {
-        experts.emplace_back(new LlamaFfnWeight{
-            hidden_dim, param.inter_size, tp_size, tp_rank, data_type, weight_type, group_size, fuse_silu_act});
+        experts.emplace_back(new LlamaFfnWeight{hidden_dim,
+                                                param.inter_size,
+                                                mlp_bias,
+                                                tp_size,
+                                                tp_rank,
+                                                data_type,
+                                                weight_type,
+                                                group_size,
+                                                act_type,
+                                                fuse_silu_act});
         register_module("experts", *experts.back(), i);
     }
 
@@ -553,6 +584,9 @@ void MoeFfnWeight::prepare(bool use_simt)
             m.k_desc            = e.k_desc;
             m.q_desc            = e.q_desc;
             m.epilogue          = e.epilogue;
+            if (e.bias) {
+                m.bias = Tensor{{(int)experts.size(), e.output_dim}, e.bias.dtype(), kDEVICE};
+            }
         }
 
         // Dummy tensors to hold the blocked ptrs
@@ -575,6 +609,13 @@ void MoeFfnWeight::prepare(bool use_simt)
         }
 
         m.k_desc.num = m.q_desc.num = experts.size();
+
+        if (m.bias) {
+            for (int i = 0; i < (int)experts.size(); ++i) {
+                auto& e = (*experts[i]).*getter;
+                Copy(e.bias, m.bias.slice(i, 1).squeeze(0));
+            }
+        }
     };
 
     process(&LlamaFfnWeight::fused_gating_intermediate);
@@ -584,6 +625,7 @@ void MoeFfnWeight::prepare(bool use_simt)
     // Copy MLP properties
     block.inter_size    = e.inter_size;
     block.is_fused_silu = e.is_fused_silu;
+    block.act_type      = e.act_type;
 }
 
 }  // namespace turbomind
