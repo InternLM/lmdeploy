@@ -112,8 +112,6 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
         return;
     }
 
-    block_trie_->Verify();
-
     for (int i = 0; i < active_size; ++i) {
         auto& seq = *sequences[i];
         if (seq.cache_len > seq.prompt.size()) {
@@ -142,8 +140,6 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
     if (!block_trie_) {
         return;
     }
-
-    block_trie_->Verify();
 
     BlockIds  block_ids;
     UniqueIds block_unique_ids;
@@ -421,8 +417,6 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         return;
     }
 
-    block_trie_->Verify();
-
     for (int i = 0; i < sequences.size(); i++) {
         BlockIds  block_ids;
         UniqueIds unique_ids;
@@ -560,6 +554,9 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     //              block_manager_->active_count(),
     //              block_manager_->cached_count(),
     //              block_manager_->free_count());
+    if (block_trie_) {
+        block_trie_->Verify();
+    }
 
     return outcome;
 }
