@@ -17,13 +17,13 @@ It is recommended installing lmdeploy using pip in a conda environment (python 3
 ```shell
 conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
-pip install lmdeploy
+pip install lmdeploy==0.9.2.post1
 ```
 
 The default prebuilt package is compiled on **CUDA 12**. If CUDA 11+ (>=11.3) is required, you can install lmdeploy by:
 
 ```shell
-export LMDEPLOY_VERSION=0.9.2
+export LMDEPLOY_VERSION=0.9.2.post1
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
@@ -51,7 +51,7 @@ DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 If you prefer a specific version instead of the `main` branch of LMDeploy, you can specify it in your command:
 
 ```shell
-pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.9.2.zip
+pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.9.2.post1.zip
 ```
 
 If you want to build LMDeploy with support for Ascend, Cambricon, or MACA, install LMDeploy with the corresponding `LMDEPLOY_TARGET_DEVICE` environment variable.
