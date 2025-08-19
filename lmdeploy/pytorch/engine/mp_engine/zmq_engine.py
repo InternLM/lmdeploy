@@ -2,15 +2,14 @@
 import asyncio
 import pickle
 import signal
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 import torch.multiprocessing as mp
 
 from lmdeploy.messages import PytorchEngineConfig
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
-                                                   DistServeInitRequest)
 from lmdeploy.utils import get_logger
+
+from .base import MPEngine
 
 logger = get_logger('lmdeploy')
 
@@ -28,61 +27,11 @@ def cancel_async_tasks(loop: asyncio.AbstractEventLoop):
     loop.close()
 
 
-class EngineInstancePool:
-    """Engine Instance Pool."""
-
-    def __init__(self, engine):
-        from lmdeploy.pytorch.engine import Engine
-        self.engine: Engine = engine
-        self.num_instance = self.engine.engine_config.max_batch_size
-        self.pool = None
-
-    def create_instance_pool(self, num_instance: int):
-        """Create instance pool."""
-        pool = asyncio.Queue(maxsize=num_instance)
-        for _ in range(num_instance):
-            instance = self.engine.create_instance()
-            pool.put_nowait(instance)
-        return pool
-
-    @asynccontextmanager
-    async def instance(self):
-        """Get an instance from the pool."""
-        # lazy create pool
-        if self.pool is None:
-            self.pool = self.create_instance_pool(self.num_instance)
-        instance = await self.pool.get()
-        try:
-            yield instance
-        finally:
-            self.pool.put_nowait(instance)
-
-    async def async_end(self, session_id: int):
-        """End the given session."""
-        async with self.instance() as instance:
-            return await instance.async_end(session_id)
-
-    async def async_cancel(self, session_id: int):
-        """Stop current streaming inference."""
-        async with self.instance() as instance:
-            return await instance.async_cancel(session_id)
-
-    async def async_stream_infer(self, *args, **kwargs):
-        """Send stream inference request."""
-        async with self.instance() as instance:
-            async for result in instance.async_stream_infer(*args, **kwargs):
-                yield result
-
-
-class MPEngine:
+class ZMQMPEngine(MPEngine):
 
     def __init__(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None, **kwargs) -> None:
         """Initialize mp engine."""
         from .zmq_rpc import AsyncRPCClient
-
-        self.in_que = mp.Queue()
-        self.out_que = mp.Queue()
-
         self.shared_dict = None
         self.port = None
         self.proc = None
@@ -90,8 +39,7 @@ class MPEngine:
 
         self.rpc_client = AsyncRPCClient(port=self.port)
 
-        self.engine_config = self._collective_rpc('get_engine_config')
-        self.model_config = self._collective_rpc('get_model_config')
+        super().__init__()
 
     def _start_mp_proc(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None):
         """Start mp proc."""
@@ -165,7 +113,7 @@ class MPEngine:
 
         signal.signal(signal.SIGTERM, _signal_handler)
         try:
-            loop.run_until_complete(MPEngine._mp_proc_async(server, engine))
+            loop.run_until_complete(ZMQMPEngine._mp_proc_async(server, engine))
         except KeyboardInterrupt:
             logger.info('Received KeyboardInterrupt, stopping mp process.')
         finally:
@@ -176,19 +124,16 @@ class MPEngine:
     @staticmethod
     async def _mp_proc_async(server, engine: 'Engine'):
         """Mp process function."""
-        engine.start_loop()
-        instance_pool = EngineInstancePool(engine)
+        import inspect
 
-        server.register_method('end_session', engine.end_session)
-        server.register_method('get_engine_config', engine.get_engine_config)
-        server.register_method('get_model_config', engine.get_model_config)
-        server.register_method('p2p_initialize', engine.p2p_initialize)
-        server.register_method('p2p_connect', engine.p2p_connect)
-        server.register_method('p2p_drop_connect', engine.p2p_drop_connect)
-        server.register_method('instance_async_end', instance_pool.async_end)
-        server.register_method('instance_async_cancel', instance_pool.async_cancel)
-        server.register_method('instance_async_stream_infer', instance_pool.async_stream_infer)
-        server.register_method('get_schedule_metrics', engine.get_schedule_metrics)
+        from .base_worker import EngineWorkerBase
+
+        worker = EngineWorkerBase(engine)
+
+        for name, value in inspect.getmembers(EngineWorkerBase):
+            if not name.startswith('_') and inspect.isfunction(value):
+                method = getattr(worker, name)
+                server.register_method(name, method)
 
         try:
             # run server
@@ -206,7 +151,8 @@ class MPEngine:
 
     async def _collective_rpc_streaming_async(self, func, *args, **kwargs):
         """Collective rpc call."""
-        return self.rpc_client.async_stream_call(func, *args, **kwargs)
+        async for out in self.rpc_client.async_stream_call(func, *args, **kwargs):
+            yield out
 
     def close(self) -> None:
         """Close mp engine."""
@@ -217,52 +163,3 @@ class MPEngine:
 
     def start_loop(self) -> None:
         """Start mp engine loop."""
-
-    def end_session(self, session_id: int):
-        """End session."""
-        return self._collective_rpc('end_session', session_id)
-
-    def p2p_initialize(self, conn_request: DistServeInitRequest):
-        """Init rdma link."""
-        return self._collective_rpc('p2p_initialize', conn_request)
-
-    def p2p_connect(self, conn_request: DistServeConnectionRequest):
-        """rdma_connect."""
-        return self._collective_rpc('p2p_connect', conn_request)
-
-    def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
-        """Drop connection.
-
-        1. drop engine connection (zmq connection)
-        2. TODO(JimyMa) drop RDMA Connection.
-        """
-        return self._collective_rpc('p2p_drop_connect', drop_conn_request)
-
-    def get_schedule_metrics(self):
-        """Get schedule metrics."""
-        return self._collective_rpc('get_schedule_metrics')
-
-    def create_instance(self, cuda_stream_id=0):
-        """Create instance."""
-        return MPEngineInstance(self)
-
-
-class MPEngineInstance:
-    """MP Engine Instance."""
-
-    def __init__(self, engine: MPEngine):
-        self.engine = engine
-
-    async def async_end(self, session_id: int):
-        """End the given session."""
-        return await self.engine._collective_rpc_async('instance_async_end', session_id)
-
-    async def async_cancel(self, session_id: int):
-        """Stop current streaming inference."""
-        return await self.engine._collective_rpc_async('instance_async_cancel', session_id)
-
-    async def async_stream_infer(self, *args, **kwargs):
-        """Send stream inference request."""
-        generator = await self.engine._collective_rpc_streaming_async('instance_async_stream_infer', *args, **kwargs)
-        async for result in generator:
-            yield result

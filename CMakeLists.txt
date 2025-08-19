@@ -13,6 +13,7 @@
 # limitations under the License.
 
 cmake_minimum_required(VERSION 3.11 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
+cmake_policy(SET CMP0074 NEW)
 project(TurboMind LANGUAGES CXX CUDA)
 
 if (MSVC)
@@ -42,6 +43,8 @@ if (BUILD_TEST)
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG        v3.8.0
+    GIT_SHALLOW ON
+    EXCLUDE_FROM_ALL
   )
   FetchContent_MakeAvailable(Catch2)
 endif()
@@ -88,6 +91,31 @@ if (LMDEPLOY_UBSAN_ENABLE)
 endif ()
 
 if(BUILD_MULTI_GPU)
+    execute_process(
+      COMMAND python -c "import importlib.util; print(importlib.util.find_spec('nvidia.nccl').submodule_search_locations[0])"
+      RESULT_VARIABLE result
+      OUTPUT_VARIABLE nccl_path
+      ERROR_QUIET
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    if(result EQUAL 0 AND NOT nccl_path STREQUAL "")
+      set(NCCL_ROOT ${nccl_path})
+      message(STATUS "Found NCCL at: ${nccl_path}")
+
+      if(result EQUAL 0 AND NOT nccl_path STREQUAL "")
+        file(GLOB nccl_lib_files "${nccl_path}/lib/libnccl.so.*")
+        if(nccl_lib_files)
+          list(GET nccl_lib_files -1 latest_lib)
+          string(REGEX MATCH "\\.([0-9]+)$" version_match ${latest_lib})
+          if(version_match)
+            set(NCCL_ROOT ${nccl_path})
+            set(ENV{NCCL_VERSION} ${CMAKE_MATCH_1})
+          endif()
+        endif()
+      endif()
+    endif()
+
     add_definitions("-DBUILD_MULTI_GPU=1")
     set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
     find_package(NCCL)

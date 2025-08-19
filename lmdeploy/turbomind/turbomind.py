@@ -7,7 +7,6 @@ import json
 import math
 import os.path as osp
 import sys
-from collections import defaultdict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -207,7 +206,7 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _get_model_params(self, model_comm, tm_params: defaultdict):
+    def _get_model_params(self, model_comm, tm_params: dict):
         """Get turbomind model params when loading from hf."""
 
         def _get_params(device_id, que):
@@ -226,7 +225,10 @@ class TurboMind:
         for _ in range(self.gpu_count):
             tensor_map = que.get()
             for k, v in tensor_map.items():
-                tm_params[k].append(v)
+                if k not in tm_params:
+                    tm_params[k] = [v]
+                else:
+                    tm_params[k].append(v)
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """Postprocess turbomind config by."""
@@ -535,7 +537,7 @@ class TurboMindInstance:
             5: ResponseType.INTERNAL_ENGINE_ERROR,
             6: ResponseType.INPUT_LENGTH_ERROR,
             7: ResponseType.FINISH,
-            8: ResponseType.FINISH,
+            8: ResponseType.CANCEL,
             9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
@@ -729,9 +731,11 @@ class TurboMindInstance:
                 state = shared_state.consume()
 
                 status, seq_len = state.status, state.seq_len
+                ret_status = ResponseType.SUCCESS
 
                 if status in [7, 8]:  # finish / canceled
-                    finish, status = True, 0
+                    finish = True
+                    ret_status = ResponseType.FINISH if status == 7 else ResponseType.CANCEL
                 elif status:
                     logger.error(f'internal error. status_code {status}')
                     yield self._get_error_output(status)
@@ -742,8 +746,7 @@ class TurboMindInstance:
 
                 output_ids += output_ids_buf[prev_len:seq_len].tolist()
                 output_len += seq_len - prev_len
-                status = ResponseType.FINISH if finish else ResponseType.SUCCESS  # noqa
-                output = EngineOutput(status, output_ids, output_len)
+                output = EngineOutput(ret_status, output_ids, output_len)
 
                 for f in extra_fs:
                     f(output, seq_len)

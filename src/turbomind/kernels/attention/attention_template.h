@@ -45,7 +45,7 @@ void invokeAttention(const typename Kernel::ParamType& params)
         return int2{sm_count, max_active_ctas};
     }();
 
-    const int tile_count      = (params.max_k_len + Kernel::CTA_S - 1) / Kernel::CTA_S;
+    const int tile_count      = cdiv(std::min(params.max_k_len, params.window_size), Kernel::CTA_S);
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
     typename Kernel::CtaMap cta_map{
@@ -56,6 +56,8 @@ void invokeAttention(const typename Kernel::ParamType& params)
 
     const int grid_size = grid.x * grid.y * grid.z;
     const int split_cnt = GetSplitCount(max_split_count, grid_size, caps.y, caps.x, 8);
+
+    // printf("max split cnt: %d, split cnt: %d\n", max_split_count, split_cnt);
 
     // adjust split cnt and update grid shape
     cta_map.set_split_cnt(split_cnt);

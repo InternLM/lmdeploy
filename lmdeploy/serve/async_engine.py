@@ -114,9 +114,13 @@ class Session:
 
     def close(self):
         """Release engine storage for this session."""
-        if self._engine:
+        if self._engine and self._prompt:
             self._engine._run(coro=self._engine.end_session(self._id)).result()
             self._engine = None
+
+    def stop(self):
+        if self._engine and self._prompt:
+            self._engine._run(coro=self._engine.stop_session(self._id)).result()
 
     def __repr__(self) -> str:
         res = ''
@@ -745,7 +749,7 @@ class AsyncEngine(LogitsMixin):
             return
 
         def is_error(status):
-            return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
+            return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
         # used to skip / rewind stop words in interactive mode
         stop_ids = []
@@ -794,7 +798,6 @@ class AsyncEngine(LogitsMixin):
                             continue
 
                     mask = slice(prev_len - output_len, output_len - hit_stop_token)
-
                     token_ids += outputs.token_ids[mask]
                     gen_len = len(token_ids) - input_len
 
@@ -849,6 +852,12 @@ class AsyncEngine(LogitsMixin):
                                  finish_reason,
                                  token_ids=[],
                                  cache_block_ids=outputs.cache_block_ids)
+                    # Update a session's sequence only when it is in finished status
+                    if outputs.status == ResponseType.FINISH:
+                        if rewind_stop_tokens:
+                            # rewind the step to the token before the stop token
+                            output_len = gen_len
+                        self.id2step[session_id] += input_len + output_len
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
@@ -864,11 +873,6 @@ class AsyncEngine(LogitsMixin):
                 if self.backend == 'pytorch':
                     # manually end pytorch session
                     await inst.async_end(session_id)
-            else:
-                if rewind_stop_tokens:
-                    # rewind the step to the token before the stop token
-                    output_len = gen_len
-                self.id2step[session_id] += input_len + output_len
 
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)
@@ -916,7 +920,8 @@ class AsyncEngine(LogitsMixin):
                                sequence_end=False,
                                session_id=session._id,
                                stream_response=stream_response,
-                               multiplex=True)
+                               multiplex=True,
+                               step=session._step)
 
         def _gen():
             resp = None

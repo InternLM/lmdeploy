@@ -50,6 +50,8 @@ def pad_out_dims(x: torch.Tensor, dims: int):
 
 
 def pad_in_dims(x: torch.Tensor, dims: int):
+    if x.dim() == 1:  # 1-dim object does not have input dim (e.g. bias)
+        return x
     pad = dims - x.size(0)
     assert x.dim() == 2
     assert pad >= 0
@@ -119,6 +121,8 @@ class Ffn(Module):
         self.model.save_split(w2, fmt.format(idx, 'w2', kind), split_dim=0, split_num=self.tp, copy=is_lora_b)
 
     def apply(self, i: int, r: BaseReader):
+        if not self.inter_size[i]:
+            return
         for e in get_params(r.ffn(i, None)):
             e(partial(self._export, self.inter_size[i], self._ffn), partial(r.ffn, i), i)
 
@@ -132,7 +136,7 @@ class MoeFfn(Ffn):
     """
 
     _moe_ffn_expert = 'layers.{0}.moe_ffn.experts.E.{1}.{2}'
-    _moe_ffn_gate = 'layers.{0}.moe_ffn.gate.weight'
+    _moe_ffn_gate = 'layers.{0}.moe_ffn.gate.{1}'
     _moe_ffn_shared_gate = 'layers.{0}.moe_ffn.shared_gate.weight'
 
     def __init__(self, model: BaseOutputModel):
@@ -144,17 +148,20 @@ class MoeFfn(Ffn):
     def apply(self, i: int, r: BaseReader):
         if self.expert_num[i] == 0:
             return
-        for p in get_params(r.moe_ffn_expert()):
+        for p in get_params(r.moe_ffn_expert(), 1):
             for e in range(self.expert_num[i]):
                 fmt = self._moe_ffn_expert.replace('E', str(e))
                 p(partial(self._export, self.inter_size, fmt), partial(r.moe_ffn_expert, e, i), i)
 
-        gate = transpose(r.moe_ffn_gate(i))
-        self.model.save_split(gate, self._moe_ffn_gate.format(i))
+        # router
+        gate = transpose(r.moe_ffn_gate(i, 'weight'))
+        self.model.save_split(gate, self._moe_ffn_gate.format(i, 'weight'))
+        bias = r.moe_ffn_gate(i, 'bias')
+        if bias is not None:
+            self.model.save_split(bias, self._moe_ffn_gate.format(i, 'bias'))
 
         if self.shared_gate:
             shared_gate = transpose(r.moe_ffn_shared_gate(i))
-            # print(shared_gate)
             self.model.save_split(shared_gate, self._moe_ffn_shared_gate.format(i))
 
 
@@ -172,6 +179,7 @@ class Attn(Module):
         self.head_dim = model.model_config.size_per_head
         self.attn_bias = model.model_config.attn_bias
         self.qk_norm = model.model_config.qk_norm
+        self.attn_sink = model.model_config.attn_sink
         self.group_size = max(1, model.model_config.group_size)
 
     def _reorder_and_merge(self, qkvo, gs: int):
@@ -250,6 +258,9 @@ class Attn(Module):
                 k = permute_v2(k, self.head_dim)
             self.model.save_split(q, self._attn.format(i, 'q_norm', '')[:-1])
             self.model.save_split(k, self._attn.format(i, 'k_norm', '')[:-1])
+        if self.attn_sink:
+            sinks = r.attn_sinks(i)
+            self.model.save_split(sinks, self._attn.format(i, 'sinks', '')[:-1], split_dim=0, split_num=self.tp)
 
 
 class MLA(Module):

@@ -25,7 +25,7 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
         }();
     }
 
-    const int tile_count      = (params.max_k_len + Kernel::CTA_S - 1) / Kernel::CTA_S;
+    const int tile_count      = cdiv(std::min(params.max_k_len, params.window_size), Kernel::CTA_S);
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
     using CtaMap = typename Kernel::CtaMap;
@@ -66,6 +66,8 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     grid = CtaMap::get_grid_shape(params.num_kv_heads, params.batch_size, split_cnt, cta_per_q_group);
 
     // Print(typename Kernel::Impl::ThreadMapKVp{});
+
+    // std::cout << "split count: " << split_cnt << "\n";
 
     auto cache_iter_factory = CreateCacheIterFactory<typename Kernel::CacheIteratorFactory>::apply(params);
 
