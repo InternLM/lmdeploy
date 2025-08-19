@@ -6,3 +6,4 @@
    :caption: NPU(Huawei)
 
    ascend/get_started.md
+   ppu/get_started.md
