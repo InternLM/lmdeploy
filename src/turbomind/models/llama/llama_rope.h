@@ -6,6 +6,8 @@
 #include <map>
 #include <string>
 
+#include <cuda_runtime.h>
+
 namespace turbomind {
 
 enum class RopeType
@@ -100,7 +102,7 @@ inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_
 {
     rope_kernel.type         = rope.type;
     rope_kernel.dim          = rope.dim;
-    rope_kernel.scale_factor = -std::log2f(rope.base) / rope.dim;
+    rope_kernel.scale_factor = -std::log2(rope.base) / rope.dim;
     if (rope.type == RopeType::kDynamic) {
         rope_kernel.inv_factor = 1.f;
     }

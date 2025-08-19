@@ -44,6 +44,9 @@ struct AttentionParams {
     const bool*  finished;
     const float* rope_theta;
 
+    const T* sinks;
+    float    scale_sinks;
+
     LinearIteratorParams linear_iter_params;
     BlockIteratorParams  block_iter_params;
 
@@ -58,6 +61,7 @@ struct AttentionParams {
     int   num_kv_heads;
     int   size_per_head;
     float inv_sqrt_dh;
+    int   window_size;
 
     // rotary embedding
     RopeKernelParam rope_param;
