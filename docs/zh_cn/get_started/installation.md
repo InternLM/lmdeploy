@@ -17,13 +17,13 @@ Ada Lovelace(sm89): 40 系列
 ```shell
 conda create -n lmdeploy python=3.10 -y
 conda activate lmdeploy
-pip install lmdeploy==0.9.2post1
+pip install lmdeploy==0.9.2.post1
 ```
 
 默认的预构建包是在 **CUDA 12** 上编译的。如果需要 CUDA 11+ (>=11.3)，你可以使用以下命令安装 lmdeploy：
 
 ```shell
-export LMDEPLOY_VERSION=0.9.2post1
+export LMDEPLOY_VERSION=0.9.2.post1
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
