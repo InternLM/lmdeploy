@@ -14,6 +14,9 @@ def input_prompt():
 
 def build_pipe(model_path, backend, **kwargs):
     engine_config = None
+    if kwargs.get('enable_prefix_caching', False):
+        print('interactive chat cannot be used when prefix caching is enabled')
+        exit(-1)
     if backend == 'turbomind':
         engine_config = TurbomindEngineConfig()
         for key, value in kwargs.items():
@@ -79,7 +82,8 @@ def main(model_path, backend, **kwargs):
                 resps = sess(prompt)
                 try:
                     for resp in resps:
-                        print(resp.text, end='', flush=True)
+                        # print(resp.text, end='', flush=True)
+                        pass
                 except KeyboardInterrupt:
                     sess.stop()
     else:
