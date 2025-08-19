@@ -111,7 +111,7 @@ void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_req
         }
     };
 
-    auto validate = [&occur](auto& reqs, const char* type) {
+    auto validate = [&](auto& reqs, const char* type) {
         for (const auto& r : reqs) {
             if (occur[r->id] > 1) {
                 TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
@@ -1290,7 +1290,9 @@ auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
     const auto output_ids = state_->requests[index]->output_ids.data();
     std::copy_n(output_ids, output_len, seq.tokens.data());
     // Cache the generated tokens of the sequence
-    sequence_manager_->CacheGeneration(seq);
+    if (!force_stop) {
+        sequence_manager_->CacheGeneration(seq);
+    }
 
     // Save random state in host memory
     seq.random_state.resize(sizeof(curandState_t));

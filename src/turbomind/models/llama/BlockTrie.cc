@@ -66,7 +66,7 @@ std::tuple<BlockIds, UniqueIds> BlockTrie::Cache(const Sequence& seq, const std:
     // We don't cache the last block of the sequence, since it might not be full
     // TODO(lvhan): determine wether the last block is full or not. It is not trivial
     // considering chunk prefill
-    for (int idx = 0; idx < seq.blocks.size() - 1; ++idx) {
+    for (int idx = 0; idx < (int)seq.blocks.size() - 1; ++idx) {
         auto start = tokens.begin() + idx * block_seq_len_;
         auto end   = start + block_seq_len_;
 
@@ -104,26 +104,23 @@ std::tuple<BlockIds, UniqueIds> BlockTrie::Cache(const Sequence& seq, const std:
     return std::make_tuple(cache_block_ids, cache_block_unique_ids);
 }
 
-int BlockTrie::Verify()
+void BlockTrie::Verify()
 {
-    return DFS(root_);
+    DFS(root_);
 }
 
-int BlockTrie::DFS(std::shared_ptr<TrieNode>& node)
+void BlockTrie::DFS(std::shared_ptr<TrieNode>& node)
 {
-    int invalid_count = 0;
     for (auto it = node->children.begin(); it != node->children.end();) {
         if (block_manager_->unique_id(it->second->block_id) != it->second->block_unique_id) {
             // child invalid
             it = node->children.erase(it);
-            ++invalid_count;
         }
         else {
-            invalid_count += DFS(it->second);
+            DFS(it->second);
             it++;
         }
     }
-    return invalid_count;
 }
 
 }  // namespace turbomind

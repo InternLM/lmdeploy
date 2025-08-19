@@ -56,12 +56,12 @@ public:
     std::tuple<BlockIds, UniqueIds> Cache(const Sequence& seq, const std::vector<int>& tokens);
 
     /**
-     * @brief remove invalid nodes, return valid count
+     * @brief remove invalid nodes
      */
-    int Verify();
+    void Verify();
 
 private:
-    int DFS(std::shared_ptr<TrieNode>& node);
+    void DFS(std::shared_ptr<TrieNode>& node);
 
 private:
     size_t block_seq_len_;

@@ -476,8 +476,6 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     SortByPriority(sequences, context_lengths, priorities);
 
-    // SortByPriority(priorities, sequences, context_lengths);
-
     // Verify and lock cache sequences to avoid their blocks being evicted unnoticed
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
