@@ -20,12 +20,12 @@ Set `device_type="ppu"` in the `PytorchEngineConfig`:
 ```python
 from lmdeploy import pipeline
 from lmdeploy import PytorchEngineConfig
-if __name__ == "__main__":
-    pipe = pipeline("internlm/internlm2_5-7b-chat",
-                    backend_config=PytorchEngineConfig(tp=1, device_type="ppu", eager_mode=True))
-    question = ['Hi, pls intro yourself', 'Shanghai is']
-    response = pipe(question)
-    print(response)
+
+pipe = pipeline("internlm/internlm2_5-7b-chat",
+                backend_config=PytorchEngineConfig(tp=1, device_type="ppu", eager_mode=False))
+question = ['Hi, pls intro yourself', 'Shanghai is']
+response = pipe(question)
+print(response)
 ```
 
 ### VLM inference
@@ -35,12 +35,12 @@ Set `device_type="ppu"` in the `PytorchEngineConfig`:
 ```python
 from lmdeploy import pipeline, PytorchEngineConfig
 from lmdeploy.vl import load_image
-if __name__ == "__main__":
-    pipe = pipeline('OpenGVLab/InternVL2-2B',
-                    backend_config=PytorchEngineConfig(tp=1, device_type='ppu', eager_mode=True))
-    image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-    response = pipe(('describe this image', image))
-    print(response)
+
+pipe = pipeline('OpenGVLab/InternVL2-2B',
+                backend_config=PytorchEngineConfig(tp=1, device_type='ppu', eager_mode=False))
+image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+response = pipe(('describe this image', image))
+print(response)
 ```
 
 ## Online serving
