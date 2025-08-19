@@ -51,7 +51,7 @@ DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 If you prefer a specific version instead of the `main` branch of LMDeploy, you can specify it in your command:
 
 ```shell
-pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.9.2.zip
+pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.9.2.post1.zip
 ```
 
 If you want to build LMDeploy with support for Ascend, Cambricon, or MACA, install LMDeploy with the corresponding `LMDEPLOY_TARGET_DEVICE` environment variable.

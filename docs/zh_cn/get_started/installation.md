@@ -51,7 +51,7 @@ DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 如果您希望使用特定版本，而不是 LMDeploy 的 `main` 分支，可以在命令行中指定：
 
 ```shell
-pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.9.2.zip
+pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.9.2.post1.zip
 ```
 
 如果您希望构建支持昇腾、寒武纪或沐熙的 LMDeploy，请使用相应的 `LMDEPLOY_TARGET_DEVICE` 环境变量进行安装。
