@@ -319,6 +319,14 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model: ['Intern-S1', 'internlm2_5-20b-chat', 'internlm2_5-20b']
+        include:
+          - tp: 2
+            model: internlm2_5-20b-chat
+          - tp: 2
+            model: internlm2_5-20b
+          - tp: 8
+            model: Intern-S1
     timeout-minutes: 60
     container:
       image: openmmlab/lmdeploy:latest-cu11
@@ -354,41 +362,36 @@ jobs:
           rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Start restful api turbomind
-        if: matrix.backend == 'turbomind'
+      - name: Start restful api
+        if:  matrix.model != 'internlm2_5-20b'
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 > ${{env.REPORT_DIR}}/${{matrix.backend}}_start_chat_restful.log 2>&1 &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_chat_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 600s
-      - name: Start restful api pytorch
-        if: matrix.backend == 'pytorch'
-        run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/Intern-S1 --tp 8 --backend pytorch > ${{env.REPORT_DIR}}/${{matrix.backend}}_start_chat_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 300s
       - name: Test lmdeploy - restful api
-        timeout-minutes: 75
+        if:  matrix.model == 'internlm2_5-20b'
+        timeout-minutes: 30
         run: |
-          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - restful api
+        if:  matrix.model == 'Intern-S1'
+        timeout-minutes: 30
+        run: |
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api turbomind - base
-        if: matrix.backend == 'turbomind'
+        if: matrix.model == 'internlm2_5-20b'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 > ${{env.REPORT_DIR}}/${{matrix.backend}}_start_base_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch - base
-        if: matrix.backend == 'pytorch'
-        run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --backend pytorch > ${{env.REPORT_DIR}}/${{matrix.backend}}_start_base_restful.log 2>&1 &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_base_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api - base
-        timeout-minutes: 40
+        timeout-minutes: 30
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
