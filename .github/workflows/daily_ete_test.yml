@@ -158,7 +158,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
@@ -243,7 +243,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
@@ -349,7 +349,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
@@ -369,7 +369,7 @@ jobs:
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 600s
       - name: Test lmdeploy - restful api
-        if:  matrix.model == 'internlm2_5-20b'
+        if:  matrix.model == 'internlm2_5-20b-chat'
         timeout-minutes: 30
         run: |
           pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
@@ -381,7 +381,7 @@ jobs:
           pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
-        if: always()
+        if:  matrix.model != 'internlm2_5-20b'
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api turbomind - base
@@ -391,12 +391,13 @@ jobs:
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api - base
+        if: matrix.model == 'internlm2_5-20b'
         timeout-minutes: 30
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
-        if: always()
+        if: matrix.model == 'internlm2_5-20b'
         run: |
           kill -15 "$restful_pid"
       - name: Clear workfile
@@ -435,7 +436,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
@@ -495,7 +496,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
@@ -558,7 +559,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Install opencompass
@@ -647,7 +648,7 @@ jobs:
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
         run: |
