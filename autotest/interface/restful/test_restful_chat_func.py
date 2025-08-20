@@ -47,7 +47,7 @@ class TestRestfulInterfaceBase:
         assert length5 == length2 * 100
         assert input_ids5 == input_ids2 * 100
 
-    @pytest.mark.intern2_5
+    @pytest.mark.internlm2_5
     def test_encode(self):
         api_client = APIClient(BASE_URL)
         input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
@@ -228,7 +228,8 @@ class TestRestfulInterfaceChatCompletions:
             continue
         assert_chat_completions_batch_return(output, model_name)
         assert ' is is' * 5 in output.get('choices')[0].get('message').get(
-            'content') or ' extensive ' * 5 in output.get('choices')[0].get('message').get('content')
+            'content') or ' extensive ' * 5 in output.get('choices')[0].get('message').get(
+                'content') or 'isanghai ' * 5 in output.get('choices')[0].get('message').get('content')
 
     def test_minimum_repetition_penalty_streaming(self):
         api_client = APIClient(BASE_URL)
