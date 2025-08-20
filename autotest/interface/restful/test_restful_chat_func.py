@@ -373,7 +373,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      messages='Hi, pls intro yourself' * 10000,
                                                      temperature=0.01):
             continue
-        assert output.get('choices')[0].get('finish_reason') == 'error'
+        assert output.get('choices')[0].get('finish_reason') == 'length'
         assert output.get('choices')[0].get('message').get('content') == ''
 
     def test_longtext_input_streaming(self):
@@ -386,7 +386,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             outputList.append(output)
         assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
-        assert outputList[0].get('choices')[0].get('finish_reason') == 'error'
+        assert outputList[0].get('choices')[0].get('finish_reason') == 'length'
         assert outputList[0].get('choices')[0].get('delta').get('content') == ''
         assert len(outputList) == 1
 
@@ -787,7 +787,8 @@ class TestRestfulOpenAI:
 
         assert_chat_completions_stream_return(outputList[0], model_name, is_last=True)
         assert outputList[0].get('choices')[0].get('finish_reason') == 'error'
-        assert outputList[0].get('choices')[0].get('delta').get('content') == ''
+        assert outputList[0].get('choices')[0].get('delta').get(
+            'content') == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
         assert len(outputList) == 1
 
     def test_max_tokens(self):
