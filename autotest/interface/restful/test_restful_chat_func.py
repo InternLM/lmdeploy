@@ -765,7 +765,8 @@ class TestRestfulOpenAI:
         output = outputs.model_dump()
         print(output)
         assert output.get('choices')[0].get('finish_reason') == 'error'
-        assert output.get('choices')[0].get('message').get('content') == ''
+        assert output.get('choices')[0].get('message').get(
+            'content') == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
 
     def test_longtext_input_streaming(self):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
