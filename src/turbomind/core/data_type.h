@@ -61,6 +61,7 @@ enum class DataType: int {
     kBfloat16    = encode_data_type(1,  8,  7),
     kFloat8_e4m3 = encode_data_type(1,  4,  3),
     kFloat8_e5m2 = encode_data_type(1,  5,  2),
+    kFloat4_e2m1 = encode_data_type(1,  2,  1),
     kUint2       = encode_data_type(0,  0,  2),
     kUint4       = encode_data_type(0,  0,  4),
     kUint6       = encode_data_type(0,  0,  6),
@@ -87,6 +88,7 @@ inline constexpr DataType kFloat64 = DataType::kFloat64;
 inline constexpr DataType kBfloat16 = DataType::kBfloat16;
 inline constexpr DataType kFloat8_e4m3 = DataType::kFloat8_e4m3;
 inline constexpr DataType kFloat8_e5m2 = DataType::kFloat8_e5m2;
+inline constexpr DataType kFloat4_e2m1 = DataType::kFloat4_e2m1;
 inline constexpr DataType kUint2  = DataType::kUint2;
 inline constexpr DataType kUint4  = DataType::kUint4;
 inline constexpr DataType kUint6  = DataType::kUint6;
@@ -161,7 +163,9 @@ constexpr std::ptrdiff_t byte_size(DataType type, std::ptrdiff_t size = 1) {
         case kFloat64:
             return size * 8;
         case kUint2: return size * 2 / 8;
-        case kUint4: return size * 4 / 8;
+        case kUint4: 
+        case kFloat4_e2m1: 
+            return size * 4 / 8;
         case kUint6: return size * 6 / 8;
     }
     return 0;
@@ -193,7 +197,9 @@ constexpr std::ptrdiff_t numel(DataType type, std::ptrdiff_t size = 1) {
         case kFloat64:
             return size / 8;
         case kUint2: return size * 8 / 2;
-        case kUint4: return size * 8 / 4;
+        case kUint4: 
+        case kFloat4_e2m1: 
+            return size * 8 / 4;
         case kUint6: return size * 8 / 6;
     }
     return 0;
@@ -220,6 +226,7 @@ constexpr const char* to_string(DataType type) {
         case kBfloat16: return "bf16";
         case kFloat8_e4m3: return "e4m3";
         case kFloat8_e5m2: return "e5m2";
+        case kFloat4_e2m1: return "e2m1";
         case kUint2: return "u2";
         case kUint4: return "u4";
         case kUint6: return "u8";

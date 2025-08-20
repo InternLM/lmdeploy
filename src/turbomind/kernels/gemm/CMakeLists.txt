@@ -46,6 +46,14 @@ target_compile_options(gemm2 PRIVATE
 set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
+
+add_executable(test_gemm_v2
+        test/test_gemm_v2.cc
+        ../../models/llama/LlamaLinear.cu
+        ../../models/llama/LlamaDenseWeight.cc
+        test/reference.cu)
+target_link_libraries(test_gemm_v2 PRIVATE gemm2 core cublas quantization_kernels gpt_kernels)
+
 if (BUILD_TEST)
         add_executable(gemm_test
                 test/gemm_test.cu

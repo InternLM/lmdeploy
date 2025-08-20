@@ -220,6 +220,9 @@ inline __device__ T round(float x)
     else if constexpr (std::is_same_v<T, uint32_t>) {
         asm("cvt.rni.sat.u32.f32 %0, %1;\n" : "=r"(y) : "f"(x));
     }
+    else if constexpr (std::is_same_v<T, int32_t>) {
+        asm("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(y) : "f"(x));
+    }
     else {
         static_assert(!std::is_same_v<T, T>, "not implemented");
     }
@@ -238,6 +241,9 @@ inline __device__ T round(half x)
     }
     else if constexpr (std::is_same_v<T, uint32_t>) {
         asm("cvt.rni.sat.u32.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
+    }
+    else if constexpr (std::is_same_v<T, int32_t>) {
+        asm("cvt.rni.sat.s32.f16 %0, %1;\n": "=r"(y) : "h"((uint16_t&)x));
     }
     else {
         static_assert(!std::is_same_v<T, T>, "not implemented");

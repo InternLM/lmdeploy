@@ -1,17 +1,25 @@
 
+
+#include <limits>
+
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
+#include <cuda_runtime.h>
+
 #include <cub/block/block_reduce.cuh>
 
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/quantization.cuh"
 #include "src/turbomind/kernels/quantization.h"
+
+#include "src/turbomind/kernels/attention/quantization.h"
 
 namespace turbomind {
 
@@ -316,6 +324,167 @@ void DequantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> src_, const Tensor& scale
         scale.data<Tscale>(),
         num,
         dim);
+}
+
+template<int vec_size, int bits, class Q, class S, class X>
+__global__ void QuantizeFloatAsymmKernel(Q*            q,
+                                         S*            s,
+                                         S*            z,
+                                         X*            d,
+                                         const X*      x,
+                                         Array<int, 2> stride_q,
+                                         Array<int, 2> stride_s,
+                                         Array<int, 2> stride_d,
+                                         Array<int, 2> stride_x,
+                                         int           M,
+                                         int           K,
+                                         int           G)
+{
+    static_assert(bits <= bitsof<Q>);
+
+    int m = blockIdx.x;
+    int k = threadIdx.x + blockIdx.y * blockDim.x;
+
+    k *= vec_size;
+
+    const int threads_per_group = G / vec_size;
+    const int warp_k            = WARP_SIZE * vec_size;
+
+    for (; k < round_up(K, warp_k); k += gridDim.y * blockDim.x * vec_size) {
+
+        Array<float, vec_size> f_vec;
+
+        float minval = std::numeric_limits<float>::infinity();
+        float maxval = -minval;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            if (k + i < K) {
+                f_vec[i] = x[stride_x[0] * m + stride_x[1] * (k + i)];
+                minval   = fminf(minval, f_vec[i]);
+                maxval   = fmaxf(maxval, f_vec[i]);
+            }
+        }
+
+        for (int offset = threads_per_group / 2; offset >= 1; offset /= 2) {
+            minval = fminf(minval, __shfl_xor_sync((uint32_t)-1, minval, offset));
+            maxval = fmaxf(maxval, __shfl_xor_sync((uint32_t)-1, maxval, offset));
+        }
+
+        constexpr int max_q = (1 << bits) - 1;
+
+        auto clamp = [](int x, int a, int b) { return max(a, min(b, x)); };
+
+        auto scale = fdividef(fmaxf(maxval - minval, 1e-5f), max_q);
+        int  zero  = clamp(-round<int32_t>(minval / scale), 0, max_q);
+
+        Array<Q, vec_size> q_vec;
+        Array<X, vec_size> d_vec;
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            q_vec[i] = clamp(round<int32_t>(f_vec[i] / scale) + zero, 0, max_q);
+            d_vec[i] = (X)((int)q_vec[i] - zero) * (X)scale;
+        }
+
+        if (k < K) {
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                if (k + i < K) {
+                    q[stride_q[0] * m + stride_q[1] * (k + i)] = q_vec[i];
+                    d[stride_d[0] * m + stride_d[1] * (k + i)] = d_vec[i];
+                }
+            }
+            if (threadIdx.x % threads_per_group == 0) {
+                s[stride_s[0] * m + stride_s[1] * (k / G)] = (S)scale;
+                z[stride_s[0] * m + stride_s[1] * (k / G)] = (S)zero;
+            }
+        }
+    }
+}
+
+template<int start_bit, int end_bit, class D, class T>
+__global__ void Pack1DKernel(D* d, const T* s, int n)
+{
+    constexpr int bits     = end_bit - start_bit;
+    constexpr int vec_size = bitsof<D> / bits;
+
+    const auto idx = threadIdx.x + (int64_t)blockIdx.x * blockDim.x;
+
+    if (idx * vec_size >= n) {
+        return;
+    }
+
+    Array<T, vec_size> s_vec;
+
+    Load(s_vec, &s[idx * vec_size]);
+
+    constexpr T mask = ((1 << bits) - 1) << start_bit;
+
+    D pack{};
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < vec_size; ++i) {
+        pack |= ((s_vec[i] & mask) >> start_bit) << (i * bits);
+    }
+
+    d[idx] = pack;
+}
+
+void QuantizeAsymm(Tensor   quant,    // (m,k)
+                   Tensor   scales,   // (m,k/g)
+                   Tensor   zeros,    // (m,k/g)
+                   Tensor   dequant,  // (m,k)
+                   Tensor   src,      // (m,k)
+                   DataType data_type,
+                   int      group_size)
+{
+    // std::cout << quant << std::endl;
+    // std::cout << scales << std::endl;
+    // std::cout << zeros << std::endl;
+    // std::cout << dequant << std::endl;
+    // std::cout << src << std::endl;
+
+    TM_CHECK(scales.layout() == zeros.layout());
+    TM_CHECK(quant.shape() == dequant.shape());
+    TM_CHECK(quant.size() == quant.layout().cosize());
+
+    Tensor_<uint16_t> u16 = empty_like(quant, kUint16);
+
+    auto stream = core::Context::stream().handle();
+
+    auto stride_2d = [](const Tensor& t) {
+        TM_CHECK_EQ(t.ndim(), 2);
+        auto [a, b] = t.strides(0, 1);
+        return Array<int, 2>{(int)a, (int)b};
+    };
+
+    const int m = src.shape(0);
+    const int k = src.shape(1);
+
+    // std::cout << "m" << m << "k" << k << "\n";
+
+    using T = half;
+    using Q = uint4_t;
+
+    constexpr int bits = bitsof<Q>;
+    constexpr int vec  = 16 / sizeof(half);
+
+    const int threads = round_up(std::min(cdiv(k, vec), 1024), WARP_SIZE);
+    QuantizeFloatAsymmKernel<vec, bits><<<m, threads, 0, stream>>>(u16.data(),
+                                                                   scales.data<T>(),
+                                                                   zeros.data<T>(),
+                                                                   dequant.data<T>(),
+                                                                   src.data<T>(),
+                                                                   stride_2d(u16),
+                                                                   stride_2d(scales),
+                                                                   stride_2d(dequant),
+                                                                   stride_2d(src),
+                                                                   m,
+                                                                   k,
+                                                                   group_size);
+
+    Pack1DKernel<0, bits><<<cdiv((int)quant.size(), 512), 512, 0, stream>>>(
+        (uint32_t*)quant.raw_data(), (uint16_t*)u16.raw_data(), quant.size());
 }
 
 }  // namespace turbomind
