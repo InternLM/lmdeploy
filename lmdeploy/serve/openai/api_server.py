@@ -473,11 +473,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 logprobs = _create_chat_completion_logprobs(VariableInterface.async_engine.tokenizer, res.token_ids,
                                                             res.logprobs)
             # Only stream chunk `usage` in the final chunk according to OpenAI API spec
-            if (
-                res.finish_reason
-                and request.stream_options
-                and request.stream_options.include_usage
-            ):
+            if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
                 total_tokens = sum([res.history_token_len, res.input_token_len, res.generate_token_len])
                 usage = UsageInfo(
                     prompt_tokens=res.input_token_len,
@@ -755,11 +751,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                         gen_config.skip_special_tokens, offset, all_token_ids, state,
                         gen_config.spaces_between_special_tokens)
                 # Only stream chunk `usage` in the final chunk according to OpenAI API spec
-                if (
-                    res.finish_reason
-                    and request.stream_options
-                    and request.stream_options.include_usage
-                ):
+                if (res.finish_reason and request.stream_options and request.stream_options.include_usage):
                     final_res = res
                     total_tokens = sum(
                         [final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
