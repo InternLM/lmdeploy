@@ -6,61 +6,12 @@ from torch import nn
 from transformers import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
-
-
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., 0::2]
-    x2 = x[..., 1::2]
-    return torch.stack((-x2, x1), dim=-1).flatten(-2)
-
-
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors.
-
-    Args:
-        q (`torch.Tensor`): The query tensor.
-        k (`torch.Tensor`): The key tensor.
-        cos (`torch.Tensor`): The cosine part of the rotary embedding.
-        sin (`torch.Tensor`): The sine part of the rotary embedding.
-        position_ids (`torch.Tensor`, *optional*):
-            Deprecated and unused.
-        unsqueeze_dim (`int`, *optional*, defaults to 1):
-            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
-            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
-            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
-            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
-            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
-            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
-    Returns:
-        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
-    """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-
-    # interleave them instead of usual shape
-    cos = cos[..., :cos.shape[-1] // 2].repeat_interleave(2, dim=-1)
-    sin = sin[..., :sin.shape[-1] // 2].repeat_interleave(2, dim=-1)
-
-    # keep half or full tensor for later concatenation
-    rotary_dim = cos.shape[-1]
-    q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
-    k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
-
-    # apply rotary embeddings on the first half or full tensor
-    q_embed = (q_rot * cos) + (rotate_half(q_rot) * sin)
-    k_embed = (k_rot * cos) + (rotate_half(k_rot) * sin)
-
-    # concatenate back to full shape
-    q_embed = torch.cat([q_embed, q_pass], dim=-1)
-    k_embed = torch.cat([k_embed, k_pass], dim=-1)
-    return q_embed, k_embed
 
 
 class Glm4Attention(nn.Module):
@@ -86,8 +37,7 @@ class Glm4Attention(nn.Module):
                                        num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
-        # GLM4-0414 has different apply rotary emb
-        self.apply_rotary_pos_emb = apply_rotary_pos_emb
+        self.apply_rotary_pos_emb = ApplyRotaryEmb()
 
         # attention
         self.attn_fwd = Attention(num_heads, head_dim, num_kv_heads=num_key_value_heads, v_head_size=head_dim)
@@ -100,6 +50,23 @@ class Glm4Attention(nn.Module):
                                    dtype=dtype,
                                    device=device,
                                    is_tp=True)
+
+    @staticmethod
+    def _extract_rope(states: torch.Tensor):
+        """Extract rope."""
+        rope = states.chunk(2, -1)[0]
+        rope = rope.unflatten(-1, (-1, 2))
+        rope = rope.transpose(-2, -1).flatten(-2, -1).contiguous()
+        return rope
+
+    @staticmethod
+    def _fill_rope(states: torch.Tensor, rope: torch.Tensor):
+        """Fill rope."""
+        rope_part = states.chunk(2, -1)[0]
+        rope = rope.unflatten(-1, (2, -1))
+        rope = rope.transpose(-2, -1).flatten(-2, -1)
+        rope_part.copy_(rope)
+        return states
 
     def forward(
         self,
@@ -116,13 +83,19 @@ class Glm4Attention(nn.Module):
         query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # apply rotary embedding
+        # chatglm series, glm4-0414 have special treatments for rope
         cos, sin = rotary_pos_emb
-        query_states, key_states = self.apply_rotary_pos_emb(
-            query_states,
-            key_states,
+        q_rope = self._extract_rope(query_states)
+        k_rope = self._extract_rope(key_states)
+        q_rope, k_rope = self.apply_rotary_pos_emb(
+            q_rope,
+            k_rope,
             cos,
             sin,
+            inplace=True,
         )
+        query_states = self._fill_rope(query_states, q_rope)
+        key_states = self._fill_rope(key_states, k_rope)
 
         # attention
         attn_output = self.attn_fwd(
@@ -209,14 +182,14 @@ class Glm4DecoderLayer(nn.Module):
                                                 dtype=dtype,
                                                 device=device)
 
-        # build post self attn layer norm
+        # build post self attention layer norm
         self.post_self_attn_layernorm = RMSNorm(config.hidden_size,
                                                 config.rms_norm_eps,
                                                 quant_config=quantization_config,
                                                 dtype=dtype,
                                                 device=device)
 
-        # build post mlp layer norm
+        # build post MLP layer norm
         self.post_mlp_layernorm = RMSNorm(config.hidden_size,
                                           config.rms_norm_eps,
                                           quant_config=quantization_config,
@@ -245,11 +218,16 @@ class Glm4DecoderLayer(nn.Module):
             attn_metadata=attn_metadata,
         )
 
+        # post self attention layer norm
         hidden_states = self.post_self_attn_layernorm(hidden_states)
 
-        # fully connected
+        # post attention layer norm
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+
+        # MLP
         hidden_states = self.mlp(hidden_states)
+
+        # post MLP layer norm
         hidden_states = self.post_mlp_layernorm(hidden_states)
 
         return (hidden_states, residual)
