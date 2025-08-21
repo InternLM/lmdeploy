@@ -2,8 +2,6 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from lmdeploy.pytorch.kernels.fused_moe import fused_moe
-
 
 def _get_sorted_idx(topk_idx: torch.Tensor, num_experts: int):
     flatten_topk_idx = topk_idx.flatten()
@@ -233,6 +231,7 @@ class TestFusedMoe:
 
     @torch.inference_mode()
     def test_fused_moe(self, hidden_states, w1, w2, topk_weights, topk_idx, top_k, renormalize, gt):
+        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe
         output = fused_moe(hidden_states, w1, w2, topk_weights, topk_idx, topk=top_k, renormalize=renormalize)
         torch.testing.assert_close(output, gt, atol=1e-3, rtol=1e-3)
 

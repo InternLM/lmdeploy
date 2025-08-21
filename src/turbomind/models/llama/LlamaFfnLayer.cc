@@ -18,17 +18,11 @@
 // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/FfnLayer.h
 
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
-#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 
 namespace turbomind {
-
-void LlamaFfnLayer::activation(Tensor& gating, Tensor& inter, cudaStream_t stream)
-{
-    // Code for dispatching activation types
-    invokeGenericActivation_v3<SiluActivation>(gating, inter, stream);
-}
 
 void LlamaFfnLayer::forward(ForwardParam param)
 {
@@ -65,8 +59,8 @@ void LlamaFfnLayer::forward(ForwardParam param)
     }
 
     if (!mlp.is_fused_silu) {
-        // silu(w1(x)) * w3(x)
-        activation(gating, inter, stream);
+        // gate' = silu(gate) * up
+        Activation(gating, inter, mlp.act_type, stream);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }

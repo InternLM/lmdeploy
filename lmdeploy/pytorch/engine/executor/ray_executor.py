@@ -3,7 +3,6 @@ import asyncio
 import contextlib
 import json
 import os
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -19,6 +18,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.ray import RayContext
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -26,8 +26,6 @@ from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
-
-PG_WAIT_TIMEOUT = 1800
 
 
 def get_device_str():
@@ -41,109 +39,6 @@ def get_device_str():
         raise ValueError(f'Unsupported device type: {device_type}')
 
     return device_type
-
-
-def _wait_until_pg_ready(current_placement_group: 'PlacementGroup'):
-    """Wait until a placement group is ready.
-
-    It prints the informative log messages if the placement group is not created within time.
-    """
-    # copy from vLLM
-    # Wait until PG is ready - this will block until all
-    # requested resources are available, and will timeout
-    # if they cannot be provisioned.
-    placement_group_specs = current_placement_group.bundle_specs
-
-    s = time.time()
-    pg_ready_ref = current_placement_group.ready()
-    wait_interval = 10
-    while time.time() - s < PG_WAIT_TIMEOUT:
-        ready, _ = ray.wait([pg_ready_ref], timeout=wait_interval)
-        if len(ready) > 0:
-            break
-
-        # Exponential backoff for warning print.
-        wait_interval *= 2
-        logger.info(
-            'Waiting for creating a placement group of specs for '
-            '%d seconds. specs=%s. Check '
-            '`ray status` to see if you have enough resources,'
-            ' and make sure the IP addresses used by ray cluster'
-            ' are the same as VLLM_HOST_IP environment variable'
-            ' specified in each node if you are running on a multi-node.', int(time.time() - s), placement_group_specs)
-
-    try:
-        ray.get(pg_ready_ref, timeout=0)
-    except ray.exceptions.GetTimeoutError:
-        raise ValueError('Cannot provide a placement group of '
-                         f'{placement_group_specs=} within {PG_WAIT_TIMEOUT} seconds. See '
-                         '`ray status` to make sure the cluster has enough resources.') from None
-
-
-def _get_obj_store_memory(dp: int = 1):
-    """Get obj store memory."""
-    import psutil
-    DEFAULT_OBJECT_STORE_MEMORY_PROPORTION = os.getenv('RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION', '0.3')
-    DEFAULT_OBJECT_STORE_MEMORY_PROPORTION = float(DEFAULT_OBJECT_STORE_MEMORY_PROPORTION)
-    DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = os.getenv('RAY_DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES', None)
-    if DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES is None:
-        DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = 80 * (10**9)
-    else:
-        DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = int(DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES)
-    total_mem = psutil.virtual_memory().total
-    obj_store_mem = int(total_mem * DEFAULT_OBJECT_STORE_MEMORY_PROPORTION)
-    obj_store_mem = min(DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES, obj_store_mem)
-    if dp > 1:
-        obj_store_mem = obj_store_mem // min(8, dp)
-    return obj_store_mem
-
-
-def init_ray_cluster(world_size: int, ray_address: str = None, dp: int = 1):
-    """Init ray cluster."""
-    # modifier from vLLM
-    if not ray.is_initialized():
-        try:
-            num_cpus = world_size
-            object_store_memory = _get_obj_store_memory(dp=dp)
-            ray.init(address=ray_address,
-                     ignore_reinit_error=True,
-                     num_cpus=num_cpus,
-                     object_store_memory=object_store_memory)
-        except ValueError as e:
-            if e.args is not None and len(e.args) >= 1 and e.args[
-                    0] == 'When connecting to an existing cluster, num_cpus and num_gpus must not be provided.':
-                ray.init(address=ray_address, ignore_reinit_error=True)
-            else:
-                raise
-
-    device_str = get_device_str()
-
-    # Create placement group for worker processes
-    current_placement_group = ray.util.get_current_placement_group()
-    if not current_placement_group:
-        num_devices_in_cluster = ray.cluster_resources().get(device_str, 0)
-        if world_size > num_devices_in_cluster:
-            logger.warning(
-                'The number of required %ss exceeds the total '
-                'number of available %ss in the placement group.', device_str, device_str)
-        # Create a new placement group
-        placement_group_specs: List[Dict[str, float]] = ([{device_str: 1.0} for _ in range(world_size)])
-
-        # gcs_addr = ray.get_runtime_context().gcs_address
-        # master_addr = gcs_addr.split(':')[0]
-        # current_ip = master_addr
-        # # This way, at least bundle is required to be created in a current
-        # # node.
-        # placement_group_specs[0][f'node:{current_ip}'] = 0.001
-
-        # By default, Ray packs resources as much as possible.
-        current_placement_group = ray.util.placement_group(placement_group_specs, strategy='PACK')
-        _wait_until_pg_ready(current_placement_group)
-
-    assert current_placement_group is not None
-    # Set the placement group in the parallel config
-    placement_group = current_placement_group
-    return placement_group
 
 
 def _get_master_addr():
@@ -379,7 +274,8 @@ class RayExecutor(ExecutorBase):
             ray_world_size = self.world_size
             if self.dp > 1:
                 ray_world_size = 1
-            placement_group = init_ray_cluster(ray_world_size, dp=dist_config.dp)
+            self.ray_ctx = RayContext(ray_world_size, dp=dist_config.dp, device_type=device_type)
+            placement_group = self.ray_ctx.get_placement_group()
             self.placement_group = placement_group
 
             if self.dp == 1:
@@ -476,6 +372,8 @@ class RayExecutor(ExecutorBase):
 
     def wakeup(self, tags: Optional[List[str]] = None):
         """Wakeup."""
+        if tags is None or 'kv_cache' in tags:
+            self.update_configs()
         self.collective_rpc('wakeup', (tags, ))
 
     def get_input_processor(self):
@@ -537,10 +435,7 @@ class RayExecutor(ExecutorBase):
         else:
             [ray.kill(worker) for worker in self.workers]
 
-        ray.util.remove_placement_group(self.placement_group)
-        logger.debug('RayExecutor placement group removed.')
-        ray.shutdown()
-        logger.debug('Ray shutdown.')
+        self.ray_ctx.shutdown()
 
     def _compile_dag(self):
         """Compile dag."""
@@ -629,12 +524,19 @@ class RayExecutor(ExecutorBase):
         sorted_workers = [item[0] for item in sorted_worker_ip_map]
         return sorted_workers
 
+    def _valid_bundle_id(self, bundle_id: int):
+        """Check if a bundle is valid only when self.use_external_ray=True."""
+        if (not self.ray_ctx.owned_pg and _envs.ray_external_pg_bundles
+                and bundle_id not in _envs.ray_external_pg_bundles):
+            return False
+        return True
+
     def _init_workers_ray(self, placement_group: PlacementGroup, worker_kwargs: dict):
         """Init worker ray."""
         device_str = get_device_str()
         bundle_indices = []
         for bundle_id, bundle in enumerate(placement_group.bundle_specs):
-            if bundle.get(device_str, 0):
+            if bundle.get(device_str, 0) and self._valid_bundle_id(bundle_id):
                 bundle_indices.append(bundle_id)
         bundle_indices = bundle_indices[:self.world_size]
 
@@ -653,7 +555,7 @@ class RayExecutor(ExecutorBase):
                     runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
                     num_cpus=0,
-                    num_gpus=1.0,
+                    num_gpus=0.01,
                     scheduling_strategy=scheduling_strategy,
                     runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
@@ -661,7 +563,7 @@ class RayExecutor(ExecutorBase):
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=0,
-                    resources={device_str: 1.0},
+                    resources={device_str: 0.01},
                     scheduling_strategy=scheduling_strategy,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             workers.append(worker)

@@ -40,6 +40,22 @@ def env_to_int(
     return value
 
 
+def env_to_list_int(
+    env_var: str,
+    default: list[int] = None,
+):
+    """Env to list of int."""
+    default_ = default if default is not None else []
+    value = os.getenv(env_var)
+    if value is None:
+        return default_
+    try:
+        value = [int(x) for x in value.split(',')]
+    except Exception:
+        value = default_
+    return value
+
+
 _ENVS = dict()
 
 
@@ -90,6 +106,10 @@ with set_envs():
     # ray timeline
     ray_timeline_enable = env_to_bool('LMDEPLOY_RAY_TIMELINE_ENABLE', False)
     ray_timeline_output_path = os.getenv('LMDEPLOY_RAY_TIMELINE_OUT_PATH', 'ray_timeline.json')
+
+    # ray external placement group bundles
+    # only used when lmdeploy is initialized inside a Ray Actor with pg allocated
+    ray_external_pg_bundles = env_to_list_int('LMDEPLOY_RAY_EXTERNAL_PG_BUNDLES', [])
 
     # dist
     dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)

@@ -9,6 +9,8 @@ SUPPORTED_ARCHS = dict(
     BaiChuanForCausalLM='baichuan',
     # baichuan2-7b, baichuan-13b, baichuan2-13b
     BaichuanForCausalLM='baichuan2',
+    # gpt-oss
+    GptOssForCausalLM='gpt-oss',
     # internlm
     InternLMForCausalLM='llama',
     # internlm2
