@@ -12,11 +12,11 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, RMSNorm, SiluAndMul,
-                                 build_rotary_embedding_from_config)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, FlashAttention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .glm4 import Glm4DecoderLayer
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
 from .utils.model import DeployModelMixin, vlm_model
 
@@ -26,48 +26,6 @@ def rotate_half(x):
     x1 = x[..., 0::2]
     x2 = x[..., 1::2]
     return torch.stack((-x2, x1), dim=-1).flatten(-2)
-
-
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors.
-
-    Args:
-        q (`torch.Tensor`): The query tensor.
-        k (`torch.Tensor`): The key tensor.
-        cos (`torch.Tensor`): The cosine part of the rotary embedding.
-        sin (`torch.Tensor`): The sine part of the rotary embedding.
-        position_ids (`torch.Tensor`, *optional*):
-            Deprecated and unused.
-        unsqueeze_dim (`int`, *optional*, defaults to 1):
-            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
-            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
-            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
-            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
-            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
-            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
-    Returns:
-        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
-    """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-
-    # interleave them instead of usual shape
-    cos = cos[..., :cos.shape[-1] // 2].repeat_interleave(2, dim=-1)
-    sin = sin[..., :sin.shape[-1] // 2].repeat_interleave(2, dim=-1)
-
-    # keep half or full tensor for later concatenation
-    rotary_dim = cos.shape[-1]
-    q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
-    k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
-
-    # apply rotary embeddings on the first half or full tensor
-    q_embed = (q_rot * cos) + (rotate_half(q_rot) * sin)
-    k_embed = (k_rot * cos) + (rotate_half(k_rot) * sin)
-
-    # concatenate back to full shape
-    q_embed = torch.cat([q_embed, q_pass], dim=-1)
-    k_embed = torch.cat([k_embed, k_pass], dim=-1)
-    return q_embed, k_embed
 
 
 def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
@@ -91,198 +49,6 @@ def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torc
     return _cos, _sin
 
 
-class Glm4vTextAttention(nn.Module):
-
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
-        num_heads = config.num_attention_heads
-        num_key_value_heads = config.num_key_value_heads
-        hidden_size = config.hidden_size
-        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
-        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
-
-        # packed qkv
-        self.qkv_proj = build_qkv_proj(hidden_size,
-                                       num_q_heads=num_heads,
-                                       num_kv_heads=num_key_value_heads,
-                                       head_size=head_dim,
-                                       bias=config.attention_bias,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device,
-                                       num_replicate_kv_heads=num_replicate_kv_heads)
-
-        # rotary embedding
-        # GLM4-0414 has different apply rotary emb
-        self.apply_rotary_pos_emb = apply_rotary_pos_emb
-
-        # attention
-        self.attn_fwd = Attention(num_heads, head_dim, num_kv_heads=num_key_value_heads, v_head_size=head_dim)
-
-        # o_proj
-        self.o_proj = build_rowwise_linear(num_heads * head_dim,
-                                           hidden_size,
-                                           bias=False,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        attn_metadata: Any = None,
-    ):
-        """Rewrite of LlamaAttention.forward."""
-        # qkv proj
-        qkv_states = self.qkv_proj(hidden_states)
-        # (-1, heads, head_dim)
-        qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
-
-        # apply rotary embedding
-        cos, sin = rotary_pos_emb
-        query_states, key_states = self.apply_rotary_pos_emb(
-            query_states,
-            key_states,
-            cos,
-            sin,
-        )
-
-        # attention
-        attn_output = self.attn_fwd(
-            query_states,
-            key_states,
-            value_states,
-            past_key_value[0],
-            past_key_value[1],
-            attn_metadata,
-            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
-            inplace=True,
-        )
-        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
-
-        # o proj
-        attn_output = self.o_proj(attn_output)
-        return attn_output
-
-
-class Glm4vTextMLP(nn.Module):
-
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
-        # gate up
-        self.gate_up_proj = build_merged_colwise_linear(
-            config.hidden_size,
-            [config.intermediate_size, config.intermediate_size],
-            bias=False,
-            dtype=dtype,
-            device=device,
-            quant_config=quantization_config,
-            is_tp=True,
-        )
-
-        # silu and mul
-        self.act_fn = SiluAndMul(inplace=True)
-
-        # down
-        self.down_proj = build_rowwise_linear(config.intermediate_size,
-                                              config.hidden_size,
-                                              bias=False,
-                                              quant_config=quantization_config,
-                                              dtype=dtype,
-                                              device=device,
-                                              is_tp=True)
-
-    def forward(self, x):
-        """forward."""
-        gate_up = self.gate_up_proj(x)
-        act = self.act_fn(gate_up)
-        return self.down_proj(act)
-
-
-class Glm4vTextDecoderLayer(nn.Module):
-
-    def __init__(self,
-                 config: PretrainedConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
-        super().__init__()
-        self.layer_idx = layer_idx
-        quantization_config = getattr(config, 'quantization_config', None)
-
-        # build attention layer
-        self.self_attn = Glm4vTextAttention(config, dtype=dtype, device=device)
-
-        # build MLP
-        self.mlp = Glm4vTextMLP(config, dtype=dtype, device=device)
-
-        # build input layer norm
-        self.input_layernorm = RMSNorm(config.hidden_size,
-                                       config.rms_norm_eps,
-                                       quant_config=quantization_config,
-                                       dtype=dtype,
-                                       device=device)
-
-        # build post attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size,
-                                                config.rms_norm_eps,
-                                                quant_config=quantization_config,
-                                                dtype=dtype,
-                                                device=device)
-
-        # build post self attn layer norm
-        self.post_self_attn_layernorm = RMSNorm(config.hidden_size,
-                                                config.rms_norm_eps,
-                                                quant_config=quantization_config,
-                                                dtype=dtype,
-                                                device=device)
-
-        # build post mlp layer norm
-        self.post_mlp_layernorm = RMSNorm(config.hidden_size,
-                                          config.rms_norm_eps,
-                                          quant_config=quantization_config,
-                                          dtype=dtype,
-                                          device=device)
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
-        attn_metadata: Any = None,
-    ):
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = self.input_layernorm(hidden_states, residual)
-
-        # self attn
-        hidden_states = self.self_attn(
-            hidden_states=hidden_states,
-            rotary_pos_emb=rotary_pos_emb,
-            past_key_value=past_key_value,
-            attn_metadata=attn_metadata,
-        )
-
-        hidden_states = self.post_self_attn_layernorm(hidden_states)
-
-        # fully connected
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = self.post_mlp_layernorm(hidden_states)
-
-        return (hidden_states, residual)
-
-
 class Glm4vTextModel(nn.Module):
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
@@ -299,7 +65,7 @@ class Glm4vTextModel(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            Glm4vTextDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            Glm4DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
