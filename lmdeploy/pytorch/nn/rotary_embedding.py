@@ -107,10 +107,10 @@ def build_rotary_params(config: PretrainedConfig):
                            llama3=_get_llama3_parameters)
         params.update(build_funcs[rope_type_str](config))
 
-        # update partial_rotary_factor
-        partial_rotary_factor = config.partial_rotary_factor if hasattr(config, 'partial_rotary_factor') else None
-        if partial_rotary_factor is not None:
-            params['partial_rotary_factor'] = partial_rotary_factor
+    # update partial_rotary_factor
+    partial_rotary_factor = config.partial_rotary_factor if hasattr(config, 'partial_rotary_factor') else None
+    if partial_rotary_factor is not None:
+        params['partial_rotary_factor'] = partial_rotary_factor
 
     return params
 

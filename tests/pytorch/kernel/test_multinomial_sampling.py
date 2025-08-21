@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch.kernels import multinomial_sampling
 from lmdeploy.utils import is_bf16_supported
 
 
@@ -61,5 +60,6 @@ class TestMultinomialSampling:
         (2000, (500, 1500)),
     ], indirect=True)
     def test_multinomial_sampling(self, scores, seeds, offsets, indices, gt):
+        from lmdeploy.pytorch.kernels.cuda import multinomial_sampling
         output = multinomial_sampling(scores, seeds, offsets, indices)
         torch.testing.assert_close(output, gt)

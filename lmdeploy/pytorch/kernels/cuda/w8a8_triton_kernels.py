@@ -6,7 +6,6 @@ import triton.language as tl
 from packaging import version
 
 from ..default.w8a8_kernels import per_channel_quant
-from .triton_utils import get_kernel_meta
 
 TRITON_VERSION = version.parse(triton.__version__)
 if TRITON_VERSION >= version.parse('3.0.0'):
@@ -29,8 +28,6 @@ else:
         }, num_stages=3, num_warps=8)
     ],
     key=['N', 'K'],
-    warmup=5,
-    rep=20,
 )
 @triton.jit(do_not_specialize=['M'])
 def _linear(
@@ -110,8 +107,6 @@ def _linear(
         }, num_stages=3, num_warps=8)
     ],
     key=['N', 'K'],
-    warmup=5,
-    rep=20,
 )
 @triton.jit(do_not_specialize=['M'])
 def _linear_add(A, B, C, residual_ptr, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
@@ -185,7 +180,6 @@ def matmul_kernel_dynamic_quant(a, b, rms_scale, linear_scale, residual=None, bi
     def grid(META):
         return (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
 
-    kernel_meta = get_kernel_meta(a)
     if residual is not None:
         _linear_add[grid](a,
                           b,
@@ -203,8 +197,7 @@ def matmul_kernel_dynamic_quant(a, b, rms_scale, linear_scale, residual=None, bi
                           GROUP_SIZE_M=8,
                           rms_scale_ptr=rms_scale,
                           linear_scale_ptr=linear_scale,
-                          ACCUMULATOR_DTYPE=accumulator_dtype,
-                          **kernel_meta)
+                          ACCUMULATOR_DTYPE=accumulator_dtype)
     else:
         _linear[grid](a,
                       b,
@@ -221,8 +214,7 @@ def matmul_kernel_dynamic_quant(a, b, rms_scale, linear_scale, residual=None, bi
                       GROUP_SIZE_M=8,
                       rms_scale_ptr=rms_scale,
                       linear_scale_ptr=linear_scale,
-                      ACCUMULATOR_DTYPE=accumulator_dtype,
-                      **kernel_meta)
+                      ACCUMULATOR_DTYPE=accumulator_dtype)
     if bias is not None:
         c += bias
 
@@ -288,7 +280,6 @@ def per_token_quant_int8(x, eps, quant_dtype=torch.int8):
         x = x.flatten(0, -2)
     assert x.stride(-1) == 1
     # enqueue kernel
-    kernel_meta = get_kernel_meta(x)
     _per_token_quant_int8[(M, )](x,
                                  x_q,
                                  x_s,
@@ -299,8 +290,7 @@ def per_token_quant_int8(x, eps, quant_dtype=torch.int8):
                                  BLOCK=BLOCK,
                                  Q_MAX=q_max,
                                  IS_FLOATING_POINT=quant_dtype.is_floating_point,
-                                 num_warps=num_warps,
-                                 **kernel_meta)
+                                 num_warps=num_warps)
 
     return x_q, x_s
 
