@@ -141,7 +141,7 @@ class Session:
                  gen_config: Optional[GenerationConfig] = None,
                  stream_response: bool = True,
                  do_preprocess: bool = True) -> Union[Response, Iterator[Response]]:
-        self._engine.chat(prompt=prompt,
+        self._engine.chat(prompt,
                           gen_config=gen_config or self._gen_config,
                           stream_response=stream_response,
                           do_preprocess=do_preprocess,
