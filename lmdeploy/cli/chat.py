@@ -82,7 +82,7 @@ def main(model_path, backend, **kwargs):
                 resps = sess(prompt)
                 try:
                     for resp in resps:
-                        # print(resp.text, end='', flush=True)
+                        print(resp.text, end='', flush=True)
                         pass
                 except KeyboardInterrupt:
                     sess.stop()
