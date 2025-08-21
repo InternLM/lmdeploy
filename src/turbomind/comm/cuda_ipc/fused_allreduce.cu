@@ -448,7 +448,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                                                 groups,
                                                                                 std::false_type{});
         }
-#if 0
+#if 1
         else if (bytesize <= 1 << 19) {
             return false;
         }

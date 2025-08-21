@@ -279,7 +279,7 @@ void CudaIpcCommImpl::AllReduceSum(
                                                               constant<vec_size>{},
                                                               std::false_type{});
         }
-#if 0
+#if 1
         else if (round_up(bytesize, 2 * n_ranks * sizeof(LLPacket)) <= std::min<size_t>(1 << 20, kPacketBuffSize)) {
             constexpr int vec_size      = sizeof(uint2) / sizeof(T);
             const int     slice         = (count / vec_size + n_ranks - 1) / n_ranks;
