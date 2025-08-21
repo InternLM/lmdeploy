@@ -601,6 +601,15 @@ class ArgumentHelper:
                             default=False,
                             help='enable metrics system')
 
+    @staticmethod
+    def logprobs_mode(parser):
+        """The mode of logprobs."""
+        parser.add_argument('--logprobs-mode',
+                            type=str,
+                            default=None,
+                            choices=[None, 'raw_logits', 'raw_logprobs'],
+                            help='The mode of logprobs.')
+
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
 class FlexibleArgumentParser(argparse.ArgumentParser):
