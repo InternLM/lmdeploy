@@ -19,7 +19,11 @@ public:
         }
         desc_         = {};
         desc_.backend = 1;
-        name_         = GetName();
+
+        chunk_size_k_ = 1;
+        smem_size_    = 0;
+
+        name_ = GetName();
     }
 
     int Launch(const Operation&    operation,
