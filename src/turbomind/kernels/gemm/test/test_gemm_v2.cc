@@ -7,21 +7,35 @@
 
 using namespace turbomind;
 
+struct TestParameter: Testbed_v3::Parameter {
+    TestParameter(DataType dtype, DataType wtype, DataType itype, int group_size = 128)
+    {
+        data_type   = dtype;
+        weight_type = wtype;
+        input_type  = itype;
+
+        this->group_size = group_size;
+    }
+};
+
 int main()
 {
+
+    constexpr auto x = (unsigned)0 - (unsigned)64 + (unsigned)8;
+    constexpr auto y = (unsigned)1 - x;
+
     auto stream = core::Stream::create();
 
     core::ContextGuard ctx{stream, core::Allocator{kCPU}, core::Allocator{stream, false}};
 
-    Testbed_v3::Parameter p{};
+    // TestParameter p{kBfloat16, kBfloat16, kBfloat16};
+    // TestParameter p{kBfloat16, kFloat8_e4m3, kFloat8_e4m3, 128};
+    TestParameter p{kHalf, kUint4, kHalf, 128};
+    // TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16, 32};
 
-    p.input_dim      = 1024;
-    p.output_dim     = 1536;
-    p.max_batch_size = 512;
-
-    // std::tie(p.data_type, p.weight_type, p.input_type) = std::tuple{kBfloat16, kBfloat16, kBfloat16};
-    // std::tie(p.data_type, p.weight_type, p.input_type) = std::tuple{kBfloat16, kFloat8_e4m3, kFloat8_e4m3};
-    std::tie(p.data_type, p.weight_type, p.input_type) = std::tuple{kHalf, kUint4, kHalf};
+    p.input_dim      = 16384;
+    p.output_dim     = 16384;
+    p.max_batch_size = 8192;
 
     Testbed_v3 test{p};
 

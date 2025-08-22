@@ -35,10 +35,17 @@ void LlamaDenseWeight::emplace(
     }
 
     if (weight_type == kFloat8_e4m3) {
-        scales       = Tensor{{cdiv(input_dim, 128), cdiv(output_dim, 128)}, kFloat, kDEVICE};
+        TM_CHECK_EQ(group_size, 128);
+        scales       = Tensor{{cdiv(input_dim, group_size), cdiv(output_dim, group_size)}, kFloat, kDEVICE};
         input_type   = kFloat8_e4m3;
-        weight_quant = QuantDesc{gemm::QuantType::kB, 128};
-        input_quant  = QuantDesc{gemm::QuantType::kK, 128};
+        weight_quant = QuantDesc{gemm::QuantType::kB, group_size};
+        input_quant  = QuantDesc{gemm::QuantType::kK, group_size};
+        register_parameter("scales", scales);
+    }
+    else if (weight_type == kFloat4_e2m1) {
+        scales       = Tensor{{cdiv(input_dim, group_size), output_dim}, kUint8, kDEVICE};
+        input_type   = data_type;
+        weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
         register_parameter("scales", scales);
     }
     else if (is_qweight) {

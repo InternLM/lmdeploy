@@ -9,13 +9,17 @@
 #include <cuda_runtime.h>
 
 #include <cub/block/block_reduce.cuh>
+#include <type_traits>
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/floating_point.h"
 #include "src/turbomind/kernels/core/math.h"
+
 #include "src/turbomind/kernels/quantization.cuh"
 #include "src/turbomind/kernels/quantization.h"
 
@@ -326,84 +330,8 @@ void DequantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> src_, const Tensor& scale
         dim);
 }
 
-template<int vec_size, int bits, class Q, class S, class X>
-__global__ void QuantizeFloatAsymmKernel(Q*            q,
-                                         S*            s,
-                                         S*            z,
-                                         X*            d,
-                                         const X*      x,
-                                         Array<int, 2> stride_q,
-                                         Array<int, 2> stride_s,
-                                         Array<int, 2> stride_d,
-                                         Array<int, 2> stride_x,
-                                         int           M,
-                                         int           K,
-                                         int           G)
-{
-    static_assert(bits <= bitsof<Q>);
-
-    int m = blockIdx.x;
-    int k = threadIdx.x + blockIdx.y * blockDim.x;
-
-    k *= vec_size;
-
-    const int threads_per_group = G / vec_size;
-    const int warp_k            = WARP_SIZE * vec_size;
-
-    for (; k < round_up(K, warp_k); k += gridDim.y * blockDim.x * vec_size) {
-
-        Array<float, vec_size> f_vec;
-
-        float minval = std::numeric_limits<float>::infinity();
-        float maxval = -minval;
-
-        PRAGMA_UNROLL
-        for (int i = 0; i < vec_size; ++i) {
-            if (k + i < K) {
-                f_vec[i] = x[stride_x[0] * m + stride_x[1] * (k + i)];
-                minval   = fminf(minval, f_vec[i]);
-                maxval   = fmaxf(maxval, f_vec[i]);
-            }
-        }
-
-        for (int offset = threads_per_group / 2; offset >= 1; offset /= 2) {
-            minval = fminf(minval, __shfl_xor_sync((uint32_t)-1, minval, offset));
-            maxval = fmaxf(maxval, __shfl_xor_sync((uint32_t)-1, maxval, offset));
-        }
-
-        constexpr int max_q = (1 << bits) - 1;
-
-        auto clamp = [](int x, int a, int b) { return max(a, min(b, x)); };
-
-        auto scale = fdividef(fmaxf(maxval - minval, 1e-5f), max_q);
-        int  zero  = clamp(-round<int32_t>(minval / scale), 0, max_q);
-
-        Array<Q, vec_size> q_vec;
-        Array<X, vec_size> d_vec;
-        PRAGMA_UNROLL
-        for (int i = 0; i < vec_size; ++i) {
-            q_vec[i] = clamp(round<int32_t>(f_vec[i] / scale) + zero, 0, max_q);
-            d_vec[i] = (X)((int)q_vec[i] - zero) * (X)scale;
-        }
-
-        if (k < K) {
-            PRAGMA_UNROLL
-            for (int i = 0; i < vec_size; ++i) {
-                if (k + i < K) {
-                    q[stride_q[0] * m + stride_q[1] * (k + i)] = q_vec[i];
-                    d[stride_d[0] * m + stride_d[1] * (k + i)] = d_vec[i];
-                }
-            }
-            if (threadIdx.x % threads_per_group == 0) {
-                s[stride_s[0] * m + stride_s[1] * (k / G)] = (S)scale;
-                z[stride_s[0] * m + stride_s[1] * (k / G)] = (S)zero;
-            }
-        }
-    }
-}
-
 template<int start_bit, int end_bit, class D, class T>
-__global__ void Pack1DKernel(D* d, const T* s, int n)
+__global__ void Compact1D_Kernel(D* d, const T* s, int n)
 {
     constexpr int bits     = end_bit - start_bit;
     constexpr int vec_size = bitsof<D> / bits;
@@ -430,13 +358,206 @@ __global__ void Pack1DKernel(D* d, const T* s, int n)
     d[idx] = pack;
 }
 
-void QuantizeAsymm(Tensor   quant,    // (m,k)
-                   Tensor   scales,   // (m,k/g)
-                   Tensor   zeros,    // (m,k/g)
-                   Tensor   dequant,  // (m,k)
-                   Tensor   src,      // (m,k)
-                   DataType data_type,
-                   int      group_size)
+template<class T_, int bits_, class Q_>
+struct IntegralQuantizer {
+
+    using T = T_;
+    using Q = Q_;
+
+    using Scale = T;
+    using Zero  = T;
+
+    static constexpr int bits  = bits_;
+    static constexpr int max_q = (1 << bits) - 1;
+
+    template<class T, int N>
+    __device__ void operator()(const Array<T, N>&    x,  //
+                               const Array<bool, N>& pred,
+                               Array<Q, N>&          q,
+                               Array<T, N>&          d,
+                               T&                    scale,
+                               T&                    zero,
+                               int                   threads) const
+    {
+        auto f = cast<float>(x);
+
+        float minval = std::numeric_limits<float>::infinity();
+        float maxval = -minval;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            if (pred[i]) {
+                minval = fminf(minval, f[i]);
+                maxval = fmaxf(maxval, f[i]);
+            }
+        }
+
+        for (int offset = threads / 2; offset >= 1; offset /= 2) {
+            minval = fminf(minval, __shfl_xor_sync((uint32_t)-1, minval, offset));
+            maxval = fmaxf(maxval, __shfl_xor_sync((uint32_t)-1, maxval, offset));
+        }
+
+        auto clamp = [](int x, int a, int b) { return max(a, min(b, x)); };
+
+        float scale_ = fmaxf(maxval - minval, 1e-5f) / (float)max_q;
+        int   zero_  = clamp(-round<int32_t>(minval / scale_), 0, max_q);
+
+        scale = (T)scale_;
+        zero  = (T)zero_;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            q[i] = clamp(round<int32_t>(f[i] / scale_) + zero_, 0, max_q);
+            d[i] = (T)((int)q[i] - zero_) * (T)scale_;
+        }
+    }
+};
+
+template<class T_, int E, int M, class Q_>
+struct FloatingPointQuantizer {
+
+    using T = T_;
+    using Q = Q_;
+
+    using Scale = uint8_t;
+    using Zero  = void;
+
+    using traits = FloatingPoint<E, M>;
+
+    static constexpr int bits = traits::bits;
+
+    template<int N, class Z>
+    __device__ void operator()(const Array<T, N>&    x,  //
+                               const Array<bool, N>& pred,
+                               Array<Q, N>&          q,
+                               Array<T, N>&          d,
+                               Scale&                scale,
+                               Z                     ignore,
+                               int                   threads) const
+    {
+        auto f = cast<float>(x);
+
+        float absmax = 0.f;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            if (pred[i]) {
+                absmax = fmaxf(absmax, fabsf(f[i]));
+            }
+        }
+
+        for (int offset = threads / 2; offset >= 1; offset /= 2) {
+            absmax = fmaxf(absmax, __shfl_xor_sync((uint32_t)-1, absmax, offset));
+        }
+
+        auto get_exponent = [](float x) -> int { return (__float_as_uint(x) >> 23U) & 0xFFU; };
+
+        int scale_i32 = get_exponent(absmax) - (1 << (traits::exponent_bits - 1));
+
+        // max{|group|} < 2*2^-125, flush to zero
+        if (scale_i32 < 0) {
+            scale_i32 = 0;
+            f         = {};
+        }
+
+        scale = scale_i32;
+
+        float scale_f32 = __uint_as_float((uint32_t)scale_i32 << 23);
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            q[i] = traits::from_f32(f[i] / scale_f32);
+            d[i] = traits::to_f32(q[i]) * scale_f32;
+        }
+    }
+
+    __device__ static float cvt_f32_e2m1(Q q)
+    {
+        union {
+            nv_bfloat16 f;
+            uint16_t    u;
+        };
+        u = ((q & 8) << 12 | (q & 7) << 6);
+        return f * __ushort_as_bfloat16(253 << 7);  // 127 + 127 - 1 (e2m1 bias)
+    }
+};
+
+template<int vec_size,
+         class Quantizer,
+         class T = typename Quantizer::T,
+         class Q = typename Quantizer::Q,
+         class S = typename Quantizer::Scale,
+         class Z = typename Quantizer::Zero>
+__global__ void QuantizeGroupwise_Kernel(Quantizer     quantizer,
+                                         Q*            q,
+                                         S*            s,
+                                         Z*            z,
+                                         T*            d,
+                                         const T*      x,
+                                         Array<int, 2> stride_q,
+                                         Array<int, 2> stride_s,
+                                         Array<int, 2> stride_d,
+                                         Array<int, 2> stride_x,
+                                         int           M,
+                                         int           K,
+                                         int           G)
+{
+
+    static constexpr bool has_zero = !std::is_void_v<Z>;
+
+    int m = blockIdx.x;
+    int k = threadIdx.x + blockIdx.y * blockDim.x;
+
+    const int threads_per_group = G / vec_size;
+    const int warp_k            = WARP_SIZE * vec_size;
+
+    k *= vec_size;
+
+    for (; k < round_up(K, warp_k); k += gridDim.y * blockDim.x * vec_size) {
+
+        Array<T, vec_size>    x_vec;
+        Array<bool, vec_size> p_vec;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            p_vec[i] = k + i < K;
+            x_vec[i] = p_vec[i] ? x[stride_x[0] * m + stride_x[1] * (k + i)] : T{0};
+        }
+
+        Array<Q, vec_size> q_vec;
+        Array<T, vec_size> d_vec;
+
+        S                                    scale;
+        std::conditional_t<has_zero, Z, int> zero{};
+
+        quantizer(x_vec, p_vec, q_vec, d_vec, scale, zero, threads_per_group);
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            const auto idx = stride_q[0] * m + stride_q[1] * (k + i);
+            if (p_vec[i]) {
+                q[idx] = q_vec[i];
+                d[idx] = d_vec[i];
+            }
+        }
+        if (threadIdx.x % threads_per_group == 0) {
+            const auto idx = stride_s[0] * m + stride_s[1] * (k / G);
+            if (p_vec[0]) {
+                s[idx] = (S)scale;
+                if constexpr (has_zero) {
+                    z[idx] = (S)zero;
+                }
+            }
+        }
+    }
+}
+
+void QuantizeGroupwise(Tensor quant,    // (m,k)
+                       Tensor scales,   // (m,k/g)
+                       Tensor zeros,    // (m,k/g)
+                       Tensor dequant,  // (m,k)
+                       Tensor src,      // (m,k)
+                       int    group_size)
 {
     // std::cout << quant << std::endl;
     // std::cout << scales << std::endl;
@@ -444,11 +565,11 @@ void QuantizeAsymm(Tensor   quant,    // (m,k)
     // std::cout << dequant << std::endl;
     // std::cout << src << std::endl;
 
-    TM_CHECK(scales.layout() == zeros.layout());
+    if (zeros) {
+        TM_CHECK(scales.layout() == zeros.layout());
+    }
     TM_CHECK(quant.shape() == dequant.shape());
     TM_CHECK(quant.size() == quant.layout().cosize());
-
-    Tensor_<uint16_t> u16 = empty_like(quant, kUint16);
 
     auto stream = core::Context::stream().handle();
 
@@ -463,28 +584,54 @@ void QuantizeAsymm(Tensor   quant,    // (m,k)
 
     // std::cout << "m" << m << "k" << k << "\n";
 
-    using T = half;
-    using Q = uint4_t;
+    auto invoke = [&](auto quantizer) {
+        using Quantizer = decltype(quantizer);
 
-    constexpr int bits = bitsof<Q>;
-    constexpr int vec  = 16 / sizeof(half);
+        using T = typename Quantizer::T;
+        using Q = typename Quantizer::Q;
+        using S = typename Quantizer::Scale;
+        using Z = typename Quantizer::Zero;
 
-    const int threads = round_up(std::min(cdiv(k, vec), 1024), WARP_SIZE);
-    QuantizeFloatAsymmKernel<vec, bits><<<m, threads, 0, stream>>>(u16.data(),
-                                                                   scales.data<T>(),
-                                                                   zeros.data<T>(),
-                                                                   dequant.data<T>(),
-                                                                   src.data<T>(),
-                                                                   stride_2d(u16),
-                                                                   stride_2d(scales),
-                                                                   stride_2d(dequant),
-                                                                   stride_2d(src),
-                                                                   m,
-                                                                   k,
-                                                                   group_size);
+        constexpr int bits = Quantizer::bits;
 
-    Pack1DKernel<0, bits><<<cdiv((int)quant.size(), 512), 512, 0, stream>>>(
-        (uint32_t*)quant.raw_data(), (uint16_t*)u16.raw_data(), quant.size());
+        Tensor_<Q> proxy = empty_like(quant, data_type_v<Q>);
+
+        constexpr int vec = 8;
+
+        TM_CHECK((group_size & (group_size - 1)) == 0);
+        TM_CHECK_GE(group_size, vec);
+        TM_CHECK_LE(group_size, WARP_SIZE * vec);
+
+        const int threads = round_up(std::min(cdiv(k, vec), 1024), WARP_SIZE);
+
+        QuantizeGroupwise_Kernel<vec><<<m, threads, 0, stream>>>(quantizer,
+                                                                 proxy.data(),
+                                                                 scales.data<S>(),
+                                                                 zeros.data_or((Z*)nullptr),
+                                                                 dequant.data<T>(),
+                                                                 src.data<T>(),
+                                                                 stride_2d(proxy),
+                                                                 stride_2d(scales),
+                                                                 stride_2d(dequant),
+                                                                 stride_2d(src),
+                                                                 m,
+                                                                 k,
+                                                                 group_size);
+
+        Compact1D_Kernel<0, bits><<<cdiv((int)quant.size(), 512), 512, 0, stream>>>(
+            (uint32_t*)quant.raw_data(), (Q*)proxy.raw_data(), quant.size());
+    };
+
+    if (0) {}
+    else if (src.dtype() == kHalf && quant.dtype() == kUint4) {
+        invoke(IntegralQuantizer<half_t, 4, uint16_t>{});
+    }
+    else if (src.dtype() == kBfloat16 && quant.dtype() == kFloat4_e2m1) {
+        invoke(FloatingPointQuantizer<bfloat16_t, 2, 1, uint16_t>{});
+    }
+    // else if (src.dtype() == kHalf && quant.dtype() == kFloat4_e2m1) {
+    //     invoke(FloatingPointQuantizer<half_t, uint16_t, 2, 1>{});
+    // }
 }
 
 }  // namespace turbomind

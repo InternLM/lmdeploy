@@ -34,6 +34,8 @@ struct Parameter {
     DataType weight_type;
     DataType input_type;
 
+    int group_size;
+
     int max_batch_size;
 
     int expert_num;
@@ -131,11 +133,11 @@ struct Testbed_v3: Parameter {
     // - dequantize weight
     void GenerateWeight(LlamaDenseWeight& original, LlamaDenseWeight& quant, LlamaDenseWeight& dequant)
     {
-        original.emplace(input_dim, output_dim, data_type, false, data_type, 128);
+        original.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
         rng_.NormalFloat(original.weight, 1.f, 1.f);
 
-        quant.emplace(input_dim, output_dim, data_type, false, weight_type, 128);
-        dequant.emplace(input_dim, output_dim, data_type, false, data_type, 128);
+        quant.emplace(input_dim, output_dim, data_type, false, weight_type, group_size);
+        dequant.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
 
         /// Weights are allocated in MN-major, but some quantization requires K-major tensor
 
@@ -149,16 +151,20 @@ struct Testbed_v3: Parameter {
         }
         else if (weight_type == kUint4) {
             /// Weights are allocated in (M,N), quantization needs K-major tensor
-            QuantizeAsymm(quant.weight.t(),
-                          quant.scales.t(),
-                          quant.zeros.t(),
-                          dequant.weight.t(),
-                          original.weight.t(),
-                          kUint4,
-                          128);
+            QuantizeGroupwise(quant.weight.t(),
+                              quant.scales.t(),
+                              quant.zeros.t(),
+                              dequant.weight.t(),
+                              original.weight.t(),
+                              group_size);
         }
         else if (weight_type == kFloat4_e2m1) {
-            TM_CHECK(0);
+            QuantizeGroupwise(quant.weight.t(),  //
+                              quant.scales.t(),
+                              {},
+                              dequant.weight.t(),
+                              original.weight.t(),
+                              group_size);
         }
         else {
             TM_CHECK(0);
@@ -215,6 +221,7 @@ struct Testbed_v3: Parameter {
     {
         // clang-format off
         printf("%20s", ""); FC_Header();
+        printf("%20s", "w_dequant v w_original"); FC_Print(FastCompare(w_dequant_->weight, w_original_->weight, stream_));
         printf("%20s", "quant   vs  dequant"); FC_Print(FastCompare(d_quant_, d_dequant_, stream_));
         printf("%20s", "quant   vs original"); FC_Print(FastCompare(d_quant_, d_original_, stream_));
         printf("%20s", "dequant vs original"); FC_Print(FastCompare(d_dequant_, d_original_, stream_));
