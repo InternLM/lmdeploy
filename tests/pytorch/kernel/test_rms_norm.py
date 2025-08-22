@@ -37,7 +37,7 @@ class TestRMSNorm:
     @pytest.mark.parametrize('dtype', [pytest.param(torch.bfloat16, marks=_bf16_mark()), torch.float16, torch.float32],
                              indirect=True)
     def test_rms_norm(self, input, weight, eps, gt):
-        from lmdeploy.pytorch.kernels import rms_norm
+        from lmdeploy.pytorch.kernels.cuda import rms_norm
 
         out = rms_norm(input, weight, eps)
         torch.testing.assert_close(out, gt)

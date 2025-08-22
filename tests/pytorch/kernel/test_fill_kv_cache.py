@@ -1,8 +1,6 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch.kernels.fill_kv_cache import fill_kv_cache
-
 
 def _div_up(a, b):
     return (a + b - 1) // b
@@ -145,6 +143,7 @@ class TestFillKVCache:
                              indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, block_offsets, q_start_loc, q_seq_length,
                            kv_seq_length, max_q_seq_length, gt):
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
         fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc, q_seq_length, kv_seq_length,
                       max_q_seq_length, block_offsets)
 
@@ -228,6 +227,7 @@ class TestFillKVCacheInt8(TestFillKVCache):
                              indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
                            q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt):
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
         fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc, q_seq_length, kv_seq_length,
                       max_q_seq_length, block_offsets, k_scales_zeros, v_scales_zeros, 8)
 
@@ -255,6 +255,7 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
                              indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
                            q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt, nbits):
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache
         k_scales_zeros = torch.zeros_like(k_scales_zeros)
         v_scales_zeros = torch.zeros_like(v_scales_zeros)
         fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc, q_seq_length, kv_seq_length,
