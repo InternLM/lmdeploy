@@ -740,8 +740,9 @@ class Engine(EngineBase):
         else:
             seq_length = torch.ones(batch_size, dtype=torch.long)
             max_q_seqlen = 1
-        max_kv_seqlen = max_q_seqlen + history_lengths.max().item()
-        sum_kv_seqlen = (seq_length + history_lengths).sum().item()
+        kv_seqlens = seq_length + history_lengths
+        max_kv_seqlen = kv_seqlens.max().item()
+        sum_kv_seqlen = kv_seqlens.sum().item()
 
         # block offsets
         block_offsets = self.scheduler.get_block_tables(messages)
