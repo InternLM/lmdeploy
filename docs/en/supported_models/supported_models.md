@@ -17,6 +17,8 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |            InternLM3             |        8B        | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM-XComposer2        |   7B, 4khd-7B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM-XComposer2.5       |        7B        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|            Intern-S1             |       241B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|          Intern-S1-mini          |        8B        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |               Qwen               |    1.8B - 72B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |     Qwen1.5<sup>\[1\]</sup>      |   1.8B - 110B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |      Qwen2<sup>\[2\]</sup>       |    0.5B - 72B    | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
@@ -67,6 +69,8 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |           InternLM2            |    7B - 20B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          InternLM2.5           |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           InternLM3            |       8B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+|           Intern-S1            |      241B       | MLLM |    Yes    |   Yes   |   Yes   | Yes  |       |
+|         Intern-S1-mini         |       8B        | MLLM |    Yes    |   Yes   |   Yes   | Yes  |       |
 |           Baichuan2            |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  No   |
 |           Baichuan2            |       13B       | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |            ChatGLM2            |       6B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
