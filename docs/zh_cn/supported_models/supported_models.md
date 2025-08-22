@@ -46,7 +46,6 @@
 |               GLM4               |       9B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            CodeGeeX4             |       9B       | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |              Molmo               |    7B-D,72B    | MLLM |    Yes    |   Yes   |   Yes   |  No   |
-|             gpt-oss              |   20B, 120B    | LLM  |    Yes    |   Yes   |   No    |   -   |
 
 “-” 表示还没有验证。
 
@@ -116,7 +115,6 @@
 |          Phi-3.5-mini          |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |         Phi-3.5-vision         |      4.2B       | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
-|            gpt-oss             |    20B, 120B    | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 
 ```{note}
 * [1] 目前，Mono-InternVL不支持FP16，因为数值不稳定。请改用BF16

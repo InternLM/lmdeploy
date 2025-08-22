@@ -141,7 +141,6 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
-  <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>
 <td>
