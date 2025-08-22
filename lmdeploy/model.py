@@ -1827,34 +1827,8 @@ class Glm4Chat(ChatGLM3):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'glm-4' in path and 'glm-4.5' not in path:
+        if 'glm-4' in path:
             return 'glm4'
-
-
-@MODELS.register_module(name='glm4_5')
-class Glm4_5(ChatGLM3):
-    """Chat template of glm-4 model."""
-
-    def __init__(
-            self,
-            system='<|system|>\n',
-            user='<|user|>\n',
-            assistant='<|assistant|>',  # no `\n` at the end
-            stop_words=['<|user|>', '<|endoftext|>', '<|observation|>'],
-            **kwargs):
-        super().__init__(system=system, user=user, assistant=assistant, stop_words=stop_words, **kwargs)
-        self.start = '[gMASK]<sop>'
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'glm-4.5' in path:
-            return 'glm4_5'
 
 
 @MODELS.register_module(name='codegeex4')
