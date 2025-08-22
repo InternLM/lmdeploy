@@ -304,7 +304,7 @@ class ModelInputs:
             num_ignored_history=num_ignored_history,
             max_q_seqlen=1,
             max_kv_seqlen=1,
-            sum_kv_seqlen=1,
+            sum_kv_seqlen=batch_size,
         )
 
     def log_info(self):
