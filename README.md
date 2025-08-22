@@ -127,7 +127,8 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
-  <li>GLM4 (9B)</li>
+  <li>GLM-4 (9B)</li>
+  <li>GLM-4-0414 (9B, 32B)</li>
   <li>CodeGeeX4 (9B)</li>
   <li>YI (6B-34B)</li>
   <li>Mistral (7B)</li>
@@ -142,6 +143,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
+  <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>
 <td>
@@ -158,6 +160,8 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>InternVL3 (1B-78B)</li>
+  <li>Intern-S1 (241B)</li>
+  <li>Intern-S1-mini (8.3B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
@@ -167,6 +171,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3-vision (4.2B)</li>
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
+  <li>GLM-4.1V-Thinking (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>
