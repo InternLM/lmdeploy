@@ -432,6 +432,30 @@ def test_hf_turbomind_chat_pr(config, model, communicator, cli_case_config):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.pr_test
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3-8B', 'internlm/Intern-S1-mini'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_hf_turbomind_chat_pr_gpu1(config, model, communicator, cli_case_config):
+    usercase = 'chat_testcase'
+
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'turbomind',
+                                                 cuda_prefix='CUDA_VISIBLE_DEVICES=5,6',
+                                                 extra=f'--communicator {communicator}')
+
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
 def test_modelscope_turbomind_chat_tp1(config, model, cli_case_config, worker_id):
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
