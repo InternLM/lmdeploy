@@ -131,6 +131,9 @@ class ModelInputs:
     block_offsets: torch.LongTensor
     is_decoding: bool
     num_ignored_history: torch.LongTensor
+    max_q_seqlen: int
+    max_kv_seqlen: int
+    sum_kv_seqlen: int
     local_adapter_ids: torch.LongTensor = None
     vision_inputs: VisionModelInputs = None
     cross_length: torch.LongTensor = None
@@ -143,6 +146,8 @@ class ModelInputs:
         """Update input ids."""
         assert self.is_decoding
         self.history_lengths = self.history_lengths + 1
+        self.max_kv_seqlen += 1
+        self.sum_kv_seqlen += self.seq_length.numel()
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -214,6 +219,7 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
+        max_kv_seqlen = self.max_kv_seqlen
 
         # for mllama
         history_cross_length = self.history_cross_length
@@ -227,6 +233,7 @@ class ModelInputs:
                 vision_inputs = None
                 end = min(max_seq_len, start + split_size)
 
+            max_q_seqlen = end - start
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -234,6 +241,9 @@ class ModelInputs:
                 history_lengths=self.history_lengths + start,
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
+                max_q_seqlen=max_q_seqlen,
+                max_kv_seqlen=max_kv_seqlen,
+                sum_kv_seqlen=max_kv_seqlen,
                 local_adapter_ids=self.local_adapter_ids,
                 vision_inputs=vision_inputs,
                 model_metas=self.model_metas,
@@ -242,6 +252,7 @@ class ModelInputs:
             )
             ret.append(inp)
             history_cross_length = cross_length
+            max_kv_seqlen += max_q_seqlen
 
             start = end
 
@@ -291,6 +302,9 @@ class ModelInputs:
             block_offsets=block_offsets,
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
+            max_q_seqlen=1,
+            max_kv_seqlen=1,
+            sum_kv_seqlen=1,
         )
 
     def log_info(self):
@@ -316,6 +330,7 @@ class StepContext:
     q_start_loc: torch.LongTensor
     kv_caches: List
     is_decoding: bool
+    sum_kv_seqlen: int
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
@@ -348,7 +363,6 @@ class StepContext:
         """
         q_seqlens = inputs.seq_length
         history_seqlens = inputs.history_lengths
-        device = q_seqlens.device
 
         input_multimodals = None
         if inputs.vision_inputs is not None:
@@ -360,16 +374,9 @@ class StepContext:
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
 
-        # kv_seqlens
-        if inputs.is_decoding:
-            attention_mask = torch.ones_like(q_seqlens)[:, None]
-            position_ids = history_seqlens.unsqueeze(-1).clone()
-        else:
-            max_q_seqlen = q_seqlens.max().item()
-            mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
-            attention_mask = (mask_range < q_seqlens[:, None]).long()
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids += history_seqlens.unsqueeze(-1)
+        # position ids
+        attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
+        position_ids = position_ids[None]  # [num_tokens] -> [1, num_tokens]
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
         # cross
@@ -378,8 +385,6 @@ class StepContext:
         if inputs.cross_length is not None:
             cross_kv_seqlens = (inputs.cross_length + inputs.history_cross_length)
 
-        # position ids 1d
-        position_ids = cls.get_position_ids_1d(position_ids, q_seqlens)[None]
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
@@ -398,6 +403,7 @@ class StepContext:
             q_start_loc=q_start_loc,
             kv_caches=kv_caches,
             is_decoding=inputs.is_decoding,
+            sum_kv_seqlen=inputs.sum_kv_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
@@ -412,15 +418,33 @@ class StepContext:
         return ret
 
     @classmethod
-    def get_position_ids_1d(cls, position_ids: torch.LongTensor, seq_length: torch.LongTensor):
-        """Get 1d position_ids."""
-        if position_ids.size(0) == 1 or position_ids.size(1) == 1:
-            position_ids_1d = position_ids.flatten()
-        else:
-            device = position_ids.device
-            position_ids_1d = [ids[:l] for ids, l in zip(position_ids.cpu(), seq_length.cpu())]
-            position_ids_1d = torch.cat(position_ids_1d).to(device)
-        return position_ids_1d
+    def get_mask_and_position_ids(cls, inputs: ModelInputs):
+        """Get position ids."""
+        q_seqlens = inputs.seq_length
+        history_seqlens = inputs.history_lengths
+
+        # decoding
+        if inputs.is_decoding:
+            attention_mask = torch.ones_like(q_seqlens)[:, None]
+            position_ids = history_seqlens.unsqueeze(-1).clone()
+            position_ids = position_ids.flatten()
+            return attention_mask, position_ids
+
+        num_tokens = inputs.input_ids.numel()
+        max_q_seqlen = inputs.max_q_seqlen
+        device = q_seqlens.device
+
+        # get mask
+        mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
+        attention_mask = (mask_range < q_seqlens[:, None]).long()
+
+        # position_ids
+        indices = attention_mask.long().cumsum(-1) - 1
+        position_ids = indices + history_seqlens.unsqueeze(-1)
+        indices[1:] += q_seqlens[:-1, None]
+        position_ids_1d = position_ids.new_empty(num_tokens)
+        position_ids_1d[indices.flatten()] = position_ids.flatten()
+        return attention_mask, position_ids_1d
 
 
 class StepContextManager:
