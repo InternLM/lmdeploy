@@ -260,11 +260,12 @@ class AscendOpsBackend(DlinferOpsBackend):
                     kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
         else:
             if step_context.is_decoding:
-                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
+                kv_seqlens_cpu = step_context.kv_seqlens.cpu().to(torch.int32)
             elif is_unpaged_prefill:
                 pass
             else:
-                kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(step_context.q_seqlens, 0).cpu()
+                kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(step_context.q_seqlens,
+                                                                           0).cpu().to(torch.int32)
                 block_offsets_int32 = step_context.block_offsets.to(torch.int32)
                 step_context.block_offsets = block_offsets_int32\
                     .repeat_interleave(step_context.q_seqlens, 0)
