@@ -107,8 +107,8 @@ class SafetensorsLoader(BaseLoader):
 
 class PytorchLoader(BaseLoader):
 
-    def __init__(self, model_path: str, pattern: str, index_name=None, file_pattern=None):
-        super().__init__(model_path, pattern)
+    def __init__(self, model_path: str, pattern: str, mappings: list, index_name=None, file_pattern=None):
+        super().__init__(model_path, pattern, mappings)
         self.shards, index = self.get_index(index_name, file_pattern)
         for k in index.keys():
             match = re.findall(self.pattern, k)
@@ -152,7 +152,7 @@ class StateDictLoader:
     lm_head, norm).
     """
 
-    def __init__(self, queue: Queue, pattern: str):
+    def __init__(self, queue: Queue, pattern: str, mappings: list):
         self.que = queue
         self.pattern = pattern
 
