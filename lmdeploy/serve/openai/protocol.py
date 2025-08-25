@@ -117,7 +117,17 @@ class ChatCompletionRequest(BaseModel):
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
     logit_bias: Optional[Dict[str, float]] = Field(default=None, examples=[None])  # noqa
-    max_tokens: Optional[int] = Field(default=None, examples=[None])
+    max_completion_tokens: Optional[int] = Field(
+        default=None,
+        examples=[None],
+        description=('An upper bound for the number of tokens that can be generated for a completion, '
+                     'including visible output tokens and reasoning tokens'),
+    )
+    max_tokens: Optional[int] = Field(
+        default=None,
+        examples=[None],
+        deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
+    )
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
 
     stream: Optional[bool] = False
@@ -261,7 +271,17 @@ class CompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     n: Optional[int] = 1
     logprobs: Optional[int] = None
-    max_tokens: Optional[int] = 16
+    max_completion_tokens: Optional[int] = Field(
+        default=16,
+        examples=[16],
+        description=('An upper bound for the number of tokens that can be generated for a completion, '
+                     'including visible output tokens and reasoning tokens'),
+    )
+    max_tokens: Optional[int] = Field(
+        default=16,
+        examples=[16],
+        deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
+    )
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
     stream: Optional[bool] = False
     stream_options: Optional[StreamOptions] = Field(default=None, examples=[None])
