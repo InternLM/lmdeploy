@@ -690,11 +690,6 @@ class AsyncEngine(LogitsMixin):
             gen_config.stop_token_ids = self.stop_words
         gen_config.update_from_hf_gen_cfg(self.hf_gen_cfg, self.tokenizer.eos_token_id)
         if not gen_config.do_sample:
-            logger.warning(f'GenerationConfig: {gen_config}')
-            logger.warning('Since v0.6.0, lmdeploy add `do_sample` in '
-                           'GenerationConfig. It defaults to False, meaning greedy '
-                           'decoding. Please set `do_sample=True` if sampling '
-                           ' decoding is needed')
             # greedy decode
             gen_config.top_k = 1
             # avoid unnecessary process
@@ -704,8 +699,7 @@ class AsyncEngine(LogitsMixin):
         elif gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
-            logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
-                         f'Fallback to 1')
+            logger.warning(f'n({gen_config.n}) > 1 hasn\'t been supported yet. Fallback to 1')
             gen_config.n = 1
         if messages:
             prompt = messages
@@ -742,6 +736,17 @@ class AsyncEngine(LogitsMixin):
                 if sequence_end is True and sequence_start is False:
                     await self.end_session(session_id)
                 return
+        if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
+                                                          or gen_config.output_logits == 'all'):
+            errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
+                      'when prefix caching is ON')
+            yield GenOut(response=errmsg,
+                         history_token_len=self.id2step[session_id],
+                         input_token_len=len(input_ids),
+                         generate_token_len=0,
+                         finish_reason='error',
+                         token_ids=[])
+            return
 
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
