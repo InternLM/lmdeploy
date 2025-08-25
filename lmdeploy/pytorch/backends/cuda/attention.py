@@ -343,8 +343,8 @@ class FlashMLAImpl(TritonAttentionImpl):
                 q_nope = query[:, :, :self.v_head_size]
                 k_rope = flatten_k.view(kv_flatten_size, self.num_kv_heads, -1)[:, :, self.v_head_size:]
                 c_kv = flatten_k.view(kv_flatten_size, self.num_kv_heads, -1)[:, :, :self.v_head_size]
-                from flash_attn_interface import flash_attn_varlen_func
-                attn_output, _ = flash_attn_varlen_func(
+                from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
+                attn_output = flash_attn_varlen_func(
                     q=q_rope,
                     k=k_rope,
                     v=c_kv,
@@ -407,7 +407,7 @@ class FA3Impl(TritonAttentionImpl):
             causal=causal,
             **kwargs,
         )
-        from flash_attn_interface import flash_attn_varlen_func
+        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
         self.flash_attn_varlen_func_v3 = flash_attn_varlen_func
 
     def forward(
@@ -496,7 +496,7 @@ class FA3Impl(TritonAttentionImpl):
             sliding_window = (-1, -1) if self.sliding_window is None else self.sliding_window
             if isinstance(sliding_window, int):
                 sliding_window = (sliding_window, sliding_window)
-            attn_output, _ = self.flash_attn_varlen_func_v3(
+            attn_output = self.flash_attn_varlen_func_v3(
                 q=query,
                 k=flatten_k,
                 v=flatten_v,

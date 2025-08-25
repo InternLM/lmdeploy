@@ -27,6 +27,7 @@ from .base import EngineBase
 from .engine_checker import EngineChecker
 from .executor import build_executor
 from .logits_process import SamplingInputs
+from .model_agent import BatchedOutputs
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -46,6 +47,7 @@ class InferOutput:
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
+    logprobs: torch.Tensor = None
 
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
@@ -736,8 +738,13 @@ class Engine(EngineBase):
         if not is_decoding:
             seq_length = [len(tokens) for tokens in token_ids]
             seq_length = torch.tensor(seq_length, dtype=torch.long)
+            max_q_seqlen = seq_length.max().item()
         else:
             seq_length = torch.ones(batch_size, dtype=torch.long)
+            max_q_seqlen = 1
+        kv_seqlens = seq_length + history_lengths
+        max_kv_seqlen = kv_seqlens.max().item()
+        sum_kv_seqlen = kv_seqlens.sum().item()
 
         # block offsets
         block_offsets = self.scheduler.get_block_tables(messages)
@@ -757,6 +764,9 @@ class Engine(EngineBase):
             block_offsets=block_offsets,
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
+            max_q_seqlen=max_q_seqlen,
+            max_kv_seqlen=max_kv_seqlen,
+            sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
         )
 
@@ -816,9 +826,18 @@ class Engine(EngineBase):
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self, new_token_timestamp: float, next_token_ids: torch.LongTensor, running: SeqList,
-                            logits: torch.Tensor, stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
+    def _make_infer_outputs(
+        self,
+        batched_outputs: BatchedOutputs,
+        running: SeqList,
+    ):
         """Make infer output."""
+        new_token_timestamp = batched_outputs.new_token_timestamp
+        next_token_ids = batched_outputs.next_token_ids
+        logits = batched_outputs.logits
+        stopped = batched_outputs.stopped
+        model_metas = batched_outputs.model_metas
+        logprobs = batched_outputs.logprobs
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
@@ -839,13 +858,21 @@ class Engine(EngineBase):
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
             else:
                 cache_block_ids = None
+
+            # logprobs
+            num_logprobs = msg.sampling_param.num_logprobs
+            cur_logprobs = None
+            if num_logprobs >= 0:
+                cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
+
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
                               cache_block_ids=cache_block_ids,
-                              req_metrics=req_metrics)
+                              req_metrics=req_metrics,
+                              logprobs=cur_logprobs)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -977,12 +1004,22 @@ class Engine(EngineBase):
         def __send_resp(out: InferOutput):
             """Send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
+            cur_logprobs = out.logprobs
+            logprobs = None
+            if cur_logprobs is not None:
+                # logprobs to dict
+                vals = cur_logprobs[0].tolist()
+                indices = cur_logprobs[1].tolist()
+                cur_logprobs = dict(zip(indices, vals))
+                logprobs = [] if out.resp.data is None else out.resp.data.get('logprobs', [])
+                logprobs = logprobs + [cur_logprobs]
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids,
                                      logits=out.logits,
                                      cache_block_ids=out.cache_block_ids,
-                                     req_metrics=out.req_metrics))
+                                     req_metrics=out.req_metrics,
+                                     logprobs=logprobs))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
@@ -1118,8 +1155,8 @@ class Engine(EngineBase):
 
                 # send output
                 out = await self.executor.get_output_async()
-                if len(out) > 0:
-                    step_outputs = self._make_infer_outputs(**out, running=running)
+                if out is not None:
+                    step_outputs = self._make_infer_outputs(out, running=running)
                     resp_que.put_nowait(step_outputs)
 
                 # lock forward event
