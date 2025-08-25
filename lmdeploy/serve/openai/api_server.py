@@ -694,12 +694,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if isinstance(request.stop, str):
         request.stop = [request.stop]
     random_seed = request.seed if request.seed else None
-    if request.max_completion_tokens:
-        max_new_tokens = request.max_completion_tokens
-    elif request.max_tokens:
-        max_new_tokens = request.max_tokens
-    else:
-        max_new_tokens = 16
+    max_new_tokens = (request.max_completion_tokens if request.max_completion_tokens else request.max_tokens)
 
     gen_config = GenerationConfig(
         max_new_tokens=max_new_tokens,
