@@ -234,6 +234,8 @@ class ModelInputs:
                 end = min(max_seq_len, start + split_size)
 
             max_q_seqlen = end - start
+            if isinstance(max_q_seqlen, torch.Tensor):
+                max_q_seqlen = max_q_seqlen.item()
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
