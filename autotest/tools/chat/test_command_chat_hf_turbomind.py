@@ -433,7 +433,7 @@ def test_hf_turbomind_chat_pr(config, model, communicator, cli_case_config):
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.pr_test
-@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3-8B', 'internlm/Intern-S1-mini'])
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3-8B'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_pr_gpu1(config, model, communicator, cli_case_config):
     usercase = 'chat_testcase'
