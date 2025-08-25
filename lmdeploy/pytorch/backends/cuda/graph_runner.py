@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
 from typing import Any, Dict, List, Tuple
 
 import torch
@@ -26,6 +27,25 @@ def next_power_of_2(n: int):
     n |= n >> 32
     n += 1
     return n
+
+
+@functools.lru_cache
+def _get_capture_batch_size_impl(max_batches: int):
+    """Capture batch size."""
+    ret = []
+    batch_size = 1
+    batch_step = 256
+    # power of 2
+    while batch_size <= min(batch_step, max_batches):
+        ret.append(batch_size)
+        batch_size *= 2
+
+    # step
+    ret += list(range(batch_size, max_batches + 1, batch_step))
+
+    if max_batches != ret[-1]:
+        ret.append(max_batches)
+    return ret
 
 
 def _false(*args, **kwargs):
@@ -144,6 +164,14 @@ class CUDAGraphRunner(GraphRunner):
 
         self.has_try_compile_model = True
 
+    def _get_capture_tokens(self, batch_size: int):
+        """Get capture tokens."""
+        cap_sizes = self.get_capture_batch_sizes()
+        for size in cap_sizes:
+            if size >= batch_size:
+                return size
+        assert False, f'Unsupported batch_size={batch_size}'
+
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
                       attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
         """Get graph key."""
@@ -153,9 +181,9 @@ class CUDAGraphRunner(GraphRunner):
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
         if meta.padding_batch_size is None:
-            new_num_tokens = next_power_of_2(num_tokens)
+            new_num_tokens = self._get_capture_tokens(num_tokens)
         else:
-            new_num_tokens = next_power_of_2(meta.padding_batch_size)
+            new_num_tokens = self._get_capture_tokens(meta.padding_batch_size)
         return (new_num_tokens, is_decoding, enable_microbatch)
 
     def __call__(self, **kwargs):
@@ -216,6 +244,10 @@ class CUDAGraphRunner(GraphRunner):
         if is_decoding and dp_meta is not None:
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
-            tp_size = next_power_of_2(padding_batch_size)
+            tp_size = self._get_capture_tokens(padding_batch_size)
             dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
         return inputs
+
+    def get_capture_batch_sizes(self) -> List[int]:
+        """Capture batch sizes."""
+        return _get_capture_batch_size_impl(self.cache_config.max_batches)
