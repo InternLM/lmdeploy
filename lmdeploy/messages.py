@@ -443,6 +443,15 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
 
+    def __repr__(self):
+        logits = 'logits=None' if self.logits is None else f'logits.shape={self.logits.shape}\nlogits={self.logits}'
+        hidden_state = (
+            'last_hidden_state=None' if self.last_hidden_state is None else
+            f'last_hidden_state.shape={self.last_hidden_state.shape}\nlast_hidden_state={self.last_hidden_state}')
+        s = (f'text={self.text}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
+             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}')
+        return s
+
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
 class EventType(enum.IntEnum):

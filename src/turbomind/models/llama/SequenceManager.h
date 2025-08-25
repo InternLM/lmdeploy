@@ -54,7 +54,7 @@ inline std::ostream& operator<<(std::ostream& os, const Sequence& seq)
 {
     os << "id=" << seq.id << ", status=" << seq.status << ", token_count=" << seq.tokens.size()
        << ", block_count=" << seq.blocks.size() << ", cache_len=" << seq.cache_len
-       << ", random_state_size=" << seq.random_state.size();
+       << ", random_state_size=" << seq.random_state.size() << ", input_length=" << seq.input_length;
     return os;
 }
 

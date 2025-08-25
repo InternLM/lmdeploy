@@ -83,7 +83,6 @@ def main(model_path, backend, **kwargs):
                 try:
                     for resp in resps:
                         print(resp.text, end='', flush=True)
-                        pass
                 except KeyboardInterrupt:
                     sess.stop()
     else:

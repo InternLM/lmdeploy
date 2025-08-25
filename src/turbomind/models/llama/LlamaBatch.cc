@@ -117,10 +117,19 @@ void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_req
                 TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
                 r->ec = Request::kConflict;
             }
-            if (param_.enable_prefix_caching && !r->session.start_flag) {
-                // Prefix caching is incompatible with interactive mode
-                TM_LOG_ERROR("Skip inconsistent %s request for ID %lu", type, r->id);
-                r->ec = Request::kInconsistency;
+            if (param_.enable_prefix_caching) {
+                if (r->session.step != 0) {
+                    // Prefix caching is incompatible with interactive mode
+                    TM_LOG_ERROR("Skip inconsistent %s request for ID %lu step %d", type, r->id, r->session.step);
+                    r->ec = Request::kInconsistency;
+                }
+                else if (r->gen_cfg.output_logits == GenerationConfig::kAll ||
+                         r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
+                    // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
+                    TM_LOG_ERROR("Skip inconsistent %s request for ID %lu. It cannot output logits or "
+                                 "last_hidden_states for all tokens", type, r->id);
+                    r->ec = Request::kInconsistency;
+                }
             }
         }
     };
@@ -230,10 +239,6 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         }
 
         const int step = [&] {
-            if (param_.enable_prefix_caching) {
-                // Prefix caching is incompatible with interactive mode
-                return 0;
-            }
             int s = r->session.step;
             if (s < 0) {
                 s = ptr->tokens.size();
@@ -1014,8 +1019,7 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
             auto& dst_buf = state_->requests[i]->outputs.at("logits").buffer();
 
             const int cache_len = state_->sequences[i]->cache_len;
-            const int history_len =
-                !param_.enable_prefix_caching ? state_->sequences[i]->tokens.size() : state_->requests[i]->session.step;
+            const int history_len = state_->sequences[i]->tokens.size();
 
             // ----------H------I-------P-----------
             //      C        C      C         C
@@ -1266,7 +1270,7 @@ auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
 {
     if (tp_rank_ == 0) {
         TM_LOG_INFO(
-            "[Interrupt] slot %d, request %llu, stop %d, end %d", index, state_->requests[index]->id, force_stop);
+            "[Interrupt] slot %d, request %llu, stop %d", index, state_->requests[index]->id, force_stop);
     }
 
     if (debug_ && tp_rank_ == 0) {
@@ -1280,31 +1284,30 @@ auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-    const int output_len = state_->h_context_length[index];
-    auto&     seq        = *state_->sequences[index];
-
-    // Update token IDs
-    seq.tokens.resize(output_len);
-
-    // output_ids is updated & synced in `Finish`
-    const auto output_ids = state_->requests[index]->output_ids.data();
-    std::copy_n(output_ids, output_len, seq.tokens.data());
-    // Cache the generated tokens of the sequence
-    if (!force_stop) {
-        sequence_manager_->CacheGeneration(seq);
+    auto& seq = *state_->sequences[index];
+    {
+        // output_ids is updated & synced in `Finish`
+        const auto output_ids = state_->requests[index]->output_ids.data();
+        const auto output_len = state_->h_context_length[index];
+        // Update token IDs to perform `CacheGeneration` later
+        seq.tokens.resize(output_len);
+        std::copy_n(output_ids, output_len, seq.tokens.data());
     }
 
-    // Save random state in host memory
-    seq.random_state.resize(sizeof(curandState_t));
-    // This async copy must be synchronized by the caller
-    core::Copy((curandState_t*)state_->curand_state.data() + index, 1, (curandState_t*)seq.random_state.data());
-
-    // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
-    sequence_manager_->UpdateAndSetUnlock(seq);
-
     if (state_->requests[index]->session.end_flag) {
-        // Sequence is ending this round
+        // Cache the generated tokens of the sequence
+        sequence_manager_->CacheGeneration(seq);
         FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
+    }
+    else {
+        // Prefix caching is incompatible with interactive mode, so we don't perform `CacheGeneration` here
+        // Save random state in host memory
+        seq.random_state.resize(sizeof(curandState_t));
+        // This async copy must be synchronized by the caller
+        core::Copy((curandState_t*)state_->curand_state.data() + index, 1, (curandState_t*)seq.random_state.data());
+
+        // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
+        sequence_manager_->UpdateAndSetUnlock(seq);
     }
 
     state_->sequences[index] = nullptr;

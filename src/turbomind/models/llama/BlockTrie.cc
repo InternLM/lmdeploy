@@ -28,6 +28,9 @@ std::tuple<BlockIds, UniqueIds> BlockTrie::Match(const Sequence& seq)
     std::shared_ptr<TrieNode> curr_node   = root_;
     int                       num_matched = 0;
 
+    // Warning: Do not use "<=" operator even when seq.prompt length is evenly
+    // divisible by block_seq_len_. This may produce an input_length of zero for
+    // the sequence, violating the precondition checked in LlamaBatch::Forward.
     while (num_matched + block_seq_len_ < seq.prompt.size()) {
         std::vector<int> curr_tokens(seq.prompt.begin() + num_matched,
                                      seq.prompt.begin() + num_matched + block_seq_len_);
