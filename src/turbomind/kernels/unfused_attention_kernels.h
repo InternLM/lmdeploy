@@ -17,25 +17,21 @@
 
 namespace turbomind {
 
-template<typename T, typename T_IN>
+template<typename T>
 struct MaskedSoftmaxParam {
     // Common parameters.
-    T*          attention_score = nullptr;  // (batch_size, head_num, q_length, k_length)
-    const T_IN* qk              = nullptr;  // (batch_size, head_num, q_length, k_length)
-    const T*    attention_mask  = nullptr;  // (batch_size, q_length, k_length)
-    int         batch_size      = 0;
-    int         q_length        = 0;
-    int         k_length        = 0;
-    int         num_heads       = 0;
-    T           qk_scale        = T(0.0f);
-
-    // Optional parameters that depend on the type of attention.
-    // The slopes of the linear position bias of ALiBi.
-    const T* linear_bias_slopes = nullptr;  // (head_num,), optional
+    T*           attention_score = nullptr;  // (batch_size, head_num, q_length, k_length)
+    const float* qk              = nullptr;  // (batch_size, head_num, q_length, k_length)
+    const T*     attention_mask  = nullptr;  // (batch_size, q_length, k_length)
+    int          batch_size      = 0;
+    int          q_length        = 0;
+    int          k_length        = 0;
+    int          num_heads       = 0;
+    const T*     sinks           = nullptr;
 };
 
-template<typename T, typename T_IN>
-void invokeMaskedSoftmax(MaskedSoftmaxParam<T, T_IN>& param, cudaStream_t stream);
+template<typename T>
+void invokeMaskedSoftmax(MaskedSoftmaxParam<T>& param, cudaStream_t stream);
 
 template<typename T>
 void invokeTransposeQKV(T*           dst,

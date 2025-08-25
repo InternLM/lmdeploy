@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import inspect
 import json
-from dataclasses import asdict, fields
+from dataclasses import asdict, field, fields
 from typing import List
 
 # use pydantic.dataclasses.dataclass to check data type
@@ -61,6 +61,9 @@ class ModelConfig:
     inter_size: List[int] = None
     norm_eps: float = None
     attn_bias: int = 0
+    mlp_bias: bool = False
+    window_size: List[int] = field(default_factory=list)
+    attn_sink: bool = False
     qk_norm: bool = False
     size_per_head: int = 128
     group_size: int = 64
@@ -70,8 +73,10 @@ class ModelConfig:
     mlp_tp_size: int = 1
     model_format: str = 'hf'
     expert_num: List[int] = ()
+    expert_router_bias: bool = False
     expert_inter_size: int = 0
     experts_per_token: int = 0
+    activation_type: str = ''
     moe_shared_gate: bool = False
     norm_topk_prob: bool = False
     routed_scale: float = 1.0

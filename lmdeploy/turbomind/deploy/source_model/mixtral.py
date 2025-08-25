@@ -17,8 +17,8 @@ class MixtralReader(LlamaReader):
             result.append(tensor)
         return (*result, )
 
-    def moe_ffn_gate(self, i):
-        return self.params.get(f'model.layers.{i}.block_sparse_moe.gate.weight')
+    def moe_ffn_gate(self, i, kind):
+        return self.params.get(f'model.layers.{i}.block_sparse_moe.gate.{kind}')
 
 
 @INPUT_MODELS.register_module(name='mixtral')

@@ -53,6 +53,7 @@ class SamplingParam:
     logits_processors: Optional[List[LogitsProcessor]] = None
     out_logits: bool = False
     out_last_hidden_states: bool = False
+    num_logprobs: int = -1
 
     @classmethod
     def from_gen_config(self, gen_config: GenerationConfig):
@@ -110,6 +111,9 @@ class SamplingParam:
                            'a int >=0 and <= `max_new_tokens`,'
                            f' but is {min_new_tokens}')
             min_new_tokens = 0
+        logprobs = gen_config.logprobs
+        if logprobs is None:
+            logprobs = -1
         return SamplingParam(top_p=top_p,
                              top_k=top_k,
                              min_p=min_p,
@@ -123,7 +127,8 @@ class SamplingParam:
                              max_new_tokens=max_new_tokens,
                              min_new_tokens=min_new_tokens,
                              logits_processors=gen_config.logits_processors,
-                             out_logits=(output_logits is not None))
+                             out_logits=(output_logits is not None),
+                             num_logprobs=logprobs)
 
 
 class MessageStatus(enum.Enum):

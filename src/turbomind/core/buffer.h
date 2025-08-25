@@ -208,7 +208,7 @@ struct Buffer_: public Buffer {
 
     const T* data_or(const T* other) const
     {
-        return const_cast<Buffer_*>(this)->data_or(other);
+        return data_ ? data() : other;
     }
 
     void* raw_data(ssize_t offset = 0)

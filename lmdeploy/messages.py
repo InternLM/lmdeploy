@@ -326,11 +326,14 @@ class PytorchEngineConfig:
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
         enable_mp_engine (bool): run engine in multi-process mode.
+        mp_engine_backend (str): backend of mp engine, options:
+            ['mp', 'ray']. Default to `mp`.
         model_format (str): weight quantization policy, options: ['fp8'].
         hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
             It can be used to override the default config of the model,
         disable_vision_encoder (bool): Whether to disable loading vision
             encoder. Default to False.
+        logprobs_mode (str): The mode of logprob, options: ['raw_logits', 'raw_logprobs']
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -359,10 +362,12 @@ class PytorchEngineConfig:
     enable_microbatch: bool = False
     enable_eplb: bool = False
     enable_mp_engine: bool = False
+    mp_engine_backend: str = 'mp'
     model_format: str = None
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
+    logprobs_mode: str = None
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
@@ -404,6 +409,7 @@ class ResponseType(enum.Enum):
     HANDLER_NOT_EXIST = enum.auto()
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
+    CANCEL = enum.auto()
 
 
 @dataclass

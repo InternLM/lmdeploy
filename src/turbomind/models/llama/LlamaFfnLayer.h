@@ -43,9 +43,6 @@ public:
     void forward(ForwardParam param);
 
 private:
-    void activation(Tensor& gating, Tensor& inter, cudaStream_t stream);
-
-private:
     const size_t hidden_units_;
     LlamaLinear& linear_;
 };
