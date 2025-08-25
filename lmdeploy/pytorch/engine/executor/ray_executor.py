@@ -17,7 +17,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.ray import RayContext
+from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -25,19 +25,6 @@ from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
-
-
-def get_device_str():
-    """Get device str."""
-    device_type = get_device_manager().current_context().device_type
-    if device_type == 'cuda':
-        device_type = 'GPU'
-    elif device_type == 'ascend':
-        device_type = 'NPU'
-    else:
-        raise ValueError(f'Unsupported device type: {device_type}')
-
-    return device_type
 
 
 def _get_master_addr():
