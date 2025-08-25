@@ -108,6 +108,7 @@ jobs:
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/root/models
         - /mnt/187:/mnt/187
+        - /mnt/bigdisk:/mnt/bigdisk
         - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -149,7 +150,6 @@ jobs:
           git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
           cd opencompass
           git checkout ${{ github.event.inputs.oc_repo_ref}}
-          cp /root/models/offline_pkg/requirements-oc.txt requirements/runtime.txt
           python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env

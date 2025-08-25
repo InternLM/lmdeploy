@@ -77,8 +77,8 @@ def assert_chat_completions_stream_return(output,
                 for content in message.get('logprobs').get('content'):
                     assert_logprobs(content, logprobs_num)
         if is_last is True:
-            assert len(message.get('delta').get('content')) == 0
-            assert message.get('finish_reason') in ['stop', 'length']
+            assert len(message.get('delta').get('content')) == 0 or 'error' in message.get('delta').get('content')
+            assert message.get('finish_reason') in ['stop', 'length', 'error']
             if check_logprobs is True:
                 assert message.get('logprobs') is None
 

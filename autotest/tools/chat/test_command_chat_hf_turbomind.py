@@ -315,8 +315,8 @@ def test_hf_turbomind_chat_fallback_backend_kvint8_tp1(config, model, communicat
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize(
-    'model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'meta-llama/Llama-3.2-11B-Vision-Instruct'])
+@pytest.mark.parametrize('model',
+                         ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'Qwen/Qwen2.5-VL-32B-Instruct'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_fallback_backend_tp2(config, model, communicator, cli_case_config, worker_id):
     usercase = 'chat_testcase'
@@ -338,8 +338,8 @@ def test_hf_turbomind_chat_fallback_backend_tp2(config, model, communicator, cli
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize(
-    'model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'meta-llama/Llama-3.2-11B-Vision-Instruct'])
+@pytest.mark.parametrize('model',
+                         ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'Qwen/Qwen2.5-VL-32B-Instruct'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_fallback_backend_kvint8_tp2(config, model, communicator, cli_case_config, worker_id):
     usercase = 'chat_testcase'
@@ -412,6 +412,30 @@ def test_hf_turbomind_base_tp2(config, model, communicator, cli_case_config, wor
 ])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_pr(config, model, communicator, cli_case_config):
+    usercase = 'chat_testcase'
+
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'turbomind',
+                                                 cuda_prefix='CUDA_VISIBLE_DEVICES=5,6',
+                                                 extra=f'--communicator {communicator}')
+
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_1
+@pytest.mark.pr_test
+@pytest.mark.parametrize('model', ['OpenGVLab/InternVL3-8B'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_hf_turbomind_chat_pr_gpu1(config, model, communicator, cli_case_config):
     usercase = 'chat_testcase'
 
     result, chat_log, msg = hf_command_line_test(config,
