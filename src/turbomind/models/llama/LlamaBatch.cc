@@ -123,11 +123,13 @@ void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_req
                     TM_LOG_ERROR("Skip inconsistent %s request for ID %lu step %d", type, r->id, r->session.step);
                     r->ec = Request::kInconsistency;
                 }
-                else if (r->gen_cfg.output_logits == GenerationConfig::kAll ||
-                         r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
+                else if (r->gen_cfg.output_logits == GenerationConfig::kAll
+                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
                     // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
                     TM_LOG_ERROR("Skip inconsistent %s request for ID %lu. It cannot output logits or "
-                                 "last_hidden_states for all tokens", type, r->id);
+                                 "last_hidden_states for all tokens",
+                                 type,
+                                 r->id);
                     r->ec = Request::kInconsistency;
                 }
             }
@@ -1018,7 +1020,7 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
             auto& dst_buf = state_->requests[i]->outputs.at("logits").buffer();
 
-            const int cache_len = state_->sequences[i]->cache_len;
+            const int cache_len   = state_->sequences[i]->cache_len;
             const int history_len = state_->sequences[i]->tokens.size();
 
             // ----------H------I-------P-----------
@@ -1269,8 +1271,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
 auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
 {
     if (tp_rank_ == 0) {
-        TM_LOG_INFO(
-            "[Interrupt] slot %d, request %llu, stop %d", index, state_->requests[index]->id, force_stop);
+        TM_LOG_INFO("[Interrupt] slot %d, request %llu, stop %d", index, state_->requests[index]->id, force_stop);
     }
 
     if (debug_ && tp_rank_ == 0) {
