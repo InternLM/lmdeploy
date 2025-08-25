@@ -21,12 +21,13 @@ if [[ ${PYTHON_VERSION} = "3.13" ]]; then
 fi
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
-    FLASH_MLA_VERSION=9edee0c
 
     if [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
         DEEP_GEMM_VERSION=03d0be3
+        FLASH_MLA_VERSION=9edee0c
     else
         DEEP_GEMM_VERSION=1876566
+        FLASH_MLA_VERSION=c759027
     fi
 
     DEEP_EP_VERSION=26cf250
