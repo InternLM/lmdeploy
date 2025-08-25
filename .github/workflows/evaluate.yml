@@ -149,7 +149,6 @@ jobs:
           git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
           cd opencompass
           git checkout ${{ github.event.inputs.oc_repo_ref}}
-          cp /root/models/offline_pkg/requirements-oc.txt requirements/runtime.txt
           python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
