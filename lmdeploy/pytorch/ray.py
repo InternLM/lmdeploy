@@ -6,14 +6,16 @@ from typing import Dict, List
 import ray
 from ray.util.placement_group import PlacementGroup
 
+from lmdeploy.pytorch.devices import get_device_manager
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 PG_WAIT_TIMEOUT = 1800
 
 
-def get_device_str(device_type: str):
+def get_device_str(device_type: str = None) -> str:
     """Get device str."""
+    device_type = device_type or get_device_manager().current_context().device_type
     if device_type == 'cuda':
         device_type = 'GPU'
     elif device_type == 'ascend':
@@ -22,6 +24,17 @@ def get_device_str(device_type: str):
         raise ValueError(f'Unsupported device type: {device_type}')
 
     return device_type
+
+
+def get_resource_kwargs(device_str: str, resource_used: float = 0.01) -> Dict[str, float]:
+    """Get resource kwargs."""
+    if device_str == 'GPU':
+        resource_kwargs = {'num_gpus': resource_used}
+    elif device_str == 'NPU':
+        resource_kwargs = {'resources': {device_str: resource_used}}
+    else:
+        raise ValueError(f'Unsupported device type: {device_str}')
+    return resource_kwargs
 
 
 def _wait_until_pg_ready(current_placement_group: PlacementGroup):
