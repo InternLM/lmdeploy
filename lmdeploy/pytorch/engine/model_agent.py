@@ -328,6 +328,7 @@ class BaseModelAgent:
 
         self.stream = torch.cuda.Stream()
         self.out_stream = torch.cuda.Stream()
+        self.cache_stream = torch.cuda.Stream()
 
         self.dist_ctx = dist_ctx
         self.device_ctx = device_ctx
@@ -951,7 +952,8 @@ class BaseModelAgent:
                                             self.model_config,
                                             rank=self.rank,
                                             tp_rank=self.tp_rank,
-                                            world_size=tp)
+                                            world_size=tp,
+                                            cache_stream=self.cache_stream)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
