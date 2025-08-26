@@ -154,7 +154,7 @@ class SamplingInputs:
                 top_k[idx] = param.top_k
                 top_p[idx] = param.top_p
                 min_p[idx] = param.min_p
-                random_offsets[idx] = seq.random_offsets
+                random_offsets[idx] = seq.num_all_ids
                 response_formats[idx] = param.response_format
                 if param.random_seed is not None:
                     random_seeds[idx] = param.random_seed & 0xffffffff

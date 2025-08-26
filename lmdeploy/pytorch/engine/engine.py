@@ -586,7 +586,7 @@ class Engine(EngineBase):
             max_session_len = self.max_session_len
             sampling_param = msg.sampling_param
             max_new_tokens = sampling_param.max_new_tokens
-            num_all_tokens = msg.num_all_tokens()
+            num_all_tokens = msg.num_all_ids
             if max_new_tokens + num_all_tokens > max_session_len:
                 logger.warning(
                     f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
@@ -603,14 +603,12 @@ class Engine(EngineBase):
             sess = scheduler.sessions[session_id]
             # TODO: support 1 session n sequence
             sampling_param = req.data['sampling_param']
-            return_logits = sampling_param.out_logits
             if len(sess.sequences) == 0:
                 migration_request = req.data.get('migration_request')
                 assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
                 sess.add_sequence(req.data['token_ids'],
                                   sampling_param=sampling_param,
                                   adapter_name=req.data['adapter_name'],
-                                  return_logits=return_logits,
                                   multimodals=req.data.get('input_multimodals'),
                                   input_embeddings=req.data.get('input_embeddings', ),
                                   migration_request=migration_request,
@@ -630,9 +628,7 @@ class Engine(EngineBase):
                     embeddings=req.data.get('input_embeddings'),
                     append_tokens=True,
                 )
-                msg.num_new_tokens = 0
                 msg.sampling_param = sampling_param
-                msg.return_logits = return_logits
                 msg.status = MessageStatus.WAITING
                 __update_max_new_tokens(msg)
 
@@ -670,10 +666,11 @@ class Engine(EngineBase):
             ]
             input_embedding_indexing = torch.zeros((batch_size, max_q_seq_length), dtype=torch.bool)
             for msg_id, msg in enumerate(messages):
+                num_history_ids = msg.num_history_ids
                 for emb in msg.input_embeddings:
                     # make slice index relative to embeddings
-                    emb_start = emb.start - msg.history_len
-                    emb_end = emb.end - msg.history_len
+                    emb_start = emb.start - num_history_ids
+                    emb_end = emb.end - num_history_ids
                     input_embedding_indexing[msg_id][emb_start:emb_end] = True
             return (input_embeddings, input_embedding_indexing, input_embedding_ranges)
 
@@ -727,7 +724,7 @@ class Engine(EngineBase):
         """
         batch_size = len(messages)
         # history lengths
-        history_lengths = torch.tensor([msg.history_len for msg in messages])
+        history_lengths = torch.tensor([msg.num_history_ids for msg in messages])
 
         # input ids
         token_ids = [msg.token_ids for msg in messages]
@@ -740,8 +737,8 @@ class Engine(EngineBase):
             seq_length = torch.tensor(seq_length, dtype=torch.long)
             max_q_seqlen = seq_length.max().item()
         else:
-            seq_length = torch.ones(batch_size, dtype=torch.long)
             max_q_seqlen = 1
+            seq_length = torch.full((batch_size, ), max_q_seqlen, dtype=torch.long)
         kv_seqlens = seq_length + history_lengths
         max_kv_seqlen = kv_seqlens.max().item()
         sum_kv_seqlen = kv_seqlens.sum().item()
@@ -804,7 +801,6 @@ class Engine(EngineBase):
 
             # fill token
             msg.update_token_ids(update_token, model_meta=model_meta)
-            msg.num_new_tokens += 1
             if stop:
                 msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
 
@@ -820,7 +816,6 @@ class Engine(EngineBase):
 
             # fill token
             msg.update_token_ids(update_token, model_meta=model_meta)
-            msg.num_new_tokens += 1
             if stop:
                 update_token = _EMPTY_TOKEN
                 msg.update_token_ids(update_token, model_meta=model_meta)
