@@ -13,23 +13,50 @@ logger = get_logger('lmdeploy')
 MODELS = Registry('model', locations=['lmdeploy.model'])
 
 DEPRECATED_CHAT_TEMPLATE_NAMES = [
+    'deepseek-v3',
+    'deepseek-r1',
+    'deepseek-coder',
+    'cogvlm2',
+    'internlm2',
+    'internlm3',
+    'internvl-internlm2',
+    'internvl2-internlm2',
+    'internvl2_5',
+    'internvl-zh-hermes2',
+    'internvl2-phi3',
+    'internvl-phi3',
     'llama3',
     'llama3_1',
     'llama3_2',
     'llama4',
-    'interns1',
-    'intern-s1',
+    'minicpmv-2d6',
+    'minicpm3',
     'qwen2d5',
     'qwen2d5-vl',
     'qwq_preview',
     'qwq',
     'qwen3',
+    'interns1',
+    'intern-s1',
     'gemma',
+    'yi',
+    'yi-vl',
+    'phi-3',
+    'phi-4',
+    'chatglm3',
+    'glm4',
+    'codegeex4',
     'molmo',
 ]
 REMOVED_CHAT_TEMPLATE_NAMES = [
-    'llama', 'wizardlm', 'vicuna', 'solar', 'yi', 'internlm-xcomposer2', 'internlm-xcomposer2d5', 'baichuan',
-    'baichuan2', 'puyu', 'ultracm', 'ultralm', 'deepseek-coder', 'yi-vl', 'codegeex4'
+    'llama',
+    'wizardlm',
+    'solar',
+    'internlm-xcomposer2',
+    'internlm-xcomposer2d5',
+    'puyu',
+    'ultracm',
+    'ultralm',
 ]
 
 
@@ -412,112 +439,6 @@ class InternLMChat7B(BaseChatTemplate):
             return 'internlm'
 
 
-@MODELS.register_module(name='internlm3')
-@MODELS.register_module(name='internlm2')
-class InternLM2Chat7B(InternLMChat7B):
-    """Chat template and generation parameters of InternLM2-Chat-7B."""
-
-    def __init__(self,
-                 system='<|im_start|>system\n',
-                 user='<|im_start|>user\n',
-                 assistant='<|im_start|>assistant\n',
-                 environment='<|im_start|>environment\n',
-                 plugin='<|plugin|>',
-                 interpreter='<|interpreter|>',
-                 eosys='<|im_end|>\n',
-                 eoh='<|im_end|>\n',
-                 eoa='<|im_end|>',
-                 eoenv='<|im_end|>\n',
-                 separator='\n',
-                 stop_words=['<|im_end|>', '<|action_end|>'],
-                 **kwargs):
-        self.plugin = plugin
-        self.interpreter = interpreter
-        self.environment = environment
-        self.eoenv = eoenv
-        super(InternLM2Chat7B, self).__init__(system=system,
-                                              user=user,
-                                              assistant=assistant,
-                                              eosys=eosys,
-                                              eoh=eoh,
-                                              eoa=eoa,
-                                              separator=separator,
-                                              stop_words=stop_words,
-                                              **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'internlm2' in path and ('chat' in path or 'math' in path):
-            return 'internlm2'
-
-        if 'internlm3' in path and ('instruct' in path):
-            return 'internlm3'
-
-    def messages2prompt(self, messages, sequence_start=True, tools=None, **kwargs):
-        """Return the prompt that is concatenated with other elements in the
-        chat template.
-
-        Args:
-            messages (str | List): user's input prompt
-        Returns:
-            str: the concatenated prompt
-        """
-        if isinstance(messages, str):
-            return self.get_prompt(messages, sequence_start)
-        box_map = dict(user=self.user,
-                       assistant=self.assistant,
-                       system=self.system,
-                       environment=self.environment,
-                       tool=self.environment)
-        eox_map = dict(user=self.eoh,
-                       assistant=self.eoa + self.separator,
-                       system=self.eosys,
-                       environment=self.eoenv,
-                       tool=self.eoenv)
-        name_map = dict(plugin=self.plugin, interpreter=self.interpreter)
-        ret = ''
-        if self.meta_instruction is not None and sequence_start:
-            if len(messages) and messages[0]['role'] != 'system':
-                ret += f'{self.system}{self.meta_instruction}{self.eosys}'
-
-        if tools:
-            tools_prompt = dict(
-                role='system',
-                name='plugin',  # only support internlm2
-                content=json.dumps(tools, ensure_ascii=False))
-            insert_index = 0
-            if messages[0]['role'] == 'system':
-                insert_index = 1
-            messages.insert(insert_index, tools_prompt)
-        for message in messages:
-            role = message['role']
-            content = get_text(message['content'])
-            if role == 'assistant' and message.get('tool_calls', None) is not None:
-                for tool_call in message['tool_calls']:
-                    function = tool_call.get('function', {})
-                    function['name'] = function.get('name', '')
-                    function['parameters'] = function.get('parameters', function.get('arguments', ''))
-                    function.pop('arguments')
-                    if isinstance(function['parameters'], str):
-                        function['parameters'] = json.loads(function['parameters'])
-                    content += f'<|action_start|><|plugin|>\n{json.dumps(function, ensure_ascii=False)}<|action_end|>'
-            if 'name' in message and message['name'] in name_map:
-                begin = box_map[role].strip() + f" name={name_map[message['name']]}\n"
-            else:
-                begin = box_map[role]
-            ret += f'{begin}{content}{eox_map[role]}'
-        if len(messages) and messages[-1]['role'] == 'assistant':
-            return ret[:-len(eox_map['assistant'])]  # prefix of response
-        ret += f'{self.assistant}'
-        return ret
-
-
 @MODELS.register_module(name='baichuan2')
 class Baichuan2(BaseChatTemplate):
     """Chat template and generation parameters of Baichuan2-7B-Base and
@@ -575,7 +496,6 @@ If a question does not make any sense, or is not factually coherent, explain why
             return 'llama2'
 
 
-@MODELS.register_module(name='minicpmv-2d6')
 @MODELS.register_module(name='qwen')
 class Qwen7BChat(BaseChatTemplate):
     """Chat template for Qwen-7B-Chat."""
@@ -612,10 +532,6 @@ class Qwen7BChat(BaseChatTemplate):
         model_path = model_path.lower()
         if 'qwen' in model_path and not any(keyword in model_path for keyword in ('qwen2.5', 'qwq', 'qwen3')):
             return 'qwen'
-        if 'minicpm-v-2_6' in model_path:
-            return 'minicpmv-2d6'
-        if 'minicpm3-' in model_path:
-            return 'minicpm3'
 
 
 @MODELS.register_module(name='codellama')
@@ -850,7 +766,7 @@ class DeepseekVL2(BaseChatTemplate):
             return 'deepseek-vl2'
 
 
-@MODELS.register_module(name=['llava-chatml', 'internvl-zh-hermes2'])
+@MODELS.register_module(name=['llava-chatml'])
 class ChatmlDirect(BaseChatTemplate):
 
     def __init__(self,
@@ -883,82 +799,6 @@ class ChatmlDirect(BaseChatTemplate):
         path = model_path.lower()
         if 'llava' in path and 'v1.6-34b' in path:
             return 'llava-chatml'
-        if 'internvl-chat' in path and 'v1-2' in path:
-            return 'internvl-zh-hermes2'
-
-
-class Phi3Instruct(BaseChatTemplate):
-    """Chat template of InternLM model."""
-
-    def __init__(self,
-                 system='<|system|>\n',
-                 meta_instruction=None,
-                 eosys='<|end|>\n',
-                 user='<|user|>\n',
-                 eoh='<|end|>\n',
-                 assistant='<|assistant|>\n',
-                 eoa='<|end|>\n',
-                 separator='',
-                 stop_words=['<|end|>', '<|endoftext|>', '<|assistant|>'],
-                 **kwargs):
-        super().__init__(system=system,
-                         meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         separator=separator,
-                         stop_words=stop_words,
-                         **kwargs)
-
-
-@MODELS.register_module(name='internvl2-phi3')
-class InternVL2Phi3(Phi3Instruct):
-
-    def __init__(self, meta_instruction='你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。', **kwargs):
-        super().__init__(meta_instruction=meta_instruction, **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'internvl2-4b' in path:
-            return 'internvl2-phi3'
-
-
-@MODELS.register_module(name='internvl-phi3')
-class InternVLPhi3(Phi3Instruct):
-    """Chat template of InternVL Chat 4B model."""
-
-    def __init__(self,
-                 meta_instruction='You are an AI assistant whose name is Phi-3.',
-                 eosys='<|end|>',
-                 eoh='<|end|>',
-                 eoa='<|end|>',
-                 separator='',
-                 **kwargs):
-        super().__init__(meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         eoh=eoh,
-                         eoa=eoa,
-                         separator=separator,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if all([c in path for c in ['mini-internvl-chat', '4b', 'v1-5']]):
-            return 'internvl-phi3'
 
 
 @MODELS.register_module(name=['hf'])
@@ -1000,9 +840,10 @@ class HFChatTemplate(BaseChatTemplate):
         else:
             # Use a sentinel position to avoid the influence of default system role in the tokenizer's chat template
             sentinel_messages = [{'role': 'system', 'content': 'This is a sentinel position'}]
-            sentinel_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-            messages = sentinel_messages + messages
-            prompt = self.tokenizer.apply_chat_template(messages,
+            sentinel_prompt = self.tokenizer.apply_chat_template(sentinel_messages,
+                                                                 tokenize=False,
+                                                                 add_generation_prompt=False)
+            prompt = self.tokenizer.apply_chat_template(sentinel_messages + messages,
                                                         tokenize=False,
                                                         add_generation_prompt=add_generation_prompt,
                                                         **kwargs)
@@ -1056,119 +897,8 @@ def best_match_model(query: str) -> Optional[str]:
 
 
 if __name__ == '__main__':
-    enable_thinking = None
-    has_user_sys = True
-
-    model_path = 'internlm/Intern-S1'
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
-    chat_template_name = best_match_model(model_path)
-    chat_template = MODELS.get(chat_template_name)(model_path)
-
-    tools = [
-        {
-            'type': 'function',
-            'function': {
-                'name': 'find_user_id_by_name_zip',
-                'description':
-                'Find user id by first name, last name, and zip code. If the user is not found, the function will return an error message. By default, find user id by email, and only call this function if the user is not found by email or cannot remember email.',  # noqa: E501
-                'parameters': {
-                    'type': 'object',
-                    'properties': {
-                        'first_name': {
-                            'type': 'string',
-                            'description': "The first name of the customer, such as 'John'."
-                        },
-                        'last_name': {
-                            'type': 'string',
-                            'description': "The last name of the customer, such as 'Doe'."
-                        },
-                        'zip': {
-                            'type': 'string',
-                            'description': "The zip code of the customer, such as '12345'."
-                        }
-                    },
-                    'required': ['first_name', 'last_name', 'zip']
-                }
-            }
-        },
-        {
-            'type': 'function',
-            'function': {
-                'name': 'get_order_details',
-                'description': 'Get the status and details of an order.',
-                'parameters': {
-                    'type': 'object',
-                    'properties': {
-                        'order_id': {
-                            'type':
-                            'string',
-                            'description':
-                            "The order id, such as '#W0000000'. Be careful there is a '#' symbol at the beginning of the order id."  # noqa: E501
-                        }
-                    },
-                    'required': ['order_id']
-                }
-            }
-        }
-    ]
-    messages = [
-        {
-            'role': 'system',
-            'content': 'You are a helpful assistant'
-        },
-        {
-            'role': 'user',
-            'content': "Hi there! I'm looking to return a couple of items from a recent order."
-        },
-        {
-            'role':
-            'assistant',
-            'content':
-            'Could you please provide your email address associated with the account, or share your first name, last name, and zip code?',  # noqa: E501
-            'reasoning_content':
-            'Okay, the user wants to return some items from a recent order. Let me start by authenticating their identity...'  # noqa: E501
-        },
-        {
-            'role': 'user',
-            'content': 'Sure, my name is Omar Anderson and my zip code is 19031.'
-        },
-        {
-            'role':
-            'assistant',
-            'content':
-            '<content>',
-            'reasoning_content':
-            "Since he didn't provide an email, I should use the find_user_id_by_name_zip function. Let me...",  # noqa: E501
-            'tool_calls': [{
-                'function': {
-                    'arguments': '{"first_name": "Omar", "last_name": "Anderson", "zip": "19031"}',
-                    'name': 'find_user_id_by_name_zip'
-                },
-                'id': 'chatcmpl-tool-a9f439084bfc4af29fee2e5105050a38',
-                'type': 'function'
-            }]
-        },
-        {
-            'content': 'omar_anderson_3203',
-            'name': 'find_user_id_by_name_zip',
-            'role': 'tool'
-        }
-    ]
-    if not has_user_sys:
-        messages = messages[1:]
-    if enable_thinking is None:
-        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, tools=tools)
-    else:
-        ref = tokenizer.apply_chat_template(messages,
-                                            tokenize=False,
-                                            add_generation_prompt=True,
-                                            tools=tools,
-                                            enable_thinking=enable_thinking)
-    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking, tools=tools)
-    print('=================ref===================')
-    print(ref)
-    print('=================lm_res===================')
-    print(lm_res)
-    assert ref == lm_res
+    model_path = ['deepseek-ai/DeepSeek-R1', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-V3.1']
+    # model_path = ['deepseek-ai/DeepSeek-V3']
+    for _model in model_path:
+        model = MODELS.get('hf')(model_path=_model)
+        assert model.stop_words == '<｜end▁of▁sentence｜>'
