@@ -53,6 +53,10 @@ class MPEngine(EngineBase):
         """Update params."""
         return self._collective_rpc('update_params', request)
 
+    def get_schedule_metrics(self):
+        """Get schedule metrics."""
+        return self._collective_rpc('get_schedule_metrics')
+
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self._collective_rpc('p2p_initialize', conn_request)
