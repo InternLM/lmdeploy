@@ -443,7 +443,7 @@ class StepContext:
         # position_ids
         indices = attention_mask.long().cumsum(-1) - 1
         position_ids = indices + history_seqlens.unsqueeze(-1)
-        indices[1:] += q_seqlens[:-1, None]
+        indices[1:] += q_seqlens.cumsum(0)[:-1, None]
         position_ids_1d = position_ids.new_empty(num_tokens)
         position_ids_1d[indices.flatten()] = position_ids.flatten()
         return attention_mask, position_ids_1d
