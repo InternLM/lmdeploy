@@ -629,8 +629,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - model (str): model name. Available from /v1/models.
     - prompt (str): the input prompt.
     - suffix (str): The suffix that comes after a completion of inserted text.
-    - max_completion_tokens (int): output token nums. Default to None.
-    - max_tokens (int): output token nums. Default to 16.
+    - max_completion_tokens (int | None): output token nums. Default to None.
+    - max_tokens (int | None): output token nums. Default to 16.
         Deprecated: Use max_completion_tokens instead.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most

@@ -272,8 +272,8 @@ class CompletionRequest(BaseModel):
     n: Optional[int] = 1
     logprobs: Optional[int] = None
     max_completion_tokens: Optional[int] = Field(
-        default=16,
-        examples=[16],
+        default=None,
+        examples=[None],
         description=('An upper bound for the number of tokens that can be generated for a completion, '
                      'including visible output tokens and reasoning tokens'),
     )
