@@ -1,12 +1,14 @@
 ARG BASE_IMAGE=openmmlab/lmdeploy:latest-cu12
 ARG GDRCOPY_HOME=/usr/local/gdrcopy
 ARG NVSHMEM_PREFIX=/usr/local/nvshmem
+ARG FLASH_MLA_VERSION=9edee0c
 
 FROM ${BASE_IMAGE} AS final
 
 ARG CUDA_HOME=/usr/local/cuda
 ARG GDRCOPY_HOME
 ARG NVSHMEM_PREFIX
+ARG FLASH_MLA_VERSION
 
 # GDRCopy
 WORKDIR /tmp
@@ -42,8 +44,10 @@ RUN cd DeepEP && NVSHMEM_DIR=${NVSHMEM_PREFIX} pip install -v . && \
 
 # install FlashMLA
 WORKDIR /opt
+# hard-code the FlashMLA version for CU124
 RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/FlashMLA.git && \
-    cd FlashMLA && python setup.py install && \
+    cd FlashMLA && git checkout ${FLASH_MLA_VERSION} && \
+    python setup.py install && \
     cd .. && rm -rf FlashMLA
 
 # install DeepGEMM
