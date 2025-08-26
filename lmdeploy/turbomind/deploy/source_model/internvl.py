@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .base import INPUT_MODELS
+from .gpt_oss import GptOssReader
 from .internlm2 import InternLM2Reader
 from .llama import LlamaModel, LlamaReader
 from .qwen import Qwen3MoeReader, Qwen3Reader
@@ -31,6 +32,42 @@ class InternVL2Reader(InternLM2Reader):
 
     def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
         model_cfg = model_cfg.get('llm_config')
+        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
+
+
+class InternVL3d5Reader(Qwen3Reader):
+    attn_layer_prefix = 'language_model.model.layers'
+    attn_layer_patten = r'language_model\.model\.layers\.([0-9]+).'
+    tok_embeddings_key = 'language_model.model.embed_tokens.weight'
+    norm_weight_key = 'language_model.model.norm.weight'
+    output_weight_key = 'language_model.lm_head.weight'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
+        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
+        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
+
+
+class InternVL3d5Qwen3MoEReader(Qwen3MoeReader):
+    attn_layer_prefix = 'language_model.model.layers'
+    attn_layer_patten = r'language_model\.model\.layers\.([0-9]+).'
+    tok_embeddings_key = 'language_model.model.embed_tokens.weight'
+    norm_weight_key = 'language_model.model.norm.weight'
+    output_weight_key = 'language_model.lm_head.weight'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
+        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
+        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
+
+
+class InternVL3d5GptOSSReader(GptOssReader):
+    attn_layer_prefix = 'language_model.model.layers'
+    attn_layer_patten = r'language_model\.model\.layers\.([0-9]+).'
+    tok_embeddings_key = 'language_model.model.embed_tokens.weight'
+    norm_weight_key = 'language_model.model.norm.weight'
+    output_weight_key = 'language_model.lm_head.weight'
+
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
+        model_cfg = model_cfg.get('llm_config') or model_cfg.get('text_config')
         super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
@@ -73,13 +110,22 @@ class InternVLModel(LlamaModel):
         super().__init__(model_path, tokenizer_path, **kwargs)
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+
+        arch = config.architectures[0]
+        if arch == 'InternVLChatModel':
+            relations = dict(InternLM2ForCausalLM=('internlm2', InternVL2Reader),
+                             LlamaForCausalLM=('llama', InternVLReader),
+                             Qwen2ForCausalLM=('qwen2', InternVLReader),
+                             Qwen3MoeForCausalLM=('qwen3-moe', InternVL3d5Qwen3MoEReader),
+                             Qwen3ForCausalLM=('qwen3', InternVL3d5Reader),
+                             GptOssForCausalLM=('gpt-oss', InternVL3d5GptOSSReader))
+        elif arch == 'InternS1ForConditionalGeneration':
+            relations = dict(Qwen3MoeForCausalLM=('qwen3-moe', InternS1Reader),
+                             Qwen3ForCausalLM=('qwen3', InternS1MiniReader))
+        else:
+            raise ValueError('unsupported model arch {arch}')
         self.llm_config = getattr(config, 'llm_config', None) or getattr(config, 'text_config', None)
         arch = self.llm_config.architectures[0]
-        relations = dict(InternLM2ForCausalLM=('internlm2', InternVL2Reader),
-                         LlamaForCausalLM=('llama', InternVLReader),
-                         Qwen2ForCausalLM=('qwen2', InternVLReader),
-                         Qwen3MoeForCausalLM=('qwen3-moe', InternS1Reader),
-                         Qwen3ForCausalLM=('qwen3', InternS1MiniReader))
         llm_model, self.Reader = relations[arch]
         self.llm_model = INPUT_MODELS.get(llm_model)(model_path=model_path, tokenizer_path=tokenizer_path, **kwargs)
 
