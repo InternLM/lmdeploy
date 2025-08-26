@@ -894,11 +894,3 @@ def best_match_model(query: str) -> Optional[str]:
             return matched_name
     logger.warning(f'Did not find a chat template matching {query}.')
     return 'base'
-
-
-if __name__ == '__main__':
-    model_path = ['deepseek-ai/DeepSeek-R1', 'deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-V3.1']
-    # model_path = ['deepseek-ai/DeepSeek-V3']
-    for _model in model_path:
-        model = MODELS.get('hf')(model_path=_model)
-        assert model.stop_words == '<｜end▁of▁sentence｜>'

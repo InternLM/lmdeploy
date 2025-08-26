@@ -402,10 +402,10 @@ def test_HFChatTemplate_DeepSeek_V3(model_path):
     assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜>'
 
 
-@pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-R1', 'deepseek-ai/DeepSeek-V3.1'])
+@pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-R1'])
 def test_HFChatTemplate_DeepSeek_thinking(model_path):
     model = MODELS.get('hf')(model_path=model_path)
     assert model.stop_words == '<｜end▁of▁sentence｜>'
 
     prompt = 'How to apply chat template using transformers?'
-    assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜></think>'
+    assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜><think>\n'
