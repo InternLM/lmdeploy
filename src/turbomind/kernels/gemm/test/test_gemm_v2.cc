@@ -8,7 +8,7 @@
 using namespace turbomind;
 
 struct TestParameter: Testbed_v3::Parameter {
-    TestParameter(DataType dtype, DataType wtype, DataType itype, int group_size = 128)
+    TestParameter(DataType dtype, DataType wtype, DataType itype, int group_size = 128): Testbed_v3::Parameter{}
     {
         data_type   = dtype;
         weight_type = wtype;
@@ -30,12 +30,16 @@ int main()
 
     // TestParameter p{kBfloat16, kBfloat16, kBfloat16};
     // TestParameter p{kBfloat16, kFloat8_e4m3, kFloat8_e4m3, 128};
-    TestParameter p{kHalf, kUint4, kHalf, 128};
-    // TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16, 32};
+    // TestParameter p{kHalf, kUint4, kHalf, 128};
+    TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16, 32};
 
-    p.input_dim      = 16384;
+    p.input_dim      = 12288;
     p.output_dim     = 16384;
     p.max_batch_size = 8192;
+
+    // p.input_dim      = 32;
+    // p.output_dim     = 32;
+    // p.max_batch_size = 1;
 
     Testbed_v3 test{p};
 

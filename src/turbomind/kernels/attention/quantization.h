@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/data_type.h"
 
@@ -243,7 +245,7 @@ inline __device__ T round(half x)
         asm("cvt.rni.sat.u32.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
     }
     else if constexpr (std::is_same_v<T, int32_t>) {
-        asm("cvt.rni.sat.s32.f16 %0, %1;\n": "=r"(y) : "h"((uint16_t&)x));
+        asm("cvt.rni.sat.s32.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
     }
     else {
         static_assert(!std::is_same_v<T, T>, "not implemented");
@@ -623,15 +625,15 @@ struct ConvertKvCache<uint4_t, float> {
 #else
     static __device__ Array<half, 8> cvt_f16x8_u4_biased(const Array<uint4_t, 8>& vi)
     {
-        Array<half, 8> result;
-        uint32_t* h = reinterpret_cast<uint32_t*>(&result);
-        uint32_t const& i4s = reinterpret_cast<uint32_t const&>(vi);
-        static constexpr uint32_t immLut = (0xf0 & 0xcc) | 0xaa;
-        static constexpr uint32_t BOT_MASK = 0x000f000f;
-        static constexpr uint32_t TOP_MASK = 0x00f000f0;
+        Array<half, 8>            result;
+        uint32_t*                 h           = reinterpret_cast<uint32_t*>(&result);
+        uint32_t const&           i4s         = reinterpret_cast<uint32_t const&>(vi);
+        static constexpr uint32_t immLut      = (0xf0 & 0xcc) | 0xaa;
+        static constexpr uint32_t BOT_MASK    = 0x000f000f;
+        static constexpr uint32_t TOP_MASK    = 0x00f000f0;
         static constexpr uint32_t MAGIC_NUM_1 = 0x54005400;        // `64`
         static constexpr uint32_t MAGIC_NUM_2 = MAGIC_NUM_1 >> 4;  // `64` >> 4
-        const uint32_t top_i4s = i4s >> 8;
+        const uint32_t            top_i4s     = i4s >> 8;
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[0]) : "r"(i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[1]) : "r"(i4s), "n"(TOP_MASK), "n"(MAGIC_NUM_1), "n"(immLut));
         asm("lop3.b32 %0, %1, %2, %3, %4;\n" : "=r"(h[2]) : "r"(top_i4s), "n"(BOT_MASK), "n"(MAGIC_NUM_2), "n"(immLut));
@@ -640,12 +642,12 @@ struct ConvertKvCache<uint4_t, float> {
         h[2] <<= 4;
         return result;
     }
-    float scale_;
-    float zero_;
+    float      scale_;
+    float      zero_;
     __device__ ConvertKvCache(float scale, float zero)
     {
         scale_ = scale;
-        zero_ = zero - scale * 64.f;
+        zero_  = zero - scale * 64.f;
     }
     template<int N>
     __device__ auto operator()(const Array<uint4_t, N>& vi) const
@@ -695,6 +697,54 @@ struct ConvertKvCache<uint8_t, T> {
         PRAGMA_UNROLL
         for (int i = 0; i < N; ++i) {
             vo[i] = vo[i] * scale_ + zero_;
+        }
+        return vo;
+    }
+};
+
+template<class T>
+struct ConvertKvCache<fp4_e2m1_t, T> {
+
+    __device__ static Array<bfloat16_t, 8> cvt_bf16x8_e2m1(const Array<fp4_e2m1_t, 8>& vi)
+    {
+        const uint32_t& x = (const uint32_t&)vi;
+
+        constexpr uint32_t S  = 0x80008000U;
+        constexpr uint32_t EM = 0x01C001C0U;
+
+        Array<uint32_t, 4> vo;
+
+        // clang-format off
+        vo[0] = (x << 12 & S) | (x << 6 & EM);
+        vo[1] = (x <<  8 & S) | (x << 2 & EM);
+        vo[2] = (x <<  4 & S) | (x >> 2 & EM);
+        vo[3] = (x <<  0 & S) | (x >> 6 & EM);
+        // clang-format on
+
+        constexpr uint32_t e  = (127U - 1U + 127U) << 7U;
+        constexpr uint32_t ee = e << 16U | e;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < 4; ++i) {
+            asm volatile("mul.bf16x2 %0, %1, %2;" : "=r"(vo[i]) : "r"(vo[i]), "r"(ee));
+        }
+
+        return (Array<bfloat16_t, 8>&)vo;
+    }
+
+    template<int N>
+    __device__ static auto convert(const Array<fp4_e2m1_t, N>& vi)
+    {
+        Array<T, N> vo;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 8) {
+            auto& v = (Array<T, 8>&)vo[i];
+            if constexpr (std::is_same_v<T, bfloat16_t>) {
+                v = cvt_bf16x8_e2m1((Array<fp4_e2m1_t, 8>&)vi[i]);
+            }
+            else {
+                static_assert(N != N, "not implemented");
+            }
         }
         return vo;
     }

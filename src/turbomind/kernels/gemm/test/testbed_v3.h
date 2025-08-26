@@ -134,7 +134,7 @@ struct Testbed_v3: Parameter {
     void GenerateWeight(LlamaDenseWeight& original, LlamaDenseWeight& quant, LlamaDenseWeight& dequant)
     {
         original.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
-        rng_.NormalFloat(original.weight, 1.f, 1.f);
+        rng_.NormalFloat(original.weight, 1., .1);
 
         quant.emplace(input_dim, output_dim, data_type, false, weight_type, group_size);
         dequant.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
@@ -219,13 +219,36 @@ struct Testbed_v3: Parameter {
 
     void Compare()
     {
+        // Buffer_<float> h(16 * 16, kCPU);
+        // Buffer_<float> x(linear_.buf, 16 * 16, kDEVICE);
+        // Copy(x, h);
+
+        // auto y = empty_like(w_dequant_->weight, kCPU);
+        // Copy(w_dequant_->weight, y);
+
         // clang-format off
         printf("%20s", ""); FC_Header();
-        printf("%20s", "w_dequant v w_original"); FC_Print(FastCompare(w_dequant_->weight, w_original_->weight, stream_));
+        printf("%20s", "w_dequant v w_origi"); FC_Print(FastCompare(w_dequant_->weight, w_original_->weight, stream_));
         printf("%20s", "quant   vs  dequant"); FC_Print(FastCompare(d_quant_, d_dequant_, stream_));
         printf("%20s", "quant   vs original"); FC_Print(FastCompare(d_quant_, d_original_, stream_));
         printf("%20s", "dequant vs original"); FC_Print(FastCompare(d_dequant_, d_original_, stream_));
         // clang-format on
+
+        // for (int m = 0; m < 16; ++m) {
+        //     for (int k = 0; k < 16; ++k) {
+        //         printf("%5.1f", h[m * 16 + k]);
+        //     }
+        //     printf("\n");
+        // }
+
+        // printf("\n");
+
+        // for (int m = 0; m < 16; ++m) {
+        //     for (int k = 0; k < 16; ++k) {
+        //         printf("%5.1f", (float)y.data<bfloat16_t>()[k * output_dim + m]);
+        //     }
+        //     printf("\n");
+        // }
     }
 
     cudaStream_t stream_;

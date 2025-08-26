@@ -2,12 +2,13 @@
 
 #pragma once
 
+#include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
-#include <iterator>
 
 namespace turbomind::gemm {
 
@@ -79,6 +80,12 @@ struct Transform_HMMA_16816 {
         // printf("tidx=%d %f %f\n", (int)threadIdx.x, (float)x[0], (float)x[1]);
         x[0] = __hfma(x[0], _s[0], _s[1]);
         x[1] = __hfma(x[1], _s[0], _s[1]);
+    }
+
+    __device__ static void dequant(Array<bfloat16_t, 2>& x, Array<uint8_t, 1> s) {
+        bfloat16_t s1 = __ushort_as_bfloat16((uint16_t)s[0] << 7);
+        x[0] = __hmul(x[0], s1);
+        x[1] = __hmul(x[1], s1);
     }
 };
 

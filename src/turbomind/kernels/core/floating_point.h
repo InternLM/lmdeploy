@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/core/common.h"
 
 namespace turbomind {
@@ -15,14 +17,10 @@ struct FloatingPoint {
     static constexpr unsigned exponent_mask = (1 << exponent_bits) - 1;
     static constexpr unsigned mantissa_mask = (1 << mantissa_bits) - 1;
 
-    static constexpr float exp2(unsigned e)
-    {
-        float x = 1;
-        for (; e > 0; --e) {
-            x *= 2;
-        }
-        return x;
-    }
+    // clang-format off
+    // For `reinterpret_cast` is not constexpr yet
+    static constexpr float exp2(unsigned e) { float x = 1; for (; e > 0; --e) { x *= 2; } return x; }
+    // clang-format on
 
     static constexpr float max_normal =
         ((1U << (mantissa_bits + 1U)) - 1U) * exp2(exponent_bias + 1) / exp2(mantissa_bits);
@@ -95,21 +93,20 @@ struct FloatingPoint {
     }
 };
 
-
 static_assert(FloatingPoint<2, 1>::max_normal == 6);
 static_assert(FloatingPoint<2, 1>::min_normal == 1);
 static_assert(FloatingPoint<2, 1>::max_denormal == .5);
 static_assert(FloatingPoint<2, 1>::min_denormal == .5);
 
-// FloatingPoint<3, 2>::max_normal;
-// FloatingPoint<3, 2>::min_normal;
-// FloatingPoint<3, 2>::max_denormal;
-// FloatingPoint<3, 2>::min_denormal;
+static_assert(FloatingPoint<3, 2>::max_normal == 28.0);
+static_assert(FloatingPoint<3, 2>::min_normal == 0.25);
+static_assert(FloatingPoint<3, 2>::max_denormal == 0.1875);
+static_assert(FloatingPoint<3, 2>::min_denormal == 0.0625);
 
-// FloatingPoint<2, 3>::max_normal;
-// FloatingPoint<2, 3>::min_normal;
-// FloatingPoint<2, 3>::max_denormal;
-// FloatingPoint<2, 3>::min_denormal;
+static_assert(FloatingPoint<2, 3>::max_normal == 7.5);
+static_assert(FloatingPoint<2, 3>::min_normal == 1.0);
+static_assert(FloatingPoint<2, 3>::max_denormal == 0.875);
+static_assert(FloatingPoint<2, 3>::min_denormal == 0.125);
 
 // FloatingPoint<4, 3>::max_normal;
 // FloatingPoint<4, 3>::min_normal;

@@ -405,10 +405,13 @@ struct IntegralQuantizer {
         scale = (T)scale_;
         zero  = (T)zero_;
 
+        // T sz = zero_ * scale_;
+
         PRAGMA_UNROLL
         for (int i = 0; i < N; ++i) {
             q[i] = clamp(round<int32_t>(f[i] / scale_) + zero_, 0, max_q);
             d[i] = (T)((int)q[i] - zero_) * (T)scale_;
+            // d[i] = __hfma((T)q[i], (T)scale_, -sz);
         }
     }
 };
@@ -452,17 +455,18 @@ struct FloatingPointQuantizer {
 
         auto get_exponent = [](float x) -> int { return (__float_as_uint(x) >> 23U) & 0xFFU; };
 
-        int scale_i32 = get_exponent(absmax) - (1 << (traits::exponent_bits - 1));
+        int scale_i32 = get_exponent(absmax) - (traits::exponent_bias + 1);
 
-        // max{|group|} < 2*2^-125, flush to zero
-        if (scale_i32 < 0) {
+        // int scale_i32 = 127;
+
+        if (scale_i32 < 0) {  // absmax(group) < 2*2^-125, flush to zero
             scale_i32 = 0;
             f         = {};
         }
 
         scale = scale_i32;
 
-        float scale_f32 = __uint_as_float((uint32_t)scale_i32 << 23);
+        float scale_f32 = __uint_as_float((uint32_t)scale_i32 << 23U);
 
         PRAGMA_UNROLL
         for (int i = 0; i < N; ++i) {

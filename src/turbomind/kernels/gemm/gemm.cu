@@ -273,8 +273,6 @@ int Gemm::Run(const Operation&    operation,
 
     const auto desc = context.Init(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc);
 
-    TM_CHECK_NOTNULL(workspace.flags);
-
     if (!desc) {
         fprintf(stderr, "invalid argument.\n");
         TM_CHECK(0);

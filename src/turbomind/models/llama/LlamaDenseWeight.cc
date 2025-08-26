@@ -10,6 +10,7 @@
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/utils.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 
 namespace turbomind {
@@ -125,6 +126,65 @@ static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
     dense.q_desc = q_desc;
 }
 
+static void convert_e2m1(LlamaDenseWeight& dense, cudaStream_t st)
+{
+    TM_CHECK_EQ(dense.weight_type, data_type_v<fp4_e2m1_t>);
+
+    using namespace gemm;
+
+    auto [order_a, pack_a, order_u, pack_u] =
+        get_weight_and_scales_layout(data_type_v<fp4_e2m1_t>, true, getSMVersion(), false);
+
+    TM_CHECK(order_a == kColMajor);
+
+    Buffer_<uint16_t> tmp_w{dense.input_dim * dense.output_dim, kDEVICE};
+    extend_to_u16(tmp_w.data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim * dense.output_dim, st);
+    sync_check_cuda_error();
+
+    MatrixLayout w_desc{
+        data_type_v<bfloat16_t>,
+        order_a,
+        (int)dense.output_dim,  // m
+        (int)dense.input_dim,   // k
+        (int)dense.output_dim,
+        // order_a == kRowMajor ? (int)dense.input_dim : (int)dense.output_dim,
+    };
+
+    MatrixLayout k_desc = w_desc;
+    k_desc.type         = data_type_v<uint4_t>;
+    k_desc.pack         = pack_a;
+
+    cudaMemsetAsync(dense.weight.raw_data(), 0, dense.weight.byte_size(), st);
+
+    FT_CHECK(Convert(tmp_w.data(), w_desc, dense.weight.raw_data(), k_desc, st) == 0);
+    sync_check_cuda_error();
+
+    k_desc.type = data_type_v<fp4_e2m1_t>;
+
+    // weight is placed at B
+    k_desc = transpose(k_desc);
+
+    auto tmp_q = empty_like(dense.scales);
+    Copy(dense.scales, tmp_q);
+
+    MatrixLayout s_desc{
+        data_type_v<uint8_t>,
+        order_u,
+        (int)dense.output_dim,                    // n
+        (int)dense.input_dim / dense.group_size,  // k
+        (int)dense.output_dim,
+    };
+
+    MatrixLayout q_desc = s_desc;
+    q_desc.pack         = pack_u;
+
+    FT_CHECK(Convert(tmp_q.raw_data(), s_desc, dense.scales.raw_data(), q_desc, st) == 0);
+    sync_check_cuda_error();
+
+    dense.k_desc = k_desc;
+    dense.q_desc = q_desc;
+}
+
 static void convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt, cudaStream_t st)
 {
     using namespace gemm;
@@ -221,6 +281,10 @@ void LlamaDenseWeight::prepare(bool fused_moe, bool use_simt)
     else if (weight_type == data_type_v<fp8_e4m3_t>) {
         TM_CHECK_EQ(data_type, data_type_v<bfloat16_t>);
         convert_f8(*this, stream);
+    }
+    else if (weight_type == data_type_v<fp4_e2m1_t>) {
+        TM_CHECK_EQ(data_type, data_type_v<bfloat16_t>);
+        convert_e2m1(*this, stream);
     }
     else {
         convert_fp(*this, fused_moe, use_simt, stream);
