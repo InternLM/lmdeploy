@@ -79,6 +79,10 @@ class EngineWorkerBase:
         """Get model config."""
         return self.engine.get_model_config()
 
+    def get_schedule_metrics(self):
+        """Get schedule metrics."""
+        return self.engine.get_schedule_metrics()
+
     def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
         return self.engine.p2p_initialize(conn_request)
