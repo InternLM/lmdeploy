@@ -118,6 +118,9 @@ with set_envs():
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
 
+    # check env
+    enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
+
     # dlblas
     # we don't need to read this, it would be passed to ray workers
     # If Ray is launched from outside, it may fail to access the environment variables.

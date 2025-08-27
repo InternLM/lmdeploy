@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import atexit
 import pickle
 import signal
 from typing import TYPE_CHECKING
@@ -40,6 +41,7 @@ class ZMQMPEngine(MPEngine):
         self.rpc_client = AsyncRPCClient(port=self.port)
 
         super().__init__()
+        atexit.register(self.close)
 
     def _start_mp_proc(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None):
         """Start mp proc."""
@@ -54,16 +56,17 @@ class ZMQMPEngine(MPEngine):
             condition = manager.Condition()
             self.mp_ctx = mp.get_context('spawn')
             log_level = logger.level
-            self.proc = self.mp_ctx.Process(target=self._mp_proc,
-                                            args=(self.shared_dict, condition),
-                                            kwargs=(dict(
-                                                model_path=model_path,
-                                                tokenizer=tokenizer,
-                                                engine_config=engine_config,
-                                                log_level=log_level,
-                                            )),
-                                            name='mp_engine_proc',
-                                            daemon=True)
+            self.proc = self.mp_ctx.Process(
+                target=self._mp_proc,
+                args=(self.shared_dict, condition),
+                kwargs=(dict(
+                    model_path=model_path,
+                    tokenizer=tokenizer,
+                    engine_config=engine_config,
+                    log_level=log_level,
+                )),
+                name='mp_engine_proc',
+            )
             self.proc.start()
             logger.debug('Receiving rpc server port from mp process.')
             with condition:
@@ -156,10 +159,13 @@ class ZMQMPEngine(MPEngine):
 
     def close(self) -> None:
         """Close mp engine."""
+        if self.proc is None:
+            return
         logger.info('Closing mp engine.')
         self.rpc_client.stop()
         self.proc.terminate()
         self.proc.join(10)
+        self.proc = None
 
     def start_loop(self) -> None:
         """Start mp engine loop."""
