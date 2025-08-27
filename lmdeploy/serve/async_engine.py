@@ -273,8 +273,10 @@ class AsyncEngine(LogitsMixin):
         # build backend engine
         if backend == 'turbomind':
             self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.hf_tm_cfg = self.engine.config
         elif backend == 'pytorch':
             self.engine = self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config

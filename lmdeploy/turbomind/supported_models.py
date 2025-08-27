@@ -82,9 +82,8 @@ def is_supported(model_path: str):
     import os
 
     def _is_head_dim_supported(cfg):
-        num_attn_head = cfg.num_attention_heads
-        hidden_size = cfg.hidden_size
-        return (hidden_size // num_attn_head) in [128, 64]
+        head_dim = cfg.head_dim if hasattr(cfg, 'head_dim') else cfg.hidden_size // cfg.num_attention_heads
+        return head_dim in [128, 64]
 
     support_by_turbomind = False
     triton_model_path = os.path.join(model_path, 'triton_models')
