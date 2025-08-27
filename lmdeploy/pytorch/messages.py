@@ -153,28 +153,32 @@ class MessageStatus(enum.Enum):
     MIGRATION_DONE = enum.auto()
 
 
-_SEQ_COUNT = 0
-
-
-def _new_msg_id():
-    """Get a new message id."""
-    global _SEQ_COUNT
-    seq_id = _SEQ_COUNT
-    _SEQ_COUNT += 1
-    return seq_id
-
-
 SeqMap = Dict[int, 'SchedulerSequence']
+
+
+@dataclass
+class SequenceMeta:
+    """Meta data shared by all sequence."""
+    block_size: int
+    model_type: str = 'llm'
 
 
 class SequenceManager:
     """Sequence manager."""
 
-    def __init__(self) -> None:
+    def __init__(self, seq_meta: SequenceMeta) -> None:
         self._seq_map: SeqMap = dict()
         self._status_seq_map: Dict[MessageStatus, SeqMap] = dict()
         for status in MessageStatus:
             self._status_seq_map[status] = dict()
+
+        self.seq_meta = seq_meta
+        self._seq_count = 0
+
+    def _new_seq_id(self):
+        seq_id = self._seq_count
+        self._seq_count += 1
+        return seq_id
 
     def get_all_sequences(self):
         """Get all sequences."""
@@ -221,9 +225,9 @@ class SequenceManager:
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, block_size: int, seq_manager: SequenceManager = None) -> None:
+    def __init__(self, session_id: int, seq_manager: SequenceManager) -> None:
         self.session_id = session_id
-        self.block_size = block_size
+        self.seq_meta = seq_manager.seq_meta
         self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: SeqMap = dict()
         self.seq_manager = seq_manager
@@ -232,7 +236,6 @@ class SchedulerSession:
                      token_ids: Tensor,
                      sampling_param: SamplingParam = None,
                      adapter_name: str = None,
-                     return_logits: bool = False,
                      multimodals: MultiModalInputs = None,
                      input_embeddings: List[InputEmbeddings] = None,
                      migration_request: Optional[MigrationRequest] = None,
@@ -248,8 +251,9 @@ class SchedulerSession:
         if sampling_param is None:
             sampling_param = SamplingParam()
 
+        seq_id = self.seq_manager._new_seq_id()
         seq = SchedulerSequence(
-            seq_id=_new_msg_id(),
+            seq_id=seq_id,
             session=self,
             history_cache=HistoryTokenIds(token_ids),
             num_new_tokens=0,
@@ -258,22 +262,19 @@ class SchedulerSession:
             arrive_time=time.perf_counter(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
-            return_logits=return_logits,
             migration_request=migration_request,
             resp_cache=resp_cache,
             preserve_cache=preserve_cache,
         )
         self.sequences[seq.seq_id] = seq
-        if self.seq_manager is not None:
-            self.seq_manager.add_sequence(seq)
+        self.seq_manager.add_sequence(seq)
         return seq
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
         assert seq.seq_id in self.sequences
         self.sequences.pop(seq.seq_id)
-        if self.seq_manager is not None:
-            self.seq_manager.remove_sequence(seq)
+        self.seq_manager.remove_sequence(seq)
 
 
 def _div_up(x, n):
@@ -462,8 +463,6 @@ class SchedulerSequence:
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
-    return_logits: bool = False
-    random_offsets: int = 0
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
@@ -485,16 +484,12 @@ class SchedulerSequence:
 
         self._num_history_cross: int = 0
         self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
+        self._seq_meta: SequenceMeta = self.session.seq_meta
 
     @property
     def block_size(self) -> int:
         """Block size."""
-        return self.session.block_size
-
-    @property
-    def history_len(self) -> int:
-        """Get history length."""
-        return self._num_history_ids
+        return self._seq_meta.block_size
 
     @property
     def history_image_num(self) -> int:
@@ -514,7 +509,7 @@ class SchedulerSequence:
     @property
     def token_ids(self) -> np.ndarray:
         """Token ids."""
-        start = self.history_len
+        start = self.num_history_ids
         end = start + self._num_token_ids
         return self.history_cache._token_ids[start:end]
 
@@ -528,7 +523,7 @@ class SchedulerSequence:
     @property
     def history_ids(self) -> np.ndarray:
         """History ids."""
-        return self.history_cache._token_ids[:self.history_len]
+        return self.history_cache._token_ids[:self.num_history_ids]
 
     @property
     def all_ids(self) -> np.ndarray:
@@ -551,7 +546,7 @@ class SchedulerSequence:
     @property
     def num_all_ids(self):
         """Num all tokens."""
-        return self.history_len + self._num_token_ids
+        return self._num_history_ids + self._num_token_ids
 
     @property
     def num_cross(self):
@@ -577,14 +572,14 @@ class SchedulerSequence:
     def status(self):
         return self._status
 
+    @property
+    def return_logits(self):
+        return self.sampling_param.out_logits
+
     @status.setter
     def status(self, value: MessageStatus):
         self.seq_manager.update_sequence_status(self, value)
         self._status = value
-
-    def num_all_tokens(self):
-        """Num all tokens."""
-        return self.num_all_ids
 
     def num_all_cross_tokens(self):
         """Num of all cross tokens."""
@@ -640,10 +635,12 @@ class SchedulerSequence:
             token_ids = token_ids[None]
         if append_tokens:
             self._num_token_ids += len(token_ids)
+            self.num_new_tokens = 0
         else:
-            self._num_token_ids = len(token_ids)
+            num_token_ids = len(token_ids)
+            self._num_token_ids = num_token_ids
+            self.num_new_tokens += num_token_ids
         self.history_cache.append(token_ids)
-        self.random_offsets += 1
         self.arrive_time = time.perf_counter()
 
     def set_step(self, step: int):
