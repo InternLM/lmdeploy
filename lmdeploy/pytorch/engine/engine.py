@@ -1094,7 +1094,7 @@ class Engine(EngineBase):
                         resp=msg.resp,
                         finish=False,
                         token_ids=np.array(token_ids),
-                        metrics_info=req_metrics,
+                        req_metrics=req_metrics,
                     )
                     outputs[session_id] = out
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
