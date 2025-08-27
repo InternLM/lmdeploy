@@ -83,9 +83,9 @@ class EngineWorkerBase:
         """Get schedule metrics."""
         return self.engine.get_schedule_metrics()
 
-    def p2p_initialize(self, conn_request: DistServeInitRequest):
+    async def p2p_initialize(self, conn_request: DistServeInitRequest):
         """Init rdma link."""
-        return self.engine.p2p_initialize(conn_request)
+        return await self.engine.p2p_initialize(conn_request)
 
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         """rdma_connect."""
