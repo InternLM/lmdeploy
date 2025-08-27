@@ -4,6 +4,7 @@ FROM openeuler/cann:${CANN_TAG} AS builder
 ARG PYTHON_VERSION=3.10
 
 RUN --mount=type=cache,target=/root/.cache \
+    mkdir -p /root/.local && \
     pip install -v uv && \
     uv venv -v -p python${PYTHON_VERSION} --seed /opt/py3
 

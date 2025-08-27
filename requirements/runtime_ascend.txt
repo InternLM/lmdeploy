@@ -18,8 +18,8 @@ safetensors
 sentencepiece
 shortuuid
 tiktoken
-torch>=2.3.1,<2.8.0
-torch-npu>=2.3.1,<2.8.0
+torch>=2.3.1,<=2.5.1
+torch-npu>=2.3.1,<=2.5.1
 torchvision>=0.18.1,<0.23.0
 transformers
 uvicorn
