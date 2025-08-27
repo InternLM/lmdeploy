@@ -59,8 +59,11 @@ struct CtaMap_ {
     }
 };
 
-template<Order order>
+template<Order order_>
 class GemmScheduler {
+
+    static constexpr auto order = order_;
+
     int4 gemm_shape_;
     int4 tiled_shape_;
     int  log_tile_;
@@ -157,8 +160,10 @@ public:
     }
 };
 
-template<Order order>
+template<Order order_>
 class DynamicScheduler {
+
+    static constexpr auto order = order_;
 
     int ctas_;
 
@@ -244,11 +249,9 @@ public:
 };
 
 template<class S>
-struct is_dynamic_scheduler: std::false_type {
-};
+struct is_dynamic_scheduler: std::false_type {};
 
 template<Order order>
-struct is_dynamic_scheduler<DynamicScheduler<order>>: std::true_type {
-};
+struct is_dynamic_scheduler<DynamicScheduler<order>>: std::true_type {};
 
 }  // namespace turbomind::gemm

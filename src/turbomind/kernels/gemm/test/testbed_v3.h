@@ -1,12 +1,13 @@
 
 #include <cstddef>
-#include <cuda.h>
 #include <memory>
-#include <optional>
 
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/core.h"
 
-#include "src/turbomind/kernels/gemm/test/quantization.h"
+#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/kernels/gemm/context.h"
+#include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/test/reference.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -23,6 +24,7 @@ using std::vector;
 using std::unique_ptr;
 
 using DenseWeight = LlamaDenseWeight;
+using Linear      = LlamaLinear;
 
 using namespace gemm;
 
@@ -38,8 +40,9 @@ struct Parameter {
 
     int max_batch_size;
 
-    int expert_num;
-    int experts_per_token;
+    int  expert_num;
+    int  experts_per_token;
+    bool combine_experts;
 };
 
 /// TODO: add a generic copy / casting for non-sub-byte Tensor
@@ -83,6 +86,8 @@ struct Testbed_v3: Parameter {
         rng_.set_stream(stream_);
         ref_.set_stream(stream_);
 
+        cudaGetDeviceProperties(&prop_, 0);
+
         w_original_ = std::make_unique<DenseWeight>();
         w_quant_    = std::make_unique<DenseWeight>();
         w_dequant_  = std::make_unique<DenseWeight>();
@@ -95,6 +100,16 @@ struct Testbed_v3: Parameter {
 
         GenerateWeight();
         GenerateInput();
+
+        if (expert_num) {
+            LinkExperts([&](int i) { return e_original_[i].get(); }, expert_num, *w_original_);
+            LinkExperts([&](int i) { return e_quant_[i].get(); }, expert_num, *w_quant_);
+            LinkExperts([&](int i) { return e_dequant_[i].get(); }, expert_num, *w_dequant_);
+
+            moe_context_ = std::make_unique<gemm::MoeGemmContext>(expert_num, experts_per_token, prop_, stream_);
+            Route();
+            moe_context_->update(expert_num, experts_per_token, offsets_.data());
+        }
     }
 
     void GenerateInput()
@@ -117,10 +132,74 @@ struct Testbed_v3: Parameter {
         }
     }
 
+    void Route()
+    {
+        const int bsz = max_batch_size;
+
+        std::mt19937 g{};
+
+        auto expert_ids = SampleUniform(bsz, expert_num, experts_per_token, g);
+
+        std::uniform_real_distribution<float> dist(1e-3, 1.f);
+
+        Buffer_<float> tmp(experts_per_token, kCPU);
+        Buffer_<float> scales(bsz * experts_per_token, kCPU);
+
+        for (int i = 0; i < bsz; ++i) {
+            float sum{};
+            for (auto& x : tmp) {
+                x = dist(g);
+                sum += x;
+            }
+            for (int e = 0; e < experts_per_token; ++e) {
+                scales[e * bsz + i] = tmp[e] / sum;
+            }
+        }
+
+        vector<int>         count(expert_num);
+        vector<vector<int>> f2i(expert_num);
+        for (int i = 0; i < (int)expert_ids.size(); ++i) {
+            ++count[expert_ids[i]];
+            f2i[expert_ids[i]].push_back(i);
+        }
+
+        Buffer_<int> offsets(expert_num + 1, kCPU);
+        offsets[0] = 0;
+        for (int i = 0; i < expert_num; ++i) {
+            offsets[i + 1] = offsets[i] + count[i];
+        }
+
+        Buffer_<int> f2n(expert_ids.size(), kCPU);
+        Buffer_<int> en2f(expert_ids.size(), kCPU);
+        for (int e = 0, i = 0; e < expert_num; ++e) {
+            for (auto x : f2i[e]) {
+                f2n[i]   = x / experts_per_token;
+                int en   = x % experts_per_token * bsz + x / experts_per_token;
+                en2f[en] = i;
+                ++i;
+            }
+        }
+
+        f2n_ = {f2n.size(), kDEVICE};
+        Copy(f2n, f2n_);
+
+        en2f_ = {en2f.size(), kDEVICE};
+        Copy(en2f, en2f_);
+
+        scales_ = {scales.size(), kDEVICE};
+        Copy(scales, scales_);
+
+        offsets_ = {offsets.size(), kDEVICE};
+        Copy(offsets, offsets_);
+        h_offsets_ = offsets;
+
+        core::Context::stream().Sync();
+    }
+
     void GenerateWeight()
     {
         if (expert_num) {
-            for (size_t i = 0; i < e_original_.size(); ++i) {
+            for (int i = 0; i < expert_num; ++i) {
                 GenerateWeight(*e_original_[i], *e_quant_[i], *e_dequant_[i]);
             }
         }
@@ -131,7 +210,7 @@ struct Testbed_v3: Parameter {
 
     // - quantize weight
     // - dequantize weight
-    void GenerateWeight(LlamaDenseWeight& original, LlamaDenseWeight& quant, LlamaDenseWeight& dequant)
+    void GenerateWeight(DenseWeight& original, DenseWeight& quant, DenseWeight& dequant)
     {
         original.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
         rng_.NormalFloat(original.weight, 1., .1);
@@ -170,9 +249,9 @@ struct Testbed_v3: Parameter {
             TM_CHECK(0);
         }
 
-        original.prepare(expert_num > 0, 0);
+        original.prepare(0, 0);
         quant.prepare(expert_num > 0, 0);
-        dequant.prepare(expert_num > 0, 0);
+        dequant.prepare(0, 0);
     }
 
     void GetReference()
@@ -199,18 +278,41 @@ struct Testbed_v3: Parameter {
         ref_.gemm(x.raw_data(), desc_A, dense->weight.raw_data(), dense->k_desc, d.raw_data(), desc_D);
     }
 
-    void GetReference(const Tensor& x, const vector<unique_ptr<DenseWeight>>& experts, Ref<Tensor> d)
+    void GetReference(const Tensor& x, const vector<unique_ptr<DenseWeight>>& experts, Ref<Tensor> d_)
     {
-        TM_CHECK(0);
+        Tensor xe{{x.shape(0) * experts_per_token, input_dim}, data_type, kDEVICE};
+        Tensor de{{x.shape(0) * experts_per_token, output_dim}, data_type, kDEVICE};
+
+        invokeMoeDispatch(xe, x, f2n_.data(), experts_per_token, stream_);
+
+        for (int i = 0; i < expert_num; ++i) {
+            const int base = h_offsets_[i], size = h_offsets_[i + 1] - base;
+            GetReference(xe.slice(base, size), experts[i], de.slice(base, size));
+        }
+
+        auto& d = d_.get();
+        if (combine_experts) {
+            d = Tensor{{x.shape(0), output_dim}, data_type, kDEVICE};
+            invokeMoeCombine(d, de, scales_.data(), en2f_.data(), nullptr, experts_per_token, 0., stream_);
+        }
+        else {
+            d = de;
+        }
     }
 
     void Run()
     {
         if (expert_num) {
-            TM_CHECK(0);
+            auto de = linear_.Forward(x_original_, *w_quant_, f2n_, offsets_, {}, moe_context_.get());
+            if (combine_experts) {
+                d_quant_ = Tensor{{x_original_.shape(0), output_dim}, data_type, kDEVICE};
+                invokeMoeCombine(d_quant_, de, scales_.data(), en2f_.data(), nullptr, experts_per_token, 0., stream_);
+            }
+            else {
+                d_quant_ = de;
+            }
         }
         else {
-            // std::cout << x_original_ << " " << w_quant_->weight << " " << d_quant_ << "\n";
             d_quant_ = linear_.Forward(x_original_, *w_quant_);
         }
     }
@@ -228,7 +330,9 @@ struct Testbed_v3: Parameter {
 
         // clang-format off
         printf("%20s", ""); FC_Header();
-        printf("%20s", "w_dequant v w_origi"); FC_Print(FastCompare(w_dequant_->weight, w_original_->weight, stream_));
+        if (!expert_num) {
+            printf("%20s", "w_dequant v w_origi"); FC_Print(FastCompare(w_dequant_->weight, w_original_->weight, stream_));
+        }
         printf("%20s", "quant   vs  dequant"); FC_Print(FastCompare(d_quant_, d_dequant_, stream_));
         printf("%20s", "quant   vs original"); FC_Print(FastCompare(d_quant_, d_original_, stream_));
         printf("%20s", "dequant vs original"); FC_Print(FastCompare(d_dequant_, d_original_, stream_));
@@ -253,7 +357,9 @@ struct Testbed_v3: Parameter {
 
     cudaStream_t stream_;
 
-    LlamaLinear linear_;
+    cudaDeviceProp prop_;
+
+    Linear linear_;
 
     // ! weights are non-movable
     unique_ptr<DenseWeight> w_original_;
@@ -271,6 +377,16 @@ struct Testbed_v3: Parameter {
     vector<unique_ptr<DenseWeight>> e_original_;
     vector<unique_ptr<DenseWeight>> e_quant_;
     vector<unique_ptr<DenseWeight>> e_dequant_;
+
+    Buffer_<int> f2n_;
+    Buffer_<int> en2f_;
+
+    Buffer_<int>   offsets_;
+    Buffer_<float> scales_;
+
+    Buffer_<int> h_offsets_;
+
+    std::unique_ptr<gemm::MoeGemmContext> moe_context_;
 
     RNG       rng_;
     Reference ref_;

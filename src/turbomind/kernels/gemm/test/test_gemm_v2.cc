@@ -20,22 +20,21 @@ struct TestParameter: Testbed_v3::Parameter {
 
 int main()
 {
-
-    constexpr auto x = (unsigned)0 - (unsigned)64 + (unsigned)8;
-    constexpr auto y = (unsigned)1 - x;
-
     auto stream = core::Stream::create();
 
     core::ContextGuard ctx{stream, core::Allocator{kCPU}, core::Allocator{stream, false}};
 
-    // TestParameter p{kBfloat16, kBfloat16, kBfloat16};
+    TestParameter p{kBfloat16, kBfloat16, kBfloat16};
     // TestParameter p{kBfloat16, kFloat8_e4m3, kFloat8_e4m3, 128};
     // TestParameter p{kHalf, kUint4, kHalf, 128};
-    TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16, 32};
+    // TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16, 32};
 
     p.input_dim      = 12288;
     p.output_dim     = 16384;
     p.max_batch_size = 8192;
+
+    p.expert_num        = 8;
+    p.experts_per_token = 2;
 
     // p.input_dim      = 32;
     // p.output_dim     = 32;

@@ -614,6 +614,8 @@ void MoeFfnWeight::prepare(bool use_simt)
     for (auto& e : experts) {
         e->prepare(fused_moe, use_simt);
     }
+
+#if 0
     const int  n_expert = experts.size();
     const auto st       = core::Context::stream().handle();
 
@@ -691,12 +693,85 @@ void MoeFfnWeight::prepare(bool use_simt)
 
     process(&LlamaFfnWeight::fused_gating_intermediate);
     process(&LlamaFfnWeight::output);
+#else
+
+    const int n = experts.size();
+    LinkExperts([&](int i) { return &experts[i]->fused_gating_intermediate; }, n, block.fused_gating_intermediate);
+    LinkExperts([&](int i) { return &experts[i]->output; }, n, block.output);
+
+#endif
 
     auto& e = *experts.at(0);
     // Copy MLP properties
     block.inter_size    = e.inter_size;
     block.is_fused_silu = e.is_fused_silu;
     block.act_type      = e.act_type;
+}
+
+void LinkExperts(std::function<LlamaDenseWeight*(int)> experts, int n, LlamaDenseWeight& d)
+{
+    const auto& e = *experts(0);
+
+    d.input_dim    = e.input_dim;
+    d.output_dim   = e.output_dim;
+    d.group_size   = e.group_size;
+    d.data_type    = e.data_type;
+    d.input_type   = e.input_type;
+    d.weight_type  = e.weight_type;
+    d.input_quant  = e.input_quant;
+    d.weight_quant = e.weight_quant;
+    d.k_desc       = e.k_desc;
+    d.q_desc       = e.q_desc;
+    d.epilogue     = e.epilogue;
+
+    d.k_desc.num = d.q_desc.num = n;
+
+    if (e.bias) {
+        d.bias = Tensor{{n, e.output_dim}, e.bias.dtype(), kDEVICE};
+    }
+
+    std::vector<std::pair<void*, int>> weights;
+    std::vector<std::pair<void*, int>> scales;
+
+    for (int i = 0; i < n; ++i) {
+        auto& e = *experts(i);
+        weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
+        if (e.scales_zeros) {
+            scales.emplace_back(e.scales_zeros.raw_data(), e.q_desc.ld);
+        }
+        else if (e.scales) {
+            scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
+        }
+        if (e.bias) {
+            Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
+        }
+    }
+
+    auto stream = core::Context::stream().handle();
+
+    if (d.weight_type == kFloat8_e4m3) {
+        auto make_blocked_ptr = [&](const auto& ptrs) {
+            return std::shared_ptr<void>{gemm::make_blocked_ptrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+        };
+        d.weight = Tensor{make_blocked_ptr(weights), {n}, e.weight.dtype(), kDEVICE};
+        d.scales = Tensor{make_blocked_ptr(scales), {n}, e.scales.dtype(), kDEVICE};
+        // This is needed to be recognized as blocked striding mode
+        d.k_desc.offsets = d.q_desc.offsets = (int*)1;
+    }
+    else {
+        auto make_strided_ptr = [&](const auto& ptrs) {
+            return std::shared_ptr<void>{gemm::make_strided_ptrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+        };
+        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_type, kDEVICE};
+        if (e.scales_zeros) {  // u4
+            d.scales_zeros = Tensor{make_strided_ptr(scales), {n}, e.scales_zeros.dtype(), kDEVICE};
+        }
+        else if (e.scales) {  // mxfp4
+            d.scales = Tensor{make_strided_ptr(scales), {n}, e.scales.dtype(), kDEVICE};
+        }
+        // pre-sm90 grouped GEMM need `ld == 0 to resolve strided_ptr
+        d.k_desc.ld = d.q_desc.ld = 0;
+    }
 }
 
 }  // namespace turbomind

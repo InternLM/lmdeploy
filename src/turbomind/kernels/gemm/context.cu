@@ -382,18 +382,23 @@ std::optional<GemmDesc> MoeGemmContext::Init(const Operation&    operation,
 
 std::vector<LaunchSpec> MoeGemmContext::Populate(const Kernel& kernel, const PopulateParam& param) const
 {
-    const int n = output_dim_, k = input_dim_;
+    const int k = input_dim_;
 
     const KernelDesc& desc = kernel.desc();
 
     // Note: cdiv(t * e, E) * E >= t * e
-    const int batch_size = ceil_div(tokens_ * experts_per_token_, expert_num_);
-    const int num        = std::min(tokens_ * experts_per_token_, expert_num_);
+    const int bsz = ceil_div(tokens_ * experts_per_token_, expert_num_);  // average batch size
 
-    const int64_t tiled_shape_m  = cdiv(batch_size, desc.cta_tile.x);
-    const int64_t tiled_shape_n  = cdiv(n, desc.cta_tile.y);
-    const int64_t tiled_shape_mn = tiled_shape_m * tiled_shape_n;
-    const int     chunk_cnt_k    = cdiv(k, kernel.chunk_size_k());
+    int m = bsz, n = output_dim_;
+    if (kernel.desc().order_c == kColMajor) {
+        std::swap(m, n);
+    }
+
+    const int num = std::min(tokens_ * experts_per_token_, expert_num_);
+
+    const int64_t tiled_shape_m = cdiv(m, desc.cta_tile.x);
+    const int64_t tiled_shape_n = cdiv(n, desc.cta_tile.y);
+    const int     chunk_cnt_k   = cdiv(k, kernel.chunk_size_k());
 
     // Despite we only have sm_count * constant tensor cores, this is the granularity for scheduling
     const int   concurrency     = sm_count_ * kernel.desc().max_active_ctas;
@@ -405,7 +410,7 @@ std::vector<LaunchSpec> MoeGemmContext::Populate(const Kernel& kernel, const Pop
     const int64_t ceil_n = tiled_shape_n * desc.cta_tile.y;
 
     int max_splits =
-        kernel.GetMaxSplits({batch_size, n, k, num}, tiled_shape_mn, param.barriers_size, param.partials_size);
+        kernel.GetMaxSplits({m, n, k, num}, tiled_shape_m * tiled_shape_n, param.barriers_size, param.partials_size);
 
     max_splits = std::min(param.max_splits, max_splits);
     // std::cout << "max_splits: " << max_splits << "\n";
@@ -439,10 +444,10 @@ std::vector<LaunchSpec> MoeGemmContext::Populate(const Kernel& kernel, const Pop
         const int64_t mma_cost = wave_mma_cost * waves;
 
         // IO has less severe quantization effect
-        const int64_t mio_cost_a = byte_size(desc.type_a, tiled_shape_n * batch_size * split_ceil_k) * num * splits;
+        const int64_t mio_cost_a = byte_size(desc.type_a, tiled_shape_n * m * split_ceil_k) * num * splits;
         const int64_t mio_cost_b = byte_size(desc.type_b, tiled_shape_m * n * split_ceil_k) * num * splits;
         /// TODO: read type from `desc_.accum` when added
-        const int64_t mio_cost_c = byte_size(desc.type_c, (int64_t)batch_size * n) * num * (splits - 1) * 2;
+        const int64_t mio_cost_c = byte_size(desc.type_c, (int64_t)m * n) * num * (splits - 1) * 2;
         const int64_t mio_cost   = mio_cost_a + mio_cost_b + mio_cost_c;
 
         LaunchSpec spec{};
