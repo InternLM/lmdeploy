@@ -563,8 +563,6 @@ class RayExecutor(ExecutorBase):
         if not rank_table_file:
             # if rank table file is not set, treat as single node
             self.workers = self._sort_workers(driver_ip, self.workers)
-            # simply set device by index, this is for single node, multiple devices
-            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
         else:
             # if rank table file is set, use it to get rank mapping, multiple nodes
             rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
