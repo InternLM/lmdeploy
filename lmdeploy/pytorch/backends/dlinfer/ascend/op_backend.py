@@ -8,6 +8,7 @@ from typing import Dict, Tuple
 
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
@@ -339,5 +340,6 @@ class AscendOpsBackend(DlinferOpsBackend):
     @staticmethod
     def support_ray():
         """Support ray."""
-        os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
+        if not _envs.ascend_set_rt_visable_devices_by_ray:
+            os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
         return True

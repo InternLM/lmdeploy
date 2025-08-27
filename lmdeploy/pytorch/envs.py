@@ -87,6 +87,7 @@ with set_envs():
     ray_nsys_output_prefix = os.getenv('LMDEPLOY_RAY_NSYS_OUT_PREFIX', None)
 
     # ascend
+    ascend_set_rt_visable_devices_by_ray = env_to_bool('ASCEND_SET_RT_VISIBLE_DEVICES_BY_RAY', False)
     ascend_rank_table_file = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
 
     # dp
