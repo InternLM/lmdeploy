@@ -2,6 +2,7 @@ import os
 from subprocess import PIPE, Popen
 
 from utils.get_run_config import get_command_with_extra, get_model_name
+from utils.config_utils import _is_bf16_supported_by_device
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy.utils import is_bf16_supported
@@ -30,6 +31,12 @@ def command_line_test(config,
             cmd += ' --model-format gptq'
     if case == 'base_testcase':
         cmd += ' --chat-template ' + TEMPLATE
+    
+    # Add device option if specified in environment
+    device = os.environ.get('DEVICE', '')
+    if device:
+        cmd += f' --device {device}'
+        
     return command_test(config, [cmd], model_case, case, case_info, type == 'turbomind', worker_id=worker_id)
 
 
@@ -57,7 +64,7 @@ def hf_command_line_test(config,
                                  cuda_prefix=cuda_prefix)
 
     if type == 'pytorch':
-        if not is_bf16_supported():
+        if not _is_bf16_supported_by_device():
             cmd += ' --dtype float16'
     if type == 'turbomind':
         if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
@@ -67,6 +74,12 @@ def hf_command_line_test(config,
 
     if case == 'base_testcase':
         cmd += ' --chat-template ' + TEMPLATE
+    
+    # Add device option if specified in environment
+    device = os.environ.get('DEVICE', '')
+    if device:
+        cmd += f' --device {device}'
+        
     return command_test(config, [cmd], model_case, '_'.join(['hf', type, case]), case_info, True)
 
 

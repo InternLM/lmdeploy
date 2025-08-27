@@ -1,5 +1,5 @@
 import json
-
+import os
 import fire
 import numpy as np
 from PIL import Image
@@ -21,7 +21,16 @@ PIC_PANDA = 'panda.jpg'
 DESC = 'What are the similarities and differences between these two images.'
 DESC_ZH = '两张图有什么相同和不同的地方.'
 
-
+def _is_bf16_supported_by_device():
+    """Check if bf16 is supported based on the current device"""
+    device = os.environ.get('DEVICE', 'cuda')
+    if device == 'ascend':
+        # For Ascend, bf16 support check would be different
+        # Placeholder implementation
+        return True
+    else:
+        # For CUDA and default, use the existing check
+        return is_bf16_supported()
 def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_test, extra: object = None):
     if 'pytorch' in backend_type:
         backend_config = PytorchEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.6)
@@ -33,12 +42,17 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
     if 'turbomind' in backend_type and extra is not None and 'communicator' in extra:
         backend_config.communicator = extra.get('communicator')
 
+    # Add device_type based on DEVICE environment variable
+    device = os.environ.get('DEVICE', '')
+    if device:
+        backend_config.device_type = device
+
     if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
         backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
 
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'
-    if not is_bf16_supported():
+    if not _is_bf16_supported_by_device():
         backend_config.dtype = 'float16'
 
     print('backend_config config: ' + str(backend_config))

@@ -7,8 +7,8 @@ import allure
 import psutil
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
-from utils.get_run_config import get_command_with_extra
+from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid, _is_bf16_supported_by_device
+from utils.get_run_config import get_command_with_extra 
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
@@ -60,6 +60,10 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix,
                                  extra=extra)
+    
+    device = os.environ.get('DEVICE', '')
+    if device:
+        cmd += f' --device {device}'
 
     if backend_type == 'turbomind':
         if ('w4' in model or '4bits' in model or 'awq' in model.lower()):
@@ -68,13 +72,13 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
             cmd += ' --model-format gptq'
     if backend_type == 'pytorch':
         cmd += ' --backend pytorch'
-        if not is_bf16_supported():
+        if not _is_bf16_supported_by_device():
             cmd += ' --dtype float16'
     if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
 
-    if not is_bf16_supported():
+    if not _is_bf16_supported_by_device():
         cmd += ' --cache-max-entry-count 0.5'
     if str(config.get('env_tag')) == '3090':
         cmd += ' --cache-max-entry-count 0.5'
@@ -91,7 +95,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     start_timeout = 300
-    if not is_bf16_supported():
+    if not _is_bf16_supported_by_device():
         start_timeout = 600
 
     sleep(5)
