@@ -121,3 +121,8 @@ class AscendGraphRunner(GraphRunner):
             inputs_embeds=inputs_embeds,
             context=context,
         )
+
+    def get_capture_batch_sizes(self) -> List[int]:
+        """Capture batch sizes."""
+        # TODO: disable warmup now.
+        return []
