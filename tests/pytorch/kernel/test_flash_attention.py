@@ -11,16 +11,18 @@ def _conti_input(data, q_seqlens):
 
 
 def _make_bias(q_seqlens, history_lens, neg_val, causal):
+    batch_size = q_seqlens.shape[0]
     kv_seqlens = q_seqlens + history_lens
     max_seq_len = q_seqlens.max().item()
     max_kv_len = kv_seqlens.max().item()
     if causal:
-        seq_ranges = [torch.arange(max_seq_len) for _ in q_seqlens]
-        for r, l in zip(seq_ranges, q_seqlens):
-            r[l:] = -max_kv_len
-        seq_ranges = torch.stack(seq_ranges, dim=0).cuda()
-        kv_ranges = [torch.arange(max_kv_len) for _ in kv_seqlens]
-        kv_ranges = torch.stack(kv_ranges, 0).cuda()
+        seq_ranges = torch.arange(max_seq_len).cuda()
+        seq_ranges = seq_ranges.repeat(batch_size, 1)
+        seq_ranges = torch.where(seq_ranges < q_seqlens[:, None], seq_ranges, -max_kv_len)
+
+        kv_ranges = torch.arange(max_kv_len).cuda()
+        kv_ranges = kv_ranges.repeat(batch_size, 1)
+
         mask = (kv_ranges[:, None, :] - seq_ranges[:, :, None] > history_lens[:, None, None])
         return mask.float() * neg_val
     else:
@@ -29,6 +31,27 @@ def _make_bias(q_seqlens, history_lens, neg_val, causal):
         mask = q_mask[:, :, None] & k_mask[:, None, :]
 
         return (~mask).float() * neg_val
+
+
+def _make_block_sparse_bias(q_seqlens: torch.Tensor, history_lens: torch.Tensor, neg_val: float,
+                            block_sparse_size: int):
+    """Make block sparse bias."""
+    batch_size = q_seqlens.shape[0]
+    kv_seqlens = q_seqlens + history_lens
+    max_seq_len = q_seqlens.max().item()
+    max_kv_len = kv_seqlens.max().item()
+
+    seq_ranges = torch.arange(max_seq_len).cuda()
+    seq_ranges = seq_ranges // block_sparse_size * block_sparse_size
+    seq_ranges = seq_ranges.repeat(batch_size, 1)
+    seq_ranges = torch.where(seq_ranges < q_seqlens[:, None], seq_ranges, -max_kv_len)
+
+    kv_ranges = torch.arange(max_kv_len).cuda()
+    kv_ranges = kv_ranges // block_sparse_size * block_sparse_size
+    kv_ranges = kv_ranges.repeat(batch_size, 1)
+
+    mask = (kv_ranges[:, None, :] - seq_ranges[:, :, None] > history_lens[:, None, None])
+    return mask.float() * neg_val
 
 
 def _naive_attention(batched_q, batched_kv, bias, sinks=None):
@@ -283,3 +306,42 @@ class TestFlashAttention:
                             sinks=sinks,
                             causal=causal)
         torch.testing.assert_close(out, conti_sink_gt, atol=1e-3, rtol=1e-5)
+
+    # block sparse attention
+    @pytest.fixture
+    def block_sparse_size(self):
+        yield 4
+
+    @pytest.fixture
+    def block_sparse_mask(self, q_seqlens, history_lens, block_sparse_size):
+        neg_val = -1e30
+        yield _make_block_sparse_bias(q_seqlens, history_lens, neg_val, block_sparse_size)
+
+    @pytest.fixture
+    def block_sparse_gt(self, batched_q, batched_kv, block_sparse_mask):
+        yield _naive_attention(batched_q, batched_kv, block_sparse_mask)
+
+    @pytest.mark.parametrize('head_dim_k', [32], indirect=True)
+    @pytest.mark.parametrize('head_dim_v', [32], indirect=True)
+    @pytest.mark.parametrize('num_heads_q', [8], indirect=True)
+    @pytest.mark.parametrize('num_heads_k', [2], indirect=True)
+    @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [([16, 32], [64, 8])], indirect=True)
+    def test_block_sparse_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens,
+                                    head_dim_v, block_sparse_size, block_sparse_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
+        max_seq_len = q_seqlens.max().item()
+
+        conti_k, conti_v = conti_kv
+        out = conti_q.new_empty(*conti_q.shape[:-1], head_dim_v)
+        flash_attention_fwd(conti_q,
+                            conti_k,
+                            conti_v,
+                            out,
+                            q_start_loc=q_start_loc,
+                            q_seqlens=q_seqlens,
+                            kv_start_loc=kv_start_loc,
+                            kv_seqlens=kv_seqlens,
+                            max_seqlen=max_seq_len,
+                            block_sparse_size=block_sparse_size)
+        gt = _conti_input(block_sparse_gt, q_seqlens)
+        torch.testing.assert_close(out, gt, atol=1e-3, rtol=1e-5)
