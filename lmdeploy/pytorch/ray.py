@@ -16,10 +16,12 @@ PG_WAIT_TIMEOUT = 1800
 def get_device_str(device_type: str = None) -> str:
     """Get device str."""
     device_type = device_type or get_device_manager().current_context().device_type
-    if device_type == 'cuda':
+    if device_type in ['cuda', 'maca', 'ppu']:
         device_type = 'GPU'
     elif device_type == 'ascend':
         device_type = 'NPU'
+    elif device_type == 'camb':
+        device_type = 'MLU'
     else:
         raise ValueError(f'Unsupported device type: {device_type}')
 
