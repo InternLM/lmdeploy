@@ -150,10 +150,9 @@ def test_pipeline_chat_kvint8_tp4(config, model, communicator, worker_id):
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', [
-    'OpenGVLab/InternVL2-4B', 'Qwen/Qwen2.5-VL-7B-Instruct', 'Qwen/Qwen2-VL-7B-Instruct-inner-4bits', 'THUDM/glm-4v-9b',
-    'THUDM/glm-4v-9b-inner-4bits'
-])
+@pytest.mark.parametrize(
+    'model',
+    ['OpenGVLab/InternVL2-4B', 'Qwen/Qwen2.5-VL-7B-Instruct', 'THUDM/glm-4v-9b', 'THUDM/glm-4v-9b-inner-4bits'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_tp1(config, model, communicator, worker_id):
     if 'gw' in worker_id:
@@ -166,10 +165,9 @@ def test_pipeline_chat_fallback_backend_tp1(config, model, communicator, worker_
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', [
-    'OpenGVLab/InternVL2-4B', 'Qwen/Qwen2.5-VL-7B-Instruct', 'Qwen/Qwen2-VL-7B-Instruct-inner-4bits', 'THUDM/glm-4v-9b',
-    'THUDM/glm-4v-9b-inner-4bits'
-])
+@pytest.mark.parametrize(
+    'model',
+    ['OpenGVLab/InternVL2-4B', 'Qwen/Qwen2.5-VL-7B-Instruct', 'THUDM/glm-4v-9b', 'THUDM/glm-4v-9b-inner-4bits'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_kvint8_tp1(config, model, communicator, worker_id):
     if 'gw' in worker_id:
@@ -189,7 +187,7 @@ def test_pipeline_chat_fallback_backend_kvint8_tp1(config, model, communicator, 
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['meta-llama/Llama-3.2-11B-Vision-Instruct'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-VL-32B-Instruct'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_tp2(config, model, communicator, worker_id):
     if 'gw' in worker_id:
@@ -202,7 +200,7 @@ def test_pipeline_chat_fallback_backend_tp2(config, model, communicator, worker_
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['meta-llama/Llama-3.2-11B-Vision-Instruct'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-VL-32B-Instruct'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_kvint8_tp2(config, model, communicator, worker_id):
     if 'gw' in worker_id:

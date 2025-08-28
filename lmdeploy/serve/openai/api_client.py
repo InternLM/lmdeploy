@@ -87,30 +87,33 @@ class APIClient:
             return output['input_ids'], output['length']
         return None, None
 
-    def chat_completions_v1(self,
-                            model: str,
-                            messages: Union[str, List[Dict[str, str]]],
-                            temperature: Optional[float] = 0.7,
-                            top_p: Optional[float] = 1.0,
-                            logprobs: Optional[bool] = False,
-                            top_logprobs: Optional[int] = 0,
-                            n: Optional[int] = 1,
-                            max_tokens: Optional[int] = None,
-                            stop: Optional[Union[str, List[str]]] = None,
-                            stream: Optional[bool] = False,
-                            presence_penalty: Optional[float] = 0.0,
-                            frequency_penalty: Optional[float] = 0.0,
-                            user: Optional[str] = None,
-                            repetition_penalty: Optional[float] = 1.0,
-                            ignore_eos: Optional[bool] = False,
-                            skip_special_tokens: Optional[bool] = True,
-                            spaces_between_special_tokens: Optional[bool] = True,
-                            top_k: int = 40,
-                            min_new_tokens: Optional[int] = None,
-                            min_p: float = 0.0,
-                            logit_bias: Optional[Dict[str, float]] = None,
-                            stream_options: Optional[Dict] = None,
-                            **kwargs):
+    def chat_completions_v1(
+        self,
+        model: str,
+        messages: Union[str, List[Dict[str, str]]],
+        temperature: Optional[float] = 0.7,
+        top_p: Optional[float] = 1.0,
+        logprobs: Optional[bool] = False,
+        top_logprobs: Optional[int] = 0,
+        n: Optional[int] = 1,
+        max_completion_tokens: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        stream: Optional[bool] = False,
+        presence_penalty: Optional[float] = 0.0,
+        frequency_penalty: Optional[float] = 0.0,
+        user: Optional[str] = None,
+        repetition_penalty: Optional[float] = 1.0,
+        ignore_eos: Optional[bool] = False,
+        skip_special_tokens: Optional[bool] = True,
+        spaces_between_special_tokens: Optional[bool] = True,
+        top_k: int = 40,
+        min_new_tokens: Optional[int] = None,
+        min_p: float = 0.0,
+        logit_bias: Optional[Dict[str, float]] = None,
+        stream_options: Optional[Dict] = None,
+        **kwargs,
+    ):
         """Chat completion v1.
 
         Args:
@@ -124,7 +127,9 @@ class APIClient:
             n (int): How many chat completion choices to generate for each
                 input message. Only support one here.
             stream: whether to stream the results or not. Default to false.
+            max_completion_tokens (int | None): output token nums. Default to None.
             max_tokens (int | None): output token nums. Default to None.
+                Deprecated: Use max_completion_tokens instead.
             stop (str | List[str] | None): To stop generating further
               tokens. Only accept stop words that's encoded to one token idex.
             repetition_penalty (float): The parameter for repetition penalty.
@@ -168,25 +173,27 @@ class APIClient:
                     yield output
 
     def completions_v1(
-            self,
-            model: str,
-            prompt: Union[str, List[Any]],
-            suffix: Optional[str] = None,
-            temperature: Optional[float] = 0.7,
-            n: Optional[int] = 1,
-            max_tokens: Optional[int] = 16,
-            stream: Optional[bool] = False,
-            stop: Optional[Union[str, List[str]]] = None,
-            top_p: Optional[float] = 1.0,
-            top_k: Optional[int] = 40,
-            user: Optional[str] = None,
-            # additional argument of lmdeploy
-            repetition_penalty: Optional[float] = 1.0,
-            ignore_eos: Optional[bool] = False,
-            skip_special_tokens: Optional[bool] = True,
-            spaces_between_special_tokens: Optional[bool] = True,
-            stream_options: Optional[Dict] = None,
-            **kwargs):
+        self,
+        model: str,
+        prompt: Union[str, List[Any]],
+        suffix: Optional[str] = None,
+        temperature: Optional[float] = 0.7,
+        n: Optional[int] = 1,
+        max_completion_tokens: Optional[int] = 16,
+        max_tokens: Optional[int] = 16,
+        stream: Optional[bool] = False,
+        stop: Optional[Union[str, List[str]]] = None,
+        top_p: Optional[float] = 1.0,
+        top_k: Optional[int] = 40,
+        user: Optional[str] = None,
+        # additional argument of lmdeploy
+        repetition_penalty: Optional[float] = 1.0,
+        ignore_eos: Optional[bool] = False,
+        skip_special_tokens: Optional[bool] = True,
+        spaces_between_special_tokens: Optional[bool] = True,
+        stream_options: Optional[Dict] = None,
+        **kwargs,
+    ):
         """Chat completion v1.
 
         Args:
@@ -194,7 +201,9 @@ class APIClient:
             prompt (str): the input prompt.
             suffix (str): The suffix that comes after a completion of inserted
                 text.
+            max_completion_tokens (int | None): output token nums. Default to 16.
             max_tokens (int): output token nums
+                Deprecated: Use max_completion_tokens instead.
             temperature (float): to modulate the next token probability
             top_p (float): If set to float < 1, only the smallest set of most
                 probable tokens with probabilities that add up to top_p or

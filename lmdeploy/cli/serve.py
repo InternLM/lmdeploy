@@ -91,6 +91,7 @@ class SubCliServe:
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
         ArgumentHelper.disable_vision_encoder(pt_group)
+        ArgumentHelper.logprobs_mode(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -217,6 +218,7 @@ class SubCliServe:
                 model_format=args.model_format,
                 hf_overrides=args.hf_overrides,
                 disable_vision_encoder=args.disable_vision_encoder,
+                logprobs_mode=args.logprobs_mode,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig

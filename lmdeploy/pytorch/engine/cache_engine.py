@@ -29,6 +29,8 @@ class CacheEngine:
         rank (int): distribution rank, 0 on non-distributed environment.
         world_size (int): distribution world size, 1 on non-distributed
             environment.
+        cache_stream (torch.cuda.Stream): the stream used for cache engine swap,
+            if set to None, it's created in CacheEngine.
     """
 
     def __init__(
@@ -38,6 +40,7 @@ class CacheEngine:
         rank: int = 0,
         tp_rank: int = 0,
         world_size: int = 1,
+        cache_stream: torch.cuda.Stream = None,
     ) -> None:
         self.world_size = world_size
         self.rank = rank
@@ -63,7 +66,7 @@ class CacheEngine:
         self.migration_backend_impl: Optional[MigrationBackendImpl] = None
 
         # Initialize the stream for caching operations.
-        self.cache_stream = torch.cuda.Stream()
+        self.cache_stream = cache_stream or torch.cuda.Stream()
         assert self.cache_stream != torch.cuda.current_stream()
         # Initialize the events for stream synchronization.
         self.events = torch.cuda.Event()

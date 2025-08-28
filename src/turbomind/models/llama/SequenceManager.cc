@@ -11,6 +11,23 @@
 #include <numeric>
 namespace turbomind {
 
+template<typename T>
+std::string vector2string(const std::vector<T>& data)
+{
+    if (data.empty()) {
+        return "nil";
+    }
+    std::stringstream ss;
+
+    auto it = data.begin();
+    ss << *it;
+
+    for (++it; it != data.end(); ++it) {
+        ss << ", " << *it;
+    }
+    return ss.str();
+}
+
 SequenceManager::SequenceManager(size_t             layer_num,
                                  const BlockConfig& block_config,
                                  double             block_count,
@@ -27,7 +44,10 @@ SequenceManager::SequenceManager(size_t             layer_num,
     size_t block_size = layout.block_size(layer_num);
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
-    block_trie_    = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_, enable_prefix_caching);
+    if (enable_prefix_caching) {
+        block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_);
+    }
+    TM_LOG_WARNING("[SegMgr] prefix caching is %s", enable_prefix_caching ? "enabled" : "disabled");
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
@@ -36,11 +56,14 @@ const Sequence* SequenceManager::Create(uint64_t id)
     auto     it = sequences_.find(id);
     if (it != sequences_.end()) {
         if (rank_ == 0) {
-            TM_LOG_WARNING("[SequenceManager][Create] Removing conflicting ID %ld", (long)id);
+            TM_LOG_WARNING("[SeqMgr][Create] Removing conflicting ID %llu", id);
         }
         Erase(it);
     }
     it = sequences_.emplace_hint(it, id, std::move(sequence));
+    if (rank_ == 0) {
+        TM_LOG_INFO("[SeqMgr][Create] ID %llu", id);
+    }
     return &it->second;
 }
 
@@ -68,10 +91,10 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
         UpdateAndSetUnlock(seq);
     }
     // if prefix cache enabled, blocks will be shared by sequences, cannot be freed immediately
-    if (!block_trie_->enabled()) {
+    if (!block_trie_) {
         freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
     }
-    it = sequences_.erase(it);
+    (void)sequences_.erase(it);
 }
 
 bool SequenceManager::Erase(uint64_t id)
@@ -83,18 +106,54 @@ bool SequenceManager::Erase(uint64_t id)
     return false;
 }
 
-void SequenceManager::CacheIfEnabled(const Sequences& sequences, int active_size)
+void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
 {
-    if (block_trie_->enabled()) {
-        block_trie_->verify();
-        for (int i = 0; i < active_size; ++i) {
-            auto& seq = *sequences[i];
-            // only cache prompt blocks
-            if (!seq.prompt.empty()) {
-                block_trie_->cache(seq);
-                seq.prompt.clear();
-            }
+    if (!block_trie_) {
+        return;
+    }
+
+    for (int i = 0; i < active_size; ++i) {
+        auto& seq = *sequences[i];
+        if (seq.cache_len > seq.prompt.size()) {
+            // seq prefill finished. We don't cache the prompt any longer
+            seq.prompt.clear();
+            continue;
         }
+        BlockIds  block_ids;
+        UniqueIds block_unique_ids;
+        std::tie(block_ids, block_unique_ids) = block_trie_->Cache(seq, seq.prompt);
+        if (rank_ == 0) {
+            TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, tokens %d",
+                        seq.id,
+                        block_ids.size(),
+                        seq.prompt.size());
+            TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, unique_ids %s",
+                         seq.id,
+                         vector2string(block_ids).c_str(),
+                         vector2string(block_unique_ids).c_str());
+        }
+    }
+}
+
+void SequenceManager::CacheGeneration(const Sequence& seq)
+{
+    if (!block_trie_) {
+        return;
+    }
+
+    BlockIds  block_ids;
+    UniqueIds block_unique_ids;
+
+    std::tie(block_ids, block_unique_ids) = block_trie_->Cache(seq, seq.tokens);
+    if (rank_ == 0) {
+        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, tokens %d",
+                    seq.id,
+                    block_ids.size(),
+                    seq.tokens.size());
+        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, unique_ids %s",
+                     seq.id,
+                     vector2string(block_ids).c_str(),
+                     vector2string(block_unique_ids).c_str());
     }
 }
 
@@ -320,25 +379,6 @@ void SequenceManager::SortByPriority(Sequences&                   sequences,
     context_lengths.swap(tmp_lengths);
 }
 
-// template<class P, class... Ts>
-// void SortByPriority(const std::vector<P>& priorities, Ts&... ranges)
-// {
-//     // sort according to priority
-//     std::vector<int> idxs(priorities.size());
-//     std::iota(idxs.begin(), idxs.end(), 0);
-//     std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {
-//         return priorities[i] < priorities[j];  //
-//     });
-//     auto reorder = [&](auto& src) {
-//         auto dst = src;
-//         for (size_t i = 0; i < idxs.size(); ++i) {
-//             dst[i] = src[idxs[i]];
-//         }
-//         src.swap(dst);
-//     };
-//     (reorder(ranges), ...);
-// }
-
 std::vector<int> SequenceManager::CountRequiredBlocks(const Sequences&        sequences,
                                                       const std::vector<int>& context_lengths,
                                                       int                     step_length)
@@ -371,6 +411,51 @@ void SequenceManager::AssignAndActivate(const Sequences&        sequences,  //
     }
 }
 
+void SequenceManager::PrefixMatch(Sequences& sequences)
+{
+    if (!block_trie_) {
+        return;
+    }
+
+    for (int i = 0; i < sequences.size(); i++) {
+        BlockIds  block_ids;
+        UniqueIds unique_ids;
+        auto&     seq = const_cast<Sequence&>(*sequences[i]);
+        if (seq.cache_len != 0) {
+            // We only apply prefix-cache matching when seq.cache_len is 0,
+            // which means this seq is a brand-new sequence.
+            // seq.cache_len is updated after every forward iter. Refer to `LlamaBatch::Forward`
+            continue;
+        }
+        std::tie(block_ids, unique_ids) = block_trie_->Match(seq);
+
+        block_manager_->Lock(block_ids);
+        int valid = block_ids.size();
+        if (rank_ == 0) {
+            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, valid, seq.cache_len);
+            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s",
+                         seq.id,
+                         vector2string(block_ids).c_str(),
+                         vector2string(unique_ids).c_str());
+        }
+
+        FT_CHECK(seq.blocks.empty());
+        seq.cache_len = valid * block_seq_len_;
+        seq.blocks.insert(seq.blocks.end(), block_ids.begin(), block_ids.end());
+        seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin(), unique_ids.end());
+        if (rank_ == 0) {
+            TM_LOG_INFO("[SeqMgr][match] ID %llu, after matching, blocks %d, cache_len %d",
+                        seq.id,
+                        seq.blocks.size(),
+                        seq.cache_len);
+            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s",
+                         seq.id,
+                         vector2string(seq.blocks).c_str(),
+                         vector2string(seq.block_unique_ids).c_str());
+        }
+    }
+}
+
 auto SequenceManager::Materialize(Sequences                    sequences,
                                   std::vector<int>             context_lengths,
                                   const std::vector<uint64_t>& priorities,
@@ -385,25 +470,11 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     SortByPriority(sequences, context_lengths, priorities);
 
-    // SortByPriority(priorities, sequences, context_lengths);
-
     // Verify and lock cache sequences to avoid their blocks being evicted unnoticed
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
 
-    if (block_trie_->enabled()) {
-        // verify blocks in trie cache
-        block_trie_->verify();
-
-        // match prefix cache
-        for (int i = 0; i < sequences.size(); i++) {
-            if (!sequences[i]->prompt.empty() && sequences[i]->blocks.empty()) {
-                auto& seq = const_cast<Sequence&>(*sequences[i]);
-                block_trie_->match(seq);
-                seq.cache_len = seq.blocks.size() * block_seq_len_;
-            }
-        }
-    }
+    PrefixMatch(sequences);
 
     const int max_input_count = adjust(sequences, context_lengths);
 
@@ -483,6 +554,9 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     //              block_manager_->active_count(),
     //              block_manager_->cached_count(),
     //              block_manager_->free_count());
+    if (block_trie_) {
+        block_trie_->Verify();
+    }
 
     return outcome;
 }

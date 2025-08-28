@@ -5,7 +5,6 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import ray
 import ray.exceptions
 import torch
@@ -18,7 +17,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, Misc
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.ray import RayContext
+from lmdeploy.pytorch.ray import RayContext, get_device_str
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -26,19 +25,6 @@ from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
-
-
-def get_device_str():
-    """Get device str."""
-    device_type = get_device_manager().current_context().device_type
-    if device_type == 'cuda':
-        device_type = 'GPU'
-    elif device_type == 'ascend':
-        device_type = 'NPU'
-    else:
-        raise ValueError(f'Unsupported device type: {device_type}')
-
-    return device_type
 
 
 def _get_master_addr():
@@ -221,13 +207,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
     def pack_output(self, output: Dict):
         """Pack output."""
-        for k, v in output.items():
-            if isinstance(v, torch.Tensor):
-                # fix numpy do not have BFloat16 type
-                if v.dtype is torch.bfloat16:
-                    v = v.to(torch.float16)
-                output[k] = v.numpy()
-        return output
+        return output.to_numpy()
 
     def remote_log_start(self, msg: str):
         """Remote log start."""
@@ -385,10 +365,7 @@ class RayExecutor(ExecutorBase):
             outs = await self.workers[0].get_outputs.remote()
             logger.debug(f'Receive {len(outs)} outputs from worker[0].')
             for out in outs:
-                # pack pytorch
-                for k, v in out.items():
-                    if isinstance(v, np.ndarray):
-                        out[k] = torch.from_numpy(v)
+                out = out.to_tensor()
                 self.remote_outs.put_nowait(out)
 
     def _prefetch_task_callback(self, task: asyncio.Task):
@@ -583,17 +560,21 @@ class RayExecutor(ExecutorBase):
     def _init_ascend_distributed_environment(self, driver_ip):
         """Init ascend distributed environment."""
         rank_table_file = _envs.ascend_rank_table_file
-        if not rank_table_file:
-            # if rank table file is not set, treat as single node
-            self.workers = self._sort_workers(driver_ip, self.workers)
-            # simply set device by index, this is for single node, multiple devices
-            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
-        else:
+        set_rt_visable_devices_by_ray = _envs.ascend_set_rt_visable_devices_by_ray
+
+        if rank_table_file:
             # if rank table file is set, use it to get rank mapping, multiple nodes
             rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
             self.workers = self._sort_workers_by_ip(worker_ips, self.workers)
             ray.get([worker.set_device.remote(rank_mapping[idx]) for idx, worker in enumerate(self.workers)])
             ray.get([worker.set_env.remote(envs) for worker in self.workers])
+        elif not set_rt_visable_devices_by_ray:
+            # if rank table file is not set, treat as single node
+            # simply set device by index, this is for single node, multiple devices
+            self.workers = self._sort_workers(driver_ip, self.workers)
+            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
+        else:
+            self.workers = self._sort_workers(driver_ip, self.workers)
 
     """ PD Disaggregation API Begin """
 

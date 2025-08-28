@@ -70,3 +70,9 @@ BASE_URL="https://github.com/Dao-AILab/flash-attention/releases/download/v${FA_V
 FULL_URL="${BASE_URL}/${WHEEL}"
 
 pip install "$FULL_URL"
+
+# copy nccl
+if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
+    rm -rf /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/nccl
+    cp -R /nccl /opt/py3/lib/python${PYTHON_VERSION}/site-packages/nvidia/
+fi

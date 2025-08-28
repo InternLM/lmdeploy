@@ -176,6 +176,9 @@ class BlockTrie:
                 access_time = self.allocator.get_access_time(parent.block)
                 heapq.heappush(leaves, (access_time, parent))
 
+        if len(self.leaves) == 0:
+            return 0
+
         evicted_blocks = []
         leaves = list(self.leaves)
 

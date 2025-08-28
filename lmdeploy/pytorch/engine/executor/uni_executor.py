@@ -112,9 +112,9 @@ class UniExecutor(ExecutorBase):
         """
         return [self.model_agent.cache_engine.p2p_initialize(init_request)]
 
-    def p2p_connect(self, conn_request: List[DistServeKVTransferEndpointInfo]):
+    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
         """rdma_connect."""
-        self.model_agent.cache_engine.p2p_connect(conn_request)
+        self.model_agent.cache_engine.p2p_connect(remote_engine_id, conn_request)
 
     async def migrate(self, batch: MigrationExecutionBatch):
         """KV Cache Migration."""
