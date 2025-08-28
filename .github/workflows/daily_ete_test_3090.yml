@@ -153,10 +153,10 @@ jobs:
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install transformers==4.53.1
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -229,7 +229,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -294,7 +293,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
