@@ -135,8 +135,10 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
         if 'qwen' in model_path.lower():
             Qwen_vl_testcase(pipe, resource_path)
 
-    # TODO fix for ascend
-    # pipe.close()
+    if device == 'ascend':
+        pass
+    else:
+        pipe.close()
     import gc
 
     import torch

@@ -94,7 +94,10 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
               f'[caseresult {case} end]\n')
 
     # TODO fix for ascend
-    # pipe.close()
+    if device == 'ascend':
+        pass
+    else:
+        pipe.close()
     import gc
 
     import torch
