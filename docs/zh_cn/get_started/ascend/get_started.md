@@ -1,6 +1,6 @@
 # 华为昇腾（Atlas 800T A2 & Atlas 300I Duo）
 
-我们基于 LMDeploy 的 PytorchEngine，增加了华为昇腾设备的支持。所以，在华为昇腾上使用 LDMeploy 的方法与在英伟达 GPU 上使用 PytorchEngine 后端的方法几乎相同。在阅读本教程之前，请先阅读原版的[快速开始](../get_started.md)。
+我们基于 LMDeploy 的 PytorchEngine，增加了华为昇腾设备的支持。所以，在华为昇腾上使用 LMDeploy 的方法与在英伟达 GPU 上使用 PytorchEngine 后端的方法几乎相同。在阅读本教程之前，请先阅读原版的[快速开始](../get_started.md)。
 
 支持的模型列表在[这里](../../supported_models/supported_models.md#PyTorchEngine-华为昇腾平台).
 
