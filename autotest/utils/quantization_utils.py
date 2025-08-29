@@ -34,7 +34,7 @@ def quantization(config,
     # Add device option if specified in environment
     device = os.environ.get('DEVICE', '')
     if device == 'ascend':
-        quantization_cmd += f' --device npu '
+        quantization_cmd += ' --device npu '
 
     if cuda_prefix is not None:
         quantization_cmd = ' '.join([cuda_prefix, quantization_cmd])

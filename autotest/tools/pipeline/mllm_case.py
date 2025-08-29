@@ -141,7 +141,6 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
         pipe.close()
     import gc
 
-    import torch
     gc.collect()
     _clear_device_cache()
 

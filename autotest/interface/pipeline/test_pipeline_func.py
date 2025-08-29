@@ -2,7 +2,6 @@ from multiprocessing import Process
 
 import pydantic
 import pytest
-import torch
 from utils.config_utils import _is_bf16_supported_by_device, set_device_env_variable, unset_device_env_variable
 from utils.get_run_config import _clear_device_cache
 from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_batch_stream_return,

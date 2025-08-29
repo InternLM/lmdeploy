@@ -100,7 +100,6 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
         pipe.close()
     import gc
 
-    import torch
     gc.collect()
     _clear_device_cache()
 
