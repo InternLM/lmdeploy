@@ -152,18 +152,15 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install transformers==4.53.1
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -237,9 +234,6 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -249,7 +243,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           cp -r /root/lora .
@@ -343,9 +336,6 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -354,7 +344,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -430,9 +419,6 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -441,7 +427,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -490,9 +475,6 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -501,7 +483,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -552,9 +533,6 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
@@ -571,7 +549,6 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
