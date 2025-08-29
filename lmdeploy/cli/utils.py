@@ -7,6 +7,10 @@ import sys
 from collections import defaultdict
 from typing import Any, List
 
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
+
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
     """Formatter to output default value and type in help information."""
@@ -64,10 +68,12 @@ def get_lora_adapters(adapters: List[str]):
     return output
 
 
-def get_chat_template(chat_template: str):
+def get_chat_template(chat_template: str, model_path: str = None):
     """Get chat template config.
 
-    Args     chat_template(str): it could be a builtin chat template name,     or a chat template json file
+    Args:
+        chat_template(str): it could be a builtin chat template name, or a chat template json file
+        model_path(str): the model path, used to check deprecated chat template names
     """
     import os
 
@@ -76,12 +82,19 @@ def get_chat_template(chat_template: str):
         if os.path.isfile(chat_template):
             return ChatTemplateConfig.from_json(chat_template)
         else:
-            from lmdeploy.model import MODELS
+            from lmdeploy.model import DEPRECATED_CHAT_TEMPLATE_NAMES, MODELS, REMOVED_CHAT_TEMPLATE_NAMES
+            if chat_template in REMOVED_CHAT_TEMPLATE_NAMES:
+                raise ValueError(f"The chat template '{chat_template}' has been removed. "
+                                 f'Please refer to the latest chat templates in '
+                                 f'https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html')
+            if chat_template in DEPRECATED_CHAT_TEMPLATE_NAMES:
+                logger.warning(f"The chat template '{chat_template}' is deprecated and fallback to hf chat template.")
+                chat_template = 'hf'
             assert chat_template in MODELS.module_dict.keys(), \
                 f"chat template '{chat_template}' is not " \
                 f'registered. The builtin chat templates are: ' \
                 f'{MODELS.module_dict.keys()}'
-            return ChatTemplateConfig(model_name=chat_template)
+            return ChatTemplateConfig(model_name=chat_template, model_path=model_path)
     else:
         return None
 
