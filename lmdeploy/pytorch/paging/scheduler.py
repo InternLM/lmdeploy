@@ -9,7 +9,7 @@ from lmdeploy.messages import EventType, ScheduleMetrics
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
-from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager
+from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager, SequenceMeta
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 
@@ -50,7 +50,8 @@ class Scheduler:
 
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
-        self.seq_manager = SequenceManager()
+        seq_meta = SequenceMeta(self.cache_config.block_size)
+        self.seq_manager = SequenceManager(seq_meta)
 
     @property
     def waiting(self):
@@ -121,7 +122,7 @@ class Scheduler:
             session_id (int): New session id.
         """
         assert session_id not in self.sessions
-        session = SchedulerSession(session_id, self.cache_config.block_size, seq_manager=self.seq_manager)
+        session = SchedulerSession(session_id, seq_manager=self.seq_manager)
         self.sessions[session_id] = session
         return session
 
@@ -179,7 +180,7 @@ class Scheduler:
         return running_migration
 
     @logging_timer('SchedulePrefilling', logger)
-    def _schedule_prefill(self):
+    def _schedule_prefill(self, prealloc_size: int = 0):
         """Schedule for prefilling."""
 
         max_batches = self.scheduler_config.max_batches - self.num_running() - self.num_locked()
@@ -203,7 +204,7 @@ class Scheduler:
             hanging = reversed(self.hanging)
             waiting = reversed(waiting)
             evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, 0)
+            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
 
         def _reorder_waiting():
             """Reorder waiting."""
@@ -226,7 +227,7 @@ class Scheduler:
                 break
 
             # allocate session memory
-            self.block_manager.allocate(seq)
+            self.block_manager.allocate(seq, prealloc_size)
             _to_running(seq)
 
             seq.record_event(EventType.SCHEDULED)
@@ -287,7 +288,7 @@ class Scheduler:
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
-            output = self._schedule_prefill()
+            output = self._schedule_prefill(prealloc_size)
         else:
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output

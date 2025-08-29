@@ -610,8 +610,6 @@ class BaseModelAgent:
                 all_ids = torch.cat([all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
             if guided_input_ids is not None:
                 guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None].to(guided_input_ids.device)], 1)
-            if sampling_inputs.random_offsets is not None:
-                sampling_inputs.random_offsets += 1
 
         @asynccontextmanager
         async def __prepare_dp():
