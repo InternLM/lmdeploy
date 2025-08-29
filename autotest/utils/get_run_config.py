@@ -1,6 +1,8 @@
+import os
 import random
+import re
+import subprocess
 from time import sleep
-import os, subprocess, re
 
 import torch
 
@@ -121,42 +123,42 @@ def close_pipeline(pipe):
 
 
 def _clear_device_cache():
-    """Clear cache based on the current device type"""
+    """Clear cache based on the current device type."""
     device = os.environ.get('DEVICE', 'cuda')
     handler = _get_device_handler(device)
     handler.clear_cache()
 
 
 def _get_device_handler(device):
-    """Get the appropriate device handler based on device type"""
+    """Get the appropriate device handler based on device type."""
     handlers = {
         'cuda': CudaDeviceHandler(),
         'ascend': AscendDeviceHandler(),
     }
-    
+
     # Return the specific handler if available, otherwise return default cuda handler
     return handlers.get(device, handlers['cuda'])
 
 
 class DeviceHandler:
-    """Base class for device handlers"""
-    
+    """Base class for device handlers."""
+
     def get_device_prefix(self, config, model):
-        """Get device-specific prefix for command execution"""
+        """Get device-specific prefix for command execution."""
         return ''
-    
+
     def clear_cache(self):
-        """Clear device-specific cache"""
+        """Clear device-specific cache."""
         pass
-    
+
     def get_available_devices(self):
-        """Get list of available devices"""
+        """Get list of available devices."""
         return []
 
 
 class CudaDeviceHandler(DeviceHandler):
-    """Handler for CUDA devices"""
-    
+    """Handler for CUDA devices."""
+
     def get_device_prefix(self, config, model):
         cuda_prefix = ''
         tp_num = get_tp_num(config, model)
@@ -169,10 +171,10 @@ class CudaDeviceHandler(DeviceHandler):
         cuda_prefix = 'CUDA_VISIBLE_DEVICES=' + ','.join(random.sample(available_cuda, tp_num))
         self.clear_cache()
         return cuda_prefix
-    
+
     def clear_cache(self):
         torch.cuda.empty_cache()
-    
+
     def get_available_devices(self):
         devices = torch.cuda.device_count()
         available_cuda = []
@@ -186,8 +188,8 @@ class CudaDeviceHandler(DeviceHandler):
 
 
 class AscendDeviceHandler(DeviceHandler):
-    """Handler for Ascend devices"""
-    
+    """Handler for Ascend devices."""
+
     def get_device_prefix(self, config, model):
         ascend_prefix = ''
         tp_num = get_tp_num(config, model)
@@ -195,29 +197,29 @@ class AscendDeviceHandler(DeviceHandler):
             return ascend_prefix
         available_ascend = self.get_available_devices()
         if len(available_ascend) < tp_num:
-            raise RuntimeError("Not enough Ascend devices available")
+            raise RuntimeError('Not enough Ascend devices available')
 
         ascend_prefix = 'ASCEND_RT_VISIBLE_DEVICES=' + ','.join(random.sample(available_ascend, tp_num))
         self.clear_cache()
         return ascend_prefix
-    
+
     def clear_cache(self):
         try:
             import torch_npu
             torch_npu.npu.empty_cache()
         except ImportError:
             pass  # torch_npu not available
-    
+
     def get_available_devices(self):
-        """Get list of available Ascend devices by checking AICPU usage rate"""
+        """Get list of available Ascend devices by checking AICPU usage
+        rate."""
         available_ascend = []
         try:
             # Get the number of NPU devices
-            result = subprocess.run(['npu-smi', 'info', '-l'], 
-                                  capture_output=True, text=True, timeout=10)
+            result = subprocess.run(['npu-smi', 'info', '-l'], capture_output=True, text=True, timeout=10)
             if result.returncode != 0:
                 return available_ascend
-                
+
             # Parse the output to get device count
             # Looking for lines like "Device Count : X"
             device_count = 0
@@ -227,15 +229,15 @@ class AscendDeviceHandler(DeviceHandler):
                     if match:
                         device_count = int(match.group(1))
                         break
-            
+
             # Check each device's AICPU usage
             for i in range(device_count):
                 try:
-                    result = subprocess.run(['npu-smi', 'info', '-t', 'usages', '-i', str(i)], 
-                                          capture_output=True, text=True, timeout=10)
+                    result = subprocess.run(
+                        ['npu-smi', 'info', '-t', 'usages', '-i', str(i)], capture_output=True, text=True, timeout=10)
                     if result.returncode != 0:
                         continue
-                        
+
                     # Parse the output to get AICPU Usage Rate
                     # Looking for lines like "Aicpu Usage Rate(%) : X"
                     aicpu_usage = 100  # Default to 100% (busy)
@@ -245,14 +247,14 @@ class AscendDeviceHandler(DeviceHandler):
                             if match:
                                 aicpu_usage = int(match.group(1))
                                 break
-                    
+
                     # If AICPU usage is 0, consider the device available
                     if aicpu_usage == 0:
                         available_ascend.append(str(i))
                 except (subprocess.TimeoutExpired, subprocess.SubprocessError):
                     continue
-                    
+
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
             # npu-smi command not found or other error
-            pass 
+            pass
         return available_ascend

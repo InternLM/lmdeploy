@@ -20,7 +20,7 @@ def config():
             config_path = config_file
     else:
         config_path = config_file
-        
+
     with open(config_path) as f:
         env_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
     return env_config
@@ -46,6 +46,7 @@ def pytest_addoption(parser):
     parser.addoption('--run_id', action='store', default='', help='github run_id')
     parser.addoption('--device', action='store', default='', help='device config suffix')
 
+
 def pytest_configure(config):
     # Set DEVICE environment variable before test execution
     device = config.getoption('--device')
@@ -56,6 +57,7 @@ def pytest_configure(config):
 @pytest.fixture(scope='session')
 def run_id(request):
     return request.config.getoption('--run_id')
+
 
 @pytest.fixture(scope='session')
 def device(request):

@@ -1,7 +1,7 @@
 import os
 
 import pytest
-from utils.config_utils import set_device_env_variable, get_torch_model_list
+from utils.config_utils import get_torch_model_list, set_device_env_variable
 from utils.pipeline_chat import run_pipeline_vl_chat_test
 
 BACKEND = 'pytorch'

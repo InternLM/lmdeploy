@@ -173,7 +173,7 @@ def get_config():
             config_path = 'autotest/config.yaml'
     else:
         config_path = 'autotest/config.yaml'
-        
+
     with open(config_path) as f:
         config = yaml.load(f.read(), Loader=yaml.SafeLoader)
     return config
@@ -239,7 +239,7 @@ def is_quantization_model(name):
 
 
 def _is_bf16_supported_by_device():
-    """Check if bf16 is supported based on the current device"""
+    """Check if bf16 is supported based on the current device."""
     device = os.environ.get('DEVICE', 'cuda')
     if device == 'ascend':
         # For Ascend, bf16 support check would be different
@@ -248,12 +248,12 @@ def _is_bf16_supported_by_device():
     else:
         # For CUDA and default, use the existing check
         return is_bf16_supported()
-    
+
 
 def set_device_env_variable(worker_id, tp_num: int = 1):
-    """Set device environment variable based on the device type"""
+    """Set device environment variable based on the device type."""
     device = os.environ.get('DEVICE', 'cuda')  # Default to cuda
-    
+
     if device == 'ascend':
         device_id = get_cuda_id_by_workerid(worker_id, tp_num)
         if device_id is not None:
@@ -262,3 +262,13 @@ def set_device_env_variable(worker_id, tp_num: int = 1):
         cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
         if cuda_id is not None:
             os.environ['CUDA_VISIBLE_DEVICES'] = cuda_id
+
+
+def unset_device_env_variable():
+    device_type = os.environ.get('DEVICE', 'cuda')
+    if device_type == 'ascend':
+        if 'ASCEND_RT_VISIBLE_DEVICES' in os.environ:
+            del os.environ['ASCEND_RT_VISIBLE_DEVICES']
+    else:
+        if 'CUDA_VISIBLE_DEVICES' in os.environ:
+            del os.environ['CUDA_VISIBLE_DEVICES']

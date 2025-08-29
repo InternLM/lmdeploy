@@ -1,5 +1,6 @@
 import json
 import os
+
 import fire
 import numpy as np
 from PIL import Image
@@ -21,8 +22,9 @@ PIC_PANDA = 'panda.jpg'
 DESC = 'What are the similarities and differences between these two images.'
 DESC_ZH = '两张图有什么相同和不同的地方.'
 
+
 def _is_bf16_supported_by_device():
-    """Check if bf16 is supported based on the current device"""
+    """Check if bf16 is supported based on the current device."""
     device = os.environ.get('DEVICE', 'cuda')
     if device == 'ascend':
         # For Ascend, bf16 support check would be different
@@ -31,6 +33,22 @@ def _is_bf16_supported_by_device():
     else:
         # For CUDA and default, use the existing check
         return is_bf16_supported()
+
+
+def _clear_device_cache():
+    """Clear cache based on the current device type."""
+    device = os.environ.get('DEVICE', 'cuda')
+    if device == 'ascend':
+        try:
+            import torch_npu
+            torch_npu.npu.empty_cache()
+        except ImportError:
+            pass  # torch_npu not available
+    else:
+        import torch
+        torch.cuda.empty_cache()
+
+
 def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_test, extra: object = None):
     if 'pytorch' in backend_type:
         backend_config = PytorchEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.6)
@@ -46,6 +64,8 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
     device = os.environ.get('DEVICE', '')
     if device:
         backend_config.device_type = device
+        if device == 'ascend':
+            backend_config.eager_mode = True
 
     if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
         backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
@@ -115,12 +135,13 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
         if 'qwen' in model_path.lower():
             Qwen_vl_testcase(pipe, resource_path)
 
-    pipe.close()
+    # TODO fix for ascend
+    # pipe.close()
     import gc
 
     import torch
     gc.collect()
-    torch.cuda.empty_cache()
+    _clear_device_cache()
 
 
 def internvl_vl_testcase(pipe, resource_path, lang='en'):

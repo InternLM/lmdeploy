@@ -9,8 +9,9 @@ from lmdeploy.utils import is_bf16_supported
 
 gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=2)
 
+
 def _is_bf16_supported_by_device():
-    """Check if bf16 is supported based on the current device"""
+    """Check if bf16 is supported based on the current device."""
     device = os.environ.get('DEVICE', 'cuda')
     if device == 'ascend':
         # For Ascend, bf16 support check would be different
@@ -19,6 +20,22 @@ def _is_bf16_supported_by_device():
     else:
         # For CUDA and default, use the existing check
         return is_bf16_supported()
+
+
+def _clear_device_cache():
+    """Clear cache based on the current device type."""
+    device = os.environ.get('DEVICE', 'cuda')
+    if device == 'ascend':
+        try:
+            import torch_npu
+            torch_npu.npu.empty_cache()
+        except ImportError:
+            pass  # torch_npu not available
+    else:
+        import torch
+        torch.cuda.empty_cache()
+
+
 def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test, extra: object = None):
 
     if 'pytorch' in backend_type:
@@ -30,6 +47,8 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
     device = os.environ.get('DEVICE', '')
     if device:
         backend_config.device_type = device
+        if device == 'ascend':
+            backend_config.eager_mode = True
 
     if 'lora' in backend_type:
         backend_config.adapters = extra.get('adapters')
@@ -74,12 +93,13 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
         print(f'[caseresult {case} start]' + json.dumps(response_list, ensure_ascii=False) +
               f'[caseresult {case} end]\n')
 
-    pipe.close()
+    # TODO fix for ascend
+    # pipe.close()
     import gc
 
     import torch
     gc.collect()
-    torch.cuda.empty_cache()
+    _clear_device_cache()
 
 
 if __name__ == '__main__':

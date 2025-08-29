@@ -7,13 +7,12 @@ import allure
 import psutil
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid, _is_bf16_supported_by_device
-from utils.get_run_config import get_command_with_extra 
+from utils.config_utils import _is_bf16_supported_by_device, get_cuda_prefix_by_workerid, get_workerid
+from utils.get_run_config import get_command_with_extra
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy.serve.openai.api_client import APIClient
-from lmdeploy.utils import is_bf16_supported
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
@@ -60,10 +59,12 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix,
                                  extra=extra)
-    
+
     device = os.environ.get('DEVICE', '')
     if device:
-        cmd += f' --device {device}'
+        cmd += f' --device {device} '
+        if device == 'ascend':
+            cmd += '--eager-mode '
 
     if backend_type == 'turbomind':
         if ('w4' in model or '4bits' in model or 'awq' in model.lower()):
@@ -137,7 +138,6 @@ def stop_restful_api(pid, startRes, param):
 
 def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
-
     model = get_model(http_url)
 
     if model is None:
@@ -164,8 +164,8 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
 
     result = True
 
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
-    model_name = client.models.list().data[0].id
+    api_client = APIClient(url)
+    model_name = api_client.available_models[0]
 
     messages = []
     msg = ''
@@ -176,17 +176,18 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        response = client.chat.completions.create(model=model_name, messages=messages, temperature=0.01, top_p=0.8)
+        for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1, max_tokens=256):
+            output_message = output.get('choices')[0].get('message')
+            messages.append(output_message)
 
-        output_content = response.choices[0].message.content
-        file.writelines('output:' + output_content + '\n')
-        messages.append({'role': 'assistant', 'content': output_content})
+            output_content = output_message.get('content')
+            file.writelines('output:' + output_content + '\n')
 
-        case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
-        file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
-        if not case_result:
-            msg += reason
-        result = result & case_result
+            case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
+            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
+            if not case_result:
+                msg += reason
+            result = result & case_result
     file.close()
     return result, restful_log, msg
 
@@ -457,9 +458,9 @@ def test_qwen_multiple_round_prompt(client, model):
         """Get temperature at a location and date.
 
         Args:
-            location: The location to get the temperature for, in the format 'City, State, Country'.
-            date: The date to get the temperature for, in the format 'Year-Month-Day'.
-            unit: The unit to return the temperature in. Defaults to 'celsius'. (choices: ['celsius', 'fahrenheit'])
+            location: The location to get the temperature for, in the format "City, State, Country".
+            date: The date to get the temperature for, in the format "Year-Month-Day".
+            unit: The unit to return the temperature in. Defaults to "celsius". (choices: ["celsius", "fahrenheit"])
 
         Returns:
             the temperature, the location, the date and the unit in a dict
@@ -617,7 +618,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
                 },
             }
         }]
-        messages = [{'role': 'user', 'content': 'What\'s the weather like in Boston today?'}]
+        messages = [{'role': 'user', 'content': "What's the weather like in Boston today?"}]
         response = client.chat.completions.create(model=model_name,
                                                   messages=messages,
                                                   temperature=0.01,
