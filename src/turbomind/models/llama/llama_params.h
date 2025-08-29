@@ -108,6 +108,7 @@ struct EngineParam {
     int mlp_tp_rank;
 
     std::vector<int> devices;
+    bool             empty_init;
 };
 
 enum class LoraPolicy : int
