@@ -195,7 +195,9 @@ class TurbomindEngineConfig:
             be allocated to the k/v cache.
             For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8,
             signifying the percentage of FREE GPU memory to be reserved for
-            the k/v cache
+            the k/v cache.
+            When it's an integer > 0, it represents the total number of k/v
+            blocks.
         cache_chunk_size (int): The policy to apply for KV block from
             the block manager, default to -1.
         cache_block_seq_len (int): the length of the token sequence in
@@ -262,8 +264,7 @@ class TurbomindEngineConfig:
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
-        assert 0 < self.cache_max_entry_count < 1, \
-            'invalid cache_max_entry_count'
+        assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \

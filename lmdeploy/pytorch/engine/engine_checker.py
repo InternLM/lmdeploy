@@ -109,7 +109,7 @@ class EngineChecker(BaseChecker):
             return
 
         current_proc = mp.current_process()
-        if not current_proc.daemon:
+        if not current_proc.daemon and self.engine_config.device_type == 'cuda':
             mp_ctx = mp.get_context('spawn')
             with ProcessPoolExecutor(mp_context=mp_ctx) as executor:
                 try:
