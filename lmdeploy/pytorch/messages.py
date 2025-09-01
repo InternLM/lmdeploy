@@ -498,6 +498,7 @@ class SchedulerSequence:
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
     adapter_name: str = None
     arrive_time: float = 0.0
+    input_pos: int = 0
     meta: Any = None
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
@@ -706,6 +707,7 @@ class SchedulerSequenceDefault(SchedulerSequence):
         num_valid = len(token_ids)
 
         if mode == UpdateTokenMode.INPUTS:
+            self.input_pos = self.num_all_ids
             self._num_token_ids += num_valid
             self.num_new_tokens = 0
         else:
@@ -818,6 +820,7 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
 
         self.history_cache.append(token_ids)
         self.history_dllm_mask.append(dllm_mask)
+        self.input_pos = self._num_valid_ids
         self._num_valid_ids = self.num_history_ids + num_tokens
         self._num_token_ids = len(token_ids)
         self.num_new_tokens = 0

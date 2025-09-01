@@ -261,30 +261,64 @@ def _batch_stopping_criteria_default(token_ids: torch.Tensor, stop_words: torch.
     return stopped, stop_pos, num_appendable_ids
 
 
+def _check_stopwords_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, is_unmasked: torch.Tensor,
+                          stopped: torch.Tensor, stop_pos: torch.Tensor, num_appendable_ids: torch.Tensor,
+                          input_pos: torch.Tensor, inputs: ModelInputs):
+    num_tokens = token_ids.size(0)
+    batch_size = num_appendable_ids.size(0)
+    block_sparse_size = num_tokens // batch_size
+
+    # blocks might contain stop words in prev-round chat
+    # these stop words should be ignored
+    kv_seqlens = inputs.history_lengths + inputs.seq_length
+    ignore_pos = (input_pos - (kv_seqlens - block_sparse_size)).clamp_min(0)
+    ignore_range = torch.arange(0, block_sparse_size, dtype=ignore_pos.dtype, device=ignore_pos.device)
+    ignore_mask = (ignore_range[None, :] < ignore_pos[:, None]).flatten()
+    token_ids = token_ids.clone()
+    token_ids[ignore_mask] = -1
+
+    # find stop words
+    sw_stopped = (token_ids[:, None] == stop_words).any(1)
+    sw_stopped = sw_stopped.view(batch_size, block_sparse_size)
+    sw_stop_pos = sw_stopped.int().argmax(1)
+
+    stop_pos = torch.where(stopped, stop_pos, sw_stop_pos)
+    sw_stopped = sw_stopped.any(dim=1)
+    sw_stopped = sw_stopped & is_unmasked
+    stopped = stopped | sw_stopped
+
+    # update num_appendable_ids
+    one_ids = torch.clamp_max(num_appendable_ids, 0)
+    num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
+
+    return stopped, stop_pos, num_appendable_ids
+
+
 def _batch_stopping_criteria_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor,
-                                  dllm_mask: torch.Tensor):
+                                  dllm_mask: torch.Tensor, input_pos: torch.Tensor, inputs: ModelInputs):
     """Batched stopping criteria."""
     num_tokens = token_ids.size(0)
     batch_size = num_appendable_ids.size(0)
     block_sparse_size = num_tokens // batch_size
-    if block_sparse_size == 1:
-        return _batch_stopping_criteria_default(token_ids, stop_words, num_appendable_ids)
 
     dllm_mask = dllm_mask.view(batch_size, block_sparse_size)
     is_unmasked = (dllm_mask == consts.DLLM_UNMASKED).all(dim=1)
+
+    # check stop by num_new_tokens
     num_appendable_ids -= is_unmasked * block_sparse_size
     stopped = num_appendable_ids <= 0
     stop_pos = block_sparse_size - 1 + num_appendable_ids
+
+    # check stop words
     if stop_words is not None:
-        sw_stopped = (token_ids[:, None] == stop_words).any(1)
-        sw_stopped = sw_stopped.view(batch_size, block_sparse_size)
-        sw_stop_pos = sw_stopped.int().argmax(1)
-        stop_pos = torch.where(stopped, stop_pos, sw_stop_pos)
-        sw_stopped = sw_stopped.any(dim=1)
-        sw_stopped = sw_stopped & is_unmasked
-        stopped = stopped | sw_stopped
-        one_ids = torch.clamp_max(num_appendable_ids, 0)
-        num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
+        stopped, stop_pos, num_appendable_ids = _check_stopwords_dllm(token_ids,
+                                                                      stop_words,
+                                                                      is_unmasked,
+                                                                      stopped,
+                                                                      stop_pos,
+                                                                      num_appendable_ids,
+                                                                      input_pos=input_pos,
+                                                                      inputs=inputs)
     return stopped, stop_pos, num_appendable_ids
 
 
@@ -523,11 +557,14 @@ class BaseModelAgent:
                                  token_ids: torch.Tensor,
                                  stop_words: torch.Tensor,
                                  num_appendable_ids: torch.Tensor,
-                                 dllm_mask: Optional[torch.Tensor] = None):
+                                 dllm_mask: Optional[torch.Tensor] = None,
+                                 input_pos: Optional[torch.Tensor] = None,
+                                 inputs: Optional[ModelInputs] = None):
         """Batched stopping criteria."""
         if self.model_config.model_paradigm == 'dllm':
             assert dllm_mask is not None
-            return _batch_stopping_criteria_dllm(token_ids, stop_words, num_appendable_ids, dllm_mask)
+            return _batch_stopping_criteria_dllm(token_ids, stop_words, num_appendable_ids, dllm_mask, input_pos,
+                                                 inputs)
 
         return _batch_stopping_criteria_default(token_ids, stop_words, num_appendable_ids)
 
@@ -698,6 +735,7 @@ class BaseModelAgent:
         is_dummy: bool = False,
         sync_long_context: bool = False,
         dllm_mask: torch.Tensor = None,
+        input_pos: torch.Tensor = None,
     ):
         """Asyc forward task."""
         dist_ctx = get_dist_manager().current_context()
@@ -855,7 +893,9 @@ class BaseModelAgent:
                 stopped, stop_pos, num_appendable_ids = self._batch_stopping_criteria(next_token_ids,
                                                                                       sampling_inputs.stop_words,
                                                                                       num_appendable_ids,
-                                                                                      dllm_mask=dllm_mask)
+                                                                                      dllm_mask=dllm_mask,
+                                                                                      input_pos=input_pos,
+                                                                                      inputs=inputs)
                 if need_broadcast_next:
                     handle.wait()
             else:
@@ -917,7 +957,7 @@ class BaseModelAgent:
     async def _async_loop_inputs_preprocess(self):
         """Async loop inputs preprocess."""
         non_blocking = True
-        keys = ['inputs', 'sampling_inputs', 'num_appendable_ids', 'dllm_mask']
+        keys = ['inputs', 'sampling_inputs', 'num_appendable_ids', 'dllm_mask', 'input_pos']
         while True:
             forward_inputs = await self._pre_in_que.get()
 
