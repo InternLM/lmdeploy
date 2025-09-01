@@ -123,3 +123,8 @@ class CambOpsBackend(DlinferOpsBackend):
         """Build graph runner."""
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
+
+    @staticmethod
+    def support_ray():
+        """Support ray."""
+        return True

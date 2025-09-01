@@ -296,6 +296,7 @@ class ModelInputs:
         history_lengths = torch.zeros((batch_size, ), dtype=torch.long, device=device)
         block_offsets = torch.full((batch_size, 1), dummy_block_id, dtype=torch.long, device=device)
         num_ignored_history = torch.zeros((batch_size, ), dtype=torch.long, device=device)
+        local_adapter_ids = torch.zeros((batch_size, ), dtype=torch.long, device=device)
 
         return cls(
             input_ids=input_ids,
@@ -307,6 +308,7 @@ class ModelInputs:
             max_q_seqlen=1,
             max_kv_seqlen=1,
             sum_kv_seqlen=batch_size,
+            local_adapter_ids=local_adapter_ids,
         )
 
     def log_info(self):
