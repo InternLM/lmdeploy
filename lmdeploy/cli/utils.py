@@ -610,6 +610,11 @@ class ArgumentHelper:
                                    choices=[None, 'raw_logits', 'raw_logprobs'],
                                    help='The mode of logprobs.')
 
+    @staticmethod
+    def block_sparse_size(parser):
+        """block_sparse_size for dllm."""
+        return parser.add_argument('--block-sparse-size', type=int, default=1, help='Block sparse size for dllm')
+
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
 class FlexibleArgumentParser(argparse.ArgumentParser):

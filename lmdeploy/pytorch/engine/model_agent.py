@@ -251,9 +251,9 @@ def _batch_stopping_criteria_default(token_ids: torch.Tensor, stop_words: torch.
     """Batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
     stopped = num_appendable_ids <= 0
+    stop_pos = torch.zeros_like(num_appendable_ids)
     if stop_words is not None:
         sw_stopped = (token_ids[:, None] == stop_words).any(1)
-        stop_pos = torch.zeros_like(num_appendable_ids)
         stopped = stopped | sw_stopped
         one_ids = torch.clamp_max(num_appendable_ids, 0)
         num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
@@ -278,10 +278,12 @@ def _batch_stopping_criteria_dllm(token_ids: torch.Tensor, stop_words: torch.Ten
     is_unmasked = (dllm_mask == DLLM_UNMASKED).all(dim=1)
     num_appendable_ids -= is_unmasked * block_sparse_size
     stopped = num_appendable_ids <= 0
+    stop_pos = block_sparse_size - 1 + num_appendable_ids
     if stop_words is not None:
         sw_stopped = (token_ids[:, None] == stop_words).any(1)
         sw_stopped = sw_stopped.view(batch_size, block_sparse_size)
-        stop_pos = sw_stopped.int().argmax(1)
+        sw_stop_pos = sw_stopped.int().argmax(1)
+        stop_pos = torch.where(stopped, stop_pos, sw_stop_pos)
         sw_stopped = sw_stopped.any(dim=1)
         sw_stopped = sw_stopped & is_unmasked
         stopped = stopped | sw_stopped

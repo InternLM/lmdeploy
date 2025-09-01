@@ -3,6 +3,7 @@ import dataclasses
 from typing import Optional
 
 import torch
+from torch.profiler import record_function
 
 
 @dataclasses.dataclass
@@ -46,6 +47,7 @@ class UnmaskingProcessor:
         dllm_mask = torch.where(is_masked, dllm_unmasked, dllm_mask)
         return dllm_mask.flatten()
 
+    @record_function('unmasking')
     def __call__(self, logits: torch.Tensor, input_ids: torch.Tensor, token_ids: torch.Tensor, dllm_mask: torch.Tensor):
         """call."""
         strategy = self.meta.strategy
