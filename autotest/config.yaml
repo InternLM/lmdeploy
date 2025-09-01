@@ -248,6 +248,7 @@ pytorch_base_model:
 turbomind_quatization:
     no_awq:
         - internlm/Intern-S1
+        - internlm/Intern-S1-mini
         - meta-llama/Meta-Llama-3-1-70B-Instruct
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
