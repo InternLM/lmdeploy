@@ -40,6 +40,7 @@
 |            InternVL2             | 1-2B, 8B - 76B | MLLM |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 | InternVL2.5(MPO)<sup>\[2\]</sup> |    1 - 78B     | MLLM |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |    InternVL3<sup>\[2\]</sup>     |    1 - 78B     | MLLM |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
+|   InternVL3.5<sup>\[3\]</sup>    |  1 - 241BA28B  | MLLM |    Yes    |  Yes\*  |  Yes\*  |  No   |
 |             ChemVLM              |    8B - 26B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       MiniCPM-Llama3-V-2_5       |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |          MiniCPM-V-2_6           |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -103,6 +104,7 @@
 |           InternVL2            |     1B-76B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |        InternVL2.5(MPO)        |     1B-78B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |           InternVL3            |     1B-78B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|          InternVL3.5           |   1B-241BA28B   | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |
 | Mono-InternVL<sup>\[1\]</sup>  |       2B        | MLLM |   Yes\*   |   Yes   |   Yes   |  -   |   -   |
 |            ChemVLM             |     8B-26B      | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |             Gemma2             |     9B-27B      | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |

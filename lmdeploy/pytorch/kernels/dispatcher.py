@@ -64,14 +64,7 @@ class FunctionDispatcher:
         self.func_name = func_name
         self.dispatched_func = self.load_and_call
         self.device_manager.register_context_callback(self.device_callback)
-        self.device_map = {
-            'cuda': 'cuda',
-            'ascend': 'dlinfer',
-            'npu': 'dlinfer',
-            'maca': 'dlinfer',
-            'camb': 'dlinfer',
-            'ppu': 'dlinfer'
-        }
+        self.device_map = {'cuda': 'cuda', 'ascend': 'dlinfer', 'npu': 'dlinfer', 'maca': 'dlinfer', 'camb': 'dlinfer'}
 
     def device_callback(self, context: DeviceContext):
         """Device context callback."""

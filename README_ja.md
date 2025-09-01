@@ -157,6 +157,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>InternVL3 (1B-78B)</li>
+  <li>InternVL3.5 (1B-241BA28B)</li>
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
   <li>Mono-InternVL (2B)</li>
