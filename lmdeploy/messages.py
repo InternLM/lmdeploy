@@ -334,8 +334,13 @@ class PytorchEngineConfig:
             It can be used to override the default config of the model,
         disable_vision_encoder (bool): Whether to disable loading vision
             encoder. Default to False.
-        block_sparse_size (int): Block size of block diffusion model.
         logprobs_mode (str): The mode of logprob, options: ['raw_logits', 'raw_logprobs']
+        dllm_block_length (int): Block size of block diffusion model.
+        dllm_unmasking_strategy (str): Dllm unmasking strategy, options:
+            ['low_confidence_dynamic', 'low_confidence_static', 'sequential'].
+        dllm_denoising_steps (int): Dllm denoising steps.
+        dllm_confidence_threshold (float): dllm unmasking threshold for
+            dynamic unmasking.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -369,8 +374,13 @@ class PytorchEngineConfig:
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
-    block_sparse_size: int = 1
     logprobs_mode: str = None
+
+    # dllm
+    dllm_block_length: int = 1
+    dllm_unmasking_strategy: str = 'low_confidence_dynamic'
+    dllm_denoising_steps: int = None
+    dllm_confidence_threshold: float = 0.85
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime

@@ -14,6 +14,7 @@ import torch
 import torch.distributed as dist
 from torch.profiler import ProfilerActivity, profile, record_function
 
+from lmdeploy.pytorch import consts
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger
@@ -28,7 +29,7 @@ from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
 from .logits_process import FusedLogitsProcessor, SamplingInputs
-from .unmasking import UnmaskingMeta, UnmaskingProcessor
+from .unmasking import UnmaskingProcessor
 
 logger = get_logger('lmdeploy')
 
@@ -260,11 +261,6 @@ def _batch_stopping_criteria_default(token_ids: torch.Tensor, stop_words: torch.
     return stopped, stop_pos, num_appendable_ids
 
 
-DLLM_MASKED = 0
-DLLM_UNMASKED = 1
-DLLM_CACHED = 2
-
-
 def _batch_stopping_criteria_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor,
                                   dllm_mask: torch.Tensor):
     """Batched stopping criteria."""
@@ -275,7 +271,7 @@ def _batch_stopping_criteria_dllm(token_ids: torch.Tensor, stop_words: torch.Ten
         return _batch_stopping_criteria_default(token_ids, stop_words, num_appendable_ids)
 
     dllm_mask = dllm_mask.view(batch_size, block_sparse_size)
-    is_unmasked = (dllm_mask == DLLM_UNMASKED).all(dim=1)
+    is_unmasked = (dllm_mask == consts.DLLM_UNMASKED).all(dim=1)
     num_appendable_ids -= is_unmasked * block_sparse_size
     stopped = num_appendable_ids <= 0
     stop_pos = block_sparse_size - 1 + num_appendable_ids
@@ -406,9 +402,11 @@ class BaseModelAgent:
 
     def _build_unmasking_processor(self):
         """Build unmasking processor."""
-        strategy = 'low_confidence_static' if self.model_config.model_paradigm == 'dllm' else None
-        unmasking_processor = UnmaskingProcessor(
-            UnmaskingMeta(strategy=strategy, block_sparse_size=self.misc_config.block_sparse_size, topk=2))
+        # block_sparse_size = self.misc_config.block_sparse_size
+        # strategy = 'low_confidence_dynamic' if self.model_config.model_paradigm == 'dllm' else None
+        # denoising_steps = max(1, block_sparse_size // 2)
+        dllm_config = self.misc_config.dllm_config
+        unmasking_processor = UnmaskingProcessor(dllm_config)
         return unmasking_processor
 
     @contextmanager
@@ -718,11 +716,11 @@ class BaseModelAgent:
             dllm_mask = dllm_mask.view(-1, block_sparse_size).clone()
 
             # flags
-            is_cached = (dllm_mask == DLLM_CACHED).all(dim=1)
+            is_cached = (dllm_mask == consts.DLLM_CACHED).all(dim=1)
 
-            is_masked = (dllm_mask == DLLM_MASKED)
+            is_masked = (dllm_mask == consts.DLLM_MASKED)
             next_token_ids[is_cached[:, None] | is_masked] = dllm_mask_token
-            dllm_mask[is_cached] = DLLM_MASKED
+            dllm_mask[is_cached] = consts.DLLM_MASKED
             seqlens = torch.where(is_cached.view(-1), seqlens, seqlens.new_zeros((1, )))
 
             return next_token_ids.flatten(), dllm_mask.flatten(), seqlens

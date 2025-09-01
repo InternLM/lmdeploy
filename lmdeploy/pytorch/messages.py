@@ -8,6 +8,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
+from lmdeploy.pytorch import consts
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -224,9 +225,9 @@ class SequenceManager:
             new_status_map[seq_id] = seq
 
 
-DLLM_MASKED = 0
-DLLM_UNMASKED = 1
-DLLM_CACHED = 2
+DLLM_MASKED = consts.DLLM_MASKED
+DLLM_UNMASKED = consts.DLLM_UNMASKED
+DLLM_CACHED = consts.DLLM_CACHED
 DLLM_MASK_DTYPE = np.uint8
 
 

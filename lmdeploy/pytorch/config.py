@@ -288,6 +288,14 @@ class ModelConfig:
 
 
 @dataclass
+class DLLMConfig:
+    block_sparse_size: int = 1
+    unmasking_strategy: str = 'low_confidence_dynamic'
+    denoising_steps: int = None
+    confidence_threshold: float = 0.85
+
+
+@dataclass
 class MiscConfig:
     prefill_interval: int = 16
     custom_module_map: str = None
@@ -297,16 +305,25 @@ class MiscConfig:
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
     block_sparse_size: int = 1
+    dllm_config: DLLMConfig = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
         """From engine config."""
+        denoising_steps = engine_config.dllm_denoising_steps
+        if denoising_steps is None:
+            denoising_steps = engine_config.dllm_block_length // 2
+        dllm_config = DLLMConfig(block_sparse_size=engine_config.dllm_block_length,
+                                 unmasking_strategy=engine_config.dllm_unmasking_strategy,
+                                 denoising_steps=denoising_steps,
+                                 confidence_threshold=engine_config.dllm_confidence_threshold)
         misc_config = cls(custom_module_map=engine_config.custom_module_map,
                           empty_init=engine_config.empty_init,
                           prefill_interval=engine_config.prefill_interval,
                           model_format=engine_config.model_format,
                           hf_overrides=engine_config.hf_overrides,
                           disable_vision_encoder=engine_config.disable_vision_encoder,
-                          block_sparse_size=engine_config.block_sparse_size,
-                          logprobs_mode=engine_config.logprobs_mode)
+                          block_sparse_size=engine_config.dllm_block_length,
+                          logprobs_mode=engine_config.logprobs_mode,
+                          dllm_config=dllm_config)
         return misc_config

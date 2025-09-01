@@ -144,7 +144,7 @@ def _build_seq_meta(cache_config: CacheConfig, model_config: ModelConfig, engine
 
     seq_meta = SequenceMeta(cache_config.block_size,
                             model_paradigm=model_config.model_paradigm,
-                            block_sparse_size=engine_config.block_sparse_size,
+                            block_sparse_size=engine_config.dllm_block_length,
                             dllm_mask_token=model_config.dllm_mask_token)
     return seq_meta
 
