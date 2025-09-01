@@ -333,6 +333,7 @@ class PytorchEngineConfig:
             It can be used to override the default config of the model,
         disable_vision_encoder (bool): Whether to disable loading vision
             encoder. Default to False.
+        block_sparse_size (int): Block size of block diffusion model.
         logprobs_mode (str): The mode of logprob, options: ['raw_logits', 'raw_logprobs']
     """
     dtype: str = 'auto'
@@ -367,6 +368,7 @@ class PytorchEngineConfig:
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
+    block_sparse_size: int = 1
     logprobs_mode: str = None
 
     role: EngineRole = EngineRole.Hybrid

@@ -200,6 +200,8 @@ class ModelConfig:
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
     use_flash_mla: bool = False
+    model_paradigm: str = 'llm'
+    dllm_mask_token: int = 0
 
     def get_head_size(self):
         """Get head size."""
@@ -294,6 +296,7 @@ class MiscConfig:
     hf_overrides: Dict[str, Any] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
+    block_sparse_size: int = 1
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -304,5 +307,6 @@ class MiscConfig:
                           model_format=engine_config.model_format,
                           hf_overrides=engine_config.hf_overrides,
                           disable_vision_encoder=engine_config.disable_vision_encoder,
+                          block_sparse_size=engine_config.block_sparse_size,
                           logprobs_mode=engine_config.logprobs_mode)
         return misc_config

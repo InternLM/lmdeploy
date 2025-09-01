@@ -28,6 +28,7 @@ from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
 from .logits_process import FusedLogitsProcessor, SamplingInputs
+from .unmasking import UnmaskingMeta, UnmaskingProcessor
 
 logger = get_logger('lmdeploy')
 
@@ -62,10 +63,12 @@ class BatchedLogProbs:
 class BatchedOutputs:
     next_token_ids: torch.Tensor
     stopped: torch.Tensor
+    stop_pos: Optional[torch.Tensor] = None
     logits: Optional[torch.Tensor] = None
     model_metas: List[Dict[str, Any]] = None
     logprobs: Optional[BatchedLogProbs] = None
     new_token_timestamp: int = 0
+    dllm_mask: Optional[torch.Tensor] = None
 
     def to_cpu(self):
         """To cpu."""
@@ -198,6 +201,8 @@ def msg_with_rank(rank: int, msg: str):
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
     """Perform cache swapping."""
     issued_cache_op = False
+    swap_in_map = swap_in_map or dict()
+    swap_out_map = swap_out_map or dict()
     if len(swap_in_map) > 0:
         cache_engine.swap_in(swap_in_map)
         issued_cache_op = True
@@ -241,17 +246,48 @@ def model_forward(
     return dict(hidden_states=output, model_metas=model_metas)
 
 
-@record_function('stopping_criteria')
-def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
+def _batch_stopping_criteria_default(token_ids: torch.Tensor, stop_words: torch.Tensor,
+                                     num_appendable_ids: torch.Tensor):
     """Batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
     stopped = num_appendable_ids <= 0
     if stop_words is not None:
         sw_stopped = (token_ids[:, None] == stop_words).any(1)
+        stop_pos = torch.zeros_like(num_appendable_ids)
         stopped = stopped | sw_stopped
         one_ids = torch.clamp_max(num_appendable_ids, 0)
         num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
-    return stopped, num_appendable_ids
+    return stopped, stop_pos, num_appendable_ids
+
+
+DLLM_MASKED = 0
+DLLM_UNMASKED = 1
+DLLM_CACHED = 2
+
+
+def _batch_stopping_criteria_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor,
+                                  dllm_mask: torch.Tensor):
+    """Batched stopping criteria."""
+    num_tokens = token_ids.size(0)
+    batch_size = num_appendable_ids.size(0)
+    block_sparse_size = num_tokens // batch_size
+    if block_sparse_size == 1:
+        return _batch_stopping_criteria_default(token_ids, stop_words, num_appendable_ids)
+
+    dllm_mask = dllm_mask.view(batch_size, block_sparse_size)
+    is_unmasked = (dllm_mask == DLLM_UNMASKED).all(dim=1)
+    num_appendable_ids -= is_unmasked * block_sparse_size
+    stopped = num_appendable_ids <= 0
+    if stop_words is not None:
+        sw_stopped = (token_ids[:, None] == stop_words).any(1)
+        sw_stopped = sw_stopped.view(batch_size, block_sparse_size)
+        stop_pos = sw_stopped.int().argmax(1)
+        sw_stopped = sw_stopped.any(dim=1)
+        sw_stopped = sw_stopped & is_unmasked
+        stopped = stopped | sw_stopped
+        one_ids = torch.clamp_max(num_appendable_ids, 0)
+        num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
+    return stopped, stop_pos, num_appendable_ids
 
 
 def _try_to_cuda(val, non_blocking: bool = False):
@@ -363,6 +399,16 @@ class BaseModelAgent:
         self.enable_microbatch_decode_batchsize_threshold = \
             int(getenv('ENABLE_MICROBATCH_DECODE_BATCHSIZE_THRESHOLD', 2))
 
+        # dllm
+        self.unmasking_processor = self._build_unmasking_processor()
+
+    def _build_unmasking_processor(self):
+        """Build unmasking processor."""
+        strategy = 'low_confidence_static' if self.model_config.model_paradigm == 'dllm' else None
+        unmasking_processor = UnmaskingProcessor(
+            UnmaskingMeta(strategy=strategy, block_sparse_size=self.misc_config.block_sparse_size, topk=2))
+        return unmasking_processor
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -396,8 +442,9 @@ class BaseModelAgent:
             inputs = ModelInputs.make_dummy(max_batches,
                                             is_decoding=False,
                                             device='cuda',
-                                            vocab_size=self.model_config.vocab_size)
-            self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+                                            vocab_size=self.model_config.vocab_size,
+                                            build_ctx=self.build_model_ctx)
+            self._forward_impl(inputs)
 
             # warmup decoding(with cuda graph)
             capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
@@ -406,20 +453,92 @@ class BaseModelAgent:
                 inputs = ModelInputs.make_dummy(num_tokens,
                                                 is_decoding=True,
                                                 device='cuda',
-                                                vocab_size=self.model_config.vocab_size)
-                self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+                                                vocab_size=self.model_config.vocab_size,
+                                                build_ctx=self.build_model_ctx)
+                self._forward_impl(inputs)
+
+    def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
+        """Slice outputs."""
+        if self.model_config.model_paradigm == 'dllm':
+            block_sparse_size = self.misc_config.block_sparse_size
+            if len(seq_length) * block_sparse_size == inputs.size(0):
+                return inputs
+            last_idx = seq_length.cumsum(0)
+            block_range = torch.arange(-block_sparse_size, 0, device=last_idx.device)
+            index = (last_idx[:, None] + block_range[None, :]).flatten()
+            inputs = inputs[index]
+            return inputs
+        else:
+            if len(seq_length) == inputs.size(0):
+                return inputs
+            last_idx = seq_length.cumsum(-1) - 1
+            return inputs[last_idx]
+
+    def _postprocess_forward_output_dllm(self, output: dict, inputs: ModelInputs, is_long_context: bool,
+                                         return_logits: bool):
+        """Post process for dllm."""
+        block_sparse_size = self.misc_config.block_sparse_size
+        hidden_states = output['hidden_states']
+        seq_length = inputs.seq_length
+        if is_long_context:
+            if not return_logits:
+                hidden_states = hidden_states[:, -block_sparse_size:]
+            else:
+                hidden_states = hidden_states.to('cuda')
+        else:
+            is_decoding = seq_length.numel() * block_sparse_size == hidden_states.size(1)
+            if not return_logits and not is_decoding:
+                hidden_states = self._slice_outs(hidden_states[0], seq_length)[None]
+        output['hidden_states'] = hidden_states
+        return output
+
+    def _postprocess_forward_output_default(self, output: dict, inputs: ModelInputs, is_long_context: bool,
+                                            return_logits: bool):
+        """Post process forward output default."""
+        hidden_states = output['hidden_states']
+        seq_length = inputs.seq_length
+        if not is_long_context:
+            is_decoding = seq_length.numel() != hidden_states.size(1)
+            if not return_logits and not is_decoding:
+                hidden_states = self._slice_outs(hidden_states[0], seq_length)[None]
+        else:
+            if not return_logits:
+                last_token_loc = [-1]
+                hidden_states = hidden_states[:, last_token_loc]
+            else:
+                hidden_states = hidden_states.to('cuda')
+        output['hidden_states'] = hidden_states
+        return output
+
+    def _postprocess_forward_output(self, output: dict, inputs: ModelInputs, is_long_context: bool,
+                                    return_logits: bool):
+        """Post process forward output."""
+        if self.model_config.model_paradigm == 'dllm':
+            return self._postprocess_forward_output_dllm(output, inputs, is_long_context, return_logits)
+        else:
+            return self._postprocess_forward_output_default(output, inputs, is_long_context, return_logits)
+
+    @record_function('stopping_criteria')
+    def _batch_stopping_criteria(self,
+                                 token_ids: torch.Tensor,
+                                 stop_words: torch.Tensor,
+                                 num_appendable_ids: torch.Tensor,
+                                 dllm_mask: Optional[torch.Tensor] = None):
+        """Batched stopping criteria."""
+        if self.model_config.model_paradigm == 'dllm':
+            assert dllm_mask is not None
+            return _batch_stopping_criteria_dllm(token_ids, stop_words, num_appendable_ids, dllm_mask)
+
+        return _batch_stopping_criteria_default(token_ids, stop_words, num_appendable_ids)
 
     async def _async_model_forward(
         self,
         inputs: ModelInputs,
-        swap_in_map: Dict,
-        swap_out_map: Dict,
         return_logits: bool,
         sync_long_context: bool,
     ):
         """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
-        swap_done = False
 
         class _OutputGather:
             """Output gather."""
@@ -453,14 +572,7 @@ class BaseModelAgent:
                 torch.cuda.synchronize()
                 return self._output
 
-        async def __forward(inputs):
-            """forward."""
-            nonlocal swap_done, swap_in_map, swap_out_map
-            if swap_done:
-                return await self.async_forward(inputs, swap_in_map=dict(), swap_out_map=dict())
-            else:
-                swap_done = True
-                return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        __forward = self.async_forward
 
         async def __long_context_single_forward(new_inputs, max_seqlen: int):
             """One large sequence."""
@@ -501,20 +613,18 @@ class BaseModelAgent:
 
         if not is_long_context:
             ret = await __forward(inputs)
-            if not return_logits and not inputs.is_decoding:
-                last_token_loc = inputs.seq_length.cumsum(0) - 1
-                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
         else:
             ret = await __long_context_single_forward(inputs, max_seqlen)
-            if not return_logits:
-                last_token_loc = [-1]
-                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
-            else:
-                ret['hidden_states'] = ret['hidden_states'].to('cuda')
+
+        ret = self._postprocess_forward_output(ret, inputs, is_long_context, return_logits)
 
         # compute dummy loop
         if dummy_loop > 0:
-            dummy_inputs = ModelInputs.make_dummy(1, False, 'cuda', vocab_size=self.model_config.vocab_size)
+            dummy_inputs = ModelInputs.make_dummy(1,
+                                                  False,
+                                                  'cuda',
+                                                  vocab_size=self.model_config.vocab_size,
+                                                  build_ctx=self.build_model_ctx)
         for _ in range(dummy_loop):
             await __forward(dummy_inputs)
 
@@ -523,29 +633,22 @@ class BaseModelAgent:
         ret['logits'] = logits
         return ret
 
-    async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
-                                    sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
+    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs, inputs: ModelInputs):
         """Sampling logits."""
-
-        def __get_last_logits():
-            """Get last logits."""
-            seq_length = inputs.seq_length
-            if len(seq_length) == logits.size(0):
-                return logits
-
-            last_idx = seq_length.cumsum(-1) - 1
-            return logits[last_idx, :]
 
         # record function does not support async function
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
-            split_logits = __get_last_logits()
+            all_ids = sampling_inputs.all_ids
+            guided_input_ids = sampling_inputs.guided_input_ids
+            ignore_eos = sampling_inputs.num_ignore_eos > 0
             logits_processor = FusedLogitsProcessor(sampling_inputs,
                                                     ignore_eos,
                                                     self.tokenizer,
                                                     sampling_vocab_size=self.sampling_vocab_size,
                                                     logprobs_mode=self.misc_config.logprobs_mode)
-            logits, raw_logprobs = await logits_processor(all_ids, guided_input_ids, split_logits)
+            origin_logits = logits
+            logits, raw_logprobs = await logits_processor(all_ids, guided_input_ids, origin_logits)
             next_token_ids = logits_processor.sampling(logits)
             logprobs = logits_processor.compute_logprobs(raw_logprobs, next_token_ids)
             if logprobs is not None:
@@ -568,11 +671,20 @@ class BaseModelAgent:
         if self.cache_config.role == EngineRole.Decode:
             next_token_ids = next_token_ids.cpu()
             tp_cpu_group = dist_ctx.tp_cpu_group
-            dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group)
+            handle = dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group, async_op=True)
         else:
             tp_gpu_group = dist_ctx.tp_gpu_group
-            dist.broadcast(next_token_ids, src=0, group=tp_gpu_group)
-        return next_token_ids
+            handle = dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
+        return handle
+
+    def dllm_unmasking(self, inputs: ModelInputs, logits: torch.Tensor, next_token_ids: torch.LongTensor,
+                       dllm_mask: torch.Tensor):
+        """Unmasking dllm."""
+        if self.build_model_ctx.model_paradigm != 'dllm':
+            return None, next_token_ids
+        input_ids = inputs.input_ids
+        input_ids = self._slice_outs(input_ids.flatten(), inputs.seq_length)
+        return self.unmasking_processor(logits, input_ids, next_token_ids, dllm_mask)
 
     async def _async_step_background(
         self,
@@ -580,36 +692,47 @@ class BaseModelAgent:
         loop_count: int,
         swap_in_map: Dict = None,
         swap_out_map: Dict = None,
-        all_ids: torch.Tensor = None,
-        guided_input_ids: torch.Tensor = None,
         sampling_inputs: SamplingInputs = None,
         num_appendable_ids: torch.LongTensor = None,
-        num_ignore_eos: torch.LongTensor = None,
         return_logits: bool = False,
         is_dummy: bool = False,
         sync_long_context: bool = False,
+        dllm_mask: torch.Tensor = None,
     ):
         """Asyc forward task."""
-        if swap_in_map is None:
-            swap_in_map = dict()
-
-        if swap_out_map is None:
-            swap_out_map = dict()
-
         dist_ctx = get_dist_manager().current_context()
 
+        def __update_dllm(next_token_ids: torch.Tensor, dllm_mask: torch.Tensor, seqlens: torch.Tensor):
+            """Update token_ids and dllm_mask."""
+            model_paradigm = self.model_config.model_paradigm
+            if model_paradigm != 'dllm':
+                return next_token_ids, dllm_mask, seqlens
+
+            dllm_mask_token = self.model_config.dllm_mask_token
+            block_sparse_size = self.build_model_ctx.block_sparse_size
+
+            # reshape to (batch, block_sparse_size)
+            next_token_ids = next_token_ids.view(-1, block_sparse_size).clone()
+            dllm_mask = dllm_mask.view(-1, block_sparse_size).clone()
+
+            # flags
+            is_cached = (dllm_mask == DLLM_CACHED).all(dim=1)
+
+            is_masked = (dllm_mask == DLLM_MASKED)
+            next_token_ids[is_cached[:, None] | is_masked] = dllm_mask_token
+            dllm_mask[is_cached] = DLLM_MASKED
+            seqlens = torch.where(is_cached.view(-1), seqlens, seqlens.new_zeros((1, )))
+
+            return next_token_ids.flatten(), dllm_mask.flatten(), seqlens
+
         @record_function('update_inputs_for_next_step')
-        def __update_inputs(next_token_ids, model_metas):
+        def __update_inputs(next_token_ids, model_metas, dllm_mask):
             """Update inputs."""
-            nonlocal all_ids, guided_input_ids, swap_in_map, swap_out_map
-            swap_in_map = dict()
-            swap_out_map = dict()
             inputs.model_metas = model_metas
-            inputs.update(next_token_ids)
-            if all_ids is not None:
-                all_ids = torch.cat([all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
-            if guided_input_ids is not None:
-                guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None].to(guided_input_ids.device)], 1)
+            next_token_ids, dllm_mask, step_seqlens = __update_dllm(next_token_ids, dllm_mask, inputs.seq_length)
+            inputs.step(next_token_ids, step_seqlens)
+            sampling_inputs.step(next_token_ids)
+            return next_token_ids, dllm_mask
 
         @asynccontextmanager
         async def __prepare_dp():
@@ -693,46 +816,63 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
             return
 
+        cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         for idx in range(loop_count):
             # inference
             logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
             output = await self._async_model_forward(
                 inputs,
-                swap_in_map=swap_in_map,
-                swap_out_map=swap_out_map,
                 return_logits=return_logits,
                 sync_long_context=sync_long_context,
             )
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+            last_logits = self._slice_outs(logits, inputs.seq_length)
+            if dllm_mask is not None:
+                dllm_mask = self._slice_outs(dllm_mask, inputs.seq_length)
 
             # output empty for dummy inputs
             if is_dummy:
                 continue
 
+            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
+
             # sampling and stopping
             if need_output:
                 logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
                 # sampling
-                next_token_ids, logprobs = await self.async_sampling_logits(logits, all_ids, guided_input_ids,
-                                                                            sampling_inputs, inputs, num_ignore_eos > 0)
-                num_ignore_eos = num_ignore_eos - 1
+                next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
+
+                # broadcast next token for TP > 1
+                if need_broadcast_next:
+                    logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
+                    handle = self._broadcast_next_token(next_token_ids, dist_ctx)
+
+                # unmasking
+                dllm_mask, next_token_ids = self.dllm_unmasking(inputs, last_logits, next_token_ids, dllm_mask)
 
                 # stopping criteria
-                stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
-                                                                       num_appendable_ids)
+                stopped, stop_pos, num_appendable_ids = self._batch_stopping_criteria(next_token_ids,
+                                                                                      sampling_inputs.stop_words,
+                                                                                      num_appendable_ids,
+                                                                                      dllm_mask=dllm_mask)
+                if need_broadcast_next:
+                    handle.wait()
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
                 with torch.inference_mode():
-                    next_token_ids = torch.zeros_like(num_ignore_eos)
+                    next_token_ids = num_appendable_ids.new_zeros(last_logits.size(0))
                 logprobs = None
 
-            # broadcast next token for TP > 1
-            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
-            if need_broadcast_next:
-                logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                next_token_ids = self._broadcast_next_token(next_token_ids, dist_ctx)
+                # broadcast next token for TP > 1
+                if need_broadcast_next:
+                    logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
+                    handle = self._broadcast_next_token(next_token_ids, dist_ctx)
+                    handle.wait()
+
+                # unmasking
+                dllm_mask, next_token_ids = self.dllm_unmasking(inputs, last_logits, next_token_ids, dllm_mask)
 
             # send output
             model_metas = output.get('model_metas')
@@ -742,12 +882,14 @@ class BaseModelAgent:
                     BatchedOutputs(next_token_ids=next_token_ids,
                                    logits=logits if return_logits else None,
                                    stopped=stopped,
+                                   stop_pos=stop_pos,
                                    model_metas=model_metas,
-                                   logprobs=logprobs))
+                                   logprobs=logprobs,
+                                   dllm_mask=dllm_mask))
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
-                __update_inputs(next_token_ids, model_metas)
+                next_token_ids, dllm_mask = __update_inputs(next_token_ids, model_metas, dllm_mask)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
@@ -775,7 +917,7 @@ class BaseModelAgent:
     async def _async_loop_inputs_preprocess(self):
         """Async loop inputs preprocess."""
         non_blocking = True
-        keys = ['inputs', 'all_ids', 'guided_input_ids', 'sampling_inputs', 'num_appendable_ids', 'num_ignore_eos']
+        keys = ['inputs', 'sampling_inputs', 'num_appendable_ids', 'dllm_mask']
         while True:
             forward_inputs = await self._pre_in_que.get()
 
@@ -911,7 +1053,9 @@ class BaseModelAgent:
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
-        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder)
+        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
+                                            block_sparse_size=self.misc_config.block_sparse_size,
+                                            model_paradigm=self.model_config.model_paradigm)
         patched_model = build_patched_model(self.model_config,
                                             device=device,
                                             model_format=self.misc_config.model_format,
@@ -923,6 +1067,7 @@ class BaseModelAgent:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
         self.patched_model = patched_model
+        self.build_model_ctx = build_model_ctx
 
     def build_model(self):
         """Build model api."""
@@ -953,8 +1098,7 @@ class BaseModelAgent:
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
 
-    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+    def _forward_impl(self, inputs: ModelInputs):
         output = model_forward(
             self.patched_model,
             inputs,
@@ -963,7 +1107,7 @@ class BaseModelAgent:
         )
         return output
 
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
+    async def async_forward(self, inputs: ModelInputs):
         """Model forward.
 
         Args:
@@ -971,7 +1115,7 @@ class BaseModelAgent:
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """
-        output = self._forward_impl(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        output = self._forward_impl(inputs)
         await asyncio.sleep(0)
         return output
 
@@ -1097,7 +1241,8 @@ class DPForwardInputsMaker:
         model_inputs = ModelInputs.make_dummy(batch_size,
                                               is_decoding,
                                               device=self.device,
-                                              vocab_size=self.model_config.vocab_size)
+                                              vocab_size=self.model_config.vocab_size,
+                                              build_ctx=self.model_agent.build_model_ctx)
         forward_inputs = dict(
             inputs=model_inputs,
             loop_count=loop_count,

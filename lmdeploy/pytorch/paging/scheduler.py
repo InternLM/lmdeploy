@@ -36,7 +36,10 @@ class Scheduler:
         cache_config (CacheConfig): The config of cache info.
     """
 
-    def __init__(self, scheduler_config: SchedulerConfig, cache_config: CacheConfig) -> None:
+    def __init__(self,
+                 scheduler_config: SchedulerConfig,
+                 cache_config: CacheConfig,
+                 seq_meta: SequenceMeta = None) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
 
@@ -50,7 +53,7 @@ class Scheduler:
 
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
-        seq_meta = SequenceMeta(self.cache_config.block_size)
+        seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         self.seq_manager = SequenceManager(seq_meta)
 
     @property

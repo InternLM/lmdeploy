@@ -109,6 +109,47 @@ def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor, guided
     return scores
 
 
+SeqList = List[SchedulerSequence]
+
+
+def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: 'SamplingInputs'):
+    """Gather history."""
+    if sampling_inputs.repetition_penalty is None and not any(sampling_inputs.logits_processors):
+        return None
+    batch = len(seqs)
+    max_len = max(seq.num_valid_ids for seq in seqs)
+    output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
+    for idx, seq in enumerate(seqs):
+        h_len = seq.num_valid_ids
+        if h_len == 0:
+            continue
+        h_ids = torch.from_numpy(seq.valid_ids)
+        output[idx, -h_len:] = h_ids
+    return output
+
+
+def _gather_guided_input_ids(pad_id: int, seqs: SeqList, sampling_inputs: 'SamplingInputs'):
+    """Gather input ids for guided decode."""
+    if not any(sampling_inputs.response_formats or ()):
+        return None
+    batch = len(seqs)
+    max_len = max(seq.num_new_tokens for seq in seqs)
+    output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
+    for idx, seq in enumerate(seqs):
+        h_len = seq.num_new_tokens
+        if h_len == 0:
+            continue
+        h_ids = torch.from_numpy(seq.generated_ids)
+        output[idx, -h_len:] = h_ids
+    return output
+
+
+def _get_num_ignore_eos(seqs: SeqList):
+    """Get num ignore eos."""
+    ret = [seq.sampling_param.min_new_tokens - seq.num_new_tokens for seq in seqs]
+    return torch.tensor(ret)
+
+
 @dataclass
 class SamplingInputs:
     temperature: torch.Tensor = None
@@ -120,16 +161,19 @@ class SamplingInputs:
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
     min_p: torch.Tensor = None
-    random_seeds: int = None
-    random_offsets: int = None
+    random_seeds: torch.Tensor = None
+    random_offsets: torch.Tensor = None
     max_top_k: int = 1
     min_top_p: float = 1.0
     response_formats: Tuple[str] = ()
     logits_processors: List[List[LogitsProcessor]] = None
     max_num_logprobs: Optional[int] = None
+    all_ids: Optional[torch.Tensor] = None
+    guided_input_ids: Optional[torch.Tensor] = None
+    num_ignore_eos: torch.Tensor = None
 
     @classmethod
-    def from_sampling_params(cls, seqs: List[SchedulerSequence]):
+    def from_sampling_params(cls, seqs: List[SchedulerSequence], pad_token_id: int = 0):
         """From samplingg params."""
         batch_size = len(seqs)
         temperature = [None] * batch_size
@@ -154,7 +198,7 @@ class SamplingInputs:
                 top_k[idx] = param.top_k
                 top_p[idx] = param.top_p
                 min_p[idx] = param.min_p
-                random_offsets[idx] = seq.num_all_ids
+                random_offsets[idx] = seq.num_valid_ids
                 response_formats[idx] = param.response_format
                 if param.random_seed is not None:
                     random_seeds[idx] = param.random_seed & 0xffffffff
@@ -255,6 +299,10 @@ class SamplingInputs:
             logits_processors=logits_processors,
             max_num_logprobs=max_num_logprobs,
         )
+
+        sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
+        sampling_input.guided_input_ids = _gather_guided_input_ids(pad_token_id, seqs, sampling_input)
+        sampling_input.num_ignore_eos = _get_num_ignore_eos(seqs)
         return sampling_input
 
     def to_device(self, device: str, non_blocking: bool = False):
@@ -268,6 +316,62 @@ class SamplingInputs:
             out_dict[k] = v
 
         return SamplingInputs(**out_dict)
+
+    def step(self, next_token_ids: torch.Tensor, **kwargs):
+        """To next step."""
+        self.num_ignore_eos = self.num_ignore_eos - 1
+        if self.all_ids is not None:
+            self.all_ids = torch.cat([self.all_ids, next_token_ids[:, None]], 1)
+        if self.guided_input_ids is not None:
+            self.guided_input_ids = torch.cat([self.guided_input_ids, next_token_ids[:, None]], 1)
+
+
+@dataclass
+class SamplingInputsDLLM(SamplingInputs):
+
+    @classmethod
+    def from_sampling_params(cls, seqs: List[SchedulerSequence], pad_token_id: int = 0, block_sparse_size: int = 1):
+        """From samplingg params."""
+        out = super().from_sampling_params(seqs, pad_token_id)
+        if block_sparse_size == 1:
+            return out
+
+        # repeat tensor
+        update_attr_names = [
+            'temperature',
+            'bad_words',
+            'bad_mask',
+            'stop_words',
+            'stop_mask',
+            'repetition_penalty',
+            'top_k',
+            'top_p',
+            'min_p',
+            'random_seeds',
+            'random_offsets',
+            'all_ids',
+            'guided_input_ids',
+            'num_ignore_eos',
+        ]
+        for name in update_attr_names:
+            attr = getattr(out, name)
+            if attr is None:
+                continue
+            repeats = (block_sparse_size, ) + (1, ) * (attr.dim())
+            attr = attr[None].repeat(*repeats).flatten(0, 1)
+            setattr(out, name, attr)
+
+        if len(out.response_formats) > 0:
+            new_resp_formats = []
+            for resp in out.response_formats:
+                new_resp_formats += [resp] * block_sparse_size
+            out.response_formats = new_resp_formats
+
+        return out
+
+    def step(self, next_token_ids: torch.Tensor, **kwargs):
+        """To next step."""
+        self.num_ignore_eos = self.num_ignore_eos - 1
 
 
 def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):

@@ -12,6 +12,7 @@ from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
 
 from ..graph_runner import GraphRunner
+from .attention import TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -173,18 +174,30 @@ class CUDAGraphRunner(GraphRunner):
         assert False, f'Unsupported batch_size={batch_size}'
 
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
-                      attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
+                      attn_metadata: TritonAttentionMetadata, inputs_embeds: torch.Tensor, **kwargs):
         """Get graph key."""
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
-        num_tokens = input_ids.numel()
+        batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
         if meta.padding_batch_size is None:
-            new_num_tokens = self._get_capture_tokens(num_tokens)
+            batch_size = self._get_capture_tokens(batch_size)
         else:
-            new_num_tokens = self._get_capture_tokens(meta.padding_batch_size)
-        return (new_num_tokens, is_decoding, enable_microbatch)
+            batch_size = self._get_capture_tokens(meta.padding_batch_size)
+        return (batch_size, is_decoding, enable_microbatch)
+
+    def _get_max_tokens(self, graph_key: tuple):
+        max_batches = graph_key[0]
+        is_decoding = graph_key[1]
+        assert is_decoding
+        model_paradigm = self.model_config.model_paradigm
+        if model_paradigm == 'dllm':
+            step_mgr = get_step_ctx_manager()
+            build_ctx = step_mgr.build_ctx
+            block_sparse_size = build_ctx.block_sparse_size
+            return max_batches * block_sparse_size
+        return max_batches
 
     def __call__(self, **kwargs):
         """call."""
@@ -198,10 +211,10 @@ class CUDAGraphRunner(GraphRunner):
                 return self.model(**kwargs)
 
         graph_key = self.get_graph_key(**kwargs)
-        max_tokens = graph_key[0]
+        max_batches = graph_key[0]
         is_decoding = graph_key[1]
         if graph_key not in self._runner_map:
-            max_batches = max_tokens if is_decoding else self.max_batches
+            max_tokens = self._get_max_tokens(graph_key)
             runner = CUDASingleGraphRunner(self.model,
                                            max_batches=max_batches,
                                            max_tokens=max_tokens,

@@ -160,7 +160,9 @@ SeqMap = Dict[int, 'SchedulerSequence']
 class SequenceMeta:
     """Meta data shared by all sequence."""
     block_size: int
-    model_type: str = 'llm'
+    model_paradigm: str = 'llm'
+    block_sparse_size: int = 1
+    dllm_mask_token: int = 151669
 
 
 class SequenceManager:
@@ -222,6 +224,23 @@ class SequenceManager:
             new_status_map[seq_id] = seq
 
 
+DLLM_MASKED = 0
+DLLM_UNMASKED = 1
+DLLM_CACHED = 2
+DLLM_MASK_DTYPE = np.uint8
+
+
+def _to_ndarray(token_ids) -> np.ndarray:
+    """To ndarray."""
+    if isinstance(token_ids, Tensor):
+        token_ids = token_ids.numpy()
+    elif not isinstance(token_ids, np.ndarray):
+        token_ids = np.array(token_ids)
+    if token_ids.ndim == 0:
+        token_ids = token_ids[None]
+    return token_ids
+
+
 class SchedulerSession:
     """Scheduler session."""
 
@@ -242,29 +261,27 @@ class SchedulerSession:
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
-        if isinstance(token_ids, Tensor):
-            token_ids = token_ids.numpy()
-        elif not isinstance(token_ids, np.ndarray):
-            token_ids = np.array(token_ids)
-        if token_ids.ndim == 0:
-            token_ids = token_ids.unsqueeze(0)
         if sampling_param is None:
             sampling_param = SamplingParam()
 
         seq_id = self.seq_manager._new_seq_id()
-        seq = SchedulerSequence(
+        seq_cls = SEQ_CLS_MAP[self.seq_meta.model_paradigm]
+        seq = seq_cls(
             seq_id=seq_id,
             session=self,
-            history_cache=HistoryTokenIds(token_ids),
             num_new_tokens=0,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
             arrive_time=time.perf_counter(),
-            history_embeddings=HistoryEmbeddings(input_embeddings),
-            history_multimodals=HistoryMultiModals(multimodals),
             migration_request=migration_request,
             resp_cache=resp_cache,
             preserve_cache=preserve_cache,
+        )
+        seq.update_token_ids(
+            token_ids,
+            multimodals=multimodals,
+            embeddings=input_embeddings,
+            mode=UpdateTokenMode.INPUTS,
         )
         self.sequences[seq.seq_id] = seq
         self.seq_manager.add_sequence(seq)
@@ -338,9 +355,9 @@ class HistoryTokenIds:
     """History token ids."""
     ALLOC_SIZE = 512
 
-    def __init__(self, token_ids: np.ndarray = None):
+    def __init__(self, token_ids: np.ndarray = None, dtype: np.dtype = np.int64):
         if token_ids is None:
-            self._token_ids = np.empty((self.ALLOC_SIZE, ), dtype=np.int64)
+            self._token_ids = np.empty((self.ALLOC_SIZE, ), dtype=dtype)
             self._num_real = 0
         else:
             self._token_ids = token_ids
@@ -358,6 +375,11 @@ class HistoryTokenIds:
     def get_real(self):
         """Get logical blocks."""
         return self._token_ids[:self._num_real]
+
+    def resize(self, size: int):
+        """Set size."""
+        assert size <= self._num_real
+        self._num_real = size
 
     def __setitem__(self, *args, **kwargs):
         """Set values."""
@@ -391,9 +413,15 @@ class HistoryTokenIds:
         return self.clone()
 
 
+class HistoryDLLMMask(HistoryTokenIds):
+
+    def __init__(self, token_ids: np.ndarray = None, dtype: np.dtype = DLLM_MASK_DTYPE):
+        super().__init__(token_ids=token_ids, dtype=dtype)
+
+
 class HistoryMultiModals:
 
-    def __init__(self, multimodals: MultiModalInputs):
+    def __init__(self, multimodals: MultiModalInputs = None):
         if multimodals is None:
             multimodals = dict()
         self.multimodals = multimodals
@@ -449,6 +477,13 @@ class HistoryMultiModals:
         return out_len
 
 
+class UpdateTokenMode(enum.Enum):
+    """Update token mode."""
+    INPUTS = enum.auto()
+    PREFILL = enum.auto()
+    DECODE = enum.auto()
+
+
 @dataclass
 class SchedulerSequence:
     """Scheduler message."""
@@ -477,14 +512,15 @@ class SchedulerSequence:
 
     def __post_init__(self):
         """Post init."""
-        self._num_history_ids: int = 0
+        self._seq_meta: SequenceMeta = self.session.seq_meta
         self._num_history_images: int = 0
-        self._num_images: int = len(self.history_embeddings)
+        self._num_history_ids: int = 0
         self._num_token_ids: int = len(self.history_cache)
 
+        # vlm
+        self._num_images: int = len(self.history_embeddings)
         self._num_history_cross: int = 0
         self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
-        self._seq_meta: SequenceMeta = self.session.seq_meta
 
     @property
     def block_size(self) -> int:
@@ -531,6 +567,17 @@ class SchedulerSequence:
         return self.history_cache._token_ids[:self.num_all_ids]
 
     @property
+    def valid_ids(self) -> np.ndarray:
+        """Valid token ids."""
+        return self.history_cache._token_ids[:self.num_valid_ids]
+
+    @property
+    def generated_ids(self) -> np.ndarray:
+        end = self.num_valid_ids
+        start = end - self.num_new_tokens
+        return self.history_cache._token_ids[start:end]
+
+    @property
     def num_history_ids(self):
         """Num history ids."""
         return self._num_history_ids
@@ -538,6 +585,10 @@ class SchedulerSequence:
     @property
     def num_token_ids(self):
         return self._num_token_ids
+
+    @property
+    def num_valid_ids(self):
+        return self._num_history_ids + self._num_token_ids
 
     @property
     def num_images(self):
@@ -591,57 +642,87 @@ class SchedulerSequence:
         end = self.num_all_ids
         return self.history_multimodals.get_datas(start, end)
 
+    def record_event(
+        self,
+        event_type: EventType,
+        timestamp: Optional[float] = None,
+    ) -> None:
+        self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
+
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
                          embeddings: List[InputEmbeddings] = None,
                          model_meta: Dict[str, Any] = None,
-                         append_tokens: bool = False):
+                         mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
+                         **kwargs):
+        """Update token ids, old token ids will be added to history."""
+        raise NotImplementedError('NotImplemented')
+
+    def set_step(self, step: int):
+        """Set step."""
+        raise NotImplementedError('NotImplemented')
+
+
+@dataclass
+class SchedulerSequenceDefault(SchedulerSequence):
+
+    def _update_embeddings(self, embeddings: List[InputEmbeddings]):
+        """Update input embeddings."""
+        self._num_history_images += self._num_images
+        if embeddings is None:
+            self._num_images = 0
+            return
+        new_embeddings = [emb.move_position(self._num_history_ids) for emb in embeddings]
+        self._num_images = len(new_embeddings)
+        self.history_embeddings.append(new_embeddings)
+
+    def _update_multimodals(self, old_num_history_ids: int, multimodals: MultiModalInputs):
+        """Update input multimodals."""
+        self._num_history_cross += self._num_cross
+        if multimodals is None:
+            self._num_cross = 0
+            return
+        multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_all_ids)
+        self.history_multimodals.add_inputs(multimodals)
+
+        # for mllama
+        self._num_cross = self.history_multimodals.get_encoder_len(old_num_history_ids, self._num_history_ids)
+
+    def update_token_ids(self,
+                         token_ids: Tensor,
+                         multimodals: MultiModalInputs = None,
+                         embeddings: List[InputEmbeddings] = None,
+                         model_meta: Dict[str, Any] = None,
+                         mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
+                         **kwargs):
         """Update token ids, old token ids will be added to history."""
         old_num_history_ids = self._num_history_ids
+        self.arrive_time = time.perf_counter()
 
-        # update history
-        if not append_tokens:
+        token_ids = _to_ndarray(token_ids)
+
+        num_valid = len(token_ids)
+
+        if mode == UpdateTokenMode.INPUTS:
+            self._num_token_ids += num_valid
+            self.num_new_tokens = 0
+        else:
             self._num_history_ids += self._num_token_ids
+            num_token_ids = num_valid
+            self._num_token_ids = num_token_ids
+            self.num_new_tokens += num_token_ids
+
+        self.history_cache.append(token_ids)
 
         # update history image nums
-        self._num_history_images += self._num_images
-        self._num_images = 0
-        if embeddings is not None:
-            new_embeddings = [emb.move_position(self._num_history_ids) for emb in embeddings]
-            self._num_images = len(new_embeddings)
-            self.history_embeddings.append(new_embeddings)
+        self._update_embeddings(embeddings)
 
         # update multimodals
-        if multimodals is not None:
-            multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_all_ids)
-            self.history_multimodals.add_inputs(multimodals)
-
-        # cross
-        self._num_history_cross += self._num_cross
-        if multimodals is not None:
-            self._num_cross = self.history_multimodals.get_encoder_len(old_num_history_ids, self._num_history_ids)
-        else:
-            self._num_cross = 0
+        self._update_multimodals(old_num_history_ids, multimodals)
 
         if model_meta is not None:
             self.model_meta = model_meta
-
-        if isinstance(token_ids, Tensor):
-            token_ids = token_ids.numpy()
-        elif not isinstance(token_ids, np.ndarray):
-            token_ids = np.array(token_ids)
-        if token_ids.ndim == 0:
-            token_ids = token_ids[None]
-        if append_tokens:
-            self._num_token_ids += len(token_ids)
-            self.num_new_tokens = 0
-        else:
-            num_token_ids = len(token_ids)
-            self._num_token_ids = num_token_ids
-            self.num_new_tokens += num_token_ids
-        self.history_cache.append(token_ids)
-        self.arrive_time = time.perf_counter()
 
     def set_step(self, step: int):
         """Set step."""
@@ -663,9 +744,164 @@ class SchedulerSequence:
             self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
             self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
 
-    def record_event(
-        self,
-        event_type: EventType,
-        timestamp: Optional[float] = None,
-    ) -> None:
-        self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
+
+@dataclass
+class SchedulerSequenceDLLM(SchedulerSequenceDefault):
+
+    # For dllm
+    history_dllm_mask: HistoryDLLMMask = field(default_factory=HistoryDLLMMask)
+
+    def __post_init__(self):
+        """Post init."""
+        super().__post_init__()
+        self._num_valid_ids: int = len(self.history_cache)
+
+    @property
+    def dllm_mask(self):
+        start = self.num_history_ids
+        end = start + self._num_token_ids
+        return self.history_dllm_mask._token_ids[start:end]
+
+    @property
+    def num_valid_ids(self):
+        return self._num_valid_ids
+
+    @property
+    def generated_ids(self) -> np.ndarray:
+        end = self.num_valid_ids
+        start = end - self.num_new_tokens
+        return self.history_cache._token_ids[start:end]
+
+    @property
+    def all_dllm_mask(self):
+        return self.history_dllm_mask._token_ids[:self.num_all_ids]
+
+    def set_stop_pos(self, pos: int):
+        block_sparse_size = self._seq_meta.block_sparse_size
+        val = block_sparse_size - pos - 1
+        self._num_valid_ids -= val
+        self.num_new_tokens -= val
+
+    def _update_token_ids_inputs(self, token_ids: np.ndarray, dllm_mask: np.ndarray):
+        """Append tokens."""
+        num_tokens = len(token_ids)
+        block_sparse_size = self._seq_meta.block_sparse_size
+        dllm_mask_token = self._seq_meta.dllm_mask_token
+        new_token_ids = [token_ids]
+        new_dllm_mask = [dllm_mask]
+
+        # add uncached tokens in token_ids
+        # for example, [cccc cccc uumm], the [uu] in last block is remain valid.
+        num_remain_valid = self.num_valid_ids - self.num_history_ids
+        if num_remain_valid != 0:
+            prev_token_ids = self.valid_ids[-num_remain_valid:]
+            prev_dllm_mask = np.full_like(prev_token_ids, DLLM_UNMASKED, dtype=DLLM_MASK_DTYPE)
+            new_token_ids = [prev_token_ids] + new_token_ids
+            new_dllm_mask = [prev_dllm_mask] + new_dllm_mask
+            self.history_cache.resize(self.num_history_ids)
+            self.history_dllm_mask.resize(self.num_history_ids)
+            num_tokens += num_remain_valid
+
+        # pad to align with block_sparse_size
+        num_pad = (-num_tokens) % block_sparse_size
+        if num_pad > 0:
+            pad_ids = np.full_like(token_ids, dllm_mask_token, shape=(num_pad, ))
+            pad_mask = np.full_like(dllm_mask, DLLM_MASKED, shape=(num_pad, ))
+            new_token_ids += [pad_ids]
+            new_dllm_mask += [pad_mask]
+
+        token_ids = np.concatenate(new_token_ids)
+        dllm_mask = np.concatenate(new_dllm_mask)
+
+        assert len(token_ids) % block_sparse_size == 0
+
+        self.history_cache.append(token_ids)
+        self.history_dllm_mask.append(dllm_mask)
+        self._num_valid_ids = self.num_history_ids + num_tokens
+        self._num_token_ids = len(token_ids)
+        self.num_new_tokens = 0
+
+    def _update_token_ids_decode(self, token_ids: np.ndarray, dllm_mask: np.ndarray):
+        """Update token ids for decode."""
+        num_tokens = len(token_ids)
+        block_sparse_size = self._seq_meta.block_sparse_size
+        dllm_mask_token = self._seq_meta.dllm_mask_token
+        assert num_tokens % block_sparse_size == 0
+        num_history_ids = self.num_history_ids
+
+        token_ids[dllm_mask == DLLM_MASKED] = dllm_mask_token
+        self.history_cache[num_history_ids:] = token_ids
+        self.history_dllm_mask[num_history_ids:] = dllm_mask
+
+        # check if all blocks are cached
+        last_mask = dllm_mask[-block_sparse_size:]
+        is_unmasked = np.all(last_mask == DLLM_UNMASKED)
+        is_cached = np.all(last_mask == DLLM_CACHED)
+
+        if is_unmasked:
+            num_new = block_sparse_size - self._num_valid_ids % block_sparse_size
+            self._num_valid_ids += num_new
+            self.num_new_tokens += num_new
+
+        if is_cached:
+            # add new block
+            new_token_ids = np.full_like(token_ids, dllm_mask_token, shape=(block_sparse_size, ))
+            new_dllm_mask = np.full_like(dllm_mask, DLLM_MASKED, shape=(block_sparse_size, ))
+            self.history_cache.append(new_token_ids)
+            self.history_dllm_mask.append(new_dllm_mask)
+            self._num_history_ids += self._num_token_ids
+            self._num_token_ids = block_sparse_size
+
+    def _update_token_ids_prefill(self, token_ids: np.ndarray, dllm_mask: np.ndarray):
+        """Update token ids for prefill."""
+        block_sparse_size = self._seq_meta.block_sparse_size
+        num_history_ids = self.num_history_ids
+
+        # fill input cache
+        if self.num_token_ids > block_sparse_size:
+            end = self.num_token_ids - block_sparse_size
+            self.history_dllm_mask[num_history_ids:end] = DLLM_CACHED
+            self._num_history_ids += end
+            self._num_token_ids -= end
+
+        # decoding update
+        self._update_token_ids_decode(token_ids, dllm_mask)
+
+    def update_token_ids(self,
+                         token_ids: Tensor,
+                         multimodals: MultiModalInputs = None,
+                         embeddings: List[InputEmbeddings] = None,
+                         model_meta: Dict[str, Any] = None,
+                         dllm_mask: Tensor = None,
+                         mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
+                         **kwargs):
+        """Update token ids, old token ids will be added to history."""
+        old_num_history_ids = self._num_history_ids
+        self.arrive_time = time.perf_counter()
+
+        token_ids: np.ndarray = _to_ndarray(token_ids)
+        if dllm_mask is None:
+            dllm_mask = np.full_like(token_ids, DLLM_UNMASKED, dtype=DLLM_MASK_DTYPE)
+        dllm_mask: np.ndarray = _to_ndarray(dllm_mask)
+
+        if mode == UpdateTokenMode.INPUTS:
+            self._update_token_ids_inputs(token_ids, dllm_mask)
+        elif mode == UpdateTokenMode.PREFILL:
+            self._update_token_ids_prefill(token_ids, dllm_mask)
+        else:
+            self._update_token_ids_decode(token_ids, dllm_mask)
+
+        # update history image nums
+        self._update_embeddings(embeddings)
+
+        # update multimodals
+        self._update_multimodals(old_num_history_ids, multimodals)
+
+        if model_meta is not None:
+            self.model_meta = model_meta
+
+
+SEQ_CLS_MAP = dict(
+    llm=SchedulerSequenceDefault,
+    dllm=SchedulerSequenceDLLM,
+)

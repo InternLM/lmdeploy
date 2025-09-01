@@ -142,12 +142,14 @@ class ModelInputs:
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
 
-    def update(self, input_ids: torch.LongTensor):
+    def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
         assert self.is_decoding
-        self.history_lengths = self.history_lengths + 1
-        self.max_kv_seqlen += 1
-        self.sum_kv_seqlen += self.seq_length.numel()
+        if step_seqlens is None:
+            step_seqlens = self.seq_length
+        self.history_lengths = self.history_lengths + step_seqlens
+        self.max_kv_seqlen += self.max_q_seqlen
+        self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -286,11 +288,20 @@ class ModelInputs:
                    is_decoding: bool,
                    device: str = 'cpu',
                    dummy_block_id: int = 0,
-                   vocab_size: int = 1):
+                   vocab_size: int = 1,
+                   build_ctx: 'BuildModelContext' = None):
         """Make dummy inputs."""
+        model_paradigm = build_ctx.model_paradigm
+        if model_paradigm == 'dllm':
+            block_sparse_size = build_ctx.block_sparse_size
+            max_q_seqlen = block_sparse_size
+        else:
+            max_q_seqlen = 1
+        num_tokens = batch_size * max_q_seqlen
+        max_kv_seqlen = max_q_seqlen
         input_ids = torch.randint(0, vocab_size, (
             1,
-            batch_size,
+            num_tokens,
         ), dtype=torch.long, device=device)
         seq_length = torch.ones((batch_size, ), dtype=torch.long, device=device)
         history_lengths = torch.zeros((batch_size, ), dtype=torch.long, device=device)
@@ -304,8 +315,8 @@ class ModelInputs:
             block_offsets=block_offsets,
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
-            max_q_seqlen=1,
-            max_kv_seqlen=1,
+            max_q_seqlen=max_q_seqlen,
+            max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=batch_size,
         )
 
@@ -356,6 +367,7 @@ class StepContext:
         model_config: ModelConfig,
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
+        build_ctx: 'BuildModelContext' = None,
     ):
         """Build step context.
 
@@ -377,7 +389,7 @@ class StepContext:
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
 
         # position ids
-        attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
+        attention_mask, position_ids = cls.get_mask_and_position_ids(inputs, build_ctx)
         position_ids = position_ids[None]  # [num_tokens] -> [1, num_tokens]
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
@@ -420,17 +432,27 @@ class StepContext:
         return ret
 
     @classmethod
-    def get_mask_and_position_ids(cls, inputs: ModelInputs):
+    def get_mask_and_position_ids(cls, inputs: ModelInputs, build_ctx: 'BuildModelContext'):
         """Get position ids."""
         q_seqlens = inputs.seq_length
         history_seqlens = inputs.history_lengths
+        model_paradigm = build_ctx.model_paradigm
+        is_decoding = inputs.is_decoding
 
         # decoding
-        if inputs.is_decoding:
-            attention_mask = torch.ones_like(q_seqlens)[:, None]
-            position_ids = history_seqlens.unsqueeze(-1).clone()
-            position_ids = position_ids.flatten()
-            return attention_mask, position_ids
+        if is_decoding:
+            if model_paradigm == 'dllm':
+                block_sparse_size = build_ctx.block_sparse_size
+                attention_mask = None
+                ranges = torch.arange(0, block_sparse_size, device=q_seqlens.device)
+                position_ids = history_seqlens[:, None] + ranges[None, :]
+                position_ids = position_ids.flatten()
+                return attention_mask, position_ids
+            else:
+                attention_mask = torch.ones_like(q_seqlens)[:, None]
+                position_ids = history_seqlens.unsqueeze(-1).clone()
+                position_ids = position_ids.flatten()
+                return attention_mask, position_ids
 
         num_tokens = inputs.input_ids.numel()
         max_q_seqlen = inputs.max_q_seqlen
@@ -449,14 +471,24 @@ class StepContext:
         return attention_mask, position_ids_1d
 
 
+@dataclass
+class BuildModelContext:
+    """Context for building model."""
+    disable_vision_encoder: bool = False
+    block_sparse_size: int = 1
+    model_paradigm: str = 'llm'
+
+
 class StepContextManager:
 
-    def __init__(self):
+    def __init__(self, build_ctx: BuildModelContext = None):
         self._current_ctx = None
+        build_ctx = build_ctx or BuildModelContext()
+        self.build_ctx = build_ctx
 
-    @staticmethod
     @record_function('build_step_context')
     def build_context(
+        self,
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
@@ -468,6 +500,7 @@ class StepContextManager:
             model_config,
             kv_caches,
             kv_quant_policy,
+            build_ctx=self.build_ctx,
         )
 
     def set_context(self, ctx: StepContext):
