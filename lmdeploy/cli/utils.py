@@ -526,7 +526,7 @@ class ArgumentHelper:
         return parser.add_argument('--max-log-len',
                                    type=int,
                                    default=None,
-                                   help='Max number of prompt characters or prompt tokens being'
+                                   help='Max number of prompt characters or prompt tokens being '
                                    'printed in log. Default: Unlimited')
 
     @staticmethod
@@ -552,8 +552,9 @@ class ArgumentHelper:
         return parser.add_argument('--communicator',
                                    type=str,
                                    default='nccl',
-                                   choices=['nccl', 'native'],
-                                   help='Communication backend for multi-GPU inference')
+                                   choices=['nccl', 'native', 'cuda-ipc'],
+                                   help='Communication backend for multi-GPU inference. The "native" option is '
+                                   'deprecated and serves as an alias for "cuda-ipc"')
 
     @staticmethod
     def enable_microbatch(parser):
@@ -581,9 +582,9 @@ class ArgumentHelper:
                                    type=str,
                                    default='Hybrid',
                                    choices=['Hybrid', 'Prefill', 'Decode'],
-                                   help='Hybrid for Non-Disaggregated Engine;'
-                                   'Prefill for Disaggregated Prefill Engine;'
-                                   'Decode for Disaggregated Decode Engine;')
+                                   help='Hybrid for Non-Disaggregated Engine; '
+                                   'Prefill for Disaggregated Prefill Engine; '
+                                   'Decode for Disaggregated Decode Engine')
 
     @staticmethod
     def migration_backend(parser):
