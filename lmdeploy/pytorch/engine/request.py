@@ -225,7 +225,7 @@ class RequestManager:
             return False
         return not self.requests.empty()
 
-    async def get_all_requests(self) -> Dict[RequestType, Request]:
+    async def get_all_requests(self) -> Dict[RequestType, List[Request]]:
         """Get all requests in current queue."""
         num_reqs = self.requests.qsize()
         reqs: ReqList = []
@@ -247,7 +247,7 @@ class RequestManager:
             __proc_reqs(elem)
 
         # gather requests
-        reqs_by_type: Dict[RequestType, Request] = dict((t, []) for t in RequestType)
+        reqs_by_type: Dict[RequestType, List[Request]] = dict((t, []) for t in RequestType)
         for req in reqs:
             reqs_by_type[req.type].append(req)
         return reqs_by_type
