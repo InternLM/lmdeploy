@@ -1,6 +1,6 @@
-ARG CANN_TAG=8.1.RC1-python3.11-oe2403lts
+ARG CANN_TAG=8.2.rc1-a3-ubuntu22.04-py3.11
 
-FROM openeuler/cann:${CANN_TAG} AS builder
+FROM ascendai/cann:${CANN_TAG} AS builder
 ARG PYTHON_VERSION=3.10
 
 RUN --mount=type=cache,target=/root/.cache \
@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.cache \
     pip install --upgrade pip build && \
     python -m build -w -o /wheels -v .
 
-FROM openeuler/cann:${CANN_TAG} AS final
+FROM ascendai/cann:${CANN_TAG} AS final
 COPY --from=builder /root/.local /root/.local
 COPY --from=builder /opt/py3 /opt/py3
 ENV PATH=/opt/py3/bin:$PATH
@@ -25,5 +25,3 @@ ENV PATH=/opt/py3/bin:$PATH
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/wheels,from=builder,source=/wheels \
     pip install /wheels/*.whl
-
-ENTRYPOINT []
