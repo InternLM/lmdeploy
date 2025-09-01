@@ -176,8 +176,8 @@ constexpr std::ptrdiff_t byte_size(DataType type, std::ptrdiff_t size = 1) {
         case kFloat64:
             return size * 8;
         case kUint2: return size * 2 / 8;
-        case kUint4: 
-        case kFloat4_e2m1: 
+        case kUint4:
+        case kFloat4_e2m1:
             return size * 4 / 8;
         case kUint6: return size * 6 / 8;
         default:
@@ -212,8 +212,8 @@ constexpr std::ptrdiff_t numel(DataType type, std::ptrdiff_t size = 1) {
         case kFloat64:
             return size / 8;
         case kUint2: return size * 8 / 2;
-        case kUint4: 
-        case kFloat4_e2m1: 
+        case kUint4:
+        case kFloat4_e2m1:
             return size * 8 / 4;
         case kUint6: return size * 8 / 6;
         default:

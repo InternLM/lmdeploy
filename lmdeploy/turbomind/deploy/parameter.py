@@ -69,6 +69,14 @@ class WeightScaleInv(Parameter):
         f(i, g('weight'), 'weight', identity)
 
 
+class Mxfp4Weight(Parameter):
+    KEYS = '.blocks', '.scales'
+
+    def __call__(self, f, g, i):
+        f(i, g('blocks'), 'weight', pack_u4_row)
+        f(i, g('scales'), 'scales', identity, apply_gs=['w2'])
+
+
 class Weight(Parameter):
     KEYS = '.weight',
 
@@ -99,6 +107,8 @@ def get_params(keys: List[str], bias=0):
         ps.append(QuantWeightOnly())
     if WeightScaleInv.take(keys):
         ps.append(WeightScaleInv())
+    if Mxfp4Weight.take(keys):
+        ps.append(Mxfp4Weight())
     if Weight.take(keys):
         ps.append(Weight())
     if bias and Bias.take(keys):

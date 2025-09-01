@@ -489,16 +489,24 @@ void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataTy
     };
 
     if (c.weight_type == kFloat8_e4m3) {
-        _chunks(c.scales.data<float>(),
-                a.scales.data<float>(),
-                b.scales.data<float>(),
-                cdiv(a.input_dim, a.group_size),
-                sizeof(float) * cdiv(a.output_dim, a.group_size));
         _chunks(c.weight.data<fp8_e4m3_t>(),
                 a.weight.data<fp8_e4m3_t>(),
                 b.weight.data<fp8_e4m3_t>(),
                 a.input_dim,
                 a.output_dim);
+        _chunks(c.scales.data<float>(),
+                a.scales.data<float>(),
+                b.scales.data<float>(),
+                cdiv(a.input_dim, a.group_size),
+                sizeof(float) * cdiv(a.output_dim, a.group_size));
+    }
+    if (c.weight_type == kFloat4_e2m1) {
+        _chunks(c.weight.raw_data(), a.weight.raw_data(), b.weight.raw_data(), a.input_dim, 4 * a.output_dim / 8);
+        _chunks(c.scales.data<uint8_t>(),
+                a.scales.data<uint8_t>(),
+                b.scales.data<uint8_t>(),
+                a.input_dim / a.group_size,
+                sizeof(uint8_t) * a.output_dim);
     }
     else {
         TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
