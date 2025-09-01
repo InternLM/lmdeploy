@@ -264,7 +264,7 @@ public:
             return;
         }
 
-        ctx_ = std::make_unique<MoeGemmContext>(experts_, top_e, prop_, stream_);
+        ctx_ = nullptr;  // std::make_unique<MoeGemmContext>(experts_, top_e, prop_, stream_);
 
         std::vector<int> r(experts);
         std::iota(r.begin(), r.end(), 0);
@@ -360,8 +360,6 @@ public:
                 ++i;
             }
         }
-
-        ((MoeGemmContext*)ctx_.get())->update(experts_, exp_per_tok_, moe_m_offsets_.data().get());
 
         CHECK(batch_dim == 0);
         CHECK(a_desc_.order == kRowMajor);
@@ -758,7 +756,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackU = HMMA_16816 | OPERAND_U | 1;
         return gTestbed<gemm::Testbed<uint4_t, half, half, 1, kColMajor, kColMajor, kColMajor, kPackA, 0, kPackU, 0>>();
     }
-    else if constexpr (0) {
+    else if constexpr (1) {
         // sm80 / sm75
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;
@@ -787,7 +785,7 @@ inline decltype(auto) get_test()
         constexpr Pack kPackV = 0;
         return gTestbed<gemm::Testbed<half, half, half, 0, kRowMajor, kColMajor, kRowMajor, 0, kPackB, 0, kPackV>>();
     }
-    else if constexpr (1) {
+    else if constexpr (0) {
         constexpr Pack kPackB = HMMA_16816 | OPERAND_B | 2;
         // constexpr Pack kPackB = 0;
         constexpr Pack kPackV = HMMA_16816 | OPERAND_V | 1;

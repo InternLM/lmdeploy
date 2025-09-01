@@ -20,10 +20,10 @@ public:
         desc_         = {};
         desc_.backend = 1;
 
-        chunk_size_k_ = 1;
-        smem_size_    = 0;
+        info_.chunk_size_k      = 1;
+        info_.dynamic_smem_size = 0;
 
-        name_ = GetName();
+        info_.name = GetName();
     }
 
     int Launch(const Operation&    operation,
@@ -112,7 +112,7 @@ public:
         if (desc.quant_a || desc.quant_b) {
             return false;
         }
-        if (desc.sched) {
+        if (desc.group_axis >= 0) {
             return false;
         }
         if (desc.order_c != kColMajor) {
@@ -130,14 +130,14 @@ public:
         return true;
     }
 
-    int GetMaxSplits(const int4&, int64_t, size_t, size_t) const override
-    {
-        return 1;
-    }
-
-    int GetSwizzle(int m, int n, int k, int splits, int swizzle) const override
+    int GetMaxSwizzle(const int4&) const override
     {
         return 0;
+    }
+
+    int GetMaxSplits(const int4&, int, size_t, size_t) const override
+    {
+        return 1;
     }
 
 private:

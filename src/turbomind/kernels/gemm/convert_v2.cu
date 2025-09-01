@@ -258,7 +258,7 @@ get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool for
         }
         else if (dtype == kFloat4_e2m1) {
             if (sm >= 80) {
-                return {kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1};
+                return {kColMajor, HMMA_16816 | OPERAND_A | 2, kColMajor, HMMA_16816 | OPERAND_U | 1};
             }
         }
     }

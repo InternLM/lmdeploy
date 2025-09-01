@@ -38,8 +38,7 @@ private:
     cudaStream_t const stream_;
     LlamaLinear&       linear_;
 
-    std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
-    std::unique_ptr<gemm::MoeGemmContext> context_;
+    std::unique_ptr<LlamaFfnLayer> expert_ffn_;
 
     ///////////////////////////////////////////////////////
     /// runtime states

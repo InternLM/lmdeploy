@@ -250,14 +250,14 @@ public:
         }
 
         std::vector<int> f2n(expert_ids.size());
-        std::vector<int> f2en(expert_ids.size());
+        // std::vector<int> f2en(expert_ids.size());
         std::vector<int> en2f(expert_ids.size());
 
         for (int e = 0, i = 0; e < expert_num_; ++e) {
             for (const auto x : f2i[e]) {
                 f2n[i]   = x / e_;
                 int en   = x % e_ * bsz + x / e_;
-                f2en[i]  = en;
+                // f2en[i]  = en;
                 en2f[en] = i;
                 ++i;
             }

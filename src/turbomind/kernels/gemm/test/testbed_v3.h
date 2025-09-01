@@ -1,12 +1,10 @@
 
-#include <cstddef>
 #include <memory>
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/core.h"
 
 #include "src/turbomind/core/tensor.h"
-#include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/test/reference.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
@@ -86,6 +84,20 @@ struct Testbed_v3: Parameter {
         rng_.set_stream(stream_);
         ref_.set_stream(stream_);
 
+        if (auto str = std::getenv("TM_GEMM_IMPORT")) {
+            import_file_ = str;
+            std::ifstream ifs(import_file_, std::ios::binary);
+            auto          n = linear_.Import(ifs);
+            std::cout << "Records imported: " << n << "\n";
+        }
+        if (auto str = std::getenv("TM_GEMM_TUNE"); str && import_file_.empty()) {
+            tuning_ = true;
+            std::cout << "Enable tuning\n";
+        }
+        if (auto str = std::getenv("TM_GEMM_EXPORT"); str && import_file_.empty()) {
+            export_file_ = str;
+        }
+
         cudaGetDeviceProperties(&prop_, 0);
 
         w_original_ = std::make_unique<DenseWeight>();
@@ -105,10 +117,19 @@ struct Testbed_v3: Parameter {
             LinkExperts([&](int i) { return e_original_[i].get(); }, expert_num, *w_original_);
             LinkExperts([&](int i) { return e_quant_[i].get(); }, expert_num, *w_quant_);
             LinkExperts([&](int i) { return e_dequant_[i].get(); }, expert_num, *w_dequant_);
-
-            moe_context_ = std::make_unique<gemm::MoeGemmContext>(expert_num, experts_per_token, prop_, stream_);
             Route();
-            moe_context_->update(expert_num, experts_per_token, offsets_.data());
+        }
+    }
+
+    ~Testbed_v3()
+    {
+        if (!export_file_.empty()) {
+            std::cerr << "export file: " << export_file_ << "\n";
+            std::ofstream ofs(export_file_, std::ios::binary);
+            if (ofs.is_open()) {
+                auto n = linear_.Export(ofs);
+                std::cout << "Records exported: " << n << "\n";
+            }
         }
     }
 
@@ -302,8 +323,11 @@ struct Testbed_v3: Parameter {
 
     void Run()
     {
+        if (tuning_) {
+            linear_.set_measure(true);
+        }
         if (expert_num) {
-            auto de = linear_.Forward(x_original_, *w_quant_, f2n_, offsets_, {}, moe_context_.get());
+            auto de = linear_.Forward(x_original_, *w_quant_, f2n_, offsets_);
             if (combine_experts) {
                 d_quant_ = Tensor{{x_original_.shape(0), output_dim}, data_type, kDEVICE};
                 invokeMoeCombine(d_quant_, de, scales_.data(), en2f_.data(), nullptr, experts_per_token, 0., stream_);
@@ -314,6 +338,9 @@ struct Testbed_v3: Parameter {
         }
         else {
             d_quant_ = linear_.Forward(x_original_, *w_quant_);
+        }
+        if (tuning_) {
+            linear_.set_measure(false);
         }
     }
 
@@ -386,7 +413,10 @@ struct Testbed_v3: Parameter {
 
     Buffer_<int> h_offsets_;
 
-    std::unique_ptr<gemm::MoeGemmContext> moe_context_;
+    bool tuning_{};
+
+    std::string import_file_;
+    std::string export_file_;
 
     RNG       rng_;
     Reference ref_;

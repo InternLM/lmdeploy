@@ -28,8 +28,7 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     const int max_expert_num = *std::max_element(param.expert_num.begin(), param.expert_num.end());
 
     if (param_.method == MoeParam::kFused) {
-        context_ =
-            std::make_unique<gemm::MoeGemmContext>(max_expert_num, param.experts_per_token, ctx.device_prop, stream_);
+        // pass
     }
     else {
         expert_ffn_ = std::make_unique<LlamaFfnLayer>(model, ctx);
@@ -142,14 +141,13 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         }
     }
     else {
-        context_->update(expert_num, param_.experts_per_token, offsets_.data());
 
         auto& block = moe.block;
 
         auto indices = f2n_.slice(0, tokens * param_.experts_per_token);
         auto offsets = offsets_.slice(0, expert_num + 1);
 
-        Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_, {}, context_.get());
+        Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_);
         sync_check_cuda_error();
 
         ApplyBias(inter, block.fused_gating_intermediate.bias, offsets_.slice(0, expert_num + 1), stream_);
@@ -162,7 +160,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
             sync_check_cuda_error();
         }
 
-        linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_, context_.get());
+        linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_);
         sync_check_cuda_error();
 
         ApplyBias(temp_, block.output.bias, offsets_.slice(0, expert_num + 1), stream_);

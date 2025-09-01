@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <climits>
+
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
@@ -30,7 +32,7 @@ __inline__ __device__ MatrixData resolve_op(const MatrixParam& param, int gemm_i
     return resolve<typename Op::Dtype, Op::GmemIter::kMode>(param, gemm_id);
 }
 
-template<class Arch_, class Mainloop, class Epilogue_, class CtaMap_>
+template<class Arch_, class Mainloop, class Epilogue_, class Scheduler_>
 struct GemmUniversal {
 
     // using Impl = typename Mainloop::Impl;
@@ -41,12 +43,11 @@ struct GemmUniversal {
     using Tu = typename Impl::Tu;
     using Tv = typename Impl::Tv;
 
-    using Epilogue = Epilogue_;
+    using Arch      = Arch_;
+    using Scheduler = Scheduler_;
+    using Epilogue  = Epilogue_;
 
     using Tc = typename Epilogue::Tc;
-
-    using Arch   = Arch_;
-    using CtaMap = CtaMap_;
 
     // col major == M-major (A)
     // row major == N-major (B)
@@ -56,7 +57,7 @@ struct GemmUniversal {
     static constexpr int CTA_N = Impl::CTA_N;
     static constexpr int CTA_K = Impl::CTA_K;
 
-    static constexpr bool kDynamicSched = is_dynamic_scheduler<CtaMap>::value;
+    static constexpr bool kDynamicSched = Scheduler::group_axis >= 0;
     static constexpr bool kSplitK       = Epilogue::SplitK;
 
     using FragC = typename Impl::FragC;
@@ -73,9 +74,12 @@ struct GemmUniversal {
     static constexpr int kGSizeU = OperandU::kGroupSize;
     static constexpr int kGSizeV = OperandV::kGroupSize;
 
-    union SharedStorage {
-        typename Mainloop::SharedStorage mainloop;
-        typename Epilogue::SharedStorage epilogue;
+    struct SharedStorage {
+        union {
+            typename Mainloop::SharedStorage mainloop;
+            typename Epilogue::SharedStorage epilogue;
+        };
+        typename Scheduler::SharedStorage sched;
     };
 
     static constexpr Order kOrderA = OperandA::kOrder;
@@ -88,20 +92,23 @@ struct GemmUniversal {
 
     using Param = GemmParam;
 
-    __device__ void operator()(const Param& param, const EpilogueParam& epi_param, CtaMap& cta_map, char* smem_buf)
+    __device__ void operator()(const Param& param, const EpilogueParam& epi_param, Scheduler& sched, char* smem_buf)
     {
-        if (!cta_map.init()) {
+        SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
+
+        typename Scheduler::Tile tile;
+
+        if (!sched.init(tile, storage.sched, std::false_type{})) {
             return;
         }
 
-        const auto [M, N, K, L] = cta_map.gemm_shape();
-        const auto tile_offset  = cta_map.tile_offset();
+        const auto& [M, N, K] = tile.shape.__a;
 
-        const auto [iter_k_beg, iter_k_end] = cta_map.iter_k_range();
+        const auto tile_id = tile.tile_id;
 
-        const int offset_m = tile_offset.x * CTA_M;
-        const int offset_n = tile_offset.y * CTA_N;
-        const int offset_k = iter_k_beg * CTA_K;
+        const int offset_m = tile_id[0] * CTA_M;
+        const int offset_n = tile_id[1] * CTA_N;
+        const int offset_k = tile_id[2] * CTA_K;
 
         if (offset_m >= M || offset_n >= N || offset_k >= K) {  // empty tile
             return;
@@ -110,15 +117,12 @@ struct GemmUniversal {
         const int extent_m = min(CTA_M, M - offset_m);
         const int extent_n = min(CTA_N, N - offset_n);
 
-        SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
-
         // Is 8 enough?
         __align__(8) FragC frag_C{};
 
-        // int tile_iter = (gemm_k_size + CTA_K - 1) / CTA_K;
-        int tile_iter = iter_k_end - iter_k_beg;
+        int tile_iter = tile.k_iters;
 
-        const int g = tile_offset.w;
+        const int g = tile.group_id;
 
         const auto mat_A = resolve_op<OperandA>(param.a, g);
         const auto mat_B = resolve_op<OperandB>(param.b, g);
@@ -138,23 +142,22 @@ struct GemmUniversal {
         mainloop(gmem_A, gmem_B, gmem_U, gmem_V, frag_C, tile_iter, storage.mainloop);
 
         {
-            cta_map.init();
+            sched.init(tile, storage.sched, std::true_type{});
 
-            const auto [M, N, K, L] = cta_map.gemm_shape();
+            const auto [M, N, K] = tile.shape.__a;
 
-            const auto tiled_shape = cta_map.tiled_shape();
-            const auto tile_offset = cta_map.tile_offset();
+            int4 tile_offset{tile.tile_id[0], tile.tile_id[1], tile.split_id, tile.group_id};
 
             const int2 extents = {min(CTA_M, M - tile_offset.x * CTA_M), min(CTA_N, N - tile_offset.y * CTA_N)};
 
-            const bool is_last = cta_map.iter_k_range().y * CTA_K == K;
+            const bool is_last = (tile.tile_id[2] + tile.k_iters) * CTA_K == K;
 
             Epilogue epilogue{};
             epilogue(frag_C,  //
                      tile_offset,
-                     tiled_shape,
                      extents,
-                     cta_map.tile_id(),
+                     sched.splits_,
+                     tile.linear_tile_id,
                      is_last,
                      epi_param,
                      storage.epilogue);
@@ -164,13 +167,13 @@ struct GemmUniversal {
 
 extern __shared__ char smem_buf[];
 
-template<class Kernel, class Param, class EpilogueParam, class CtaMap>
-__global__ void gemm_kernel(Param param, EpilogueParam epi_param, CtaMap cta_map)
+template<class Kernel, class Param, class EpilogueParam, class Scheduler>
+__global__ void gemm_kernel(Param param, EpilogueParam epi_param, Scheduler sched)
 {
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
         Kernel kernel;
-        kernel(param, epi_param, cta_map, smem_buf);
+        kernel(param, epi_param, sched, smem_buf);
     }
 #endif
 }

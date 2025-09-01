@@ -103,7 +103,8 @@ public:
 
         desc_.cta_tile = {TILE_M, TILE_N, TILE_K};
         desc_.mma_tile = {1, 1, 1};
-        chunk_size_k_  = Gemm::TILE_K;
+
+        info_.chunk_size_k = Gemm::TILE_K;
 
         desc_.align.x = 1;  // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
         desc_.align.y = 1;  // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
@@ -116,31 +117,32 @@ public:
 
         desc_.cluster_shape = {Gemm::Cluster::M, Gemm::Cluster::N};
 
-        smem_size_ = Gemm::kSmemSize;
+        info_.dynamic_smem_size = Gemm::kSmemSize;
 
-        desc_.stages  = Gemm::Stages;
-        desc_.split_k = 1;      // Gemm::kSplitK;
-        desc_.sched   = false;  // Gemm::kDynamicSched;
+        desc_.stages     = Gemm::Stages;
+        desc_.split_k    = 1;  // Gemm::kSplitK;
+        desc_.group_axis = 0;
 
         desc_.arch = Gemm::Arch::value;
 
         auto func = gemm_kernel_name<Gemm>;
 
-        if (smem_size_ > (48 << 10)) {
-            cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);
+        cudaFuncGetAttributes(&info_.attr, func);
+
+        if (info_.dynamic_smem_size > (48 << 10)) {
+            cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);
         }
 
         if (1) {
             cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
         }
 
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&desc_.max_active_ctas, func, Gemm::CTA_SIZE, smem_size_);
-
-        cudaFuncGetAttributes(&desc_.attr, func);
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &info_.max_active_ctas, func, Gemm::CTA_SIZE, info_.dynamic_smem_size);
 
         sm_count_ = getSMCount();
 
-        name_ = GetName();
+        info_.name = GetName();
     }
 
     int Launch(const Operation&    operation,
@@ -248,7 +250,7 @@ public:
         cudaLaunchConfig_t config{};
         config.gridDim          = grid;
         config.blockDim         = block;
-        config.dynamicSmemBytes = smem_size_;
+        config.dynamicSmemBytes = info_.dynamic_smem_size;
         config.stream           = stream;
 
         auto func = gemm_kernel_name<Gemm>;
@@ -297,14 +299,12 @@ public:
         return 0;
     }
 
-    std::array<size_t, 2> GetWorkspaceSizesV2(const int4& shape, int tiles, int splits) const
+    std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
         static constexpr bool kSerial = true;
 
-        const auto& [m, n, _, num] = shape;
-
         size_t barriers_size = sizeof(int) * tiles;
-        size_t partials_size = sizeof(float) * m * n * num;
+        size_t partials_size = sizeof(float) * TILE_M * TILE_N * tiles;
 
         if constexpr (!kSerial) {
             barriers_size *= splits;
@@ -314,58 +314,17 @@ public:
         return {barriers_size, partials_size};
     }
 
-    int GetMaxSplits(const int4& shape, int64_t tiles, size_t bsize, size_t psize) const override
+    int GetMaxSplits(const int4& shape, int swizzle, size_t bsize, size_t psize) const override
     {
-        if (!Gemm::kSplitK) {
-            return 1;
-        }
-
-        const auto& [m, n, k, _] = shape;
-
-        const auto& [a, b] = GetWorkspaceSizesV2(shape, tiles, 1);
-
-        if (bsize >= a && psize >= b) {
-            // Serial split-k requires workspace for 1 split only
-            // But it can't exceed num of k chunks
-            return cdiv(k, Gemm::kChunkSizeK);
-        }
-        else {
-            return 1;
-        }
+        return 1;
     }
 
-    int GetSwizzle(int m, int n, int k, int splits, int swizzle) const override
+    int GetMaxSwizzle(const int4& shape) const override
     {
-        // return swizzle;
-        using Map        = typename Gemm::Scheduler;
-        const auto tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
-        return Map::get_log_tile(tiles, 1 << swizzle);
-    }
-
-    int FixSplits(const int4& shape, int2 tiled_mn, int splits, Workspace& ws) const
-    {
-        const int tiles            = tiled_mn.x * tiled_mn.y;
-        const auto& [bsize, psize] = GetWorkspaceSizesV2(shape, tiles, splits);
-
-        if (ws.barriers_size < bsize || ws.partials_size < psize) {
-            const int max_splits       = GetMaxSplits(shape, tiles, ws.barriers_size, ws.partials_size);
-            const auto& [m, n, k, num] = shape;
-            fprintf(
-                stderr,
-                "Problem size (%d, %d, %d), workspace size too small (%d, %d) vs required (%d, %d) for %d splits. Force `splits` = %d\n",
-                m,
-                n,
-                k,
-                (int)ws.barriers_size,
-                (int)ws.partials_size,
-                (int)bsize,
-                (int)psize,
-                splits,
-                max_splits);
-            splits = max_splits;
-        }
-
-        return splits;
+        using Map = typename Gemm::Scheduler;
+        // TODO: fix tiled shape
+        const auto tiles = get_tiled_shape(shape.x, shape.y, TILE_M, TILE_N);
+        return Map::get_log_tile(tiles, 1 << 10);
     }
 
     bool is_feasible(const GemmDesc& desc) const noexcept override

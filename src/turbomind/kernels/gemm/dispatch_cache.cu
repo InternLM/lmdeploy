@@ -54,7 +54,7 @@ static inline decltype(auto) as_tuple(const KernelDesc& d)
                     d.split_k,
                     d.backend,
                     d.transpose,
-                    d.sched);
+                    d.group_axis);
 }
 
 static inline bool operator==(const QuantDesc& a, const QuantDesc& b)
@@ -67,86 +67,29 @@ static inline bool operator==(const KernelDesc& a, const KernelDesc& b)
     return as_tuple(a) == as_tuple(b);
 }
 
-template<class... Ts>
-static inline void export_impl(std::ostream& os, const Ts&... ts)
-{
-    ((os << static_cast<int>(ts) << " "), ...);
-}
+namespace {
 
-template<class T>
-static inline void import_value(std::istream& is, T& value)
-{
-    int token{};
-    is >> token;
-    value = static_cast<T>(token);
-}
+struct Record {
+    GemmDesc   gemm;
+    KernelDesc kernel;
 
-template<class... Ts>
-static inline void import_impl(std::istream& is, Ts&... ts)
-{
-    (import_value(is, ts), ...);
-}
+    int swizzle;
+    int splits;
+};
+
+}  // namespace
 
 void ExportDispatchCache(std::ostream& os, const std::vector<std::pair<GemmDesc, LaunchSpec>>& entries)
 {
+
     for (const auto& [g, spec] : entries) {
-        // GEMM desc
-        export_impl(os,
-                    g.arch,
-                    g.type_a,
-                    g.type_b,
-                    g.type_c,
-                    g.order_a,
-                    g.order_b,
-                    g.order_c,
-                    g.striding_a,
-                    g.striding_b,
-                    g.striding_c,
-                    g.pack_a,
-                    g.pack_b,
-                    g.pack_u,
-                    g.pack_v,
-                    g.quant_a.type,
-                    g.quant_a.group_size,
-                    g.quant_b.type,
-                    g.quant_b.group_size,
-                    g.epilogue,
-                    g.batch_dim,
-                    g.sched,
-                    g.m,
-                    g.n,
-                    g.k,
-                    g.num);
-        // Kernel desc
-        auto& k = spec.kernel->desc();
-        export_impl(os,
-                    k.arch,
-                    k.op_class,
-                    k.striding_a,
-                    k.striding_b,
-                    k.striding_c,
-                    k.cta_tile.x,
-                    k.cta_tile.y,
-                    k.cta_tile.z,
-                    k.mma_tile.x,
-                    k.mma_tile.y,
-                    k.mma_tile.z,
-                    k.cluster_shape.x,
-                    k.cluster_shape.y,
-                    k.stages,
-                    k.align.x,
-                    k.align.y,
-                    k.align.z,
-                    k.policy_a,
-                    k.policy_b,
-                    k.c_tile.x,
-                    k.c_tile.y,
-                    k.split_k,
-                    k.backend,
-                    k.transpose);
-        // Runtime params
-        export_impl(os, spec.swizzle, spec.splits);
-        os << std::endl;
+        Record record{};
+        record.gemm    = g;
+        record.kernel  = spec.kernel->desc();
+        record.splits  = spec.splits;
+        record.swizzle = spec.swizzle;
+
+        os.write((const char*)&record, sizeof(record));
     }
 }
 
@@ -154,89 +97,37 @@ void ImportDispatchCache(std::istream&                                 is,
                          std::vector<std::pair<GemmDesc, LaunchSpec>>& entries,
                          const std::vector<Kernel*>&                   kernels)
 {
-    std::string line;
-    while (std::getline(is, line)) {
-        std::cout << line << std::endl;
-        std::stringstream ss(line);
-        GemmDesc          g{};
-        import_impl(ss,
-                    g.arch,
-                    g.type_a,
-                    g.type_b,
-                    g.type_c,
-                    g.order_a,
-                    g.order_b,
-                    g.order_c,
-                    g.striding_a,
-                    g.striding_b,
-                    g.striding_c,
-                    g.pack_a,
-                    g.pack_b,
-                    g.pack_u,
-                    g.pack_v,
-                    g.quant_a.type,
-                    g.quant_a.group_size,
-                    g.quant_b.type,
-                    g.quant_b.group_size,
-                    g.epilogue,
-                    g.batch_dim,
-                    g.sched,
-                    g.m,
-                    g.n,
-                    g.k,
-                    g.num);
-        KernelDesc k{};
-        k.type_a  = g.type_a;
-        k.type_b  = g.type_b;
-        k.type_c  = g.type_c;
-        k.pack_a  = g.pack_a;
-        k.pack_b  = g.pack_b;
-        k.pack_u  = g.pack_u;
-        k.pack_v  = g.pack_v;
-        k.order_a = g.order_a;
-        k.order_b = g.order_b;
-        k.order_c = g.order_c;
-        k.quant_a = g.quant_a;
-        k.quant_b = g.quant_b;
-        k.sched   = g.sched;
-        import_impl(ss,
-                    k.arch,
-                    k.op_class,
-                    k.striding_a,
-                    k.striding_b,
-                    k.striding_c,
-                    k.cta_tile.x,
-                    k.cta_tile.y,
-                    k.cta_tile.z,
-                    k.mma_tile.x,
-                    k.mma_tile.y,
-                    k.mma_tile.z,
-                    k.cluster_shape.x,
-                    k.cluster_shape.y,
-                    k.stages,
-                    k.align.x,
-                    k.align.y,
-                    k.align.z,
-                    k.policy_a,
-                    k.policy_b,
-                    k.c_tile.x,
-                    k.c_tile.y,
-                    k.split_k,
-                    k.backend,
-                    k.transpose);
+    is.seekg(0, is.end);
+    const auto size_in_bytes = is.tellg();
+    is.seekg(0, is.beg);
+
+    if (size_in_bytes % sizeof(Record)) {
+        std::cerr << "File size is not a multiple of record size, faild to import records.\n";
+    }
+
+    const int n = size_in_bytes / sizeof(Record);
+
+    std::cerr << "size in bytes: " << size_in_bytes << ", record count: " << n << "\n";
+
+    for (int i = 0; i < n; ++i) {
+        Record record;
+        is.read((char*)&record, sizeof(Record));
+
         LaunchSpec spec{};
-        import_impl(ss, spec.swizzle, spec.splits);
+        spec.splits  = record.splits;
+        spec.swizzle = record.swizzle;
+
         for (const auto& p : kernels) {
-            if (p->desc() == k) {
+            if (p->desc() == record.kernel) {
                 spec.kernel = p;
                 break;
             }
         }
         if (spec.kernel) {
-            entries.emplace_back(g, spec);
+            entries.emplace_back(record.gemm, spec);
         }
         else {
-            std::cerr << "No kernel found for entry: " << line << "\n";
+            std::cerr << "No kernel found for entry " << i << "\n";
         }
     }
 }
@@ -264,7 +155,7 @@ inline decltype(auto) as_tuple(const GemmDesc& d)
                     d.quant_b.type,
                     d.quant_b.group_size,
                     d.batch_dim,
-                    d.sched,
+                    d.group_axis,
                     d.m,
                     d.n,
                     d.k,
