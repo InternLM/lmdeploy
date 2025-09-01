@@ -350,7 +350,7 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
     register_module("wo", output, tp_rank);
 
     if (sink) {
-        sinks = Tensor{{head_num}, data_type, kDEVICE};
+        sinks = Tensor{{head_num / tp_size}, data_type, kDEVICE};
         register_parameter(std::to_string(tp_rank) + ".sinks", sinks);
     }
 }

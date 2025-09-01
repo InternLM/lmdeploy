@@ -451,7 +451,7 @@ void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
 }
 
 template<class T, int vec_size>
-__global__ void biasKernel(T* data, const T* bias, const int* offsets, int num, int dim, int groups)
+__global__ void biasKernel(T* data, const T* bias, const int* offsets, int num, int dim, int groups, float scale)
 {
     int ti = blockIdx.x;
     int di = threadIdx.x * vec_size;
@@ -479,6 +479,11 @@ __global__ void biasKernel(T* data, const T* bias, const int* offsets, int num, 
     Array<T, vec_size> b;
     Ldg(b, bias + di);
 
+    PRAGMA_UNROLL
+    for (int i = 0; i < vec_size; ++i) {
+        b[i] = (T)((float)b[i] * scale);
+    }
+
     Array<T, vec_size> x;
     Load(x, data + di);
 
@@ -488,7 +493,7 @@ __global__ void biasKernel(T* data, const T* bias, const int* offsets, int num, 
     Store(data + di, x);
 }
 
-void ApplyBias(Tensor& data, const Tensor& bias, const Buffer_<int>& offsets, cudaStream_t st)
+void ApplyBias(Tensor& data, const Tensor& bias, const Buffer_<int>& offsets, float scale, cudaStream_t st)
 {
     if (!bias) {
         return;
@@ -518,7 +523,8 @@ void ApplyBias(Tensor& data, const Tensor& bias, const Buffer_<int>& offsets, cu
                                                             offsets.data(),
                                                             num,
                                                             dim,
-                                                            offsets.size() - 1);
+                                                            offsets.size() - 1,
+                                                            scale);
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(data.dtype(), invoke);

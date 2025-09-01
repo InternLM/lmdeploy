@@ -31,8 +31,10 @@ private:
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
-    const int      inter_size_;
-    const int      hidden_dim_;
+    const int inter_size_;
+    const int hidden_dim_;
+    const int tp_;
+
     const MoeParam param_;
 
     cudaStream_t const stream_;

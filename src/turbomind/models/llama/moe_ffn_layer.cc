@@ -19,6 +19,7 @@ namespace turbomind {
 MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx):
     inter_size_(param.inter_size / engine.mlp_tp_size),
     hidden_dim_(model.hidden_units),
+    tp_(engine.mlp_tp_size),
     param_(param),
     stream_(ctx.stream),
     linear_(*ctx.linear)
@@ -150,7 +151,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_);
         sync_check_cuda_error();
 
-        ApplyBias(inter, block.fused_gating_intermediate.bias, offsets_.slice(0, expert_num + 1), stream_);
+        ApplyBias(inter, block.fused_gating_intermediate.bias, offsets_.slice(0, expert_num + 1), 1.f, stream_);
 
         if (!block.is_fused_silu) {
             Activation(inter.slice({0, 0}, {-1, inter_size_}),
@@ -163,7 +164,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_);
         sync_check_cuda_error();
 
-        ApplyBias(temp_, block.output.bias, offsets_.slice(0, expert_num + 1), stream_);
+        ApplyBias(temp_, block.output.bias, offsets_.slice(0, expert_num + 1), 1.f / tp_, stream_);
     }
 
     if (moe.shared_gate.weight) {
