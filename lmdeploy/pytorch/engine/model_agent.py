@@ -513,13 +513,13 @@ class BaseModelAgent:
         """Post process for dllm."""
         block_sparse_size = self.misc_config.block_sparse_size
         hidden_states = output['hidden_states']
-        seq_length = inputs.seq_length
         if is_long_context:
             if not return_logits:
                 hidden_states = hidden_states[:, -block_sparse_size:]
             else:
                 hidden_states = hidden_states.to('cuda')
         else:
+            seq_length = inputs.seq_length
             is_decoding = seq_length.numel() * block_sparse_size == hidden_states.size(1)
             if not return_logits and not is_decoding:
                 hidden_states = self._slice_outs(hidden_states[0], seq_length)[None]
@@ -530,8 +530,8 @@ class BaseModelAgent:
                                             return_logits: bool):
         """Post process forward output default."""
         hidden_states = output['hidden_states']
-        seq_length = inputs.seq_length
         if not is_long_context:
+            seq_length = inputs.seq_length
             is_decoding = seq_length.numel() != hidden_states.size(1)
             if not return_logits and not is_decoding:
                 hidden_states = self._slice_outs(hidden_states[0], seq_length)[None]
@@ -628,6 +628,8 @@ class BaseModelAgent:
             tmp_out['hidden_states'] = output_gather.get_output()
             return tmp_out
 
+        origin_inputs = inputs
+
         # make long context inputs
         is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
         max_seqlen = 0
@@ -653,7 +655,7 @@ class BaseModelAgent:
         else:
             ret = await __long_context_single_forward(inputs, max_seqlen)
 
-        ret = self._postprocess_forward_output(ret, inputs, is_long_context, return_logits)
+        ret = self._postprocess_forward_output(ret, origin_inputs, is_long_context, return_logits)
 
         # compute dummy loop
         if dummy_loop > 0:
