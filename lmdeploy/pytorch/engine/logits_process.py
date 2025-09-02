@@ -399,12 +399,10 @@ class FusedLogitsProcessor:
 
     def __init__(self,
                  sampling_inputs: SamplingInputs,
-                 ignore_eos: torch.Tensor,
                  tokenizer: Optional[Tokenizer] = None,
                  sampling_vocab_size: Optional[int] = None,
                  logprobs_mode: Optional[str] = None):
         self.sampling_inputs: SamplingInputs = sampling_inputs
-        self.ignore_eos = ignore_eos
         self.tokenizer = tokenizer
         self.sampling_vocab_size = sampling_vocab_size
         self.logprobs_mode = logprobs_mode
@@ -415,12 +413,9 @@ class FusedLogitsProcessor:
         if not stream.query():
             await asyncio.sleep(0)
 
-    async def __call__(self, all_ids: torch.LongTensor, guided_input_ids: torch.LongTensor,
-                       scores: torch.FloatTensor) -> torch.FloatTensor:
+    async def __call__(self, scores: torch.FloatTensor) -> torch.FloatTensor:
         r"""
         Args:
-            all_ids (torch.LongTensor): All the token ids.
-            guided_input_ids (torch.LongTensor): Guided prompt ids.
             scores (torch.FloatTensor):
                 Prediction scores of a language modeling head.
                 These can be logits for each vocabulary when not using
@@ -446,6 +441,8 @@ class FusedLogitsProcessor:
                 logprobs = None
 
         sampling_inputs = self.sampling_inputs
+        all_ids = sampling_inputs.all_ids
+        guided_input_ids = sampling_inputs.guided_input_ids
 
         custom_logits_processors = self.sampling_inputs.logits_processors
         if any(custom_logits_processors):
@@ -467,8 +464,9 @@ class FusedLogitsProcessor:
 
         stop_words = sampling_inputs.stop_words
         if stop_words is not None:
+            ignore_eos = sampling_inputs.num_ignore_eos > 0
             stop_mask = sampling_inputs.stop_mask
-            stop_mask = torch.where(self.ignore_eos[:, None], stop_mask, False)
+            stop_mask = torch.where(ignore_eos[:, None], stop_mask, False)
             scores = _process_bad_words_(scores, stop_words, stop_mask)
 
         if guided_input_ids is not None:

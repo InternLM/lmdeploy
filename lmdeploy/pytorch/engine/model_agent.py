@@ -678,16 +678,12 @@ class BaseModelAgent:
         # record function does not support async function
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
-            all_ids = sampling_inputs.all_ids
-            guided_input_ids = sampling_inputs.guided_input_ids
-            ignore_eos = sampling_inputs.num_ignore_eos > 0
             logits_processor = FusedLogitsProcessor(sampling_inputs,
-                                                    ignore_eos,
                                                     self.tokenizer,
                                                     sampling_vocab_size=self.sampling_vocab_size,
                                                     logprobs_mode=self.misc_config.logprobs_mode)
             origin_logits = logits
-            logits, raw_logprobs = await logits_processor(all_ids, guided_input_ids, origin_logits)
+            logits, raw_logprobs = await logits_processor(origin_logits)
             next_token_ids = logits_processor.sampling(logits)
             logprobs = logits_processor.compute_logprobs(raw_logprobs, next_token_ids)
             if logprobs is not None:
