@@ -55,6 +55,9 @@ struct Gemm::Impl {
                 tuning_ = {};
             }
         }
+        if (std::getenv("TM_GEMM_WARN_CACHE_MISS")) {
+            warn_cache_miss_ = true;
+        }
         measurer_.emplace(CreateStoppingCriterion(tuning_.min_iter, tuning_.max_iter, tuning_.max_time));
     }
 
@@ -66,7 +69,10 @@ struct Gemm::Impl {
             if (auto spec = cache_.LowerBound(desc)) {
                 return *spec;
             }
-            std::cerr << "Failed to find a feasible kernel in the cache, will dispatch by heuristic.\n";
+            if (warn_cache_miss_) {
+                std::cerr << "Failed to find a feasible kernel in the cache, will dispatch by heuristic: "
+                          << to_string(ctx.desc()) << std::endl;
+            }
         }
 
         if (auto spec = cache_.Find(desc)) {
@@ -187,12 +193,12 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        // for (const auto& s : specs) {
-        //     std::cout << s.kernel->name()          //
-        //               << " swizzle=" << s.swizzle  //
-        //               << ", splits=" << s.splits   //
-        //               << ", measured=" << s.measured << "ms\n";
-        // }
+        for (const auto& s : specs) {
+            std::cout << s.kernel->name()          //
+                      << " swizzle=" << s.swizzle  //
+                      << ", splits=" << s.splits   //
+                      << ", measured=" << s.measured << "ms\n";
+        }
 
         if (!specs.empty()) {
             cache_.Insert(ctx.desc(), specs.front());
@@ -222,6 +228,8 @@ struct Gemm::Impl {
     Registry registry_;
 
     TuningParams tuning_;
+
+    bool warn_cache_miss_{};
 
     std::optional<Measurer> measurer_;
 
