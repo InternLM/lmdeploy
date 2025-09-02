@@ -5,6 +5,7 @@ from lmdeploy.messages import EngineOutput, GenerationConfig
 from lmdeploy.utils import get_logger
 
 from ..messages import SamplingParam
+from .base import EngineInstanceBase
 from .engine import Engine
 from .request import RequestSender, RequestType, Response, ResponseType
 
@@ -71,7 +72,7 @@ def cancel(req_sender: RequestSender, session_id: int):
                                f'Error: {resp.type}.'))
 
 
-class EngineInstance:
+class EngineInstance(EngineInstanceBase):
     """Instance of TurboMind.
 
     Args:
@@ -149,6 +150,7 @@ class EngineInstance:
 
             cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
             req_metrics = resp.data.get('req_metrics', None) if resp.data else None
+            logprobs = resp.data.get('logprobs', None) if resp.data else None
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids)
@@ -157,7 +159,8 @@ class EngineInstance:
                                    token_ids,
                                    num_ids,
                                    cache_block_ids=cache_block_ids,
-                                   req_metrics=req_metrics)
+                                   req_metrics=req_metrics,
+                                   logprobs=logprobs)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
@@ -169,7 +172,8 @@ class EngineInstance:
                                    num_ids,
                                    logits=logits,
                                    cache_block_ids=cache_block_ids,
-                                   req_metrics=req_metrics)
+                                   req_metrics=req_metrics,
+                                   logprobs=logprobs)
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')

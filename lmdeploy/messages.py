@@ -195,7 +195,9 @@ class TurbomindEngineConfig:
             be allocated to the k/v cache.
             For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8,
             signifying the percentage of FREE GPU memory to be reserved for
-            the k/v cache
+            the k/v cache.
+            When it's an integer > 0, it represents the total number of k/v
+            blocks.
         cache_chunk_size (int): The policy to apply for KV block from
             the block manager, default to -1.
         cache_block_seq_len (int): the length of the token sequence in
@@ -262,8 +264,7 @@ class TurbomindEngineConfig:
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
-        assert 0 < self.cache_max_entry_count < 1, \
-            'invalid cache_max_entry_count'
+        assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
@@ -326,11 +327,14 @@ class PytorchEngineConfig:
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
         enable_mp_engine (bool): run engine in multi-process mode.
+        mp_engine_backend (str): backend of mp engine, options:
+            ['mp', 'ray']. Default to `mp`.
         model_format (str): weight quantization policy, options: ['fp8'].
         hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
             It can be used to override the default config of the model,
         disable_vision_encoder (bool): Whether to disable loading vision
             encoder. Default to False.
+        logprobs_mode (str): The mode of logprob, options: ['raw_logits', 'raw_logprobs']
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -359,10 +363,12 @@ class PytorchEngineConfig:
     enable_microbatch: bool = False
     enable_eplb: bool = False
     enable_mp_engine: bool = False
+    mp_engine_backend: str = 'mp'
     model_format: str = None
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
+    logprobs_mode: str = None
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
@@ -380,8 +386,7 @@ class PytorchEngineConfig:
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
-        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb',
-                                    'ppu'], (f'invalid device_type: {self.device_type}')
+        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
         assert self.block_size >= 16 and (self.block_size & (self.block_size - 1)) == 0, \
             f'block_size must be >= 16 and a power of 2, but got {self.block_size}'
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
@@ -405,6 +410,7 @@ class ResponseType(enum.Enum):
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
     CANCEL = enum.auto()
+    PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
 
 
 @dataclass
@@ -438,6 +444,15 @@ class Response:
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
+
+    def __repr__(self):
+        logits = 'logits=None' if self.logits is None else f'logits.shape={self.logits.shape}\nlogits={self.logits}'
+        hidden_state = (
+            'last_hidden_state=None' if self.last_hidden_state is None else
+            f'last_hidden_state.shape={self.last_hidden_state.shape}\nlast_hidden_state={self.last_hidden_state}')
+        s = (f'text={self.text}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
+             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}')
+        return s
 
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py

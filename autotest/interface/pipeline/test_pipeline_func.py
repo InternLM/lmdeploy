@@ -329,7 +329,8 @@ def test_backend_config_session_len(config, model, backend, worker_id):
 
         result = True
         for i in range(2):
-            result &= response[i].finish_reason == 'length'
+            result &= response[i].finish_reason == 'error'
+            result &= response[i].text == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
             result &= response[i].generate_token_len == 0
         save_pipeline_common_log(config, file_name, result, response)
         del pipe

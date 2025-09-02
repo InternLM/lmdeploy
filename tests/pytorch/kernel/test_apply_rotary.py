@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch.kernels import apply_rotary_pos_emb
 from lmdeploy.utils import is_bf16_supported
 
 
@@ -86,6 +85,7 @@ class TestApplyRotary:
                              indirect=True)
     @pytest.mark.parametrize(('num_heads_q', 'num_heads_k'), [(8, 8), (8, 4)], indirect=True)
     def test_apply_rotary(self, q_states, k_states, cos, sin, gt):
+        from lmdeploy.pytorch.kernels.cuda import apply_rotary_pos_emb
         q_embed, k_embed = apply_rotary_pos_emb(q_states, k_states, cos, sin)
         q_gt, k_gt = gt
 

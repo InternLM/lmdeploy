@@ -126,6 +126,7 @@ class SamplingInputs:
     min_top_p: float = 1.0
     response_formats: Tuple[str] = ()
     logits_processors: List[List[LogitsProcessor]] = None
+    max_num_logprobs: Optional[int] = None
 
     @classmethod
     def from_sampling_params(cls, seqs: List[SchedulerSequence]):
@@ -142,6 +143,7 @@ class SamplingInputs:
         random_offsets = [None] * batch_size
         response_formats = [None] * batch_size
         logits_processors = [None] * batch_size
+        num_logprobs = [None] * batch_size
 
         def __gather_params():
             """Gather params."""
@@ -164,6 +166,7 @@ class SamplingInputs:
                 bad_words[idx] = bw
                 stop_words[idx] = sw
                 logits_processors[idx] = param.logits_processors
+                num_logprobs[idx] = param.num_logprobs
 
         def __get_topp(top_p):
             """Get topp."""
@@ -232,6 +235,8 @@ class SamplingInputs:
             random_seeds = torch.tensor(random_seeds)
             random_offsets = torch.tensor(random_offsets)
 
+        max_num_logprobs = max(num_logprobs)
+
         sampling_input = cls(
             temperature=temperature,
             bad_words=bad_words,
@@ -248,6 +253,7 @@ class SamplingInputs:
             max_top_k=max_top_k,
             min_top_p=min_top_p,
             logits_processors=logits_processors,
+            max_num_logprobs=max_num_logprobs,
         )
         return sampling_input
 
@@ -280,11 +286,13 @@ class FusedLogitsProcessor:
                  sampling_inputs: SamplingInputs,
                  ignore_eos: torch.Tensor,
                  tokenizer: Optional[Tokenizer] = None,
-                 sampling_vocab_size: Optional[int] = None):
+                 sampling_vocab_size: Optional[int] = None,
+                 logprobs_mode: Optional[str] = None):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.ignore_eos = ignore_eos
         self.tokenizer = tokenizer
         self.sampling_vocab_size = sampling_vocab_size
+        self.logprobs_mode = logprobs_mode
 
     async def _wait_stream_once(self):
         """Wait stream once."""
@@ -309,6 +317,19 @@ class FusedLogitsProcessor:
             torch.FloatTensor: The processed prediction scores.
 
         """
+
+        num_logprobs = self.sampling_inputs.max_num_logprobs
+        # get raw logprobs
+        if num_logprobs < 0:
+            logprobs = None
+        else:
+            if self.logprobs_mode == 'raw_logits':
+                logprobs = scores.clone()
+            elif self.logprobs_mode == 'raw_logprobs':
+                logprobs = scores.log_softmax(dim=-1)
+            else:
+                logprobs = None
+
         sampling_inputs = self.sampling_inputs
 
         custom_logits_processors = self.sampling_inputs.logits_processors
@@ -338,7 +359,7 @@ class FusedLogitsProcessor:
         if guided_input_ids is not None:
             await self._wait_stream_once()
             scores = _guided_sampling(sampling_inputs.response_formats, scores, guided_input_ids, self.tokenizer)
-        return scores
+        return scores, logprobs
 
     @torch.inference_mode()
     def sampling(self, logits: torch.Tensor):
@@ -384,3 +405,19 @@ class FusedLogitsProcessor:
             else:
                 scores, indices = logits.topk(max_topk, dim=1)
             return __random_sampling(scores, indices)
+
+    @torch.inference_mode()
+    def compute_logprobs(self, raw_logprobs: torch.Tensor, token_ids: torch.LongTensor):
+        """Compute logprobs."""
+        if raw_logprobs is None:
+            return None
+
+        indices = token_ids.unsqueeze(-1)
+        logprobs = raw_logprobs.gather(-1, indices)
+        num_logprobs = self.sampling_inputs.max_num_logprobs
+        if num_logprobs > 0:
+            topk_logprobs, topk_indices = raw_logprobs.topk(num_logprobs, dim=-1)
+            logprobs = torch.cat([logprobs, topk_logprobs], dim=-1)
+            indices = torch.cat([indices, topk_indices], dim=-1)
+
+        return logprobs, indices.to(torch.int32)

@@ -134,7 +134,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
         if not step_context.is_decoding:
             kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
-            kv_flatten_size = kv_seqlens.sum().item()
+            kv_flatten_size = step_context.sum_kv_seqlen
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
