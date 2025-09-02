@@ -36,7 +36,7 @@ def run_pipeline_chat_test(config,
         log_path, '_'.join(['pipeline', 'chat', backend_type, worker_id,
                             model_case.split('/')[1] + '.log']))
 
-    if str(config.get('env_tag')) == '3090':
+    if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         if extra is None:
             extra = {}
         extra['cache-max-entry-count'] = 0.6
@@ -101,7 +101,7 @@ def run_pipeline_vl_chat_test(config,
         log_path, '_'.join(['pipeline', 'mllm', backend_type, worker_id,
                             model_case.split('/')[1] + '.log']))
 
-    if str(config.get('env_tag')) == '3090':
+    if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         if extra is None:
             extra = {}
         extra['cache-max-entry-count'] = 0.5
