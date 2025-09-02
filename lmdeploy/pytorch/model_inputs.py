@@ -369,7 +369,6 @@ class StepContext:
         model_config: ModelConfig,
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
-        build_ctx: 'BuildModelContext' = None,
     ):
         """Build step context.
 
@@ -391,7 +390,7 @@ class StepContext:
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
 
         # position ids
-        attention_mask, position_ids = cls.get_mask_and_position_ids(inputs, build_ctx)
+        attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
         position_ids = position_ids[None]  # [num_tokens] -> [1, num_tokens]
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
@@ -434,31 +433,30 @@ class StepContext:
         return ret
 
     @classmethod
-    def get_mask_and_position_ids(cls, inputs: ModelInputs, build_ctx: 'BuildModelContext'):
+    def get_mask_and_position_ids(cls, inputs: ModelInputs):
         """Get position ids."""
         q_seqlens = inputs.seq_length
         history_seqlens = inputs.history_lengths
-        model_paradigm = build_ctx.model_paradigm
-        is_decoding = inputs.is_decoding
+        max_q_seqlen = inputs.max_q_seqlen
 
         # decoding
-        if is_decoding:
-            if model_paradigm == 'dllm':
-                block_sparse_size = build_ctx.block_sparse_size
-                attention_mask = None
-                ranges = torch.arange(0, block_sparse_size, device=q_seqlens.device)
-                position_ids = history_seqlens[:, None] + ranges[None, :]
-                position_ids = position_ids.flatten()
-                return attention_mask, position_ids
-            else:
-                attention_mask = torch.ones_like(q_seqlens)[:, None]
-                position_ids = history_seqlens.unsqueeze(-1).clone()
-                position_ids = position_ids.flatten()
-                return attention_mask, position_ids
+        if max_q_seqlen == 1:
+            attention_mask = torch.ones_like(q_seqlens)[:, None]
+            position_ids = history_seqlens.unsqueeze(-1).clone()
+            position_ids = position_ids.flatten()
+            return attention_mask, position_ids
 
         num_tokens = inputs.input_ids.numel()
-        max_q_seqlen = inputs.max_q_seqlen
+        batch_size = inputs.seq_length.numel()
         device = q_seqlens.device
+
+        # batch with same seqlens
+        if max_q_seqlen * batch_size == num_tokens:
+            attention_mask = None
+            ranges = torch.arange(0, max_q_seqlen, device=device)
+            position_ids = history_seqlens[:, None] + ranges[None, :]
+            position_ids = position_ids.flatten()
+            return attention_mask, position_ids
 
         # get mask
         mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
@@ -502,7 +500,6 @@ class StepContextManager:
             model_config,
             kv_caches,
             kv_quant_policy,
-            build_ctx=self.build_ctx,
         )
 
     def set_context(self, ctx: StepContext):
