@@ -72,7 +72,6 @@ work_dir*/
 **/src/pytorch-sphinx-theme/
 
 # Outputs and logs
-*.txt
 *.log
 *.out
 *.csv
