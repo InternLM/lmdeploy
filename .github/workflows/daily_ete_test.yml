@@ -158,6 +158,8 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
+          pip install ${{env.DEEPSEEK_VL}} --no-deps
           python3 -m pip install transformers==4.53.1
       - name: Check env
         run: |
@@ -341,6 +343,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
@@ -424,6 +427,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
@@ -480,6 +484,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
@@ -539,6 +544,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Install opencompass
         run: |

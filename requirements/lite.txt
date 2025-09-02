@@ -1,3 +1,4 @@
 accelerate
 datasets
+timm
 transformers_stream_generator
