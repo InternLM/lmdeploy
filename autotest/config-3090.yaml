@@ -16,7 +16,6 @@ turbomind_chat_model:
     - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL3-2B-Instruct
     - OpenGVLab/InternVL3-1B-Instruct
-    - OpenGVLab/Mono-InternVL-2B
     - OpenGVLab/InternVL2_5-1B
     - Qwen/Qwen3-8B
     - Qwen/Qwen3-4B
@@ -31,7 +30,6 @@ pytorch_chat_model:
     - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL3-2B-Instruct
     - OpenGVLab/InternVL3-1B-Instruct
-    - OpenGVLab/Mono-InternVL-2B
     - OpenGVLab/InternVL2_5-1B
     - Qwen/Qwen3-8B
     - Qwen/Qwen3-4B
@@ -45,14 +43,12 @@ turbomind_vl_model:
     - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL3-2B-Instruct
     - OpenGVLab/InternVL3-1B-Instruct
-    - OpenGVLab/Mono-InternVL-2B
     - OpenGVLab/InternVL2_5-1B
 
 pytorch_vl_model:
     - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL3-2B-Instruct
     - OpenGVLab/InternVL3-1B-Instruct
-    - OpenGVLab/Mono-InternVL-2B
     - OpenGVLab/InternVL2_5-1B
     - Qwen/Qwen2.5-VL-3B-Instruct
     - Qwen/Qwen2.5-VL-7B-Instruct
