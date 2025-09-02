@@ -17,23 +17,31 @@ struct PopulateParam {
 
 class Context {
 public:
-    virtual ~Context() = default;
-
     explicit Context(const cudaDeviceProp& prop);
 
-    virtual std::optional<GemmDesc> Init(const Operation&    operation,
-                                         const MatrixLayout& Adesc,
-                                         const MatrixLayout& Udesc,
-                                         const MatrixLayout& Bdesc,
-                                         const MatrixLayout& Vdesc,
-                                         const MatrixLayout& Cdesc,
-                                         const MatrixLayout& Ddesc) = 0;
+    bool Init(const Operation&    operation,
+              const MatrixLayout& Adesc,
+              const MatrixLayout& Udesc,
+              const MatrixLayout& Bdesc,
+              const MatrixLayout& Vdesc,
+              const MatrixLayout& Cdesc,
+              const MatrixLayout& Ddesc);
 
-    virtual std::vector<Kernel*> Filter(const std::vector<Kernel*>& kernels) const = 0;
+    std::vector<Kernel*> Filter(const std::vector<Kernel*>& kernels) const;
 
-    virtual std::vector<LaunchSpec> Populate(const Kernel& kernel, const PopulateParam& param) const = 0;
+    std::vector<LaunchSpec> Populate(const Kernel& kernel, const PopulateParam& param) const;
 
-    virtual std::vector<LaunchSpec> Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const = 0;
+    std::vector<LaunchSpec> Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const;
+
+    const GemmDesc& desc() const
+    {
+        return desc_;
+    }
+
+    const GemmDesc& get_desc(const Kernel& kernel) const
+    {
+        return kernel.desc().transpose ? desc_trans_ : desc_;
+    }
 
     // Alignment
     // (align_m, align_n, align_k) -> is_aligned
@@ -53,26 +61,8 @@ protected:
     int arch_{};
     int sm_count_{};
 
-    std::optional<GemmDesc> desc_{};
-};
-
-class StaticGemmContext: public Context {
-public:
-    explicit StaticGemmContext(const cudaDeviceProp& prop);
-
-    std::optional<GemmDesc> Init(const Operation&    operation,
-                                 const MatrixLayout& Adesc,
-                                 const MatrixLayout& Udesc,
-                                 const MatrixLayout& Bdesc,
-                                 const MatrixLayout& Vdesc,
-                                 const MatrixLayout& Cdesc,
-                                 const MatrixLayout& Ddesc) override;
-
-    std::vector<Kernel*> Filter(const std::vector<Kernel*>& kernels) const override;
-
-    std::vector<LaunchSpec> Populate(const Kernel& kernel, const PopulateParam& param) const override;
-
-    std::vector<LaunchSpec> Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const override;
+    GemmDesc desc_{};
+    GemmDesc desc_trans_{};
 };
 
 }  // namespace turbomind::gemm

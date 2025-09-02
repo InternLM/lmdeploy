@@ -74,6 +74,9 @@ struct SchedulerSm70 {
         tiles_[0] = round_up(tiles_[0], 1 << log_unit[0]);
         tiles_[1] = round_up(tiles_[1], 1 << log_unit[1]);
 
+        // printf("gemm shape: %d %d %d %d\n", gemm_shape_[0], gemm_shape_[1], gemm_shape_[2], gemm_shape_[3]);
+        // printf("tile shape: %d %d %d\n", tile_shape[0], tile_shape[1], tile_shape[2]);
+
         if constexpr (group_axis >= 0) {
             constexpr int i = group_axis;
             // overwrite dynamic axis <- estimated upper bound
@@ -191,6 +194,7 @@ struct SchedulerSm70 {
     __host__ __device__ static Array<int, 3> get_swizzled_shape(Array<int, 3> tiles, int log_tile)
     {
         constexpr int i = (int)order;  // expansion axis
+        // printf("swizzle %d %d %d %d\n", tiles[0], tiles[1], tiles[2], 1 << log_tile);
         return {tiles[i] << log_tile, (tiles[1 - i] + (1 << log_tile) - 1) >> log_tile, 1};
     }
 

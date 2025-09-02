@@ -44,8 +44,7 @@ struct Gemm::Impl {
         props_{GetCudaDeviceProps()},
         arch_{props_->major * 100 + props_->minor * 10},
         registry_{props_},
-        cache_{registry_.kernels()},
-        default_ctx_(*props_)
+        cache_{registry_.kernels()}
     {
         if (auto str = std::getenv("TM_GEMM_TUNE")) {
             try {
@@ -60,8 +59,9 @@ struct Gemm::Impl {
     }
 
     // find launch spec in dispatch cache, dispatch by heuristic on cache miss
-    LaunchSpec Dispatch(Context& ctx, DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t partials_size)
+    LaunchSpec Dispatch(Context& ctx, DispatchPolicy policy, size_t barriers_size, size_t partials_size)
     {
+        const auto& desc = ctx.desc();
         if (policy & DispatchPolicy::kReuse) {
             if (auto spec = cache_.LowerBound(desc)) {
                 return *spec;
@@ -73,7 +73,7 @@ struct Gemm::Impl {
             return *spec;
         }
 
-        auto specs = Find(ctx, desc, barriers_size, partials_size, 1);
+        auto specs = Find(ctx, barriers_size, partials_size, 1);
         if (!specs.empty()) {
             cache_.Insert(desc, specs.front());
             return specs.front();
@@ -81,18 +81,9 @@ struct Gemm::Impl {
         return {};
     }
 
-    std::vector<LaunchSpec>
-    Find(Context& ctx, const GemmDesc& desc, size_t barrier_size, size_t partials_size, int top_k)
+    std::vector<LaunchSpec> Find(Context& ctx, size_t barrier_size, size_t partials_size, int top_k)
     {
-        std::vector<Kernel*> feasible;
-        std::copy_if(registry_.kernels().begin(), registry_.kernels().end(), std::back_inserter(feasible), [&](auto p) {
-            return p->is_feasible(desc);
-        });
-        if (feasible.empty()) {
-            return {};
-        }
-
-        feasible = ctx.Filter(feasible);
+        std::vector<Kernel*> feasible = ctx.Filter(registry_.kernels());
 
         std::vector<std::vector<LaunchSpec>> clusters;
         {
@@ -176,21 +167,16 @@ struct Gemm::Impl {
     }
 
     template<class LaunchFunc>
-    int Measure(Context&        ctx,
-                const GemmDesc& desc,
-                size_t          barriers_size,
-                size_t          partials_size,
-                int             top_k,
-                LaunchFunc      launch_func,
-                cudaStream_t    st)
+    int Measure(
+        Context& ctx, size_t barriers_size, size_t partials_size, int top_k, LaunchFunc launch_func, cudaStream_t st)
     {
         // Early exit on exact match
-        if (cache_.Find(desc)) {
+        if (cache_.Find(ctx.desc())) {
             return 0;
         }
         // std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
 
-        const auto tmp = Find(ctx, desc, barriers_size, partials_size, tuning_.top_k);
+        const auto tmp = Find(ctx, barriers_size, partials_size, tuning_.top_k);
 
         std::vector<LaunchSpec> specs;
         for (const auto& spec : tmp) {
@@ -201,15 +187,15 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        // for (const auto& s : specs) {
-        //     std::cout << s.kernel->name()          //
-        //               << " swizzle=" << s.swizzle  //
-        //               << ", splits=" << s.splits   //
-        //               << ", measured=" << s.measured << "ms\n";
-        // }
+        for (const auto& s : specs) {
+            std::cout << s.kernel->name()          //
+                      << " swizzle=" << s.swizzle  //
+                      << ", splits=" << s.splits   //
+                      << ", measured=" << s.measured << "ms\n";
+        }
 
         if (!specs.empty()) {
-            cache_.Insert(desc, specs.front());
+            cache_.Insert(ctx.desc(), specs.front());
         }
         else {
             std::cerr << "No valid kernel found for the problem\n";
@@ -240,8 +226,6 @@ struct Gemm::Impl {
     std::optional<Measurer> measurer_;
 
     DispatchCache cache_;
-
-    StaticGemmContext default_ctx_;
 };
 
 // implementation of GEMM interfaces
@@ -269,7 +253,7 @@ int Gemm::Run(const Operation&    operation,
               cudaStream_t        stream)
 {
 
-    Context& context = operation.context ? *operation.context : (Context&)impl_->default_ctx_;
+    Context context{*impl_->props_};
 
     const auto desc = context.Init(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc);
 
@@ -302,8 +286,9 @@ int Gemm::Run(const Operation&    operation,
                                    st);
     };
 
+#if 0
     if (operation.reserved) {
-        auto specs = impl_->Find(context, *desc, workspace.barriers_size, workspace.partials_size, 0);
+        auto specs = impl_->Find(context, workspace.barriers_size, workspace.partials_size, 0);
         auto cases = (std::vector<std::function<LaunchSpec()>>*)operation.reserved;
         for (const auto& spec : specs) {
             cases->push_back([=] {
@@ -313,14 +298,15 @@ int Gemm::Run(const Operation&    operation,
         }
         return -1;
     }
+#endif
 
     LaunchSpec spec{};
 
     if (operation.dispatch & DispatchPolicy::kMeasure) {
-        impl_->Measure(context, *desc, workspace.barriers_size, workspace.partials_size, 1, launch, stream);
+        impl_->Measure(context, workspace.barriers_size, workspace.partials_size, 1, launch, stream);
     }
 
-    spec = impl_->Dispatch(context, operation.dispatch, *desc, workspace.barriers_size, workspace.partials_size);
+    spec = impl_->Dispatch(context, operation.dispatch, workspace.barriers_size, workspace.partials_size);
 
     if (spec.kernel) {
         // std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
@@ -329,7 +315,7 @@ int Gemm::Run(const Operation&    operation,
         return launch(spec, stream);
     }
 
-    TM_CHECK(0) << "No feasible kernel found for the problem: " << to_string(*desc);
+    TM_CHECK(0) << "No feasible kernel found for the problem: " << to_string(context.desc());
 
     return -1;
 }

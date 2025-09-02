@@ -216,19 +216,17 @@ public:
 
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
-        return kernel_->is_feasible(transpose(desc));
+        return kernel_->is_feasible(desc);
     }
 
     int GetMaxSwizzle(const int4& shape) const override
     {
-        auto [m, n, k, l] = shape;
-        return kernel_->GetMaxSwizzle({n, m, k, l});
+        return kernel_->GetMaxSwizzle(shape);
     }
 
     int GetMaxSplits(const int4& shape, int swizzle, size_t bsize, size_t psize) const override
     {
-        auto [m, n, k, l] = shape;
-        return kernel_->GetMaxSplits({n, m, k, l}, swizzle, bsize, psize);
+        return kernel_->GetMaxSplits(shape, swizzle, bsize, psize);
     }
 
 private:

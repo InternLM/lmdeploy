@@ -406,8 +406,8 @@ public:
             quant_a_,
             quant_b_,
             kBatchDim,
-            ctx_.get(),
-            ctx,
+            // ctx_.get(),
+            // ctx,
         };
 
         const Workspace workspace{barriers_.data().get(), barriers_.size(), partials_.data().get(), partials_.size()};

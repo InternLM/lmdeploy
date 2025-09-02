@@ -133,7 +133,7 @@ public:
         const int m = Ddesc.rows;
         const int n = Ddesc.cols;
         const int k = Adesc.cols;
-        const int l = Ddesc.num;
+        const int l = std::max(1, Ddesc.num);
 
         auto transpose = [](MatrixLayout x) {
             std::swap(x.rows, x.cols);

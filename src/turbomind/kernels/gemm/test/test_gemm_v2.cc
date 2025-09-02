@@ -47,17 +47,17 @@ int main()
     // p.output_dim     = 2880;
     // p.max_batch_size = 64;
 
-    // p.input_dim         = 7168;
-    // p.output_dim        = 4096;
-    // p.max_batch_size    = 16384;
-    // p.expert_num        = 256;
-    // p.experts_per_token = 8;
+    p.input_dim         = 7168;
+    p.output_dim        = 4096;
+    p.max_batch_size    = 8192;
+    p.expert_num        = 256;
+    p.experts_per_token = 8;
 
-    p.input_dim         = 16384;
-    p.output_dim        = 16384;
-    p.max_batch_size    = 16384;
-    p.expert_num        = 0;
-    p.experts_per_token = 0;
+    // p.input_dim         = 16384;
+    // p.output_dim        = 16384;
+    // p.max_batch_size    = 1;
+    // p.expert_num        = 0;
+    // p.experts_per_token = 0;
 
     // p.input_dim      = 32;
     // p.output_dim     = 32;

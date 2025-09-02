@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/desc.h"
+#include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
@@ -89,62 +90,81 @@ std::vector<LaunchSpec> get_swizzle(const int4& shape, const LaunchSpec& spec, c
     return ret;
 }
 
-std::vector<Kernel*> filter_by_batch_size(std::vector<Kernel*> kernels, const GemmDesc& desc, int batch_size)
-{
-    auto get_batch_dim = [idx = desc.batch_dim](const Kernel* k) {
-        return idx == 0 ? k->desc().cta_tile.x : k->desc().cta_tile.y;
-    };
-
-    int max_batch_size = 0;
-    for (const auto& k : kernels) {
-        max_batch_size = std::max(get_batch_dim(k), max_batch_size);
-    }
-    for (const auto& k : kernels) {
-        const auto x = get_batch_dim(k);
-        if (x >= batch_size) {
-            max_batch_size = std::min(max_batch_size, x);
-        }
-    }
-    const auto pred = [&](auto k) { return get_batch_dim(k) > max_batch_size; };
-    kernels.erase(std::remove_if(kernels.begin(), kernels.end(), pred), kernels.end());
-
-    return kernels;
-}
-
 Context::Context(const cudaDeviceProp& prop)
 {
     arch_     = prop.major * 100 + prop.minor * 10;
     sm_count_ = prop.multiProcessorCount;
 }
 
-StaticGemmContext::StaticGemmContext(const cudaDeviceProp& prop): Context{prop} {}
-
-std::optional<GemmDesc> StaticGemmContext::Init(const Operation&    operation,
-                                                const MatrixLayout& Adesc,
-                                                const MatrixLayout& Udesc,
-                                                const MatrixLayout& Bdesc,
-                                                const MatrixLayout& Vdesc,
-                                                const MatrixLayout& Cdesc,
-                                                const MatrixLayout& Ddesc)
+bool Context::Init(const Operation&    operation,
+                   const MatrixLayout& Adesc,
+                   const MatrixLayout& Udesc,
+                   const MatrixLayout& Bdesc,
+                   const MatrixLayout& Vdesc,
+                   const MatrixLayout& Cdesc,
+                   const MatrixLayout& Ddesc)
 {
+    auto desc = get_gemm_desc(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc, arch_);
+    if (!desc) {
+        return false;
+    }
 
-    desc_ = get_gemm_desc(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc, arch_);
-    return desc_;
+    desc_       = *desc;
+    desc_trans_ = transpose(desc_);
+
+    return true;
 }
 
-std::vector<Kernel*> StaticGemmContext::Filter(const std::vector<Kernel*>& kernels) const
+std::vector<Kernel*> Context::Filter(const std::vector<Kernel*>& kernels) const
 {
-    return filter_by_batch_size(kernels, *desc_, desc_->batch_dim == 0 ? desc_->m : desc_->n);
+    std::vector<std::pair<Kernel*, int>> feasible;
+    auto get_batch_dim  = [](auto k, auto& g) { return g.batch_dim ? k->desc().cta_tile.y : k->desc().cta_tile.x; };
+    int  max_batch_size = 0;  // max batch size of single CTA tile
+
+    for (auto& k : kernels) {
+        auto& g = get_desc(*k);
+        if (k->is_feasible(g)) {
+            auto bsz = get_batch_dim(k, g);
+            feasible.emplace_back(k, bsz);
+            max_batch_size = std::max(bsz, max_batch_size);
+        }
+    }
+
+    // Batch size of the GEMM problem
+    const int batch_size = desc_.batch_dim ? desc_.n : desc_.m;
+    // std::cout << "BATCH SIZE: " << batch_size << "\n";
+
+    // Find smallest kernel the problem can fit into (may not exist)
+    for (const auto& [k, bsz] : feasible) {
+        if (bsz >= batch_size) {
+            max_batch_size = std::min(max_batch_size, bsz);
+        }
+    }
+
+    const auto pred = [&](auto k) {  //
+        return k.second > max_batch_size;
+    };
+    feasible.erase(std::remove_if(feasible.begin(), feasible.end(), pred), feasible.end());
+
+    std::vector<Kernel*> ret;
+    for (auto& [k, bsz] : feasible) {
+        // std::cout << "KERNEL: " << k->name() << ", BSZ: " << bsz << std::endl;
+        ret.push_back(k);
+    }
+
+    return ret;
 }
 
-std::vector<LaunchSpec> StaticGemmContext::Populate(const Kernel& kernel, const PopulateParam& param) const
+std::vector<LaunchSpec> Context::Populate(const Kernel& kernel, const PopulateParam& param) const
 {
     // early exit for cuBLAS backend
     if (kernel.desc().backend) {
         return {LaunchSpec{const_cast<Kernel*>(&kernel), 0, 1}};
     }
 
-    const int m = desc_->m, n = desc_->n, k = desc_->k, num = std::max(1, desc_->num);
+    const auto& gemm = get_desc(kernel);
+
+    const int m = gemm.m, n = gemm.n, k = gemm.k, num = std::max(1, gemm.num);
 
     const auto& desc = kernel.desc();
     const auto& info = kernel.info();
@@ -218,9 +238,10 @@ std::vector<LaunchSpec> StaticGemmContext::Populate(const Kernel& kernel, const 
     return specs;
 }
 
-std::vector<LaunchSpec> StaticGemmContext::Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const
+std::vector<LaunchSpec> Context::Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const
 {
-    return get_swizzle({desc_->m, desc_->n, desc_->k, desc_->num}, spec, swizzle);
+    auto& desc = get_desc(*spec.kernel);
+    return get_swizzle({desc.m, desc.n, desc.k, desc.num}, spec, swizzle);
 }
 
 }  // namespace turbomind::gemm
