@@ -152,7 +152,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install auto_gptq
+          python3 -m pip install auto_gptq matplotlib
           python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |
