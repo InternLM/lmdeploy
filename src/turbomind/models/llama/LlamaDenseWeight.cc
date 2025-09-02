@@ -142,7 +142,7 @@ static void convert_e2m1(LlamaDenseWeight& dense, cudaStream_t st)
     sync_check_cuda_error();
 
     MatrixLayout w_desc{
-        data_type_v<bfloat16_t>,
+        dense.data_type,
         order_a,
         (int)dense.output_dim,  // m
         (int)dense.input_dim,   // k
@@ -166,6 +166,10 @@ static void convert_e2m1(LlamaDenseWeight& dense, cudaStream_t st)
 
     auto tmp_q = empty_like(dense.scales);
     Copy(dense.scales, tmp_q);
+
+    if (dense.data_type == kHalf) {
+        AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), st);
+    }
 
     MatrixLayout s_desc{
         data_type_v<uint8_t>,
@@ -283,7 +287,7 @@ void LlamaDenseWeight::prepare(bool fused_moe, bool use_simt)
         convert_f8(*this, stream);
     }
     else if (weight_type == data_type_v<fp4_e2m1_t>) {
-        TM_CHECK_EQ(data_type, data_type_v<bfloat16_t>);
+        // TM_CHECK_EQ(data_type, data_type_v<bfloat16_t>);
         convert_e2m1(*this, stream);
     }
     else {

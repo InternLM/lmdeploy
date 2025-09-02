@@ -82,10 +82,20 @@ struct Transform_HMMA_16816 {
         x[1] = __hfma(x[1], _s[0], _s[1]);
     }
 
-    __device__ static void dequant(Array<bfloat16_t, 2>& x, Array<uint8_t, 1> s) {
+    __device__ static void dequant(Array<bfloat16_t, 2>& x, Array<uint8_t, 1> s)
+    {
         bfloat16_t s1 = __ushort_as_bfloat16((uint16_t)s[0] << 7);
-        x[0] = __hmul(x[0], s1);
-        x[1] = __hmul(x[1], s1);
+        x[0]          = __hmul(x[0], s1);
+        x[1]          = __hmul(x[1], s1);
+    }
+
+    __device__ static void dequant(Array<half_t, 2>& x, Array<uint8_t, 1> s)
+    {
+        // half_t s1 = __ushort_as_half(((uint16_t)s[0] + 15 - 127) << 10);
+        // Adjusted in `AdjustUe8m0ScaleForHalf`
+        half_t s1 = __ushort_as_half((uint16_t)s[0] << 10);
+        x[0]      = __hmul(x[0], s1);
+        x[1]      = __hmul(x[1], s1);
     }
 };
 

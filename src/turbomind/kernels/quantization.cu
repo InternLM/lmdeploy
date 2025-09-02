@@ -474,16 +474,6 @@ struct FloatingPointQuantizer {
             d[i] = traits::to_f32(q[i]) * scale_f32;
         }
     }
-
-    __device__ static float cvt_f32_e2m1(Q q)
-    {
-        union {
-            nv_bfloat16 f;
-            uint16_t    u;
-        };
-        u = ((q & 8) << 12 | (q & 7) << 6);
-        return f * __ushort_as_bfloat16(253 << 7);  // 127 + 127 - 1 (e2m1 bias)
-    }
 };
 
 template<int vec_size,
@@ -633,9 +623,12 @@ void QuantizeGroupwise(Tensor quant,    // (m,k)
     else if (src.dtype() == kBfloat16 && quant.dtype() == kFloat4_e2m1) {
         invoke(FloatingPointQuantizer<bfloat16_t, 2, 1, uint16_t>{});
     }
-    // else if (src.dtype() == kHalf && quant.dtype() == kFloat4_e2m1) {
-    //     invoke(FloatingPointQuantizer<half_t, uint16_t, 2, 1>{});
-    // }
+    else if (src.dtype() == kHalf && quant.dtype() == kFloat4_e2m1) {
+        invoke(FloatingPointQuantizer<half_t, 2, 1, uint16_t>{});
+    }
+    else {
+        TM_CHECK(0) << "Unsupported types: " << to_string(src.dtype()) << ", " << to_string(quant.dtype());
+    }
 }
 
 }  // namespace turbomind
