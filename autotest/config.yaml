@@ -266,6 +266,7 @@ turbomind_quatization:
         - deepseek-ai/deepseek-coder-1.3b-instruct
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - codellama/CodeLlama-7b-Instruct-hf
+        - microsoft/Phi-4-mini-instruct
         - allenai/Molmo-7B-D-0924
         - THUDM/codegeex4-all-9b
     gptq:
@@ -316,7 +317,6 @@ pytorch_quatization:
         - Qwen/Qwen1.5-7B-Chat
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
-        - microsoft/Phi-4-mini-instruct
         - THUDM/glm-4v-9b
     w8a8:
         - meta-llama/Meta-Llama-3-8B-Instruct
