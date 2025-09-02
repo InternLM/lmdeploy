@@ -107,8 +107,6 @@ void ImportDispatchCache(std::istream&                                 is,
 
     const int n = size_in_bytes / sizeof(Record);
 
-    std::cerr << "size in bytes: " << size_in_bytes << ", record count: " << n << "\n";
-
     for (int i = 0; i < n; ++i) {
         Record record;
         is.read((char*)&record, sizeof(Record));

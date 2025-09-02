@@ -504,7 +504,7 @@ void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataTy
                 cdiv(a.input_dim, a.group_size),
                 sizeof(float) * cdiv(a.output_dim, a.group_size));
     }
-    if (c.weight_type == kFloat4_e2m1) {
+    else if (c.weight_type == kFloat4_e2m1) {
         _chunks(c.weight.raw_data(), a.weight.raw_data(), b.weight.raw_data(), a.input_dim, 4 * a.output_dim / 8);
         _chunks(c.scales.data<uint8_t>(),
                 a.scales.data<uint8_t>(),
