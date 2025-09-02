@@ -55,3 +55,32 @@ pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.9.2.zip
 ```
 
 如果您希望构建支持昇腾、寒武纪或沐熙的 LMDeploy，请使用相应的 `LMDEPLOY_TARGET_DEVICE` 环境变量进行安装。
+
+LMDeploy 也支持在 AMD GPU 的 ROCm 环境中安装。
+```shell
+#The recommended way is to use the official ROCm PyTorch Docker image with pre-installed dependencies:
+docker run -it \
+    --cap-add=SYS_PTRACE \
+    --security-opt seccomp=unconfined \
+    --device=/dev/kfd \
+    --device=/dev/dri \
+    --group-add video \
+    --ipc=host \
+    --network=host \
+    --shm-size 32G \
+    -v /root:/workspace \
+    rocm/pytorch:latest
+
+
+#Once inside the container, install LMDeploy with ROCm support:
+# Clone repository
+git clone https://github.com/Vivicai1005/lmdeploy.git
+cd lmdeploy
+
+# Enable ROCm build
+export LMDEPLOY_TARGET_DEVICE=rocm
+
+# Install LMDeploy
+pip install .
+
+```
