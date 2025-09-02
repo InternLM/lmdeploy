@@ -153,7 +153,7 @@ jobs:
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install auto_gptq
-          python3 -m pip install requirements/lite.txt
+          python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
