@@ -769,7 +769,7 @@ class BaseModelAgent:
             inputs.model_metas = model_metas
             next_token_ids, dllm_mask, step_seqlens = __update_dllm(next_token_ids, dllm_mask, inputs.seq_length)
             inputs.step(next_token_ids, step_seqlens)
-            sampling_inputs.step(next_token_ids)
+            sampling_inputs.step(next_token_ids, dllm_mask=dllm_mask)
             return next_token_ids, dllm_mask
 
         @asynccontextmanager

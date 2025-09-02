@@ -171,6 +171,7 @@ class SamplingInputs:
     all_ids: Optional[torch.Tensor] = None
     guided_input_ids: Optional[torch.Tensor] = None
     num_ignore_eos: torch.Tensor = None
+    batch_size: int = 0
 
     @classmethod
     def from_sampling_params(cls, seqs: List[SchedulerSequence], pad_token_id: int = 0):
@@ -298,6 +299,7 @@ class SamplingInputs:
             min_top_p=min_top_p,
             logits_processors=logits_processors,
             max_num_logprobs=max_num_logprobs,
+            batch_size=batch_size,
         )
 
         sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
@@ -367,11 +369,20 @@ class SamplingInputsDLLM(SamplingInputs):
                 new_resp_formats += [resp] * block_sparse_size
             out.response_formats = new_resp_formats
 
+        out.batch_size *= block_sparse_size
+
         return out
 
-    def step(self, next_token_ids: torch.Tensor, **kwargs):
+    def step(self, next_token_ids: torch.Tensor, dllm_mask: torch.Tensor, **kwargs):
         """To next step."""
-        self.num_ignore_eos = self.num_ignore_eos - 1
+        from lmdeploy.pytorch import consts
+        batch_size = self.batch_size
+        block_sparse_size = next_token_ids.numel() // batch_size
+        DLLM_UNMASKED = consts.DLLM_UNMASKED
+        is_unmasked = (dllm_mask == DLLM_UNMASKED).view(batch_size, -1).all(dim=1, keepdim=True)
+        num_ignore_eos = self.num_ignore_eos.view(batch_size, -1)
+        num_ignore_eos = torch.where(is_unmasked, num_ignore_eos - block_sparse_size, num_ignore_eos)
+        self.num_ignore_eos = num_ignore_eos.flatten()
 
 
 def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
