@@ -38,6 +38,8 @@ on:
         description: 'regression functions'
         type: string
         default: "['quant', 'tools']"
+  schedule:
+    - cron:  '00 14 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -156,7 +158,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -228,7 +229,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -293,7 +293,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results

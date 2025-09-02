@@ -39,7 +39,7 @@ on:
         type: string
         default: "['quant', 'tools']"
   schedule:
-    - cron:  '00 16 * * 0-4'
+    - cron:  '00 14 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
