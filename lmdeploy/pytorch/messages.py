@@ -712,7 +712,7 @@ class SchedulerSequenceDefault(SchedulerSequence):
         num_valid = len(token_ids)
 
         if mode == UpdateTokenMode.INPUTS:
-            self.input_pos = self.num_all_ids
+            self.input_pos = self.num_all_ids + len(token_ids)
             self._num_token_ids += num_valid
             self.num_new_tokens = 0
         else:
@@ -819,7 +819,7 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
 
         self.history_cache.append(token_ids)
         self.history_dllm_mask.append(dllm_mask)
-        self.input_pos = self._num_valid_ids
+        self.input_pos = self._num_valid_ids + len(token_ids)
         self._num_valid_ids = self.num_history_ids + num_tokens
         self._num_token_ids = len(token_ids)
         self.num_new_tokens = 0
