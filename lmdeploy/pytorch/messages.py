@@ -685,7 +685,7 @@ class SchedulerSequenceDefault(SchedulerSequence):
         if multimodals is None:
             self._num_cross = 0
             return
-        multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_all_ids)
+        multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
         self.history_multimodals.add_inputs(multimodals)
 
         # for mllama
@@ -699,7 +699,12 @@ class SchedulerSequenceDefault(SchedulerSequence):
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""
-        old_num_history_ids = self._num_history_ids
+        # update history image nums
+        self._update_embeddings(embeddings)
+
+        # update multimodals
+        self._update_multimodals(self._num_history_ids, multimodals)
+
         self.arrive_time = time.perf_counter()
 
         token_ids = _to_ndarray(token_ids)
@@ -717,12 +722,6 @@ class SchedulerSequenceDefault(SchedulerSequence):
             self.num_new_tokens += num_token_ids
 
         self.history_cache.append(token_ids)
-
-        # update history image nums
-        self._update_embeddings(embeddings)
-
-        # update multimodals
-        self._update_multimodals(old_num_history_ids, multimodals)
 
         if model_meta is not None:
             self.model_meta = model_meta
@@ -880,7 +879,12 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
                          mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
                          **kwargs):
         """Update token ids, old token ids will be added to history."""
-        old_num_history_ids = self._num_history_ids
+        # update history image nums
+        self._update_embeddings(embeddings)
+
+        # update multimodals
+        self._update_multimodals(self._num_history_ids, multimodals)
+
         self.arrive_time = time.perf_counter()
 
         token_ids: np.ndarray = _to_ndarray(token_ids)
@@ -894,12 +898,6 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
             self._update_token_ids_prefill(token_ids, dllm_mask)
         else:
             self._update_token_ids_decode(token_ids, dllm_mask)
-
-        # update history image nums
-        self._update_embeddings(embeddings)
-
-        # update multimodals
-        self._update_multimodals(old_num_history_ids, multimodals)
 
         if model_meta is not None:
             self.model_meta = model_meta
