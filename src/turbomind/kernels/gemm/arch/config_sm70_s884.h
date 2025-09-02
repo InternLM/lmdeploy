@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <numeric>
+
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/arch/mma_sm70.h"
 #include "src/turbomind/kernels/gemm/arch/operand_sm70_s884.h"
@@ -10,6 +12,7 @@
 #include "src/turbomind/kernels/gemm/gemm_universal.h"
 #include "src/turbomind/kernels/gemm/iterator_sm70.h"
 #include "src/turbomind/kernels/gemm/mainloop_sm70.h"
+#include "src/turbomind/kernels/gemm/scheduler_sm70.cuh"
 #include "src/turbomind/kernels/gemm/thread_group_map.h"
 #include "src/turbomind/kernels/gemm/tiled_mma.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -27,7 +30,8 @@ template<class A,
          Striding mode_A,
          Striding mode_B,
          Striding mode_C,
-         class CtaMap_>
+         Order    raster_order,
+         int      group_axis>
 struct Sm70_s884 {
 
     static_assert(A::SmemCopyAtom::K == B::SmemCopyAtom::K);
@@ -74,6 +78,10 @@ struct Sm70_s884 {
                                       Stages,
                                       true>;  // FusePrefetch_
 
+        static constexpr int CHUNK_K = std::lcm(std::lcm(GroupSizeU, GroupSizeV), CTA_K);
+
+        using Scheduler = SchedulerSm70<raster_order, CTA_M, CTA_N, CTA_K, CHUNK_K, SplitK, group_axis>;
+
         static constexpr int TILE_C_M = TILE_C_M_ == -1 ? CTA_M : TILE_C_M_;
         static constexpr int TILE_C_N = TILE_C_N_ == -1 ? CTA_N : TILE_C_N_;
 
@@ -88,7 +96,7 @@ struct Sm70_s884 {
                                          mode_C,
                                          SplitK>;
 
-        using Kernel = GemmUniversal<Sm70, Mainloop, Epilogue, CtaMap_>;
+        using Kernel = GemmUniversal<Sm70, Mainloop, Epilogue, Scheduler>;
     };
 };
 

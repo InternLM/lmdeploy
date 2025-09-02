@@ -26,7 +26,8 @@ int main()
     // TestParameter p{kBfloat16, kBfloat16, kBfloat16};
     // TestParameter p{kBfloat16, kFloat8_e4m3, kFloat8_e4m3, 128};
     // TestParameter p{kHalf, kUint4, kHalf, 128};
-    TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16, 32};
+    // TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16, 32};
+    TestParameter p{kHalf, kFloat4_e2m1, kHalf, 32};
 
     // p.input_dim      = 512;
     // p.output_dim     = 1024;
@@ -53,8 +54,8 @@ int main()
     p.expert_num        = 256;
     p.experts_per_token = 8;
 
-    // p.input_dim         = 16384;
-    // p.output_dim        = 16384;
+    // p.input_dim         = 32;
+    // p.output_dim        = 32;
     // p.max_batch_size    = 1;
     // p.expert_num        = 0;
     // p.experts_per_token = 0;

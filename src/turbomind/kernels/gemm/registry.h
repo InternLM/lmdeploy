@@ -43,7 +43,8 @@ private:
 
     void u4g128_f16_f16_nnn_sm80_s16816();
 
-    void mxfp4_bf16_bf16_nnn_sm90_s16816();
+    void sm80_mxfp4();
+    void sm90_mxfp4();
 
     void cublas_float();
 
