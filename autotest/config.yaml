@@ -76,6 +76,7 @@ turbomind_chat_model:
     - Qwen/Qwen2.5-72B-Instruct
     - Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
     - Qwen/Qwen2.5-VL-7B-Instruct
+    - Qwen/Qwen2.5-VL-32B-Instruct
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
     - Qwen/Qwen1.5-7B-Chat
@@ -192,6 +193,7 @@ turbomind_vl_model:
     - OpenGVLab/InternVL2-40B
     - OpenGVLab/InternVL2-Llama3-76B-AWQ
     - Qwen/Qwen2.5-VL-7B-Instruct
+    - Qwen/Qwen2.5-VL-32B-Instruct
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
     - Qwen/Qwen-VL-Chat
@@ -223,6 +225,7 @@ pytorch_vl_model:
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
     - Qwen/Qwen2.5-VL-7B-Instruct
+    - Qwen/Qwen2.5-VL-32B-Instruct
     - THUDM/cogvlm-chat-hf
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
@@ -255,6 +258,7 @@ turbomind_quatization:
         - Qwen/Qwen3-30B-A3B-Base
         - Qwen/Qwen1.5-MoE-A2.7B-Chat
         - Qwen/Qwen2.5-VL-7B-Instruct
+        - Qwen/Qwen2.5-VL-32B-Instruct
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
         - mistralai/Mistral-7B-Instruct-v0.3
@@ -283,6 +287,7 @@ turbomind_quatization:
         - Qwen/Qwen2.5-32B-Instruct
         - Qwen/Qwen2.5-72B-Instruct
         - Qwen/Qwen2.5-VL-7B-Instruct
+        - Qwen/Qwen2.5-VL-32B-Instruct
         - Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
@@ -311,6 +316,7 @@ pytorch_quatization:
         - Qwen/Qwen1.5-7B-Chat
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
+        - microsoft/Phi-4-mini-instruct
         - THUDM/glm-4v-9b
     w8a8:
         - meta-llama/Meta-Llama-3-8B-Instruct
@@ -324,6 +330,7 @@ pytorch_quatization:
         - Qwen/Qwen1.5-7B-Chat
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
+        - microsoft/Phi-4-mini-instruct
         - internlm/internlm2_5-20b
         - internlm/internlm2_5-7b
         - meta-llama/Meta-Llama-3-1-8B-Instruct
@@ -348,6 +355,7 @@ pytorch_quatization:
         - Qwen/Qwen1.5-4B-Chat-AWQ
         - Qwen/Qwen1.5-MoE-A2.7B-Chat
         - Qwen/Qwen2.5-VL-7B-Instruct
+        - Qwen/Qwen2.5-VL-32B-Instruct
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
         - deepseek-ai/DeepSeek-V2-Lite-Chat
