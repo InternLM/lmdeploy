@@ -162,7 +162,7 @@ class SequenceMeta:
     """Meta data shared by all sequence."""
     block_size: int
     model_paradigm: str = 'llm'
-    block_sparse_size: int = 1
+    dllm_block_length: int = 1
     dllm_mask_token: int = 151669
 
 
@@ -778,16 +778,20 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
     def all_dllm_mask(self):
         return self.history_dllm_mask._token_ids[:self.num_all_ids]
 
+    @property
+    def dllm_block_length(self):
+        return self._seq_meta.dllm_block_length
+
     def set_stop_pos(self, pos: int):
-        block_sparse_size = self._seq_meta.block_sparse_size
-        val = block_sparse_size - pos - 1
+        dllm_block_length = self.dllm_block_length
+        val = dllm_block_length - pos - 1
         self._num_valid_ids -= val
         self.num_new_tokens -= val
 
     def _update_token_ids_inputs(self, token_ids: np.ndarray, dllm_mask: np.ndarray):
         """Append tokens."""
         num_tokens = len(token_ids)
-        block_sparse_size = self._seq_meta.block_sparse_size
+        dllm_block_length = self.dllm_block_length
         dllm_mask_token = self._seq_meta.dllm_mask_token
         new_token_ids = [token_ids]
         new_dllm_mask = [dllm_mask]
@@ -804,8 +808,8 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
             self.history_dllm_mask.resize(self.num_history_ids)
             num_tokens += num_remain_valid
 
-        # pad to align with block_sparse_size
-        num_pad = (-num_tokens) % block_sparse_size
+        # pad to align with dllm_block_length
+        num_pad = (-num_tokens) % dllm_block_length
         if num_pad > 0:
             pad_ids = np.full_like(token_ids, dllm_mask_token, shape=(num_pad, ))
             pad_mask = np.full_like(dllm_mask, DLLM_MASKED, shape=(num_pad, ))
@@ -815,7 +819,7 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         token_ids = np.concatenate(new_token_ids)
         dllm_mask = np.concatenate(new_dllm_mask)
 
-        assert len(token_ids) % block_sparse_size == 0
+        assert len(token_ids) % dllm_block_length == 0
 
         self.history_cache.append(token_ids)
         self.history_dllm_mask.append(dllm_mask)
@@ -827,9 +831,9 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
     def _update_token_ids_decode(self, token_ids: np.ndarray, dllm_mask: np.ndarray):
         """Update token ids for decode."""
         num_tokens = len(token_ids)
-        block_sparse_size = self._seq_meta.block_sparse_size
+        dllm_block_length = self.dllm_block_length
         dllm_mask_token = self._seq_meta.dllm_mask_token
-        assert num_tokens % block_sparse_size == 0
+        assert num_tokens % dllm_block_length == 0
         num_history_ids = self.num_history_ids
 
         token_ids[dllm_mask == DLLM_MASKED] = dllm_mask_token
@@ -837,32 +841,32 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         self.history_dllm_mask[num_history_ids:] = dllm_mask
 
         # check if all blocks are cached
-        last_mask = dllm_mask[-block_sparse_size:]
+        last_mask = dllm_mask[-dllm_block_length:]
         is_unmasked = np.all(last_mask == DLLM_UNMASKED)
         is_cached = np.all(last_mask == DLLM_CACHED)
 
         if is_unmasked:
-            num_new = block_sparse_size - self._num_valid_ids % block_sparse_size
+            num_new = dllm_block_length - self._num_valid_ids % dllm_block_length
             self._num_valid_ids += num_new
             self.num_new_tokens += num_new
 
         if is_cached:
             # add new block
-            new_token_ids = np.full_like(token_ids, dllm_mask_token, shape=(block_sparse_size, ))
-            new_dllm_mask = np.full_like(dllm_mask, DLLM_MASKED, shape=(block_sparse_size, ))
+            new_token_ids = np.full_like(token_ids, dllm_mask_token, shape=(dllm_block_length, ))
+            new_dllm_mask = np.full_like(dllm_mask, DLLM_MASKED, shape=(dllm_block_length, ))
             self.history_cache.append(new_token_ids)
             self.history_dllm_mask.append(new_dllm_mask)
             self._num_history_ids += self._num_token_ids
-            self._num_token_ids = block_sparse_size
+            self._num_token_ids = dllm_block_length
 
     def _update_token_ids_prefill(self, token_ids: np.ndarray, dllm_mask: np.ndarray):
         """Update token ids for prefill."""
-        block_sparse_size = self._seq_meta.block_sparse_size
+        dllm_block_length = self.dllm_block_length
         num_history_ids = self.num_history_ids
 
         # fill input cache
-        if self.num_token_ids > block_sparse_size:
-            end = self.num_token_ids - block_sparse_size
+        if self.num_token_ids > dllm_block_length:
+            end = self.num_token_ids - dllm_block_length
             self.history_dllm_mask[num_history_ids:end] = DLLM_CACHED
             self._num_history_ids += end
             self._num_token_ids -= end

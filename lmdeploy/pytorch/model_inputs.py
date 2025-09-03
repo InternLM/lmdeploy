@@ -9,7 +9,7 @@ from torch.profiler import record_function
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import ModelConfig
+from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 
 
@@ -293,8 +293,8 @@ class ModelInputs:
         """Make dummy inputs."""
         model_paradigm = build_ctx.model_paradigm
         if model_paradigm == 'dllm':
-            block_sparse_size = build_ctx.block_sparse_size
-            max_q_seqlen = block_sparse_size
+            block_size = build_ctx.dllm_config.dllm_block_length
+            max_q_seqlen = block_size
         else:
             max_q_seqlen = 1
         num_tokens = batch_size * max_q_seqlen
@@ -475,8 +475,8 @@ class StepContext:
 class BuildModelContext:
     """Context for building model."""
     disable_vision_encoder: bool = False
-    block_sparse_size: int = 1
     model_paradigm: str = 'llm'
+    dllm_config: DLLMConfig = None
 
 
 class StepContextManager:

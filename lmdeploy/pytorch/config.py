@@ -289,7 +289,7 @@ class ModelConfig:
 
 @dataclass
 class DLLMConfig:
-    block_sparse_size: int = 1
+    dllm_block_length: int = 1
     unmasking_strategy: str = 'low_confidence_dynamic'
     denoising_steps: int = None
     confidence_threshold: float = 0.85
@@ -304,7 +304,7 @@ class MiscConfig:
     hf_overrides: Dict[str, Any] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
-    block_sparse_size: int = 1
+    dllm_block_length: int = 1
     dllm_config: DLLMConfig = None
 
     @classmethod
@@ -313,7 +313,7 @@ class MiscConfig:
         denoising_steps = engine_config.dllm_denoising_steps
         if denoising_steps is None:
             denoising_steps = engine_config.dllm_block_length // 2
-        dllm_config = DLLMConfig(block_sparse_size=engine_config.dllm_block_length,
+        dllm_config = DLLMConfig(dllm_block_length=engine_config.dllm_block_length,
                                  unmasking_strategy=engine_config.dllm_unmasking_strategy,
                                  denoising_steps=denoising_steps,
                                  confidence_threshold=engine_config.dllm_confidence_threshold)
@@ -323,7 +323,7 @@ class MiscConfig:
                           model_format=engine_config.model_format,
                           hf_overrides=engine_config.hf_overrides,
                           disable_vision_encoder=engine_config.disable_vision_encoder,
-                          block_sparse_size=engine_config.dllm_block_length,
+                          dllm_block_length=engine_config.dllm_block_length,
                           logprobs_mode=engine_config.logprobs_mode,
                           dllm_config=dllm_config)
         return misc_config

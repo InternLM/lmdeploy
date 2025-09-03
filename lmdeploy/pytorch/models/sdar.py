@@ -40,7 +40,7 @@ class SDARAttention(nn.Module):
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
-        block_sparse_size = config.block_sparse_size
+        dllm_block_length = config.dllm_block_length
 
         # attention
         self.attn_fwd = Attention(
@@ -49,7 +49,7 @@ class SDARAttention(nn.Module):
             num_kv_heads=num_key_value_heads,
             v_head_size=head_dim,
             sliding_window=config.sliding_window,
-            block_sparse_size=block_sparse_size,
+            block_sparse_size=dllm_block_length,
         )
 
         # o_proj
@@ -301,7 +301,7 @@ class SDARForCausalLM(nn.Module, CudaGraphMixin):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
-        config.block_sparse_size = ctx_mgr.build_ctx.block_sparse_size
+        config.dllm_block_length = ctx_mgr.build_ctx.dllm_config.dllm_block_length
         # build model
         self.model = SDARModel(config, dtype=dtype, device=device)
         # build lm_head

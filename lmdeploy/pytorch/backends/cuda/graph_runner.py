@@ -195,8 +195,8 @@ class CUDAGraphRunner(GraphRunner):
         if model_paradigm == 'dllm':
             step_mgr = get_step_ctx_manager()
             build_ctx = step_mgr.build_ctx
-            block_sparse_size = build_ctx.block_sparse_size
-            return max_batches * block_sparse_size
+            dllm_block_length = build_ctx.dllm_config.dllm_block_length
+            return max_batches * dllm_block_length
         return max_batches
 
     def __call__(self, **kwargs):

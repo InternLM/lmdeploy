@@ -144,7 +144,7 @@ def _build_seq_meta(cache_config: CacheConfig, model_config: ModelConfig, engine
 
     seq_meta = SequenceMeta(cache_config.block_size,
                             model_paradigm=model_config.model_paradigm,
-                            block_sparse_size=engine_config.dllm_block_length,
+                            dllm_block_length=engine_config.dllm_block_length,
                             dllm_mask_token=model_config.dllm_mask_token)
     return seq_meta
 
@@ -396,6 +396,7 @@ class Engine(EngineBase):
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.dist_config = dist_config
+        self.misc_config = self.executor.misc_config
         self.max_session_len = self._get_max_session_len()
         self.engine_config.num_cpu_blocks = self.cache_config.num_cpu_blocks
         self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
@@ -816,9 +817,9 @@ class Engine(EngineBase):
 
     def _update_running_dllm(self, running: SeqList, next_token_ids: torch.Tensor, dllm_mask: torch.Tensor,
                              stopped: List[bool], model_metas: List[Any], is_decoding: bool, stop_pos: torch.Tensor):
-        block_sparse_size = self.seq_meta.block_sparse_size
-        next_token_ids = next_token_ids.view(-1, block_sparse_size).numpy()
-        dllm_mask = dllm_mask.view(-1, block_sparse_size).numpy()
+        batch_size = len(running)
+        next_token_ids = next_token_ids.view(batch_size, -1).numpy()
+        dllm_mask = dllm_mask.view(batch_size, -1).numpy()
         stop_pos = stop_pos.tolist()
         update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
         for idx, token in enumerate(next_token_ids):
@@ -928,9 +929,9 @@ class Engine(EngineBase):
             model_paradigm = self.model_config.model_paradigm
             if model_paradigm == 'dllm':
                 block_size = self.cache_config.block_size
-                block_sparse_size = self.seq_meta.block_sparse_size
-                num_blocks = min(prefill_interval // 2, block_size // block_sparse_size)
-                return num_blocks * block_sparse_size
+                dllm_block_length = self.misc_config.dllm_config.dllm_block_length
+                num_blocks = min(prefill_interval // 2, block_size // dllm_block_length)
+                return num_blocks * dllm_block_length
             else:
                 return prefill_interval
 
@@ -940,8 +941,8 @@ class Engine(EngineBase):
                 return 1
             if model_paradigm == 'dllm':
                 block_size = self.cache_config.block_size
-                block_sparse_size = self.seq_meta.block_sparse_size
-                max_num_loops = block_size // block_sparse_size * 2
+                dllm_block_length = self.misc_config.dllm_config.dllm_block_length
+                max_num_loops = block_size // dllm_block_length * 2
                 num_loops = min(prefill_interval, max_num_loops)
                 return num_loops
             else:
@@ -952,8 +953,8 @@ class Engine(EngineBase):
             num_appendable = [seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
             num_appendable = torch.tensor(num_appendable)
             if self.model_config.model_paradigm == 'dllm':
-                block_sparse_size = self.seq_meta.block_sparse_size
-                remain = [seq.num_valid_ids % block_sparse_size for seq in seqs]
+                dllm_block_length = self.misc_config.dllm_config.dllm_block_length
+                remain = [seq.num_valid_ids % dllm_block_length for seq in seqs]
                 num_appendable += torch.tensor(remain)
             return num_appendable
 
@@ -974,10 +975,9 @@ class Engine(EngineBase):
             pad_id = 0 if pad_id is None else pad_id
             if self.model_config.model_paradigm == 'dllm':
                 from .logits_process import SamplingInputsDLLM
-                block_sparse_size = self.seq_meta.block_sparse_size
                 return SamplingInputsDLLM.from_sampling_params(seqs,
                                                                pad_token_id=pad_id,
-                                                               block_sparse_size=block_sparse_size)
+                                                               dllm_config=self.misc_config.dllm_config)
             return SamplingInputs.from_sampling_params(seqs, pad_token_id=pad_id)
 
         def __get_output_start_pos(seqs: SeqList):

@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 from lmdeploy.messages import LogitsProcessor
+from lmdeploy.pytorch.config import DLLMConfig
 from lmdeploy.tokenizer import Tokenizer
 
 from ..messages import SchedulerSequence
@@ -332,11 +333,11 @@ class SamplingInputs:
 class SamplingInputsDLLM(SamplingInputs):
 
     @classmethod
-    def from_sampling_params(cls, seqs: List[SchedulerSequence], pad_token_id: int = 0, block_sparse_size: int = 1):
+    def from_sampling_params(cls, seqs: List[SchedulerSequence], pad_token_id: int = 0, dllm_config: DLLMConfig = None):
         """From samplingg params."""
         out = super().from_sampling_params(seqs, pad_token_id)
-        if block_sparse_size == 1:
-            return out
+        assert dllm_config is not None
+        dllm_block_length = dllm_config.dllm_block_length
 
         # repeat tensor
         update_attr_names = [
@@ -359,17 +360,17 @@ class SamplingInputsDLLM(SamplingInputs):
             attr = getattr(out, name)
             if attr is None:
                 continue
-            repeats = (block_sparse_size, ) + (1, ) * (attr.dim())
+            repeats = (dllm_block_length, ) + (1, ) * (attr.dim())
             attr = attr[None].repeat(*repeats).flatten(0, 1)
             setattr(out, name, attr)
 
         if len(out.response_formats) > 0:
             new_resp_formats = []
             for resp in out.response_formats:
-                new_resp_formats += [resp] * block_sparse_size
-            out.response_formats = new_resp_formats
+                new_resp_formats += [resp] * dllm_block_length
+            out.response_formats = tuple(new_resp_formats)
 
-        out.batch_size *= block_sparse_size
+        out.batch_size *= dllm_block_length
 
         return out
 
@@ -377,11 +378,11 @@ class SamplingInputsDLLM(SamplingInputs):
         """To next step."""
         from lmdeploy.pytorch import consts
         batch_size = self.batch_size
-        block_sparse_size = next_token_ids.numel() // batch_size
+        dllm_block_size = next_token_ids.numel() // batch_size
         DLLM_UNMASKED = consts.DLLM_UNMASKED
         is_unmasked = (dllm_mask == DLLM_UNMASKED).view(batch_size, -1).all(dim=1, keepdim=True)
         num_ignore_eos = self.num_ignore_eos.view(batch_size, -1)
-        num_ignore_eos = torch.where(is_unmasked, num_ignore_eos - block_sparse_size, num_ignore_eos)
+        num_ignore_eos = torch.where(is_unmasked, num_ignore_eos - dllm_block_size, num_ignore_eos)
         self.num_ignore_eos = num_ignore_eos.flatten()
 
 

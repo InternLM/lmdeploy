@@ -266,20 +266,20 @@ def _check_stopwords_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, is_
                           output_start_pos: torch.Tensor, inputs: ModelInputs):
     num_tokens = token_ids.size(0)
     batch_size = num_appendable_ids.size(0)
-    block_sparse_size = num_tokens // batch_size
+    block_size = num_tokens // batch_size
 
     # blocks might contain stop words in prev-round chat
     # these stop words should be ignored
     kv_seqlens = inputs.history_lengths + inputs.seq_length
-    ignore_pos = (output_start_pos - (kv_seqlens - block_sparse_size)).clamp_min(0)
-    ignore_range = torch.arange(0, block_sparse_size, dtype=ignore_pos.dtype, device=ignore_pos.device)
+    ignore_pos = (output_start_pos - (kv_seqlens - block_size)).clamp_min(0)
+    ignore_range = torch.arange(0, block_size, dtype=ignore_pos.dtype, device=ignore_pos.device)
     ignore_mask = (ignore_range[None, :] < ignore_pos[:, None]).flatten()
     token_ids = token_ids.clone()
     token_ids[ignore_mask] = -1
 
     # find stop words
     sw_stopped = (token_ids[:, None] == stop_words).any(1)
-    sw_stopped = sw_stopped.view(batch_size, block_sparse_size)
+    sw_stopped = sw_stopped.view(batch_size, block_size)
     sw_stop_pos = sw_stopped.int().argmax(1)
 
     stop_pos = torch.where(stopped, stop_pos, sw_stop_pos)
@@ -299,15 +299,15 @@ def _batch_stopping_criteria_dllm(token_ids: torch.Tensor, stop_words: torch.Ten
     """Batched stopping criteria."""
     num_tokens = token_ids.size(0)
     batch_size = num_appendable_ids.size(0)
-    block_sparse_size = num_tokens // batch_size
+    block_size = num_tokens // batch_size
 
-    dllm_mask = dllm_mask.view(batch_size, block_sparse_size)
+    dllm_mask = dllm_mask.view(batch_size, block_size)
     is_unmasked = (dllm_mask == consts.DLLM_UNMASKED).all(dim=1)
 
     # check stop by num_new_tokens
-    num_appendable_ids -= is_unmasked * block_sparse_size
+    num_appendable_ids -= is_unmasked * block_size
     stopped = num_appendable_ids <= 0
-    stop_pos = block_sparse_size - 1 + num_appendable_ids
+    stop_pos = block_size - 1 + num_appendable_ids
 
     # check stop words
     if stop_words is not None:
@@ -436,9 +436,6 @@ class BaseModelAgent:
 
     def _build_unmasking_processor(self):
         """Build unmasking processor."""
-        # block_sparse_size = self.misc_config.block_sparse_size
-        # strategy = 'low_confidence_dynamic' if self.model_config.model_paradigm == 'dllm' else None
-        # denoising_steps = max(1, block_sparse_size // 2)
         dllm_config = self.misc_config.dllm_config
         unmasking_processor = UnmaskingProcessor(dllm_config)
         return unmasking_processor
@@ -494,11 +491,11 @@ class BaseModelAgent:
     def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
         """Slice outputs."""
         if self.model_config.model_paradigm == 'dllm':
-            block_sparse_size = self.misc_config.block_sparse_size
-            if len(seq_length) * block_sparse_size == inputs.size(0):
+            block_length = self.misc_config.dllm_config.dllm_block_length
+            if len(seq_length) * block_length == inputs.size(0):
                 return inputs
             last_idx = seq_length.cumsum(0)
-            block_range = torch.arange(-block_sparse_size, 0, device=last_idx.device)
+            block_range = torch.arange(-block_length, 0, device=last_idx.device)
             index = (last_idx[:, None] + block_range[None, :]).flatten()
             inputs = inputs[index]
             return inputs
@@ -511,16 +508,16 @@ class BaseModelAgent:
     def _postprocess_forward_output_dllm(self, output: dict, inputs: ModelInputs, is_long_context: bool,
                                          return_logits: bool):
         """Post process for dllm."""
-        block_sparse_size = self.misc_config.block_sparse_size
+        block_length = self.misc_config.dllm_config.dllm_block_length
         hidden_states = output['hidden_states']
         if is_long_context:
             if not return_logits:
-                hidden_states = hidden_states[:, -block_sparse_size:]
+                hidden_states = hidden_states[:, -block_length:]
             else:
                 hidden_states = hidden_states.to('cuda')
         else:
             seq_length = inputs.seq_length
-            is_decoding = seq_length.numel() * block_sparse_size == hidden_states.size(1)
+            is_decoding = seq_length.numel() * block_length == hidden_states.size(1)
             if not return_logits and not is_decoding:
                 hidden_states = self._slice_outs(hidden_states[0], seq_length)[None]
         output['hidden_states'] = hidden_states
@@ -746,11 +743,12 @@ class BaseModelAgent:
                 return next_token_ids, dllm_mask, seqlens
 
             dllm_mask_token = self.model_config.dllm_mask_token
-            block_sparse_size = self.build_model_ctx.block_sparse_size
+            dllm_config = self.misc_config.dllm_config
+            dllm_block_length = dllm_config.dllm_block_length
 
-            # reshape to (batch, block_sparse_size)
-            next_token_ids = next_token_ids.view(-1, block_sparse_size).clone()
-            dllm_mask = dllm_mask.view(-1, block_sparse_size).clone()
+            # reshape to (batch, dllm_block_length)
+            next_token_ids = next_token_ids.view(-1, dllm_block_length).clone()
+            dllm_mask = dllm_mask.view(-1, dllm_block_length).clone()
 
             # flags
             is_cached = (dllm_mask == consts.DLLM_CACHED).all(dim=1)
@@ -1088,8 +1086,8 @@ class BaseModelAgent:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
         build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
-                                            block_sparse_size=self.misc_config.block_sparse_size,
-                                            model_paradigm=self.model_config.model_paradigm)
+                                            model_paradigm=self.model_config.model_paradigm,
+                                            dllm_config=self.misc_config.dllm_config)
         patched_model = build_patched_model(self.model_config,
                                             device=device,
                                             model_format=self.misc_config.model_format,

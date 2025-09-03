@@ -23,24 +23,24 @@ class UnmaskingProcessor:
 
     def _get_denoise_num(self):
         """Get denoise num."""
-        block_sparse_size = self.dllm_config.block_sparse_size
+        block_size = self.dllm_config.dllm_block_length
         denoising_steps = self.dllm_config.denoising_steps
         if denoising_steps is None:
-            denoising_steps = block_sparse_size
-        num = block_sparse_size // self.dllm_config.denoising_steps
-        num = max(1, min(num, block_sparse_size))
+            denoising_steps = block_size
+        num = block_size // self.dllm_config.denoising_steps
+        num = max(1, min(num, block_size))
         return num
 
     def low_confidence_static(self, logits: torch.Tensor, token_ids: torch.Tensor, dllm_mask: torch.Tensor):
         """static."""
-        block_sparse_size = self.dllm_config.block_sparse_size
+        block_size = self.dllm_config.dllm_block_length
         topk = self._get_denoise_num()
         scores = self._get_scores(logits, token_ids)
         is_masked = dllm_mask == DLLM_MASKED
         scores = torch.where(is_masked, scores, scores.new_zeros((1, )))
 
-        scores = scores.view(-1, block_sparse_size)
-        dllm_mask = dllm_mask.view(-1, block_sparse_size)
+        scores = scores.view(-1, block_size)
+        dllm_mask = dllm_mask.view(-1, block_size)
         _, indices = scores.topk(topk, dim=-1)
         dllm_unmasked = dllm_mask.scatter(-1, indices, DLLM_UNMASKED)
 
@@ -50,14 +50,14 @@ class UnmaskingProcessor:
 
     def low_confidence_dynamic(self, logits: torch.Tensor, token_ids: torch.Tensor, dllm_mask: torch.Tensor):
         """dynamic."""
-        block_sparse_size = self.dllm_config.block_sparse_size
+        block_size = self.dllm_config.dllm_block_length
         threshold = self.dllm_config.confidence_threshold
         scores = self._get_scores(logits, token_ids)
         is_masked = dllm_mask == DLLM_MASKED
         scores = torch.where(is_masked, scores, scores.new_zeros((1, )))
 
-        scores = scores.view(-1, block_sparse_size)
-        dllm_mask = dllm_mask.view(-1, block_sparse_size)
+        scores = scores.view(-1, block_size)
+        dllm_mask = dllm_mask.view(-1, block_size)
         _, indices = scores.topk(1, dim=-1)
         scores = scores.scatter(-1, indices, threshold)
 
@@ -68,16 +68,16 @@ class UnmaskingProcessor:
 
     def sequential(self, dllm_mask: torch.Tensor):
         """sequential."""
-        block_sparse_size = self.dllm_config.block_sparse_size
+        block_size = self.dllm_config.dllm_block_length
         denoise_num = self._get_denoise_num()
-        dllm_mask = dllm_mask.view(-1, block_sparse_size)
+        dllm_mask = dllm_mask.view(-1, block_size)
         is_masked = dllm_mask == DLLM_MASKED
 
         # get indices
         indices = is_masked.int().argmax(dim=1)
         ranges = torch.arange(0, denoise_num, device=indices.device, dtype=indices.dtype)
         indices = indices[:, None] + ranges[None, :]
-        indices = indices % block_sparse_size
+        indices = indices % block_size
 
         dllm_unmasked = dllm_mask.clone()
         dllm_unmasked = dllm_unmasked.scatter(-1, indices, DLLM_UNMASKED)
@@ -92,9 +92,9 @@ class UnmaskingProcessor:
         if strategy is None:
             return dllm_mask
 
-        # reshape to [num_blocks, block_sparse_size]
-        block_sparse_size = self.dllm_config.block_sparse_size
-        dllm_mask = dllm_mask.unflatten(0, (-1, block_sparse_size))
+        # reshape to [num_blocks, block_size]
+        block_size = self.dllm_config.dllm_block_length
+        dllm_mask = dllm_mask.unflatten(0, (-1, block_size))
 
         is_same = (dllm_mask == dllm_mask[:, :1]).all(dim=1)
         first_mask = dllm_mask[:, 0]
