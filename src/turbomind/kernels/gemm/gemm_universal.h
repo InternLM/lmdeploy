@@ -108,7 +108,8 @@ struct GemmUniversal {
 
         const int offset_m = tile_id[0] * CTA_M;
         const int offset_n = tile_id[1] * CTA_N;
-        const int offset_k = tile_id[2] * CTA_K;
+
+        const int offset_k = tile.k_iters[0] * CTA_K;
 
         if (offset_m >= M || offset_n >= N || offset_k >= K) {  // empty tile
             return;
@@ -120,7 +121,7 @@ struct GemmUniversal {
         // Is 8 enough?
         __align__(8) FragC frag_C{};
 
-        int tile_iter = tile.k_iters;
+        int tile_iter = tile.k_iters[1];
 
         const int g = tile.group_id;
 
@@ -146,17 +147,17 @@ struct GemmUniversal {
 
             const auto [M, N, K] = tile.shape.__a;
 
-            int4 tile_offset{tile.tile_id[0], tile.tile_id[1], tile.split_id, tile.group_id};
+            int4 tile_offset{tile.tile_id[0], tile.tile_id[1], tile.tile_id[2], tile.group_id};
 
             const int2 extents = {min(CTA_M, M - tile_offset.x * CTA_M), min(CTA_N, N - tile_offset.y * CTA_N)};
 
-            const bool is_last = (tile.tile_id[2] + tile.k_iters) * CTA_K == K;
+            const bool is_last = (tile.k_iters[0] + tile.k_iters[1]) * CTA_K == K;
 
             Epilogue epilogue{};
             epilogue(frag_C,  //
                      tile_offset,
                      extents,
-                     sched.splits_,
+                     sched.tiles_[2],
                      tile.linear_tile_id,
                      is_last,
                      epi_param,

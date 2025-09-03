@@ -198,6 +198,7 @@ struct Gemm::Impl {
                       << " swizzle=" << s.swizzle  //
                       << ", splits=" << s.splits   //
                       << ", measured=" << s.measured << "ms\n";
+            break;
         }
 
         if (!specs.empty()) {

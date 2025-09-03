@@ -40,11 +40,12 @@ void Registry::sm90_mxfp4()
     //////////////////////////////////////////////////////////////////////////////
     using D = cache_policy::Default;
 
-    // Not very useful in the context of grouped GEMM
-    // Add<C16::Type<256, 128,  32, 8, 1, 1, D, D, 3, false, 32, 1, 128, 128>>();
-    // Add<C16::Type<256, 128,  64, 8, 1, 1, D, D, 3, false, 32, 1, 128, 128>>();
-
     using C16 = Config_<bfloat16_t, 16>;
+
+    // Not very useful in the context of grouped GEMM
+    // Add<C16::Type<256, 128, 32, 8, 1, 1, D, D, 3, false, 32, 1, 128, 128>>();
+    // Add<C16::Type<256, 128, 64, 8, 1, 1, D, D, 3, false, 32, 1, 128, 128>>();
+
     Add<C16::Type<128, 128, 32, 4, 1, 1, D, D, 3, false, 32, 1, 128, 128>>();
     Add<C16::Type<128, 128, 32, 4, 1, 1, D, D, 3, false, 32, 1, 128, 64>>();  // For sm_120
     Add<C16::Type<128, 96, 32, 4, 1, 1, D, D, 3, false, 32, 1>>();

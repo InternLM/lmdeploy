@@ -205,6 +205,8 @@ public:
         const auto grid  = sched.get_grid_shape();
         const auto block = Gemm::Impl::WARPS * WARP_SIZE;
 
+        // std::cout << info_.name << " " << splits << " " << swizzle << " " << sched.tiles_[0] << " " << sched.tiles_[1]
+        //           << std::endl;
         // std::cout << grid.x << " " << grid.y << " " << grid.z << "\n";
 
         gemm_kernel<Gemm><<<grid, block, info_.dynamic_smem_size, stream>>>(param, epilogue, sched);

@@ -27,7 +27,6 @@ struct SchedulerSm70 {
 
     int log_tile_;
 
-    int splits_;
     int split_chunks_;
     int chunk_offset_;
 
@@ -36,12 +35,9 @@ struct SchedulerSm70 {
     struct Tile {
         Array<int, 3> tile_id;
         Array<int, 3> shape;
+        Array<int, 2> k_iters;
 
         int group_id;
-        int split_id;
-
-        int k_iters;
-
         int linear_tile_id;
     };
 
@@ -53,18 +49,16 @@ struct SchedulerSm70 {
 
     __host__ dim3 get_grid_shape()
     {
-        auto tiles = tiles_;
-        tiles[2]   = splits_;
-        auto shape = get_swizzled_shape(tiles, log_tile_);
+        auto shape = get_swizzled_shape(tiles_, log_tile_);
         return dim3(shape[0], shape[1], shape[2]);
     }
 
     __host__ SchedulerSm70(Array<int, 4> gemm_shape, int log_tile = 0, int splits = 1):
-        gemm_shape_{gemm_shape}, log_tile_{log_tile}, splits_{splits}
+        gemm_shape_{gemm_shape}, log_tile_{log_tile}
     {
         tiles_[0] = cdiv(gemm_shape[0], tile_m);
         tiles_[1] = cdiv(gemm_shape[1], tile_n);
-        tiles_[2] = cdiv(gemm_shape[2], tile_k);
+        tiles_[2] = splits;
 
         log_tile_ = log_tile;
 
@@ -84,7 +78,7 @@ struct SchedulerSm70 {
         }
 
         int chunks    = cdiv(gemm_shape[2], chunk_k);
-        split_chunks_ = chunks / splits_;
+        split_chunks_ = chunks / splits;
         chunk_offset_ = splits - chunks % splits;
     }
 
@@ -128,25 +122,6 @@ struct SchedulerSm70 {
         return __syncthreads_or(success);
     }
 
-    __device__ Array<int, 3> unswizzle(Array<int, 3> cta_id)
-    {
-        int tile_c = cta_id[0] >> log_tile_;
-        int tile_s = cta_id[1] << log_tile_ | (cta_id[0] & ((1 << log_tile_) - 1));
-
-        Array<int, 3> tile_id;
-
-        tile_id[(int)order]     = tile_c;
-        tile_id[1 - (int)order] = tile_s;
-
-        tile_id[2] = cta_id[2];
-
-        // if (threadIdx.x == 0) {
-        //     printf("%d %d -> %d %d\n", cta_id[0], cta_id[1], tile_id[0], tile_id[1]);
-        // }
-
-        return tile_id;
-    }
-
     template<class Reinit>
     __device__ int init(Tile& tile, SharedStorage& storage, Reinit)
     {
@@ -154,8 +129,8 @@ struct SchedulerSm70 {
         Array<int, 3> tile_id = unswizzle(cta_id);
         Array<int, 3> shape{gemm_shape_[0], gemm_shape_[1], gemm_shape_[2]};
 
-        tile.group_id = 0;
-        tile.split_id = 0;
+        tile.group_id       = 0;
+        tile.linear_tile_id = tile_id[1 - (int)order] * tiles_[(int)order] + tile_id[(int)order];
 
         constexpr int axis = group_axis;
 
@@ -173,29 +148,41 @@ struct SchedulerSm70 {
         }
 
         if constexpr (split_k) {
-            tile.split_id = tile_id[2];
-            int chunk_id  = tile.split_id * split_chunks_ + max(tile.split_id - chunk_offset_, 0);
-            tile.k_iters  = (split_chunks_ + int(tile.split_id >= chunk_offset_)) * chunk_iters;
-            tile_id[2]    = chunk_id * chunk_iters;
+            int split_id    = tile_id[2];
+            int chunk_id    = split_id * split_chunks_ + max(split_id - chunk_offset_, 0);
+            tile.k_iters[0] = chunk_id * chunk_iters;
+            tile.k_iters[1] = (split_chunks_ + int(split_id >= chunk_offset_)) * chunk_iters;
         }
         else {
-            tile.k_iters = split_chunks_ * chunk_iters;
-            tile_id[2]   = 0;
+            tile.k_iters[0] = 0;
+            tile.k_iters[1] = split_chunks_ * chunk_iters;
         }
 
         tile.tile_id = tile_id;
         tile.shape   = shape;
 
-        tile.linear_tile_id = tile_id[1 - (int)order] * tiles_[(int)order] + tile_id[(int)order];
-
         return true;
+    }
+
+    __device__ Array<int, 3> unswizzle(Array<int, 3> cta_id)
+    {
+        int tile_c = cta_id[0] >> log_tile_;
+        int tile_s = cta_id[1] << log_tile_ | (cta_id[0] & ((1 << log_tile_) - 1));
+
+        Array<int, 3> tile_id;
+
+        tile_id[(int)order]     = tile_c;
+        tile_id[1 - (int)order] = tile_s;
+
+        tile_id[2] = cta_id[2];
+
+        return tile_id;
     }
 
     __host__ __device__ static Array<int, 3> get_swizzled_shape(Array<int, 3> tiles, int log_tile)
     {
         constexpr int i = (int)order;  // expansion axis
-        // printf("swizzle %d %d %d %d\n", tiles[0], tiles[1], tiles[2], 1 << log_tile);
-        return {tiles[i] << log_tile, (tiles[1 - i] + (1 << log_tile) - 1) >> log_tile, 1};
+        return {tiles[i] << log_tile, (tiles[1 - i] + (1 << log_tile) - 1) >> log_tile, tiles[2]};
     }
 
     __host__ int get_max_swizzle()
