@@ -91,7 +91,7 @@ void Registry::sm75_s16816_dynamic()
         Add<C::Type<128, 32, 32, 4, 1, 1, D, D, 2, false, 32, 1>>();
         Add<C::Type<128, 16, 32, 4, 1, 1, D, D, 2, false, 32, 1>>();
         Add<C::Type<128, 16, 64, 4, 1, 1, D, D, 2, false, 32, 1>>();
-        Add<C::Type< 64, 16, 64, 4, 1, 1, D, D, 2, false, 32, 1>>();
+        Add<C::Type<64, 16, 64, 4, 1, 1, D, D, 2, false, 32, 1>>();
     }
 }
 

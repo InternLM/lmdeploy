@@ -154,7 +154,8 @@ std::string Kernel::GetName() const
        << "_" << to_string(desc_.op_class)                                               //
        << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z;
     if (desc_.group_axis >= 0) {
-        ss << "_" << "mn"[desc_.group_axis] << "group";
+        ss << "_"
+           << "mn"[desc_.group_axis] << "group";
     }
     ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                        //
        << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z  //

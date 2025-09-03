@@ -496,50 +496,51 @@ __global__ void QuantizeGroupwise_Kernel(Quantizer     quantizer,
                                          int           K,
                                          int           G)
 {
+    if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
+        static constexpr bool has_zero = !std::is_void_v<Z>;
 
-    static constexpr bool has_zero = !std::is_void_v<Z>;
+        int m = blockIdx.x;
+        int k = threadIdx.x + blockIdx.y * blockDim.x;
 
-    int m = blockIdx.x;
-    int k = threadIdx.x + blockIdx.y * blockDim.x;
+        const int threads_per_group = G / vec_size;
+        const int warp_k            = WARP_SIZE * vec_size;
 
-    const int threads_per_group = G / vec_size;
-    const int warp_k            = WARP_SIZE * vec_size;
+        k *= vec_size;
 
-    k *= vec_size;
+        for (; k < round_up(K, warp_k); k += gridDim.y * blockDim.x * vec_size) {
 
-    for (; k < round_up(K, warp_k); k += gridDim.y * blockDim.x * vec_size) {
+            Array<T, vec_size>    x_vec;
+            Array<bool, vec_size> p_vec;
 
-        Array<T, vec_size>    x_vec;
-        Array<bool, vec_size> p_vec;
-
-        PRAGMA_UNROLL
-        for (int i = 0; i < vec_size; ++i) {
-            p_vec[i] = k + i < K;
-            x_vec[i] = p_vec[i] ? x[stride_x[0] * m + stride_x[1] * (k + i)] : T{0};
-        }
-
-        Array<Q, vec_size> q_vec;
-        Array<T, vec_size> d_vec;
-
-        S                                    scale;
-        std::conditional_t<has_zero, Z, int> zero{};
-
-        quantizer(x_vec, p_vec, q_vec, d_vec, scale, zero, threads_per_group);
-
-        PRAGMA_UNROLL
-        for (int i = 0; i < vec_size; ++i) {
-            const auto idx = stride_q[0] * m + stride_q[1] * (k + i);
-            if (p_vec[i]) {
-                q[idx] = q_vec[i];
-                d[idx] = d_vec[i];
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                p_vec[i] = k + i < K;
+                x_vec[i] = p_vec[i] ? x[stride_x[0] * m + stride_x[1] * (k + i)] : T{0};
             }
-        }
-        if (threadIdx.x % threads_per_group == 0) {
-            const auto idx = stride_s[0] * m + stride_s[1] * (k / G);
-            if (p_vec[0]) {
-                s[idx] = (S)scale;
-                if constexpr (has_zero) {
-                    z[idx] = (S)zero;
+
+            Array<Q, vec_size> q_vec;
+            Array<T, vec_size> d_vec;
+
+            S                                    scale;
+            std::conditional_t<has_zero, Z, int> zero{};
+
+            quantizer(x_vec, p_vec, q_vec, d_vec, scale, zero, threads_per_group);
+
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                const auto idx = stride_q[0] * m + stride_q[1] * (k + i);
+                if (p_vec[i]) {
+                    q[idx] = q_vec[i];
+                    d[idx] = d_vec[i];
+                }
+            }
+            if (threadIdx.x % threads_per_group == 0) {
+                const auto idx = stride_s[0] * m + stride_s[1] * (k / G);
+                if (p_vec[0]) {
+                    s[idx] = (S)scale;
+                    if constexpr (has_zero) {
+                        z[idx] = (S)zero;
+                    }
                 }
             }
         }

@@ -142,7 +142,6 @@ static_assert(sizeof(Array<uint4_t, 16>) == 8);
 static_assert(sizeof(Array<uint4_t, 24>) == 12);
 static_assert(sizeof(Array<uint4_t, 32>) == 16);
 
-
 template<int N>
 struct Array<fp4_e2m1_t, N> {
     using value_type      = detail::__uint4_t;

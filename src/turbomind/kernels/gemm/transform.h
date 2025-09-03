@@ -99,6 +99,7 @@ struct Transform_HMMA_16816 {
     }
 };
 
+// Used by SM70 MMA
 struct Transform_HMMA_SIMT_B {
     template<class F, int Nf, int Mf, int K, class D, int Nd, int Md, class S, int Ns, int Ms, int Ks>
     __device__ static void
@@ -131,6 +132,15 @@ struct Transform_HMMA_SIMT_B {
 
         x[0] = __hfma(x[0], _s[0], _s[1]);
         x[1] = __hfma(x[1], _s[0], _s[1]);
+    }
+
+    __device__ static void dequant(Array<half_t, 2>& x, Array<uint8_t, 1> s)
+    {
+        // half_t s1 = __ushort_as_half(((uint16_t)s[0] + 15 - 127) << 10);
+        // Adjusted in `AdjustUe8m0ScaleForHalf`
+        half_t s1 = __ushort_as_half((uint16_t)s[0] << 10);
+        x[0]      = __hmul(x[0], s1);
+        x[1]      = __hmul(x[1], s1);
     }
 };
 

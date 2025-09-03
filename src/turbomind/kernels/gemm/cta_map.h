@@ -249,9 +249,11 @@ public:
 };
 
 template<class S>
-struct is_dynamic_scheduler: std::false_type {};
+struct is_dynamic_scheduler: std::false_type {
+};
 
 template<Order order>
-struct is_dynamic_scheduler<DynamicScheduler<order>>: std::true_type {};
+struct is_dynamic_scheduler<DynamicScheduler<order>>: std::true_type {
+};
 
 }  // namespace turbomind::gemm
