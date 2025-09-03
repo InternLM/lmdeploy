@@ -8,7 +8,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest, EncoderResult
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
@@ -152,6 +152,11 @@ class MessageStatus(enum.Enum):
     MIGRATION_LOCKED = enum.auto()
     MIGRATION_DONE = enum.auto()
 
+    WAITING_EP_MIGRATION = enum.auto()  # waiting for encoder => prefill migration
+    RUNNING_EP_MIGRATION = enum.auto()  # running encoder => prefill migration
+    EP_MIGRATION_LOCKED = enum.auto()  # locked during encoder => prefill migration
+    EP_MIGRATION_DONE = enum.auto()    # done encoder => prefill migration
+
 
 _SEQ_COUNT = 0
 
@@ -236,6 +241,7 @@ class SchedulerSession:
                      multimodals: MultiModalInputs = None,
                      input_embeddings: List[InputEmbeddings] = None,
                      migration_request: Optional[MigrationRequest] = None,
+                     encoder_result: Optional[EncoderResult] = None,
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
@@ -260,6 +266,7 @@ class SchedulerSession:
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
             migration_request=migration_request,
+            encoder_result=encoder_result,
             resp_cache=resp_cache,
             preserve_cache=preserve_cache,
         )
@@ -472,6 +479,7 @@ class SchedulerSequence:
     migration_request: Optional[MigrationRequest] = None
     resp_cache: bool = False
     preserve_cache: bool = False
+    encoder_result: Optional[EncoderResult] = None
 
     # For logging
     engine_events: List[EngineEvent] = field(default_factory=list)

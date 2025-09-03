@@ -398,6 +398,8 @@ class Engine(EngineBase):
         # for PD Disaggregation
         # For migrating prefill request to decode engine
         self.migration_event: asyncio.Event = None
+        # For encoder result migration
+        self.ep_migration_event: asyncio.Event = None
         # For backpressure prefill request when cache is full
         self.perfill_watermark_event: asyncio.Event = None
 
@@ -568,13 +570,19 @@ class Engine(EngineBase):
                 logger.warning('Vision encoder has not been loaded, multimodal inputs will be ignored.')
                 continue
 
-            result = self.input_processor.preprocess_input(input_ids, input_multimodals)
+            # FIXME, here if we deploy MLLM, will invoke input_processor to process multimodal data
+            # but now if encoder_result is detected, need to skip preprocess
+            if req_data.get('encoder_result') is None:
+                result = self.input_processor.preprocess_input(input_ids, input_multimodals)
+                input_ids = result.input_ids
+                input_multimodals = result.input_multimodals
 
-            input_ids = result.input_ids
-            input_multimodals = result.input_multimodals
-
-            req_data['token_ids'] = input_ids
-            req_data['input_multimodals'] = input_multimodals
+                req_data['token_ids'] = input_ids
+                req_data['input_multimodals'] = input_multimodals
+            else:
+                # ignore multimodal inputs
+                req_data['input_multimodals'] = None
+                logger.info('Have encoder result, try to fetch from encode instance')
 
         if len(valid_reqs) > 0:
             self._add_message(valid_reqs)
@@ -606,6 +614,9 @@ class Engine(EngineBase):
             return_logits = sampling_param.out_logits
             if len(sess.sequences) == 0:
                 migration_request = req.data.get('migration_request')
+                encoder_result = req.data.get('encoder_result')
+                print(f'=> add msg, migration_request {migration_request}')
+                print(f'=> add msg, encoder_result {encoder_result}')
                 assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
                 sess.add_sequence(req.data['token_ids'],
                                   sampling_param=sampling_param,
@@ -614,6 +625,7 @@ class Engine(EngineBase):
                                   multimodals=req.data.get('input_multimodals'),
                                   input_embeddings=req.data.get('input_embeddings', ),
                                   migration_request=migration_request,
+                                  encoder_result=encoder_result,
                                   resp_cache=req.data.get('with_cache'),
                                   preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
@@ -622,6 +634,13 @@ class Engine(EngineBase):
                 if migration_request:
                     self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
                     self.migration_event.set()
+                # if have encoder results here, skip encoding, directly proceed to prefill
+                if encoder_result:
+                    print(f'set waiting EP migration!!!')
+                    self.scheduler._set_message_status(msg, MessageStatus.WAITING_EP_MIGRATION)
+                    self.ep_migration_event.set()
+
+                # FIXME, seems we need to care about tokens ids, otherwise, the token ids processed will not contain the image token id as place holder
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -683,6 +702,15 @@ class Engine(EngineBase):
                     if len(val) > 0:
                         return True
             return False
+
+        has_encoder_result = any([msg.encoder_result is not None for msg in messages])
+        # FIXME, suppose we already have the image feature migrated to local cache blocks
+        # The only thing left here is to create an indexing tensor to tell the model where the
+        # image tokens are in the input sequence.
+        if has_encoder_result:
+            # we need to determine input_embeddings here, but a fake one as place holder? for prefill instance to allocate mem?
+            # second one is the image mask, we can directly fetch from encoder_result
+            pass
 
         has_embedding = any([len(msg.history_embeddings) > 0 for msg in messages])
         if has_embedding:
@@ -786,6 +814,7 @@ class Engine(EngineBase):
             model_inputs.history_cross_length = history_cross_length
 
         # vision inputs
+        # FIXME, handle vision inputs differently, directly migrate feature from encoder_results
         vision_model_inputs = self._create_vision_model_inputs(messages, model_inputs)
         model_inputs.vision_inputs = vision_model_inputs
 
@@ -1106,6 +1135,50 @@ class Engine(EngineBase):
                 await asyncio.sleep(.5)
 
     @torch.inference_mode()
+    async def _async_loop_ep_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
+        """Async loop for encoder-prefill migration."""
+        while True:
+            ep_migration_running = self.scheduler._schedule_ep_migration()
+            if not ep_migration_running and not self.scheduler.has_ep_migration_waiting():
+                await self.ep_migration_event.wait()
+            elif ep_migration_running:
+                self.ep_migration_event.clear()
+                for msg in ep_migration_running:
+                    print(f'fake migration here')
+                    migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
+                    ep_migration_request = msg.encoder_result
+                    encoder_block_ids = ep_migration_request.remote_block_ids
+                    prefill_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
+
+                    # assert len(encoder_block_ids) == len(prefill_block_ids), (
+                    #     f'#encoder block ids ({len(encoder_block_ids)}) must equal to '
+                    #     f'#prefill block ids ({len(prefill_block_ids)}) '
+                    #     f'all id length: {len(msg.num_token_ids)}')
+                    # migration_execution_requests.append((
+                    #     ep_migration_request.remote_engine_id,
+                    #     list(zip(encoder_block_ids, prefill_block_ids)),
+                    # ))
+                    # migration_inputs = MigrationExecutionBatch(protocol=ep_migration_request.protocol,
+                    #                                             requests=migration_execution_requests)
+                    # logger.info(f'migrating encoder features for session: {msg.session_id} begin')
+                    # await self.executor.migrate(migration_inputs)
+                    # logger.info(f'migrating encoder features for session: {msg.session_id} done')
+                    # await self.engine_conn.zmq_send(remote_engine_id=ep_migration_request.remote_engine_id,
+                    #                                 remote_session_id=ep_migration_request.remote_session_id)
+
+                # After migration, the sequences are ready for prefill. We change their status to WAITING
+                # later it will be scheduled by self.scheduler.schedule_prefill() and proceed to prefill stage
+                self.scheduler.lock_running_ep_migration(ep_migration_running)
+                for msg in ep_migration_running:
+                    self.scheduler._set_message_status(msg, MessageStatus.WAITING)
+                self.scheduler.unlock_running_ep_migration(ep_migration_running)
+
+                has_runable_event.set()
+            else:
+                # release coroutine for other tasks
+                await asyncio.sleep(.5)
+
+    @torch.inference_mode()
     async def _async_loop_main(
         self,
         resp_que: asyncio.Queue,
@@ -1129,6 +1202,7 @@ class Engine(EngineBase):
                     forward_event.clear()
 
                 scheduler.collect_migration_done()
+                scheduler.collect_ep_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
                 if next_running is None:
                     # TODO (JimyMa): add watermark check event instead of async sleep.
@@ -1151,6 +1225,7 @@ class Engine(EngineBase):
                 # pre-forward before get last token
                 if idx == num_loops - 1:
                     scheduler.collect_migration_done()
+                    scheduler.collect_ep_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
 
                 # send output
@@ -1217,6 +1292,7 @@ class Engine(EngineBase):
 
             # migration task
             self.migration_event = asyncio.Event()
+            self.ep_migration_event = asyncio.Event()
 
             logger.info('Starting executor.')
             self.executor.start(forward_event)
@@ -1244,6 +1320,14 @@ class Engine(EngineBase):
                     name='MainLoopMigration',
                 )
                 loop_tasks.append(loop_migration)
+
+            # TODO: modify proxy, add encoder role, only create this coroutine when in EPD mode
+            logger.info('Starting async task EPMigrationLoop.')
+            loop_ep_migration = event_loop.create_task(
+                self._async_loop_ep_migration(resp_que, has_runable_event=has_runable_event),
+                name='MainLoopEPMigration',
+            )
+            loop_tasks.append(loop_ep_migration)
 
             # binding done callback
             self._add_loop_tasks_done_callback(loop_tasks)

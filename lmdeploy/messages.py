@@ -8,7 +8,7 @@ import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest, EncoderResult
 
 from .tokenizer import Tokenizer
 from .utils import get_logger
@@ -115,6 +115,7 @@ class GenerationConfig:
     with_cache: bool = False
     preserve_cache: bool = False
     migration_request: Optional[MigrationRequest] = None
+    encoder_result: Optional[EncoderResult] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to

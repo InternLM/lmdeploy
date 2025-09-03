@@ -28,7 +28,7 @@ from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
                                                    DistServeDropConnectionRequest, DistServeInitRequest,
-                                                   MigrationRequest)
+                                                   MigrationRequest, EncoderResult)
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -354,9 +354,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
     preserve_cache = json_request.pop('preserve_cache', False)
+    encoder_result = json_request.pop('encoder_result', None)
     if migration_request:
         migration_request = MigrationRequest.model_validate(migration_request)
-
+    if encoder_result:
+        encoder_result = EncoderResult.model_validate(encoder_result)
+    print(f'=> api server, migration_request: \n{migration_request}\n')
+    print(f'=> api server, encoder_result: \n{encoder_result}\n')
+    # import pdb; pdb.set_trace()
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -414,6 +419,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         random_seed=random_seed,
         spaces_between_special_tokens=request.spaces_between_special_tokens,
         migration_request=migration_request,
+        encoder_result=encoder_result,
         with_cache=with_cache,
         preserve_cache=preserve_cache,
     )

@@ -317,7 +317,7 @@ class CacheEngine:
         total = num_layers * (mem_key_block + mem_value_block)
         return total
 
-    """ Metheds for PD Disaggregation Begin. """
+    """ Methods for PD Disaggregation Begin. """
 
     def p2p_initialize(self, migration_init_request: DistServeInitRequest) -> DistServeKVTransferEndpointInfo:
         if not self.migration_backend_impl:
@@ -383,4 +383,9 @@ class CacheEngine:
                 batch=assignment_batch,
             ))
 
-    """ Metheds for PD Disaggregation End. """
+    async def ep_migrate(self):
+        # TODO, implement actual EP migration logic here
+        # TODO, we may consider a seperate MM cache, may not exactly be here
+        pass
+
+    """ Methods for PD Disaggregation End. """

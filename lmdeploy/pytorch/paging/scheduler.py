@@ -94,6 +94,24 @@ class Scheduler:
         seq_map = self.seq_manager.get_sequences(MessageStatus.MIGRATION_DONE)
         return list(seq_map.values())
 
+    @property
+    def waiting_ep_migration(self):
+        """Get waiting sequence."""
+        seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING_EP_MIGRATION)
+        return list(seq_map.values())
+
+    @property
+    def running_ep_migration(self):
+        """Get running sequence."""
+        seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING_EP_MIGRATION)
+        return list(seq_map.values())
+
+    @property
+    def ep_migration_done(self):
+        """Get migration done sequence."""
+        seq_map = self.seq_manager.get_sequences(MessageStatus.EP_MIGRATION_DONE)
+        return list(seq_map.values())
+
     def build_eviction_helper(self, eviction_type: str):
         if eviction_type == 'copy':
             logger.warning('`copy` eviction has been deprecated, '
@@ -177,6 +195,48 @@ class Scheduler:
             _to_running(seq)
 
         return running_migration
+
+    @logging_timer('ScheduleEPMigration', logger)
+    def _schedule_ep_migration(self):
+        running_ep_migration: SeqList = []
+        migrating_token_count = 0
+
+        def _to_running(seq: SchedulerSequence):
+            """To running."""
+            seq.status = MessageStatus.RUNNING_EP_MIGRATION
+            running_ep_migration.append(seq)
+            nonlocal migrating_token_count
+            migrating_token_count += seq.num_token_ids
+
+        def __evict_for_seq(seq: SchedulerSequence, waiting):
+            """Evict until can append."""
+            from itertools import chain
+
+            hanging = reversed(self.hanging)
+            waiting = reversed(waiting)
+            evictable = list(chain(hanging, waiting))
+            return self.eviction_helper.evict_for_seq(seq, evictable, 0)
+
+        def _reorder_migrating():
+            """Reorder waiting."""
+            return sorted(self.waiting_ep_migration, key=lambda seq: seq.arrive_time)
+
+        waiting_ep_migration = _reorder_migrating()
+        print(f'=> check waiting EP migration: {waiting_ep_migration}')
+
+        max_batches = self.scheduler_config.max_batches - self.num_running() - self.num_locked()
+        while len(waiting_ep_migration) > 0 and len(running_ep_migration) < max_batches:
+            seq = waiting_ep_migration.pop(0)
+            self.block_trie.match(waiting_ep_migration)
+            if not __evict_for_seq(seq, waiting_ep_migration):
+                break
+
+            # allocate session memory
+            self.block_manager.allocate(seq)
+            _to_running(seq)
+
+        print(f'=> check running EP migration: {running_ep_migration}')
+        return running_ep_migration
 
     @logging_timer('SchedulePrefilling', logger)
     def _schedule_prefill(self):
@@ -339,7 +399,8 @@ class Scheduler:
 
     def has_unfinished(self):
         """Check if there are any unfinished message."""
-        return self.has_running() or self.has_waiting() or self.has_migration_done()
+        # return self.has_running() or self.has_waiting() or self.has_migration_done()
+        return self.has_running() or self.has_waiting() or self.has_migration_done() or self.has_ep_migration_done()
 
     def has_running(self):
         return self.num_running() > 0
@@ -358,6 +419,15 @@ class Scheduler:
 
     def has_migration_done(self):
         return self.num_migration_done() > 0
+
+    def has_ep_migration_running(self):
+        return self.num_ep_migration_running() > 0
+
+    def has_ep_migration_waiting(self):
+        return self.num_ep_migration_waiting() > 0
+
+    def has_ep_migration_done(self):
+        return self.num_ep_migration_done() > 0
 
     def get_block_tables(self, seqs: SeqList):
         """Get block table of the sequences."""
@@ -391,6 +461,18 @@ class Scheduler:
         """Num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING_MIGRATION)
 
+    def num_ep_migration_running(self):
+        """Num EP migration running."""
+        return self.seq_manager.num_sequences(MessageStatus.RUNNING_EP_MIGRATION)
+
+    def num_ep_migration_done(self):
+        """Num EP migration done."""
+        return self.seq_manager.num_sequences(MessageStatus.EP_MIGRATION_DONE)
+
+    def num_ep_migration_waiting(self):
+        """Num EP migration waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.WAITING_EP_MIGRATION)
+
     def num_locked(self):
         """Num locked."""
         return self.seq_manager.num_sequences(MessageStatus.LOCKED)
@@ -418,9 +500,26 @@ class Scheduler:
             if seq.status == MessageStatus.MIGRATION_LOCKED:
                 self._set_message_status(seq, MessageStatus.MIGRATION_DONE)
 
+    def lock_running_ep_migration(self, running: SeqList):
+        """Lock running EP migration sequence."""
+        for seq in running:
+            if seq.status == MessageStatus.RUNNING_EP_MIGRATION:
+                self._set_message_status(seq, MessageStatus.EP_MIGRATION_LOCKED)
+
+    def unlock_running_ep_migration(self, locked: SeqList):
+        """Unlock running EP migration."""
+        for seq in locked:
+            if seq.status == MessageStatus.EP_MIGRATION_LOCKED:
+                self._set_message_status(seq, MessageStatus.EP_MIGRATION_DONE)
+
     def collect_migration_done(self):
         migration_done = self.migration_done
         for seq in migration_done:
+            self._set_message_status(seq, MessageStatus.RUNNING)
+
+    def collect_ep_migration_done(self):
+        ep_migration_done = self.ep_migration_done
+        for seq in ep_migration_done:
             self._set_message_status(seq, MessageStatus.RUNNING)
 
     @property

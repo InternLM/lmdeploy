@@ -139,6 +139,7 @@ class EngineInstance(EngineInstanceBase):
             adapter_name=adapter_name,
             input_multimodals=multimodal,
             migration_request=gen_config.migration_request,
+            encoder_result=gen_config.encoder_result,
             with_cache=gen_config.with_cache,
             preserve_cache=gen_config.preserve_cache,
         )

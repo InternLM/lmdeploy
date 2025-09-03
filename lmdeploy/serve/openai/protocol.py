@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 import shortuuid
 from pydantic import BaseModel, Field
+from lmdeploy.pytorch.disagg.conn.protocol import EncoderResult
 
 
 class ErrorResponse(BaseModel):
@@ -148,6 +149,7 @@ class ChatCompletionRequest(BaseModel):
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
     min_p: float = 0.0
     enable_thinking: Optional[bool] = None
+    encoder_result: Optional[EncoderResult] = None
 
 
 class FunctionCall(BaseModel):
