@@ -125,43 +125,43 @@ def run_pipeline_vl_chat_test(config,
             assert False, 'system error: ' + response.stderr
         with allure.step('single1 pic'):
             response = get_response_from_output(output_text, 'single1')
-            case_result = any(['tiger', '虎'] in response.lower())
+            case_result = any(word in response.lower() for word in ['tiger', '虎'])
             f.writelines(f'single1 pic result: {case_result} reason: simple example tiger should in {response} \n')
             with assume:
                 assert case_result, f'reason: simple example tiger should in {response}'
         with allure.step('single2 pic'):
             response = get_response_from_output(output_text, 'single2')
-            case_result = any(['tiger', '虎'] in response.lower())
+            case_result = any(word in response.lower() for word in ['tiger', '虎'])
             f.writelines(f'single2 pic result: {case_result} reason: simple example tiger should in {response} \n')
             with assume:
                 assert case_result, f'reason: simple example tiger should in {response}'
         with allure.step('multi-imagese'):
             response = get_response_from_output(output_text, 'multi-imagese')
-            case_result = any(['tiger', '虎', '滑雪', 'ski'] in response.lower())
+            case_result = any(word in response.lower() for word in ['tiger', '虎', '滑雪', 'ski'])
             f.writelines(f'multi-imagese pic result: {case_result} reason: tiger or ski should in {response} \n')
             with assume:
                 assert case_result, f'reason: Multi-images example: tiger or ski should in {response}'
         with allure.step('batch-example1'):
             response = get_response_from_output(output_text, 'batch-example1')
-            case_result = any(['滑雪', 'ski'] in response.lower())
+            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
             f.writelines(f'batch-example1 pic result: {case_result} reason: ski should in {response} \n')
             with assume:
                 assert case_result, f'reason: batch-example1: ski should in {response}'
         with allure.step('batch-example2'):
             response = get_response_from_output(output_text, 'batch-example2')
-            case_result = any(['tiger', '虎'] in response.lower())
+            case_result = any(word in response.lower() for word in ['tiger', '虎'])
             f.writelines(f'batch-example2 pic result: {case_result} reason: tiger should in {response} \n')
             with assume:
                 assert case_result, f'reason: batch-example1: tiger should in {response}'
         with allure.step('multi-turn1'):
             response = get_response_from_output(output_text, 'multi-turn1')
-            case_result = any(['滑雪', 'ski'] in response.lower())
+            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
             f.writelines(f'multi-turn1 pic result: {case_result} reason:  tiger should in {response} \n')
             with assume:
                 assert case_result, f'reason: batch-example1: tiger should in {response}'
         with allure.step('multi-turn2'):
             response = get_response_from_output(output_text, 'multi-turn2')
-            case_result = any(['滑雪', 'ski'] in response.lower())
+            case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
             f.writelines(f'multi-turn2 pic result: {case_result} reason: tiger should in {response} \n')
             with assume:
                 assert case_result, f'reason: batch-example1: tiger should in {response}'
@@ -261,37 +261,37 @@ def assert_pipeline_single_element(output, is_stream: bool = False, is_last: boo
 def internvl_vl_testcase(output_text, f, lang: str = 'en'):
     with allure.step(f'internvl-combined-images-{lang}'):
         response = get_response_from_output(output_text, f'internvl-combined-images-{lang}')
-        case_result = any(['panda', '熊猫'] in response.lower())
+        case_result = any(word in response.lower() for word in ['panda', '熊猫'])
         f.writelines(f'internvl-combined-images-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: combined images: panda should in {response}'
     with allure.step(f'internvl-combined-images2-{lang}'):
         response = get_response_from_output(output_text, f'internvl-combined-images2-{lang}')
-        case_result = any(['panda', '熊猫'] in response.lower())
+        case_result = any(word in response.lower() for word in ['panda', '熊猫'])
         f.writelines(f'internvl-combined-images2-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: combined images2: panda should in {response}'
     with allure.step(f'internvl-separate-images-{lang}'):
         response = get_response_from_output(output_text, f'internvl-separate-images-{lang}')
-        case_result = any(['panda', '熊猫', 'same', 'different'] in response.lower())
+        case_result = any(word in response.lower() for word in ['panda', '熊猫', 'same', 'different'])
         f.writelines(f'internvl-separate-images-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: separate images: panda should in {response}'
     with allure.step(f'internvl-separate-images2-{lang}'):
         response = get_response_from_output(output_text, f'internvl-separate-images2-{lang}')
-        case_result = any(['panda', '熊猫', 'same', 'different', 'difference'] in response.lower())
+        case_result = any(word in response.lower() for word in ['panda', '熊猫', 'same', 'different', 'difference'])
         f.writelines(f'internvl-separate-images2-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: separate images2: panda should in {response}'
     with allure.step(f'internvl-video-{lang}'):
         response = get_response_from_output(output_text, f'internvl-video-{lang}')
-        case_result = any(['red panda', 'eat', '熊猫', '竹子'] in response.lower())
+        case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子'])
         f.writelines(f'internvl-video-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: video: panda should in {response}'
     with allure.step(f'internvl-video2-{lang}'):
         response = get_response_from_output(output_text, f'internvl-video2-{lang}')
-        case_result = any(['red panda', 'eat', '熊猫', '竹子'] in response.lower())
+        case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子'])
         f.writelines(f'internvl-video2-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: video2: panda should in {response}'
@@ -300,25 +300,25 @@ def internvl_vl_testcase(output_text, f, lang: str = 'en'):
 def MiniCPM_vl_testcase(output_text, f):
     with allure.step('minicpm-combined-images'):
         response = get_response_from_output(output_text, 'minicpm-combined-images')
-        case_result = any(['panda', '熊猫'] in response.lower())
+        case_result = any(word in response.lower() for word in ['panda', '熊猫'])
         f.writelines(f'minicpm-combined-images result: {case_result}, reason:  panda should in {response} \n')
         with assume:
             assert case_result, f'reason: combined images: panda should in {response}'
     with allure.step('minicpm-combined-images2'):
         response = get_response_from_output(output_text, 'minicpm-combined-images2')
-        case_result = any(['panda', '熊猫'] in response.lower())
+        case_result = any(word in response.lower() for word in ['panda', '熊猫'])
         f.writelines(f'minicpm-combined-images2 result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: combined images2: panda should in {response}'
     with allure.step('minicpm-fewshot'):
         response = get_response_from_output(output_text, 'minicpm-fewshot')
-        case_result = any(['2021', '14'] in response.lower())
+        case_result = any(word in response.lower() for word in ['2021', '14'])
         f.writelines(f'minicpm-fewshot result: {case_result} reason: 2021 or 14 should in {response} \n')
         with assume:
             assert case_result, f'reason: fewshot: 2021 or 14 should in {response}'
     with allure.step('minicpm-video'):
         response = get_response_from_output(output_text, 'minicpm-video')
-        case_result = any(['red panda', '熊猫'] in response.lower())
+        case_result = any(word in response.lower() for word in ['red panda', '熊猫'])
         f.writelines(f'minicpm-video result: {case_result} reason: video: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: video: panda should in {response}'
@@ -327,25 +327,25 @@ def MiniCPM_vl_testcase(output_text, f):
 def Qwen_vl_testcase(output_text, f):
     with allure.step('qwen-combined-images'):
         response = get_response_from_output(output_text, 'qwen-combined-images')
-        case_result = any(['buildings', '楼', 'skyline', 'city'] in response.lower())
+        case_result = any(word in response.lower() for word in ['buildings', '楼', 'skyline', 'city'])
         f.writelines(f'qwen-combined-images result: {case_result}, reason: buildings should in {response} \n')
         with assume:
             assert case_result, f'reason: combined images: panda should in {response}'
     with allure.step('qwen-combined-images2'):
         response = get_response_from_output(output_text, 'qwen-combined-images2')
-        case_result = any(['buildings', '楼', 'skyline', 'city'] in response.lower())
+        case_result = any(word in response.lower() for word in ['buildings', '楼', 'skyline', 'city'])
         f.writelines(f'qwen-combined-images2 result: {case_result}, reason: buildings should in {response} \n')
         with assume:
             assert case_result, f'reason: combined images: panda should in {response}'
     with allure.step('qwen-performance-images'):
         response = get_response_from_output(output_text, 'qwen-performance-images')
-        case_result = any(['buildings', '楼', 'skyline', 'city'] in response.lower())
+        case_result = any(word in response.lower() for word in ['buildings', '楼', 'skyline', 'city'])
         f.writelines(f'qwen-performance-images result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: performance images: panda should in {response}'
     with allure.step('qwen-performance-images2'):
         response = get_response_from_output(output_text, 'qwen-performance-images2')
-        case_result = any(['buildings', '楼', 'skyline', 'city'] in response.lower())
+        case_result = any(word in response.lower() for word in ['buildings', '楼', 'skyline', 'city'])
         f.writelines(f'qwen-performance-images2 result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: performance images: panda should in {response}'
