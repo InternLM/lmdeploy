@@ -73,14 +73,5 @@ docker run -it \
 
 
 #Once inside the container, install LMDeploy with ROCm support:
-# Clone repository
-git clone https://github.com/Vivicai1005/lmdeploy.git
-cd lmdeploy
-
-# Enable ROCm build
-export LMDEPLOY_TARGET_DEVICE=rocm
-
-# Install LMDeploy
-pip install .
-
+LMDEPLOY_TARGET_DEVICE=rocm pip install  git+https://github.com/InternLM/lmdeploy.git
 ```
