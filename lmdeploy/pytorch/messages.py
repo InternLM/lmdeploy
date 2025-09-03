@@ -160,7 +160,7 @@ SeqMap = Dict[int, 'SchedulerSequence']
 class SequenceMeta:
     """Meta data shared by all sequence."""
     block_size: int
-    model_type: str = 'llm'
+    model_paradigm: str = 'llm'
 
 
 class SequenceManager:
@@ -222,6 +222,17 @@ class SequenceManager:
             new_status_map[seq_id] = seq
 
 
+def _to_ndarray(token_ids) -> np.ndarray:
+    """To ndarray."""
+    if isinstance(token_ids, Tensor):
+        token_ids = token_ids.numpy()
+    elif not isinstance(token_ids, np.ndarray):
+        token_ids = np.array(token_ids)
+    if token_ids.ndim == 0:
+        token_ids = token_ids[None]
+    return token_ids
+
+
 class SchedulerSession:
     """Scheduler session."""
 
@@ -242,12 +253,6 @@ class SchedulerSession:
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
-        if isinstance(token_ids, Tensor):
-            token_ids = token_ids.numpy()
-        elif not isinstance(token_ids, np.ndarray):
-            token_ids = np.array(token_ids)
-        if token_ids.ndim == 0:
-            token_ids = token_ids.unsqueeze(0)
         if sampling_param is None:
             sampling_param = SamplingParam()
 
@@ -255,16 +260,18 @@ class SchedulerSession:
         seq = SchedulerSequence(
             seq_id=seq_id,
             session=self,
-            history_cache=HistoryTokenIds(token_ids),
             num_new_tokens=0,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            arrive_time=time.perf_counter(),
-            history_embeddings=HistoryEmbeddings(input_embeddings),
-            history_multimodals=HistoryMultiModals(multimodals),
             migration_request=migration_request,
             resp_cache=resp_cache,
             preserve_cache=preserve_cache,
+        )
+        seq.update_token_ids(
+            token_ids,
+            multimodals=multimodals,
+            embeddings=input_embeddings,
+            mode=UpdateTokenMode.INPUTS,
         )
         self.sequences[seq.seq_id] = seq
         self.seq_manager.add_sequence(seq)
@@ -338,9 +345,9 @@ class HistoryTokenIds:
     """History token ids."""
     ALLOC_SIZE = 512
 
-    def __init__(self, token_ids: np.ndarray = None):
+    def __init__(self, token_ids: np.ndarray = None, dtype: np.dtype = np.int64):
         if token_ids is None:
-            self._token_ids = np.empty((self.ALLOC_SIZE, ), dtype=np.int64)
+            self._token_ids = np.empty((self.ALLOC_SIZE, ), dtype=dtype)
             self._num_real = 0
         else:
             self._token_ids = token_ids
@@ -358,6 +365,11 @@ class HistoryTokenIds:
     def get_real(self):
         """Get logical blocks."""
         return self._token_ids[:self._num_real]
+
+    def resize(self, size: int):
+        """Set size."""
+        assert size <= self._num_real
+        self._num_real = size
 
     def __setitem__(self, *args, **kwargs):
         """Set values."""
@@ -393,7 +405,7 @@ class HistoryTokenIds:
 
 class HistoryMultiModals:
 
-    def __init__(self, multimodals: MultiModalInputs):
+    def __init__(self, multimodals: MultiModalInputs = None):
         if multimodals is None:
             multimodals = dict()
         self.multimodals = multimodals
@@ -449,6 +461,13 @@ class HistoryMultiModals:
         return out_len
 
 
+class UpdateTokenMode(enum.Enum):
+    """Update token mode."""
+    INPUTS = enum.auto()
+    PREFILL = enum.auto()
+    DECODE = enum.auto()
+
+
 @dataclass
 class SchedulerSequence:
     """Scheduler message."""
@@ -477,14 +496,15 @@ class SchedulerSequence:
 
     def __post_init__(self):
         """Post init."""
-        self._num_history_ids: int = 0
+        self._seq_meta: SequenceMeta = self.session.seq_meta
         self._num_history_images: int = 0
-        self._num_images: int = len(self.history_embeddings)
+        self._num_history_ids: int = 0
         self._num_token_ids: int = len(self.history_cache)
 
+        # vlm
+        self._num_images: int = len(self.history_embeddings)
         self._num_history_cross: int = 0
         self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
-        self._seq_meta: SequenceMeta = self.session.seq_meta
 
     @property
     def block_size(self) -> int:
@@ -531,6 +551,17 @@ class SchedulerSequence:
         return self.history_cache._token_ids[:self.num_all_ids]
 
     @property
+    def valid_ids(self) -> np.ndarray:
+        """Valid token ids."""
+        return self.history_cache._token_ids[:self.num_valid_ids]
+
+    @property
+    def generated_ids(self) -> np.ndarray:
+        end = self.num_valid_ids
+        start = end - self.num_new_tokens
+        return self.history_cache._token_ids[start:end]
+
+    @property
     def num_history_ids(self):
         """Num history ids."""
         return self._num_history_ids
@@ -538,6 +569,10 @@ class SchedulerSequence:
     @property
     def num_token_ids(self):
         return self._num_token_ids
+
+    @property
+    def num_valid_ids(self):
+        return self._num_history_ids + self._num_token_ids
 
     @property
     def num_images(self):
@@ -591,57 +626,63 @@ class SchedulerSequence:
         end = self.num_all_ids
         return self.history_multimodals.get_datas(start, end)
 
+    def _update_embeddings(self, embeddings: List[InputEmbeddings]):
+        """Update input embeddings."""
+        self._num_history_images += self._num_images
+        if embeddings is None:
+            self._num_images = 0
+            return
+        new_embeddings = [emb.move_position(self._num_history_ids) for emb in embeddings]
+        self._num_images = len(new_embeddings)
+        self.history_embeddings.append(new_embeddings)
+
+    def _update_multimodals(self, multimodals: MultiModalInputs):
+        """Update input multimodals."""
+        self._num_history_cross += self._num_cross
+        if multimodals is None:
+            self._num_cross = 0
+            return
+        multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
+        self.history_multimodals.add_inputs(multimodals)
+
+        # for mllama
+        self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, self._num_history_ids)
+
     def update_token_ids(self,
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
                          embeddings: List[InputEmbeddings] = None,
                          model_meta: Dict[str, Any] = None,
-                         append_tokens: bool = False):
+                         mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
+                         **kwargs):
         """Update token ids, old token ids will be added to history."""
-        old_num_history_ids = self._num_history_ids
-
-        # update history
-        if not append_tokens:
-            self._num_history_ids += self._num_token_ids
-
         # update history image nums
-        self._num_history_images += self._num_images
-        self._num_images = 0
-        if embeddings is not None:
-            new_embeddings = [emb.move_position(self._num_history_ids) for emb in embeddings]
-            self._num_images = len(new_embeddings)
-            self.history_embeddings.append(new_embeddings)
+        self._update_embeddings(embeddings)
 
         # update multimodals
-        if multimodals is not None:
-            multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_all_ids)
-            self.history_multimodals.add_inputs(multimodals)
+        self._update_multimodals(multimodals)
 
-        # cross
-        self._num_history_cross += self._num_cross
-        if multimodals is not None:
-            self._num_cross = self.history_multimodals.get_encoder_len(old_num_history_ids, self._num_history_ids)
+        self.arrive_time = time.perf_counter()
+
+        token_ids = _to_ndarray(token_ids)
+
+        num_valid = len(token_ids)
+
+        if mode == UpdateTokenMode.INPUTS:
+            self.input_pos = self.num_all_ids + len(token_ids)
+            self._num_token_ids += num_valid
+            self.num_new_tokens = 0
+            self.arrive_time = time.time()
         else:
-            self._num_cross = 0
+            self._num_history_ids += self._num_token_ids
+            num_token_ids = num_valid
+            self._num_token_ids = num_token_ids
+            self.num_new_tokens += num_token_ids
+
+        self.history_cache.append(token_ids)
 
         if model_meta is not None:
             self.model_meta = model_meta
-
-        if isinstance(token_ids, Tensor):
-            token_ids = token_ids.numpy()
-        elif not isinstance(token_ids, np.ndarray):
-            token_ids = np.array(token_ids)
-        if token_ids.ndim == 0:
-            token_ids = token_ids[None]
-        if append_tokens:
-            self._num_token_ids += len(token_ids)
-            self.num_new_tokens = 0
-        else:
-            num_token_ids = len(token_ids)
-            self._num_token_ids = num_token_ids
-            self.num_new_tokens += num_token_ids
-        self.history_cache.append(token_ids)
-        self.arrive_time = time.perf_counter()
 
     def set_step(self, step: int):
         """Set step."""

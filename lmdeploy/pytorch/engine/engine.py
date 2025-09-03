@@ -20,7 +20,7 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_ti
 
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
-from ..messages import MessageStatus, SchedulerSequence
+from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .base import EngineBase
@@ -137,6 +137,13 @@ def _build_misc_config(engine_config: PytorchEngineConfig):
     """Build misc config."""
     misc_config = MiscConfig.from_engine_config(engine_config)
     return misc_config
+
+
+def _build_seq_meta(cache_config: CacheConfig, model_config: ModelConfig, engine_config: PytorchEngineConfig):
+    from lmdeploy.pytorch.messages import SequenceMeta
+
+    seq_meta = SequenceMeta(cache_config.block_size)
+    return seq_meta
 
 
 class CounterEvent:
@@ -376,7 +383,8 @@ class Engine(EngineBase):
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.scheduler = Scheduler(scheduler_config, cache_config)
+        self.seq_meta = _build_seq_meta(cache_config, self.model_config, engine_config)
+        self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
 
         # engine args
         self.model_path = model_path
@@ -626,7 +634,7 @@ class Engine(EngineBase):
                     req.data['token_ids'],
                     multimodals=req.data.get('input_multimodals'),
                     embeddings=req.data.get('input_embeddings'),
-                    append_tokens=True,
+                    mode=UpdateTokenMode.INPUTS,
                 )
                 msg.sampling_param = sampling_param
                 msg.status = MessageStatus.WAITING
@@ -788,19 +796,23 @@ class Engine(EngineBase):
 
         return model_inputs
 
-    def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
-                       model_metas: List[Dict[str, Any]]):
+    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, is_decoding: bool):
         """Update scheduler."""
+        next_token_ids = batched_outputs.next_token_ids
+        stopped = batched_outputs.stopped
+        stopped = stopped.tolist()
+        model_metas = batched_outputs.model_metas
         if model_metas is None:
             model_metas = [None] * len(running)
         next_token_ids = next_token_ids.numpy()
+        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
         for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
             if msg.status != MessageStatus.LOCKED:
                 continue
             update_token = token
 
             # fill token
-            msg.update_token_ids(update_token, model_meta=model_meta)
+            msg.update_token_ids(update_token, model_meta=model_meta, mode=update_mode)
             if stop:
                 msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
 
@@ -815,36 +827,33 @@ class Engine(EngineBase):
             update_token = token
 
             # fill token
-            msg.update_token_ids(update_token, model_meta=model_meta)
+            msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
             if stop:
                 update_token = _EMPTY_TOKEN
-                msg.update_token_ids(update_token, model_meta=model_meta)
+                msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
                 msg.status = MessageStatus.STOPPED
 
     def _make_infer_outputs(
         self,
         batched_outputs: BatchedOutputs,
         running: SeqList,
+        is_decoding: bool,
     ):
         """Make infer output."""
         new_token_timestamp = batched_outputs.new_token_timestamp
-        next_token_ids = batched_outputs.next_token_ids
         logits = batched_outputs.logits
-        stopped = batched_outputs.stopped
-        model_metas = batched_outputs.model_metas
         logprobs = batched_outputs.logprobs
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
-        stopped = stopped.tolist()
-        self.update_running(running, next_token_ids, stopped, model_metas)
+        self.update_running(running, batched_outputs, is_decoding)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
                 continue
-            token_ids = msg.all_ids[-msg.num_new_tokens:]
+            token_ids = msg.generated_ids
             finish = msg.status == MessageStatus.STOPPED or msg.status == MessageStatus.TO_BE_MIGRATED
             if not finish and len(token_ids) == 0:
                 continue
@@ -1138,6 +1147,7 @@ class Engine(EngineBase):
 
             forward_event.set()
             num_loops = forward_inputs['loop_count']
+            is_decoding = forward_inputs['inputs'].is_decoding
             running = next_running
             next_running = None
             scheduler.lock_running(running)
@@ -1151,7 +1161,7 @@ class Engine(EngineBase):
                 # send output
                 out = await self.executor.get_output_async()
                 if out is not None:
-                    step_outputs = self._make_infer_outputs(out, running=running)
+                    step_outputs = self._make_infer_outputs(out, running=running, is_decoding=is_decoding)
                     resp_que.put_nowait(step_outputs)
 
                 # lock forward event
