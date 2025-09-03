@@ -27,6 +27,11 @@ ______________________________________________________________________
 <summary><b>2025</b></summary>
 </details>
 
+- 【2025年6月】深度优化 FP8 MoE 模型推理
+- 【2025年6月】集成[DLSlime](https://github.com/DeepLink-org/DLSlime)和[Mooncake](https://github.com/kvcache-ai/Mooncake)，实现DeepSeek PD分离部署，向两个团队表示诚挚的感谢！
+- 【2025年4月】集成deepseek-ai组件FlashMLA、DeepGemm、DeepEP、MicroBatch、eplb等，提升DeepSeek推理性能
+- 【2025年1月】新增对DeepSeek V3及R1的支持
+
 <details close>
 <summary><b>2024</b></summary>
 
@@ -161,6 +166,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>InternVL3 (1B-78B)</li>
+  <li>InternVL3.5 (1B-241BA28B)</li>
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
   <li>Mono-InternVL (2B)</li>
@@ -266,6 +272,15 @@ with lmdeploy.pipeline("internlm/internlm3-8b-instruct") as pipe:
     author={LMDeploy Contributors},
     howpublished = {\url{https://github.com/InternLM/lmdeploy}},
     year={2023}
+}
+```
+
+```bibtex
+@article{zhang2025efficient,
+  title={Efficient Mixed-Precision Large Language Model Inference with TurboMind},
+  author={Zhang, Li and Jiang, Youhe and He, Guoliang and Chen, Xin and Lv, Han and Yao, Qian and Fu, Fangcheng and Chen, Kai},
+  journal={arXiv preprint arXiv:2508.15601},
+  year={2025}
 }
 ```
 

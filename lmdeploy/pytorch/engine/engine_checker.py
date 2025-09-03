@@ -96,3 +96,27 @@ class EngineChecker(BaseChecker):
                               message='num_gpu_blocks should be greater than 16, '
                               f'but got {num_gpu_blocks}. Set num_gpu_blocks to 0 to automatically '
                               'determine the number of GPU blocks based on the model size and device memory.')
+
+    def _handle_impl(self):
+        return super().handle()
+
+    def handle(self):
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor
+
+        from lmdeploy.pytorch import envs
+        if not envs.enable_check_env:
+            return
+
+        current_proc = mp.current_process()
+        if not current_proc.daemon and self.engine_config.device_type == 'cuda':
+            mp_ctx = mp.get_context('spawn')
+            with ProcessPoolExecutor(mp_context=mp_ctx) as executor:
+                try:
+                    executor.submit(self._handle_impl).result()
+                except SystemExit:
+                    exit(1)
+                except BaseException as e:
+                    self.log_and_exit(e, mod_name='Engine')
+        else:
+            return self._handle_impl()

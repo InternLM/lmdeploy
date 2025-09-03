@@ -25,6 +25,12 @@ ______________________________________________________________________
 
 <details open>
 <summary><b>2025</b></summary>
+
+- \[2025/06\] Comprehensive inference optimization for FP8 MoE Models
+- \[2025/06\] DeepSeek PD Disaggregation deployment is now supported through integration with [DLSlime](https://github.com/DeepLink-org/DLSlime) and [Mooncake](https://github.com/kvcache-ai/Mooncake). Huge thanks to both teams!
+- \[2025/04\] Enhance DeepSeek inference performance by integration deepseek-ai techniques: FlashMLA, DeepGemm, DeepEP, MicroBatch and eplb
+- \[2025/01\] Support DeepSeek V3 and R1
+
 </details>
 
 <details close>
@@ -159,6 +165,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>InternVL3 (1B-78B)</li>
+  <li>InternVL3.5 (1B-241BA28B)</li>
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
   <li>Mono-InternVL (2B)</li>
@@ -266,6 +273,15 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
     author={LMDeploy Contributors},
     howpublished = {\url{https://github.com/InternLM/lmdeploy}},
     year={2023}
+}
+```
+
+```bibtex
+@article{zhang2025efficient,
+  title={Efficient Mixed-Precision Large Language Model Inference with TurboMind},
+  author={Zhang, Li and Jiang, Youhe and He, Guoliang and Chen, Xin and Lv, Han and Yao, Qian and Fu, Fangcheng and Chen, Kai},
+  journal={arXiv preprint arXiv:2508.15601},
+  year={2025}
 }
 ```
 

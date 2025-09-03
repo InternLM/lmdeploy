@@ -2,9 +2,11 @@
 
 #pragma once
 
-#include <unordered_map>
+#include <cuda.h>
+#include <set>
 
-#include "src/turbomind/comm/cuda_ipc/mscclpp.h"
+#include "src/turbomind/comm/cuda_ipc/common.h"
+#include "src/turbomind/comm/cuda_ipc/semaphore.h"
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
 
@@ -14,20 +16,14 @@
 
 namespace turbomind::comm {
 
-static constexpr int kMaxRanks     = 8;
-static constexpr int kMaxNearPeers = 7;
-
 class CudaIpcCommImpl: public DeviceCommImpl {
-public:
-    static constexpr int kPacketBuffSize  = 8 << 20;  // 8 MB
-    static constexpr int kScratchBuffSize = 8 << 20;  // 8 MB
-    static constexpr int kChannelsPerConn = 64;
+    struct Allocation;
+    struct Symmetric;
 
+public:
     ~CudaIpcCommImpl() override;
 
     explicit CudaIpcCommImpl(HostComm h_comm);
-
-    void Initialize();
 
     int n_ranks(int group) const override
     {
@@ -56,6 +52,19 @@ public:
 
     void AllGather(
         const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream) override;
+
+    void Broadcast(const void*  sendbuff,
+                   void*        recvbuff,
+                   size_t       count,
+                   DataType     type,
+                   int          root,
+                   int          group,
+                   cudaStream_t stream) override;
+
+    void
+    Gather(const void* sendbuff, void* recvbuff, size_t count, DataType type, int root, int group, cudaStream_t stream);
+
+    void Barrier(int group, cudaStream_t stream);
 
     void AllreduceResidualBiasRMSnorm(void*        hidden,
                                       void*        residual,
@@ -92,22 +101,23 @@ public:
                      cudaStream_t stream) override;
 
 private:
-    uint64_t* create_semaphore_buffer();
-
-    mscclpp::D2DSemaphoreHandle* init_semaphores(const std::vector<uint64_t*>& buffers, int group);
-
     template<class T>
-    inline Array<T*, kMaxNearPeers> get_symmetric(T* ptr, int group)
+    inline SymmetricPtr_V2<T> get_symmetric_v2(T* ptr, int group)
     {
-        auto                     src = get_symmetric_impl(ptr, group);
-        Array<T*, kMaxNearPeers> dst;
-        for (int i = 0; i < dst.size(); ++i) {
-            dst[i] = static_cast<T*>(src[i]);
+        auto               tmp = get_symmetric_v2_impl(ptr, group);
+        SymmetricPtr_V2<T> ret{};
+        ret.mc = static_cast<T*>(tmp.mc);
+        for (int i = 0; i < ret.uc.size(); ++i) {
+            ret.uc[i] = static_cast<T*>(tmp.uc[i]);
         }
-        return dst;
+        return ret;
     }
 
-    Array<void*, kMaxNearPeers> get_symmetric_impl(void* ptr, int group);
+    SymmetricPtr_V2<void> get_symmetric_v2_impl(void* ptr, int group);
+
+    void Register(const Allocation& alloc, int group);
+
+    void Deregister(Symmetric& s);
 
 private:
     HostComm h_comm_;
@@ -117,30 +127,68 @@ private:
 
     std::vector<int> ordinals_;
 
-    std::unordered_map<void*, std::vector<std::pair<void*, size_t>>> registered_memories_;
+    struct Symmetric {
+        void*              uc_beg;
+        void*              uc_end;
+        size_t             size;
+        std::vector<void*> uc_ptrs;  // peers
+        void*              mc_ptr;
+
+        CUmemGenericAllocationHandle mc_handle;
+
+        friend bool operator<(const Symmetric& a, const Symmetric& b)
+        {
+            return (char*)a.uc_beg < (char*)b.uc_beg;
+        }
+        friend bool operator<(const Symmetric& a, void* b)
+        {
+            return (char*)a.uc_end <= (char*)b;
+        }
+        friend bool operator<(void* a, const Symmetric& b)
+        {
+            return (char*)a < (char*)b.uc_beg;
+        }
+    };
 
     void*    packet_buff_{};
     void*    scratch_buff_{};
     uint32_t flag_{1};
 
     struct Allocation {
-        CUmemGenericAllocationHandle handle;
+        void*                        uc_beg;
+        void*                        uc_end;
         size_t                       size;
+        size_t                       alignment;
+        std::vector<void*>           uc_ptrs;  // ranks
+        CUmemGenericAllocationHandle handle;
+
+        friend bool operator<(const Allocation& a, const Allocation& b)
+        {
+            return (char*)a.uc_beg < (char*)b.uc_beg;
+        }
+        friend bool operator<(const Allocation& a, void* b)
+        {
+            return (char*)a.uc_end <= (char*)b;
+        }
+        friend bool operator<(void* a, const Allocation& b)
+        {
+            return (char*)a < (char*)b.uc_beg;
+        }
     };
 
-    CUmemAllocationProp          alloc_prop_{};
-    size_t                       alloc_granularity_{};
     std::vector<CUmemAccessDesc> alloc_access_descs_{};
 
-    std::unordered_map<void*, Allocation> allocations_;
+    int multicast_capability_{false};
+
+    std::set<Allocation, std::less<>> allocation_;
 
     struct Group {
-        std::vector<int> l2g;
-        std::vector<int> g2l;
+        std::vector<int> l2g;  // local -> global
+        std::vector<int> g2l;  // global -> local
 
-        uint64_t* d2d_semaphore_data;
+        SystemSemaphoreStorage semaphore;
 
-        mscclpp::D2DSemaphoreHandle* d2d_semaphores;
+        std::set<Symmetric, std::less<>> symmetric;
     };
 
     std::vector<Group> groups_;

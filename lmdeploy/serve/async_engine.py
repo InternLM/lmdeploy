@@ -140,12 +140,14 @@ class Session:
                  prompt: str,
                  gen_config: Optional[GenerationConfig] = None,
                  stream_response: bool = True,
-                 do_preprocess: bool = True) -> Union[Response, Iterator[Response]]:
+                 do_preprocess: bool = True,
+                 adapter_name: str = None) -> Union[Response, Iterator[Response]]:
         self._engine.chat(prompt,
                           gen_config=gen_config or self._gen_config,
                           stream_response=stream_response,
                           do_preprocess=do_preprocess,
-                          session=self)
+                          session=self,
+                          adapter_name=adapter_name)
         if stream_response:
             return self.generator
         else:
@@ -273,8 +275,10 @@ class AsyncEngine(LogitsMixin):
         # build backend engine
         if backend == 'turbomind':
             self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.hf_tm_cfg = self.engine.config
         elif backend == 'pytorch':
             self.engine = self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config
@@ -893,6 +897,7 @@ class AsyncEngine(LogitsMixin):
              session=None,
              gen_config: Optional[GenerationConfig] = None,
              stream_response=False,
+             adapter_name=None,
              **kwargs) -> Union[Session, Iterator]:
         """Chat.
 
@@ -916,6 +921,7 @@ class AsyncEngine(LogitsMixin):
 
         generator = self.infer(prompt,
                                gen_config,
+                               adapter_name=adapter_name,
                                sequence_start=sequence_start,
                                sequence_end=False,
                                session_id=session._id,

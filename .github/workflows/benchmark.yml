@@ -103,9 +103,6 @@ jobs:
           name: my-artifact-${{ github.run_id }}-py310
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -119,7 +116,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           mkdir ${{env.REPORT_DIR}}/allure-results/.pytest_cache -p
