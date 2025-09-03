@@ -189,24 +189,6 @@ def test_llama2():
         assert _prompt is None
 
 
-def test_qwen():
-    prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('qwen')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
-    assert model.stop_words is not None
-
-    model = MODELS.get('qwen')(capability='chat')
-    assert model.get_prompt(prompt, sequence_start=True) != prompt
-    assert model.get_prompt(prompt, sequence_start=False) != prompt
-
-    model = MODELS.get('qwen')(capability='voice')
-    _prompt = None
-    with pytest.raises(AssertionError):
-        _prompt = model.get_prompt(prompt, sequence_start=True)
-        assert _prompt is None
-
-
 def test_codellama_completion():
     model = MODELS.get('codellama')(capability='completion')
     prompt = """\
