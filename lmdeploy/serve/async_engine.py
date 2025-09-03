@@ -259,7 +259,7 @@ class AsyncEngine(LogitsMixin):
         self.model_name = model_name if model_name else model_path
         chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(chat_template_name)
+            chat_template_config = ChatTemplateConfig(chat_template_name, model_path=model_path)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
