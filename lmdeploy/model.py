@@ -496,44 +496,6 @@ If a question does not make any sense, or is not factually coherent, explain why
             return 'llama2'
 
 
-@MODELS.register_module(name='qwen')
-class Qwen7BChat(BaseChatTemplate):
-    """Chat template for Qwen-7B-Chat."""
-
-    def __init__(self,
-                 system='<|im_start|>system\n',
-                 meta_instruction='You are a helpful assistant.',
-                 eosys='<|im_end|>\n',
-                 user='<|im_start|>user\n',
-                 eoh='<|im_end|>\n',
-                 assistant='<|im_start|>assistant\n',
-                 eoa='<|im_end|>',
-                 separator='\n',
-                 stop_words=['<|im_end|>'],
-                 **kwargs):
-        super().__init__(system=system,
-                         meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         separator=separator,
-                         stop_words=stop_words,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        model_path = model_path.lower()
-        if 'qwen' in model_path and not any(keyword in model_path for keyword in ('qwen2.5', 'qwq', 'qwen3')):
-            return 'qwen'
-
-
 @MODELS.register_module(name='codellama')
 class CodeLlama(Llama2):
 
@@ -803,8 +765,10 @@ class ChatmlDirect(BaseChatTemplate):
 
 @MODELS.register_module(name=['hf'])
 class HFChatTemplate(BaseChatTemplate):
-    """Chat template for HuggingFace models with `apply_chat_template`
-    method."""
+    """Chat template for HuggingFace models with `apply_chat_template` method.
+
+    It MUST be at the end of @MODLES registry
+    """
 
     def __init__(self, model_path: str = '', **kwargs):
         try:
@@ -881,7 +845,7 @@ def best_match_model(query: str) -> Optional[str]:
         str: the possible builtin chat template name.
     """
 
-    priorities = ['deepseek-vl2', 'codellama', 'hf']
+    priorities = [name for name, _ in MODELS.module_dict.items()]
 
     for name in priorities:
         chat_template = MODELS.module_dict[name]

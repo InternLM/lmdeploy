@@ -88,18 +88,15 @@ def test_best_match_model_hf(model_path):
     assert best_match_model(model_path) == 'hf'
 
 
-@pytest.mark.parametrize(
-    'model_path_and_name',
-    [
-        ('internlm/internlm-chat-7b', ['internlm']),
-        ('internlm/internlm2-1_8b', ['base']),
-        ('Qwen/Qwen-7B-Chat', ['qwen']),
-        ('codellama/CodeLlama-7b-hf', ['codellama']),
-        # ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
-        ('THUDM/chatglm2-6b', ['chatglm']),
-        ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
-        ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
-    ])
+@pytest.mark.parametrize('model_path_and_name', [
+    ('internlm/internlm-chat-7b', ['internlm']),
+    ('internlm/internlm2-1_8b', ['base']),
+    ('codellama/CodeLlama-7b-hf', ['codellama']),
+    ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
+    ('THUDM/chatglm2-6b', ['chatglm']),
+    ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
+    ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
+])
 def test_best_match_model(model_path_and_name):
     deduced_name = best_match_model(model_path_and_name[0])
     if deduced_name is not None:
