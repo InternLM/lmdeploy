@@ -201,7 +201,7 @@ bool test_moe_gate(int                     tokens,  //
     moe_gate_ref(tokens, expert_num, experts_per_token, logits, offsets_ref, eids_ref, f2n_ref, en2f_ref, scales_ref);
 
     cudaMemPrefetchAsync(f2n.data().get(), sizeof(int) * f2n.size(), 0);
-    cudaMemPrefetchAsync(f2E.data().get(),sizeof(int) * f2E.size(), 0);
+    cudaMemPrefetchAsync(f2E.data().get(), sizeof(int) * f2E.size(), 0);
     cudaMemPrefetchAsync(en2f.data().get(), sizeof(int) * en2f.size(), 0);
     cudaMemPrefetchAsync(offsets.data().get(), sizeof(int) * offsets.size(), 0);
     cudaMemPrefetchAsync(scales.data().get(), sizeof(float) * scales.size(), 0);
