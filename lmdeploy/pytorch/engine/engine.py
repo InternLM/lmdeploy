@@ -980,8 +980,8 @@ class Engine(EngineBase):
                                                                block_sparse_size=block_sparse_size)
             return SamplingInputs.from_sampling_params(seqs, pad_token_id=pad_id)
 
-        def __get_input_pos(seqs: SeqList):
-            pos = [seq.input_pos for seq in seqs]
+        def __get_output_start_pos(seqs: SeqList):
+            pos = [seq.output_start_pos for seq in seqs]
             return torch.tensor(pos)
 
         scheduler = self.scheduler
@@ -1012,7 +1012,7 @@ class Engine(EngineBase):
         num_appendable_ids = __get_num_appendable_ids(running)
         return_logits = __need_logits(running)
         dllm_mask = __get_dllm_mask(running)
-        input_pos = __get_input_pos(running)
+        output_start_pos = __get_output_start_pos(running)
 
         sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
         return dict(
@@ -1027,7 +1027,7 @@ class Engine(EngineBase):
             is_dummy=False,
             sync_long_context=sync_long_context,
             dllm_mask=dllm_mask,
-            input_pos=input_pos,
+            output_start_pos=output_start_pos,
         )
 
     async def _await_forward_event(self, forward_event: asyncio.Event):

@@ -263,7 +263,7 @@ def _batch_stopping_criteria_default(token_ids: torch.Tensor, stop_words: torch.
 
 def _check_stopwords_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, is_unmasked: torch.Tensor,
                           stopped: torch.Tensor, stop_pos: torch.Tensor, num_appendable_ids: torch.Tensor,
-                          input_pos: torch.Tensor, inputs: ModelInputs):
+                          output_start_pos: torch.Tensor, inputs: ModelInputs):
     num_tokens = token_ids.size(0)
     batch_size = num_appendable_ids.size(0)
     block_sparse_size = num_tokens // batch_size
@@ -271,7 +271,7 @@ def _check_stopwords_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, is_
     # blocks might contain stop words in prev-round chat
     # these stop words should be ignored
     kv_seqlens = inputs.history_lengths + inputs.seq_length
-    ignore_pos = (input_pos - (kv_seqlens - block_sparse_size)).clamp_min(0)
+    ignore_pos = (output_start_pos - (kv_seqlens - block_sparse_size)).clamp_min(0)
     ignore_range = torch.arange(0, block_sparse_size, dtype=ignore_pos.dtype, device=ignore_pos.device)
     ignore_mask = (ignore_range[None, :] < ignore_pos[:, None]).flatten()
     token_ids = token_ids.clone()
@@ -295,7 +295,7 @@ def _check_stopwords_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, is_
 
 
 def _batch_stopping_criteria_dllm(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor,
-                                  dllm_mask: torch.Tensor, input_pos: torch.Tensor, inputs: ModelInputs):
+                                  dllm_mask: torch.Tensor, output_start_pos: torch.Tensor, inputs: ModelInputs):
     """Batched stopping criteria."""
     num_tokens = token_ids.size(0)
     batch_size = num_appendable_ids.size(0)
@@ -317,7 +317,7 @@ def _batch_stopping_criteria_dllm(token_ids: torch.Tensor, stop_words: torch.Ten
                                                                       stopped,
                                                                       stop_pos,
                                                                       num_appendable_ids,
-                                                                      input_pos=input_pos,
+                                                                      output_start_pos=output_start_pos,
                                                                       inputs=inputs)
     return stopped, stop_pos, num_appendable_ids
 
@@ -558,12 +558,12 @@ class BaseModelAgent:
                                  stop_words: torch.Tensor,
                                  num_appendable_ids: torch.Tensor,
                                  dllm_mask: Optional[torch.Tensor] = None,
-                                 input_pos: Optional[torch.Tensor] = None,
+                                 output_start_pos: Optional[torch.Tensor] = None,
                                  inputs: Optional[ModelInputs] = None):
         """Batched stopping criteria."""
         if self.model_config.model_paradigm == 'dllm':
             assert dllm_mask is not None
-            return _batch_stopping_criteria_dllm(token_ids, stop_words, num_appendable_ids, dllm_mask, input_pos,
+            return _batch_stopping_criteria_dllm(token_ids, stop_words, num_appendable_ids, dllm_mask, output_start_pos,
                                                  inputs)
 
         return _batch_stopping_criteria_default(token_ids, stop_words, num_appendable_ids)
@@ -700,17 +700,18 @@ class BaseModelAgent:
         event.record()
         self._out_que.put_nowait((output, event))
 
-    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None):
+    @contextmanager
+    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None, enable: bool = True):
+        if not enable:
+            yield
+            return
+
         if dist_ctx is None:
             dist_ctx = get_dist_manager().current_context()
-        if self.cache_config.role == EngineRole.Decode:
-            next_token_ids = next_token_ids.cpu()
-            tp_cpu_group = dist_ctx.tp_cpu_group
-            handle = dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group, async_op=True)
-        else:
-            tp_gpu_group = dist_ctx.tp_gpu_group
-            handle = dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
-        return handle
+        tp_gpu_group = dist_ctx.tp_gpu_group
+        handle = dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
+        yield
+        handle.wait()
 
     def dllm_unmasking(self, inputs: ModelInputs, logits: torch.Tensor, next_token_ids: torch.LongTensor,
                        dllm_mask: torch.Tensor):
@@ -733,7 +734,7 @@ class BaseModelAgent:
         is_dummy: bool = False,
         sync_long_context: bool = False,
         dllm_mask: torch.Tensor = None,
-        input_pos: torch.Tensor = None,
+        output_start_pos: torch.Tensor = None,
     ):
         """Asyc forward task."""
         dist_ctx = get_dist_manager().current_context()
@@ -879,23 +880,20 @@ class BaseModelAgent:
                 # sampling
                 next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
 
-                # broadcast next token for TP > 1
-                if need_broadcast_next:
+                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                    handle = self._broadcast_next_token(next_token_ids, dist_ctx)
 
-                # unmasking
-                dllm_mask, next_token_ids = self.dllm_unmasking(inputs, last_logits, next_token_ids, dllm_mask)
+                    # unmasking
+                    dllm_mask, next_token_ids = self.dllm_unmasking(inputs, last_logits, next_token_ids, dllm_mask)
 
-                # stopping criteria
-                stopped, stop_pos, num_appendable_ids = self._batch_stopping_criteria(next_token_ids,
-                                                                                      sampling_inputs.stop_words,
-                                                                                      num_appendable_ids,
-                                                                                      dllm_mask=dllm_mask,
-                                                                                      input_pos=input_pos,
-                                                                                      inputs=inputs)
-                if need_broadcast_next:
-                    handle.wait()
+                    # stopping criteria
+                    stopped, stop_pos, num_appendable_ids = self._batch_stopping_criteria(
+                        next_token_ids,
+                        sampling_inputs.stop_words,
+                        num_appendable_ids,
+                        dllm_mask=dllm_mask,
+                        output_start_pos=output_start_pos,
+                        inputs=inputs)
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
@@ -904,10 +902,8 @@ class BaseModelAgent:
                 logprobs = None
 
                 # broadcast next token for TP > 1
-                if need_broadcast_next:
+                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                    handle = self._broadcast_next_token(next_token_ids, dist_ctx)
-                    handle.wait()
 
                 # unmasking
                 dllm_mask, next_token_ids = self.dllm_unmasking(inputs, last_logits, next_token_ids, dllm_mask)
@@ -955,7 +951,7 @@ class BaseModelAgent:
     async def _async_loop_inputs_preprocess(self):
         """Async loop inputs preprocess."""
         non_blocking = True
-        keys = ['inputs', 'sampling_inputs', 'num_appendable_ids', 'dllm_mask', 'input_pos']
+        keys = ['inputs', 'sampling_inputs', 'num_appendable_ids', 'dllm_mask', 'output_start_pos']
         while True:
             forward_inputs = await self._pre_in_que.get()
 
