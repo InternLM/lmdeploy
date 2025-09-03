@@ -745,7 +745,7 @@ class Engine(EngineBase):
             seq_length = torch.tensor(seq_length, dtype=torch.long)
             max_q_seqlen = seq_length.max().item()
         else:
-            max_q_seqlen = 1
+            max_q_seqlen = len(token_ids[0])
             seq_length = torch.full((batch_size, ), max_q_seqlen, dtype=torch.long)
         kv_seqlens = seq_length + history_lengths
         max_kv_seqlen = kv_seqlens.max().item()
