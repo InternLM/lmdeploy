@@ -19,7 +19,7 @@ namespace turbomind {
 MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx):
     inter_size_(param.inter_size / engine.mlp_tp_size),
     hidden_dim_(model.hidden_units),
-    tp_(engine.mlp_tp_size),
+    tp_size_(engine.mlp_tp_size),
     param_(param),
     stream_(ctx.stream),
     linear_(*ctx.linear)
@@ -42,6 +42,7 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
 
     masks_   = {max_expert_num * pad_token_num, kDEVICE};
     f2n_     = {param_.experts_per_token * max_token_num, kDEVICE};
+    f2E_     = {param_.experts_per_token * max_token_num, kDEVICE};
     en2f_    = {param_.experts_per_token * max_token_num, kDEVICE};
     scales_  = {param_.experts_per_token * max_token_num, kDEVICE};
     offsets_ = {max_expert_num + 1, kDEVICE};
@@ -89,6 +90,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     /// TODO: fix illegal memory access even if NaN are present in logits
     invokeMoeGate_V2(f2n_.data(),
+                     f2E_.data(),
                      en2f_.data(),
                      offsets_.data(),
                      scales_.data(),
@@ -151,20 +153,13 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_);
         sync_check_cuda_error();
 
-        ApplyBias(inter, block.fused_gating_intermediate.bias, offsets_.slice(0, expert_num + 1), 1.f, stream_);
-
         if (!block.is_fused_silu) {
-            Activation(inter.slice({0, 0}, {-1, inter_size_}),
-                       inter.slice({0, inter_size_}, {-1, -1}),
-                       moe.block.act_type,
-                       stream_);
+            Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, stream_);
             sync_check_cuda_error();
         }
 
         linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_);
         sync_check_cuda_error();
-
-        ApplyBias(temp_, block.output.bias, offsets_.slice(0, expert_num + 1), 1.f / tp_, stream_);
     }
 
     if (moe.shared_gate.weight) {
@@ -178,10 +173,13 @@ void MoeFfnLayer::Combine(ForwardParam& p)
 
     invokeMoeCombine(p.output,
                      temp_,
+                     p.weights->block.output.bias,
                      scales_.data(),
                      en2f_.data(),
+                     f2E_.data(),
                      shared_scales_.data_or((float*)nullptr),
                      param_.experts_per_token,
+                     1.f / tp_size_,
                      p.scale,
                      stream_);
     sync_check_cuda_error();

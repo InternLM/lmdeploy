@@ -186,6 +186,7 @@ bool test_moe_gate(int                     tokens,  //
     universal_vector<int8_t> masks(expert_num * tokens_padded);
     universal_vector<int>    eids(experts_per_token * tokens);
     universal_vector<int>    f2n(experts_per_token * tokens);
+    universal_vector<int>    f2E(experts_per_token * tokens);
     universal_vector<int>    en2f(experts_per_token * tokens);
     universal_vector<float>  scales(experts_per_token * tokens);
     // universal_vector<int2>  coords(max_coords);
@@ -200,6 +201,7 @@ bool test_moe_gate(int                     tokens,  //
     moe_gate_ref(tokens, expert_num, experts_per_token, logits, offsets_ref, eids_ref, f2n_ref, en2f_ref, scales_ref);
 
     cudaMemPrefetchAsync(f2n.data().get(), sizeof(int) * f2n.size(), 0);
+    cudaMemPrefetchAsync(f2E.data().get(),sizeof(int) * f2E.size(), 0);
     cudaMemPrefetchAsync(en2f.data().get(), sizeof(int) * en2f.size(), 0);
     cudaMemPrefetchAsync(offsets.data().get(), sizeof(int) * offsets.size(), 0);
     cudaMemPrefetchAsync(scales.data().get(), sizeof(float) * scales.size(), 0);
@@ -217,6 +219,7 @@ bool test_moe_gate(int                     tokens,  //
         cudaMemset(accum.data().get(), 0, sizeof(int) * accum.size());
         cudaMemset(masks.data().get(), -1, sizeof(int8_t) * masks.size());
         invokeMoeGate_V2(f2n.data().get(),
+                         f2E.data().get(),
                          en2f.data().get(),
                          offsets.data().get(),
                          scales.data().get(),

@@ -314,7 +314,17 @@ struct Testbed_v3: Parameter {
         auto& d = d_.get();
         if (combine_experts) {
             d = Tensor{{x.shape(0), output_dim}, data_type, kDEVICE};
-            invokeMoeCombine(d, de, scales_.data(), en2f_.data(), nullptr, experts_per_token, 0., stream_);
+            invokeMoeCombine(d,  //
+                             de,
+                             {},
+                             scales_.data(),
+                             en2f_.data(),
+                             nullptr,
+                             nullptr,
+                             experts_per_token,
+                             1.,
+                             0.,
+                             stream_);
         }
         else {
             d = de;
@@ -330,7 +340,17 @@ struct Testbed_v3: Parameter {
             auto de = linear_.Forward(x_original_, *w_quant_, f2n_, offsets_);
             if (combine_experts) {
                 d_quant_ = Tensor{{x_original_.shape(0), output_dim}, data_type, kDEVICE};
-                invokeMoeCombine(d_quant_, de, scales_.data(), en2f_.data(), nullptr, experts_per_token, 0., stream_);
+                invokeMoeCombine(d_quant_,
+                                 de,
+                                 {},
+                                 scales_.data(),
+                                 en2f_.data(),
+                                 nullptr,
+                                 nullptr,
+                                 experts_per_token,
+                                 1.,
+                                 0.,
+                                 stream_);
             }
             else {
                 d_quant_ = de;

@@ -33,7 +33,7 @@ private:
 
     const int inter_size_;
     const int hidden_dim_;
-    const int tp_;
+    const int tp_size_;
 
     const MoeParam param_;
 
@@ -48,6 +48,7 @@ private:
 
     Buffer_<int>   masks_;
     Buffer_<int>   f2n_;
+    Buffer_<int>   f2E_;
     Buffer_<int>   en2f_;
     Buffer_<float> scales_;
     Buffer_<int>   accum_;
