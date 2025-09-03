@@ -424,6 +424,7 @@ def _kernel_meta_sm12x(BLOCK_DK: int, shared_kv: bool):
 
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
+
 def _kernel_meta_rocm(BLOCK_DK: int, shared_kv: bool):
     BLOCK_N = 32
     BLOCK_M = 32 if BLOCK_DK > 128 else 64
@@ -498,7 +499,7 @@ def flash_attention_fwd(
     shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
 
     num_warps = 4
-    hip_mode = getattr(torch.version, "hip", None) is not None
+    hip_mode = getattr(torch.version, 'hip', None) is not None
     if hip_mode:
         BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_rocm(BLOCK_DK, shared_kv)
     else:
