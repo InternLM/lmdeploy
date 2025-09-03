@@ -291,7 +291,7 @@ class Scheduler:
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
-            output = self._schedule_prefill(prealloc_size)
+            output = self._schedule_prefill(0)
         else:
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
