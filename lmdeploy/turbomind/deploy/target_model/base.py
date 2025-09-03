@@ -2,7 +2,6 @@
 
 import os.path as osp
 from abc import ABC
-from collections import defaultdict
 from collections.abc import Sequence
 
 import torch
@@ -55,7 +54,7 @@ class BaseOutputModel(ABC):
         self.mlp_tp_size = self.model_config.mlp_tp_size
         self.out_dir = out_dir
         self.to_file = True if out_dir else False
-        self.tm_params = defaultdict(list)
+        self.tm_params = dict()
 
         # get `model_info` at first, which will be updated to `self.model_config` and `self.attention_config`
         self.input_model_info = self.input_model.model_info()

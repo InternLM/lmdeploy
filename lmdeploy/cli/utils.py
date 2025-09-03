@@ -401,7 +401,7 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def device(parser, default: str = 'cuda', choices: List[str] = ['cuda', 'ascend', 'maca', 'camb', 'ppu']):
+    def device(parser, default: str = 'cuda', choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',
@@ -585,7 +585,7 @@ class ArgumentHelper:
     @staticmethod
     def enable_metrics(parser):
         """Add argument enable_metrics to parser."""
-        parser.add_argument('--enable-metrics', action='store_true', default=False, help='enable metrics system')
+        return parser.add_argument('--enable-metrics', action='store_true', default=False, help='enable metrics system')
 
     # For Disaggregation
     @staticmethod
@@ -609,10 +609,19 @@ class ArgumentHelper:
     @staticmethod
     def disable_vision_encoder(parser):
         """Disable loading vision encoder."""
-        parser.add_argument('--disable-vision-encoder',
-                            action='store_true',
-                            default=False,
-                            help='enable metrics system')
+        return parser.add_argument('--disable-vision-encoder',
+                                   action='store_true',
+                                   default=False,
+                                   help='enable metrics system')
+
+    @staticmethod
+    def logprobs_mode(parser):
+        """The mode of logprobs."""
+        return parser.add_argument('--logprobs-mode',
+                                   type=str,
+                                   default=None,
+                                   choices=[None, 'raw_logits', 'raw_logprobs'],
+                                   help='The mode of logprobs.')
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

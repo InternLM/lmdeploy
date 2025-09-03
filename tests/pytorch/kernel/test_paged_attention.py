@@ -232,7 +232,7 @@ class TestPagedAttention:
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     @pytest.mark.parametrize('layout', ['bshd', 'bhsd'], indirect=True)
     def test_paged_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, layout, conti_gt):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
+        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
         kv_seq_lens = 1 + history_lens
 
         blocked_k, blocked_v = blocked_kv
@@ -272,7 +272,7 @@ class TestPagedAttention:
     @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
     def test_window_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, win_size, layout,
                               window_gt):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
+        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
         kv_seq_lens = 1 + history_lens
 
         blocked_k, blocked_v = blocked_kv
@@ -309,7 +309,7 @@ class TestPagedAttentionSink(TestPagedAttention):
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
     def test_sink(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, layout, sinks, conti_sink_gt):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
+        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
         kv_seq_lens = 1 + history_lens
 
         blocked_k, blocked_v = blocked_kv
@@ -394,7 +394,7 @@ class TestPagedAttentionInt8(TestPagedAttention):
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     def test_paged_attention(self, conti_q, blocked_kv, block_offsets, seq_lens, history_lens, feat_dim_v, conti_gt,
                              nbits):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
+        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
         kv_seq_lens = 1 + history_lens
 
         blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv
@@ -424,7 +424,7 @@ class TestPagedAttentionInt8(TestPagedAttention):
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     def test_window_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, win_size, window_gt,
                               nbits):
-        from lmdeploy.pytorch.kernels import paged_attention_fwd
+        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
         kv_seq_lens = 1 + history_lens
 
         blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv

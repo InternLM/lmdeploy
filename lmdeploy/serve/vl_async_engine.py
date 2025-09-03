@@ -233,8 +233,9 @@ class VLAsyncEngine(AsyncEngine):
 
         # recover prompts & history
         sess._prompt = prompts
-        last_round = sess.history[-1]
-        sess.history[-1] = (prompts, last_round[-1])
+        if sess.history:
+            last_round = sess.history[-1]
+            sess.history[-1] = (prompts, last_round[-1])
         return sess
 
     @classmethod

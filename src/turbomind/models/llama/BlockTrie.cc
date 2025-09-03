@@ -14,13 +14,13 @@ size_t hash(const std::vector<int>& vec)
     return seed;
 }
 
-BlockTrie::BlockTrie(size_t block_seq_len, std::shared_ptr<BlockManager> block_manager, bool enable_prefix_caching):
-    block_seq_len_(block_seq_len), block_manager_(block_manager), enable_prefix_caching_(enable_prefix_caching)
+BlockTrie::BlockTrie(size_t block_len, std::shared_ptr<BlockManager> block_manager):
+    block_seq_len_(block_len), block_manager_(block_manager)
 {
     root_ = std::make_shared<TrieNode>();
 }
 
-void BlockTrie::match(Sequence& seq)
+std::tuple<BlockIds, UniqueIds> BlockTrie::Match(const Sequence& seq)
 {
     BlockIds  matched_blocks;
     UniqueIds matched_unique_ids;
@@ -28,6 +28,9 @@ void BlockTrie::match(Sequence& seq)
     std::shared_ptr<TrieNode> curr_node   = root_;
     int                       num_matched = 0;
 
+    // Warning: Do not use "<=" operator even when seq.prompt length is evenly
+    // divisible by block_seq_len_. This may produce an input_length of zero for
+    // the sequence, violating the precondition checked in LlamaBatch::Forward.
     while (num_matched + block_seq_len_ < seq.prompt.size()) {
         std::vector<int> curr_tokens(seq.prompt.begin() + num_matched,
                                      seq.prompt.begin() + num_matched + block_seq_len_);
@@ -40,44 +43,47 @@ void BlockTrie::match(Sequence& seq)
         }
 
         if (curr_tokens != it->second->tokens) {
+            TM_LOG_WARNING("hash key cache hit, but tokens are not the same");
             break;
         }
 
-        matched_blocks.push_back(it->second->block_id);
-        matched_unique_ids.push_back(it->second->block_unique_id);
+        matched_blocks.emplace_back(it->second->block_id);
+        matched_unique_ids.emplace_back(it->second->block_unique_id);
         curr_node = it->second;
         num_matched += block_seq_len_;
     }
-
-    if (matched_blocks.size() > 0) {
-        // add use count
-        block_manager_->Lock(matched_blocks);
-        block_manager_->Touch(matched_blocks);
-        // only consider no history blocks
-        seq.blocks.insert(seq.blocks.end(), matched_blocks.begin(), matched_blocks.end());
-        seq.block_unique_ids.insert(seq.block_unique_ids.end(), matched_unique_ids.begin(), matched_unique_ids.end());
-    }
+    return std::make_tuple(matched_blocks, matched_unique_ids);
 }
 
-void BlockTrie::cache(const Sequence& seq)
+std::tuple<BlockIds, UniqueIds> BlockTrie::Cache(const Sequence& seq, const std::vector<int>& tokens)
 {
-    std::shared_ptr<TrieNode> curr_node   = root_;
-    int                       num_matched = 0;
-    int                       idx         = 0;
-    BlockIds                  cached_blocks;
+    FT_CHECK(seq.status != Sequence::kCached);
+    FT_CHECK(tokens.size() <= seq.blocks.size() * block_seq_len_);
 
-    while (num_matched + block_seq_len_ <= seq.prompt.size()) {
-        std::vector<int> curr_tokens(seq.prompt.begin() + num_matched,
-                                     seq.prompt.begin() + num_matched + block_seq_len_);
-        size_t           hash_key = hash(curr_tokens);
+    std::shared_ptr<TrieNode> curr_node = root_;
+    int                       idx       = 0;
 
-        auto it = curr_node->children.find(hash_key);
+    BlockIds  cache_block_ids;
+    UniqueIds cache_block_unique_ids;
+
+    // We don't cache the last block of the sequence, since it might not be full
+    // TODO(lvhan): determine wether the last block is full or not. It is not trivial
+    // considering chunk prefill
+    for (int idx = 0; idx < (int)seq.blocks.size() - 1; ++idx) {
+        auto start = tokens.begin() + idx * block_seq_len_;
+        auto end   = start + block_seq_len_;
+
+        std::vector<int> curr_tokens(start, end);
+        // TODO(lvhan): add salt to ensure the hash security
+        size_t hash_key = hash(curr_tokens);
 
         int      block_id        = seq.blocks[idx];
         uint64_t block_unique_id = seq.block_unique_ids[idx];
 
+        auto it = curr_node->children.find(hash_key);
         if (it != curr_node->children.end()) {
             if (curr_tokens != it->second->tokens) {
+                TM_LOG_WARNING("[BlockTrie][cache] hash key cache hit, but tokens are not the same");
                 break;
             }
             curr_node                  = it->second;
@@ -91,38 +97,33 @@ void BlockTrie::cache(const Sequence& seq)
             node->tokens                   = curr_tokens;
             node->block_id                 = block_id;
             node->block_unique_id          = block_unique_id;
-            node->num_matched              = num_matched + block_seq_len_;
             curr_node->children[hash_key]  = node;
             curr_node                      = node;
         }
-
-        cached_blocks.push_back(curr_node->block_id);
-        num_matched += block_seq_len_;
-        idx++;
+        cache_block_ids.emplace_back(block_id);
+        cache_block_unique_ids.emplace_back(block_unique_id);
     }
 
-    block_manager_->Touch(cached_blocks);
+    return std::make_tuple(cache_block_ids, cache_block_unique_ids);
 }
 
-int BlockTrie::verify()
+void BlockTrie::Verify()
 {
-    return verify_traverse(root_);
+    DFS(root_);
 }
 
-int BlockTrie::verify_traverse(std::shared_ptr<TrieNode>& node)
+void BlockTrie::DFS(std::shared_ptr<TrieNode>& node)
 {
-    int valid_count = 1;
     for (auto it = node->children.begin(); it != node->children.end();) {
         if (block_manager_->unique_id(it->second->block_id) != it->second->block_unique_id) {
             // child invalid
             it = node->children.erase(it);
         }
         else {
-            valid_count += verify_traverse(it->second);
+            DFS(it->second);
             it++;
         }
     }
-    return valid_count;
 }
 
 }  // namespace turbomind

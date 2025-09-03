@@ -143,6 +143,7 @@ jobs:
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/bigdisk:/mnt/bigdisk
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -151,18 +152,15 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          python3 -m pip install transformers==4.53.1
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -227,6 +225,7 @@ jobs:
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/bigdisk:/mnt/bigdisk
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -235,19 +234,15 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           cp -r /root/lora .
@@ -317,6 +312,14 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model: ['Intern-S1', 'internlm2_5-20b-chat', 'internlm2_5-20b']
+        include:
+          - tp: 2
+            model: internlm2_5-20b-chat
+          - tp: 2
+            model: internlm2_5-20b
+          - tp: 8
+            model: Intern-S1
     timeout-minutes: 60
     container:
       image: openmmlab/lmdeploy:latest-cu11
@@ -325,6 +328,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -332,18 +336,14 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -351,46 +351,42 @@ jobs:
           rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Start restful api turbomind
-        if: matrix.backend == 'turbomind'
+      - name: Start restful api
+        if:  matrix.model != 'internlm2_5-20b'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_chat_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch
-        if: matrix.backend == 'pytorch'
-        run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b-chat --tp 2 --backend pytorch > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
+          sleep 600s
       - name: Test lmdeploy - restful api
-        timeout-minutes: 75
+        if:  matrix.model == 'internlm2_5-20b-chat'
+        timeout-minutes: 30
         run: |
-          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - restful api
+        if:  matrix.model == 'Intern-S1'
+        timeout-minutes: 30
+        run: |
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
-        if: always()
+        if:  matrix.model != 'internlm2_5-20b'
         run: |
           kill -15 "$restful_pid"
       - name: Start restful api turbomind - base
-        if: matrix.backend == 'turbomind'
+        if: matrix.model == 'internlm2_5-20b'
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch - base
-        if: matrix.backend == 'pytorch'
-        run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm2_5-20b --tp 2 --backend pytorch > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_base_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api - base
-        timeout-minutes: 40
+        if: matrix.model == 'internlm2_5-20b'
+        timeout-minutes: 30
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
-        if: always()
+        if: matrix.model == 'internlm2_5-20b'
         run: |
           kill -15 "$restful_pid"
       - name: Clear workfile
@@ -415,6 +411,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -422,18 +419,14 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -474,6 +467,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -481,18 +475,14 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -535,6 +525,7 @@ jobs:
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -542,14 +533,11 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Install opencompass
@@ -561,7 +549,6 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -638,7 +625,7 @@ jobs:
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
         run: |

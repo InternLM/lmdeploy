@@ -9,15 +9,6 @@
 namespace mscclpp {
 
 // Copied from
-// https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/include/mscclpp/semaphore_device.hpp#L40
-struct D2DSemaphoreHandle {
-    uint64_t* inboundSemaphoreId;
-    uint64_t* outboundSemaphoreId;
-    uint64_t* remoteInboundSemaphoreId;
-    uint64_t* expectedInboundSemaphoreId;
-};
-
-// Copied from
 // https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/include/mscclpp/packet_device.hpp#L19
 union alignas(16) LL16Packet {
     // Assume data is written with an atomicity of 8 bytes (IB/RDMA).

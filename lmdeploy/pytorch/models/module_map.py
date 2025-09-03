@@ -7,12 +7,8 @@ MODULE_MAP = dict()
 ASCEND_MODULE_MAP = dict()
 MACA_MODULE_MAP = dict()
 CAMB_MODULE_MAP = dict()
-PPU_MODULE_MAP = dict()
 
-DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP,
-                                 maca=MACA_MODULE_MAP,
-                                 camb=CAMB_MODULE_MAP,
-                                 ppu=PPU_MODULE_MAP)
+DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP, maca=MACA_MODULE_MAP, camb=CAMB_MODULE_MAP)
 
 # llama
 MODULE_MAP.update({
@@ -34,6 +30,17 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'ChatGLMForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.chatglm2.ChatGLMForConditionalGeneration',  # noqa: E501
+})
+
+# glm4-0414
+MODULE_MAP.update({
+    'Glm4ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4.Glm4ForCausalLM',
+})
+
+# glm4.1-v
+MODULE_MAP.update({
+    'Glm4vForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4_1v.Glm4vForConditionalGeneration',
 })
 
 # internlm

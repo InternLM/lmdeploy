@@ -22,7 +22,9 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
 
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/gemm/types.h"
+
 #include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
@@ -111,12 +113,16 @@ struct LlamaAttentionWeight: public core::Module {
                          int      tp_rank,
                          DataType data_type,
                          DataType weight_type,
-                         int      group_size);
+                         int      group_size,
+                         int      window_size,
+                         bool     sink);
 
     void prepare(bool use_simt);
 
     LlamaDenseWeight qkv;
     LlamaDenseWeight output;
+
+    Tensor sinks;
 
     LlamaDenseWeight q_proj;
     LlamaDenseWeight q_a_proj;
@@ -126,20 +132,24 @@ struct LlamaAttentionWeight: public core::Module {
 
     Tensor q_a_layernorm;
     Tensor kv_a_layernorm;
+
+    int window_size{};
 };
 
 struct LlamaFfnWeight: core::Module {
 
     LlamaFfnWeight() = default;
 
-    LlamaFfnWeight(int      hidden_dim,
-                   int      inter_size,
-                   int      tp_size,
-                   int      tp_rank,
-                   DataType data_type,
-                   DataType weight_type,
-                   int      group_size,
-                   bool     fuse_silu_act);
+    LlamaFfnWeight(int            hidden_dim,
+                   int            inter_size,
+                   bool           bias,
+                   int            tp_size,
+                   int            tp_rank,
+                   DataType       data_type,
+                   DataType       weight_type,
+                   int            group_size,
+                   ActivationType act_type,
+                   bool           fuse_silu_act);
 
     static constexpr bool fuse_up_and_gate = true;
 
@@ -149,6 +159,8 @@ struct LlamaFfnWeight: core::Module {
     LlamaDenseWeight intermediate;
     LlamaDenseWeight output;
     LlamaDenseWeight fused_gating_intermediate;
+
+    ActivationType act_type;
 
     int  inter_size{};
     bool is_fused_silu{};
@@ -163,11 +175,13 @@ struct MoeFfnWeight: core::Module {
     MoeFfnWeight(int             layer_id,
                  const MoeParam& param,
                  int             hidden_dim,
+                 bool            mlp_bias,
                  DataType        data_type,
                  DataType        weight_type,
                  int             group_size,
                  int             tp_size,
                  int             tp_rank,
+                 ActivationType  act_type,
                  bool            fuse_silu_act);
 
     void prepare(bool use_simt);
