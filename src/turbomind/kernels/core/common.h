@@ -32,7 +32,7 @@
 
 #define TURBOMIND_ARCH_BF16_GUARD(type) (TURBOMIND_ARCH_HAS_BF16 || type != ::turbomind::kBfloat16)
 
-#define TURBOMIND_ARCH_FP8_GUARD(type)                                                                                      \
+#define TURBOMIND_ARCH_FP8_GUARD(type)                                                                                 \
     (TURBOMIND_ARCH_HAS_FP8 || (type != ::turbomind::kFloat8_e4m3 && type != ::turbomind::kFloat8_e5m2))
 
 #define TURBOMIND_ARCH_DTYPE_GUARD(type) (TURBOMIND_ARCH_BF16_GUARD(type) && TURBOMIND_ARCH_FP8_GUARD(type))
