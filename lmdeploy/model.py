@@ -810,16 +810,8 @@ def best_match_model(query: str) -> Optional[str]:
         str: the possible builtin chat template name.
     """
 
-    priorities = [name for name, _ in MODELS.module_dict.items()]
-
-    for name in priorities:
-        chat_template = MODELS.module_dict[name]
-        if chat_template.match(query):
-            return name
-
     for name, model in MODELS.module_dict.items():
-        matched_name = model.match(query)  # cache the result to avoid matching twice
-        if matched_name:
-            return matched_name
+        if model.match(query):
+            return name
     logger.warning(f'Did not find a chat template matching {query}.')
     return 'base'
