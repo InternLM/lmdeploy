@@ -26,7 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2025</b></summary>
 
-- \[2025/09\] TurboMind engine support MXFP4. The openai gpt-oss models can be deployed on NVIDIA GPU since V100!
+- \[2025/09\] TurboMind supports MXFP4 on NVIDIA GPUs starting from V100, achieving 1.5x the performmance of vLLM on H800 for openai gpt-oss models!
 - \[2025/06\] Comprehensive inference optimization for FP8 MoE Models
 - \[2025/06\] DeepSeek PD Disaggregation deployment is now supported through integration with [DLSlime](https://github.com/DeepLink-org/DLSlime) and [Mooncake](https://github.com/kvcache-ai/Mooncake). Huge thanks to both teams!
 - \[2025/04\] Enhance DeepSeek inference performance by integration deepseek-ai techniques: FlashMLA, DeepGemm, DeepEP, MicroBatch and eplb
