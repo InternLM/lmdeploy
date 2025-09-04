@@ -58,14 +58,14 @@ print(response)
 将`--device ascend`加入到服务启动命令中。
 
 ```bash
-lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat
+lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5-7b-chat
 ```
 
 也可以运行以下命令启动容器运行LLM模型服务。
 
 ```bash
-docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
-    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
+docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5-7b-chat"
 ```
 
 ### VLM 模型服务
@@ -79,8 +79,8 @@ lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2-
 也可以运行以下命令启动容器运行VLM模型服务。
 
 ```bash
-docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
-    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B"
+docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2-2B"
 ```
 
 ## 使用命令行与LLM模型对话
@@ -88,14 +88,14 @@ docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyunc
 将`--device ascend`加入到服务启动命令中。
 
 ```bash
-lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend --eager-mode
+lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend
 ```
 
 也可以运行以下命令使启动容器后开启lmdeploy聊天
 
 ```bash
-docker exec -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
-    bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
+docker run -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy chat --backend pytorch --device ascend internlm/internlm2_5-7b-chat"
 ```
 
 ## 量化
