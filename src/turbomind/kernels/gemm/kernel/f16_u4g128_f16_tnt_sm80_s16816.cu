@@ -29,7 +29,8 @@ void Registry::f16_u4g128_f16_tnt_sm80_s16816()
                           Striding::kFlat,
                           Striding::kFlat,
                           Striding::kFlat,
-                          GemmScheduler<kColMajor>>;
+                          kColMajor,
+                          -1>;
     // clang-format off
     // Add<C::Type<128, 256,  64, 1, 8, 1, D, S, 3, true, 1, 128>>(); // 0/0
     Add<C::Type<128, 256,  32, 1, 8, 1, D, D, 3, true, 1, 128, 128, 128>>(); // 30/3

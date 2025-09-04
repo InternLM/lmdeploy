@@ -1,17 +1,29 @@
 
+
+#include <limits>
+
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
+#include <cuda_runtime.h>
+
 #include <cub/block/block_reduce.cuh>
+#include <type_traits>
 
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/floating_point.h"
 #include "src/turbomind/kernels/core/math.h"
+
 #include "src/turbomind/kernels/quantization.cuh"
 #include "src/turbomind/kernels/quantization.h"
+
+#include "src/turbomind/kernels/attention/quantization.h"
 
 namespace turbomind {
 
@@ -316,6 +328,328 @@ void DequantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> src_, const Tensor& scale
         scale.data<Tscale>(),
         num,
         dim);
+}
+
+template<int start_bit, int end_bit, class D, class T>
+__global__ void Compact1D_Kernel(D* d, const T* s, int n)
+{
+    constexpr int bits     = end_bit - start_bit;
+    constexpr int vec_size = bitsof<D> / bits;
+
+    const auto idx = threadIdx.x + (int64_t)blockIdx.x * blockDim.x;
+
+    if (idx * vec_size >= n) {
+        return;
+    }
+
+    Array<T, vec_size> s_vec;
+
+    Load(s_vec, &s[idx * vec_size]);
+
+    constexpr T mask = ((1 << bits) - 1) << start_bit;
+
+    D pack{};
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < vec_size; ++i) {
+        pack |= ((s_vec[i] & mask) >> start_bit) << (i * bits);
+    }
+
+    d[idx] = pack;
+}
+
+template<class T_, int bits_, class Q_>
+struct IntegralQuantizer {
+
+    using T = T_;
+    using Q = Q_;
+
+    using Scale = T;
+    using Zero  = T;
+
+    static constexpr int bits  = bits_;
+    static constexpr int max_q = (1 << bits) - 1;
+
+    template<class T, int N, class R>
+    __device__ void operator()(const Array<T, N>&    x,  //
+                               const Array<bool, N>& pred,
+                               const R&              rbits,
+                               Array<Q, N>&          q,
+                               Array<T, N>&          d,
+                               T&                    scale,
+                               T&                    zero,
+                               int                   threads) const
+    {
+        auto f = cast<float>(x);
+
+        float minval = std::numeric_limits<float>::infinity();
+        float maxval = -minval;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            if (pred[i]) {
+                minval = fminf(minval, f[i]);
+                maxval = fmaxf(maxval, f[i]);
+            }
+        }
+
+        for (int offset = threads / 2; offset >= 1; offset /= 2) {
+            minval = fminf(minval, __shfl_xor_sync((uint32_t)-1, minval, offset));
+            maxval = fmaxf(maxval, __shfl_xor_sync((uint32_t)-1, maxval, offset));
+        }
+
+        auto clamp = [](int x, int a, int b) { return max(a, min(b, x)); };
+
+        float scale_ = fmaxf(maxval - minval, 1e-5f) / (float)max_q;
+        int   zero_  = clamp(-round<int32_t>(minval / scale_), 0, max_q);
+
+        scale = (T)scale_;
+        zero  = (T)zero_;
+
+        // T sz = zero_ * scale_;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            q[i] = clamp(round<int32_t>(f[i] / scale_) + zero_, 0, max_q);
+            d[i] = (T)((int)q[i] - zero_) * (T)scale_;
+            // d[i] = __hfma((T)q[i], (T)scale_, -sz);
+        }
+    }
+};
+
+template<class T_, int E, int M, class Q_>
+struct FloatingPointQuantizer {
+
+    using T = T_;
+    using Q = Q_;
+
+    using Scale = uint8_t;
+    using Zero  = void;
+
+    using traits = FloatingPoint<E, M>;
+
+    static constexpr int bits = traits::bits;
+
+    float pre_rounding_scale_;
+
+    __host__ __device__ FloatingPointQuantizer(float pre_rounding_scale = 1.f): pre_rounding_scale_{pre_rounding_scale}
+    {
+    }
+
+    template<int N, class Z, class R>
+    __device__ void operator()(const Array<T, N>&    x,  //
+                               const Array<bool, N>& pred,
+                               const R&              rbits,
+                               Array<Q, N>&          q,
+                               Array<T, N>&          d,
+                               Scale&                scale,
+                               Z                     ignore,
+                               int                   threads) const
+    {
+        auto f = cast<float>(x);
+
+        float absmax = 0.f;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            if (pred[i]) {
+                absmax = fmaxf(absmax, fabsf(f[i]));
+            }
+        }
+
+        for (int offset = threads / 2; offset >= 1; offset /= 2) {
+            absmax = fmaxf(absmax, __shfl_xor_sync((uint32_t)-1, absmax, offset));
+        }
+
+        auto get_exponent = [](float x) -> int { return (__float_as_uint(x) >> 23U) & 0xFFU; };
+
+        int scale_i32 = get_exponent(absmax) - (traits::exponent_bias + 1);
+
+        // int scale_i32 = 127;
+
+        if (scale_i32 < 0) {  // absmax(group) < 2*2^-125, flush to zero
+            scale_i32 = 0;
+            f         = {};
+        }
+
+        scale = scale_i32;
+
+        float scale_f32 = __uint_as_float((uint32_t)scale_i32 << 23U);
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            q[i] = traits::from_f32((f[i] * pre_rounding_scale_) / scale_f32, rbits[i]);
+            d[i] = (traits::to_f32(q[i]) * scale_f32) / pre_rounding_scale_;
+        }
+    }
+};
+
+template<int vec_size,
+         class Quantizer,
+         class T = typename Quantizer::T,
+         class Q = typename Quantizer::Q,
+         class S = typename Quantizer::Scale,
+         class Z = typename Quantizer::Zero>
+__global__ void QuantizeGroupwise_Kernel(Quantizer       quantizer,
+                                         Q*              q,
+                                         S*              s,
+                                         Z*              z,
+                                         T*              d,
+                                         const T*        x,
+                                         const unsigned* r,
+                                         Array<int, 2>   stride_q,
+                                         Array<int, 2>   stride_s,
+                                         Array<int, 2>   stride_d,
+                                         Array<int, 2>   stride_x,
+                                         int             M,
+                                         int             K,
+                                         int             G)
+{
+    if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
+        static constexpr bool has_zero = !std::is_void_v<Z>;
+
+        int m = blockIdx.x;
+        int k = threadIdx.x + blockIdx.y * blockDim.x;
+
+        const int threads_per_group = G / vec_size;
+        const int warp_k            = WARP_SIZE * vec_size;
+
+        k *= vec_size;
+
+        for (; k < round_up(K, warp_k); k += gridDim.y * blockDim.x * vec_size) {
+
+            Array<T, vec_size>    x_vec;
+            Array<bool, vec_size> p_vec;
+
+            Array<unsigned, vec_size> r_vec;
+
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                p_vec[i] = k + i < K;
+                x_vec[i] = p_vec[i] ? x[stride_x[0] * m + stride_x[1] * (k + i)] : T{0};
+                if (r) {
+                    r_vec[i] = p_vec[i] ? r[m * K + k] : 0;
+                }
+            }
+
+            Array<Q, vec_size> q_vec;
+            Array<T, vec_size> d_vec;
+
+            S                                    scale;
+            std::conditional_t<has_zero, Z, int> zero{};
+
+            auto invoke = [&](auto rbits) {
+                quantizer(x_vec, p_vec, rbits, q_vec, d_vec, scale, zero, threads_per_group);
+            };
+
+            r ? invoke(r_vec) : invoke(Array<char, vec_size>{});
+
+            PRAGMA_UNROLL
+            for (int i = 0; i < vec_size; ++i) {
+                const auto idx = stride_q[0] * m + stride_q[1] * (k + i);
+                if (p_vec[i]) {
+                    q[idx] = q_vec[i];
+                    d[idx] = d_vec[i];
+                }
+            }
+            if (threadIdx.x % threads_per_group == 0) {
+                const auto idx = stride_s[0] * m + stride_s[1] * (k / G);
+                if (p_vec[0]) {
+                    s[idx] = (S)scale;
+                    if constexpr (has_zero) {
+                        z[idx] = (S)zero;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void QuantizeGroupwise(Tensor            quant,    // (m,k)
+                       Tensor            scales,   // (m,k/g)
+                       Tensor            zeros,    // (m,k/g)
+                       Tensor            dequant,  // (m,k)
+                       Tensor            src,      // (m,k)
+                       Buffer_<unsigned> rbits,    // (m*k)
+                       int               group_size)
+{
+    // std::cout << quant << std::endl;
+    // std::cout << scales << std::endl;
+    // std::cout << zeros << std::endl;
+    // std::cout << dequant << std::endl;
+    // std::cout << src << std::endl;
+
+    if (zeros) {
+        TM_CHECK(scales.layout() == zeros.layout());
+    }
+    TM_CHECK(quant.shape() == dequant.shape());
+    TM_CHECK(quant.size() == quant.layout().cosize());
+
+    auto stream = core::Context::stream().handle();
+
+    auto stride_2d = [](const Tensor& t) {
+        TM_CHECK_EQ(t.ndim(), 2);
+        auto [a, b] = t.strides(0, 1);
+        return Array<int, 2>{(int)a, (int)b};
+    };
+
+    const int m = src.shape(0);
+    const int k = src.shape(1);
+
+    // std::cout << "m" << m << "k" << k << "\n";
+
+    auto invoke = [&](auto quantizer) {
+        using Quantizer = decltype(quantizer);
+
+        using T = typename Quantizer::T;
+        using Q = typename Quantizer::Q;
+        using S = typename Quantizer::Scale;
+        using Z = typename Quantizer::Zero;
+
+        constexpr int bits = Quantizer::bits;
+
+        Tensor_<Q> proxy = empty_like(quant, data_type_v<Q>);
+
+        constexpr int vec = 8;
+
+        TM_CHECK((group_size & (group_size - 1)) == 0);
+        TM_CHECK_GE(group_size, vec);
+        TM_CHECK_LE(group_size, WARP_SIZE * vec);
+
+        const int threads = round_up(std::min(cdiv(k, vec), 1024), WARP_SIZE);
+
+        QuantizeGroupwise_Kernel<vec><<<m, threads, 0, stream>>>(quantizer,
+                                                                 proxy.data(),
+                                                                 scales.data<S>(),
+                                                                 zeros.data_or((Z*)nullptr),
+                                                                 dequant.data<T>(),
+                                                                 src.data<T>(),
+                                                                 rbits.data_or(nullptr),
+                                                                 stride_2d(proxy),
+                                                                 stride_2d(scales),
+                                                                 stride_2d(dequant),
+                                                                 stride_2d(src),
+                                                                 m,
+                                                                 k,
+                                                                 group_size);
+
+        Compact1D_Kernel<0, bits><<<cdiv((int)quant.size(), 512), 512, 0, stream>>>(
+            (uint32_t*)quant.raw_data(), (Q*)proxy.raw_data(), quant.size());
+    };
+
+    if (0) {}
+    else if (src.dtype() == kHalf && quant.dtype() == kUint4) {
+        invoke(IntegralQuantizer<half_t, 4, uint16_t>{});
+    }
+    else if (src.dtype() == kBfloat16 && quant.dtype() == kFloat4_e2m1) {
+        invoke(FloatingPointQuantizer<bfloat16_t, 2, 1, uint16_t>{});
+    }
+    else if (src.dtype() == kHalf && quant.dtype() == kFloat4_e2m1) {
+        invoke(FloatingPointQuantizer<half_t, 2, 1, uint16_t>{});
+    }
+    else {
+        TM_CHECK(0) << "Unsupported types: " << to_string(src.dtype()) << ", " << to_string(quant.dtype());
+    }
 }
 
 }  // namespace turbomind

@@ -31,15 +31,16 @@ private:
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
-    const int      inter_size_;
-    const int      hidden_dim_;
+    const int inter_size_;
+    const int hidden_dim_;
+    const int tp_size_;
+
     const MoeParam param_;
 
     cudaStream_t const stream_;
     LlamaLinear&       linear_;
 
-    std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
-    std::unique_ptr<gemm::MoeGemmContext> context_;
+    std::unique_ptr<LlamaFfnLayer> expert_ffn_;
 
     ///////////////////////////////////////////////////////
     /// runtime states
@@ -47,6 +48,7 @@ private:
 
     Buffer_<int>   masks_;
     Buffer_<int>   f2n_;
+    Buffer_<int>   f2E_;
     Buffer_<int>   en2f_;
     Buffer_<float> scales_;
     Buffer_<int>   accum_;

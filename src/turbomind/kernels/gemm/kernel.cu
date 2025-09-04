@@ -60,7 +60,7 @@ bool Kernel::is_feasible(const GemmDesc& desc) const noexcept
         return false;
     }
 
-    if (desc.sched != desc_.sched) {
+    if (desc.group_axis >= 0 && desc.group_axis != desc_.group_axis) {
         return false;
     }
 
@@ -153,7 +153,10 @@ std::string Kernel::GetName() const
        << "_" << desc_.cluster_shape.x << "x" << desc_.cluster_shape.y                   //
        << "_" << to_string(desc_.op_class)                                               //
        << "_" << desc_.mma_tile.x << "x" << desc_.mma_tile.y << "x" << desc_.mma_tile.z;
-    ss << (desc_.sched ? "_dynamic" : "");
+    if (desc_.group_axis >= 0) {
+        ss << "_"
+           << "mn"[desc_.group_axis] << "group";
+    }
     ss << "_c" << desc_.c_tile.x << "x" << desc_.c_tile.y                        //
        << "_a" << desc_.align.x << "x" << desc_.align.y << "x" << desc_.align.z  //
        << "_" << desc_.policy_a << desc_.policy_b;
@@ -166,12 +169,9 @@ public:
     explicit TransposedKernel(Kernel& kernel): kernel_(&kernel)
     {
         desc_ = kernel.desc();
+        info_ = kernel.info();
 
         desc_.transpose = !desc_.transpose;
-
-        chunk_size_k_ = kernel_->chunk_size_k();
-        smem_size_    = kernel_->smem_size();
-        name_         = kernel_->name();
     }
 
     int Launch(const Operation&    operation,
@@ -217,18 +217,17 @@ public:
 
     bool is_feasible(const GemmDesc& desc) const noexcept override
     {
-        return kernel_->is_feasible(transpose(desc));
+        return kernel_->is_feasible(desc);
     }
 
-    int GetMaxSplits(const int4& shape, int64_t tiles, size_t bsize, size_t psize) const override
+    int GetMaxSwizzle(const int4& shape) const override
     {
-        auto [m, n, k, l] = shape;
-        return kernel_->GetMaxSplits({n, m, k, l}, tiles, bsize, psize);
+        return kernel_->GetMaxSwizzle(shape);
     }
 
-    int GetSwizzle(int m, int n, int k, int splits, int swizzle) const override
+    int GetMaxSplits(const int4& shape, int swizzle, size_t bsize, size_t psize) const override
     {
-        return kernel_->GetSwizzle(n, m, k, splits, swizzle);
+        return kernel_->GetMaxSplits(shape, swizzle, bsize, psize);
     }
 
 private:
@@ -270,6 +269,8 @@ std::vector<std::vector<LaunchSpec>> Cluster(const std::vector<LaunchSpec>& spec
             }
         }
         if (param.max_active_ctas) {
+            const auto& a = u->kernel->info();
+            const auto& b = v->kernel->info();
             if (a.max_active_ctas != b.max_active_ctas) {
                 return a.max_active_ctas < b.max_active_ctas;
             }

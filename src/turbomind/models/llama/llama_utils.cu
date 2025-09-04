@@ -84,7 +84,7 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
     }
 
     fprintf(stderr,
-            "%12s%12f%12f%12f%12f%12f\n",
+            "%15s%15f%15f%15f%15f%15f\n",
             key.c_str(),
             (float)amean_x / (float)size,
             (float)amean_r / (float)size,

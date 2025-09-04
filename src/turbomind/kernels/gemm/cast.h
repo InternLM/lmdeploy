@@ -36,4 +36,6 @@ inline void interleave_output_dims(T* fused, const T* a, const T* b, int m, int 
     }
 }
 
+void AdjustUe8m0ScaleForHalf(uint8_t* data, int n, cudaStream_t st);
+
 }  // namespace turbomind
