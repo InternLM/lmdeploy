@@ -23,7 +23,7 @@ env:
 
 jobs:
   test_quantization:
-    if: ${{ !cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'quant') }}
+    # if: ${{ !cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'quant') }}
     runs-on: [self-hosted, ascend-013]
     timeout-minutes: 150
     container:
