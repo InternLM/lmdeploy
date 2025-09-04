@@ -23,6 +23,7 @@ env:
 
 jobs:
   test_quantization:
+    if: ${{ !cancelled() }}
     # if: ${{ !cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'quant') }}
     runs-on: [self-hosted, ascend-013]
     timeout-minutes: 150
@@ -62,18 +63,21 @@ jobs:
           ln -s ${{ env.REPORT_DIR }}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
+        if: ${{ !cancelled() }}
         # if: ${{ contains(fromJSON(env.BACKEND), 'turbomind') }}
         run: |
           pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} --clean-alluredir ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
+        if: ${{ !cancelled() }}
         # if: ${{ contains(fromJSON(env.BACKEND), 'pytorch') }}
         run: |
           pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
 
   test_tools:
+    if: ${{ !cancelled() }}
     # if: ${{ !cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'tools') }}
     runs-on: [self-hosted, ascend-013]
     needs: test_quantization
@@ -131,6 +135,7 @@ jobs:
           ln -s ${{ env.REPORT_DIR }}/.pytest_cache autotest
       - name: Test lmdeploy - chat
         continue-on-error: true
+        if: ${{ !cancelled() }}
         # if: ${{ (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat' }}
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
@@ -143,6 +148,7 @@ jobs:
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline
         continue-on-error: true
+        if: ${{ !cancelled() }}
         # if: ${{ matrix.function == 'pipeline' }}
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
@@ -155,6 +161,7 @@ jobs:
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful
         continue-on-error: true
+        if: ${{ !cancelled() }}
         # if: ${{ matrix.function == 'restful' }}
         run: |
           pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
