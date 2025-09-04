@@ -1,11 +1,11 @@
 # Run the following command in the root directory of lmdeploy to build the image:
 # DOCKER_BUILDKIT=1 docker build --network=host -t lmdeploy_dlinfer:a2 -f  docker/Dockerfile.ascend .
-ARG ASCEND_DEVICE=a2
+ARG ASCEND_DEVICE=ascend_a2
 ARG ASCEND_HUB=swr.cn-south-1.myhuaweicloud.com/ascendhub
 
-FROM ${ASCEND_HUB}/cann:8.1.rc1-910b-ubuntu22.04-py3.10 AS a2_base
+FROM ${ASCEND_HUB}/cann:8.1.rc1-910b-ubuntu22.04-py3.10 AS ascend_a2_base
 
-FROM ${ASCEND_HUB}/cann:8.1.rc1-310p-ubuntu22.04-py3.10 AS 300i_base
+FROM ${ASCEND_HUB}/cann:8.1.rc1-310p-ubuntu22.04-py3.10 AS ascend_300i_base
 
 FROM ${ASCEND_DEVICE}_base AS builder
 ENV LMDEPLOY_TARGET_DEVICE=ascend
