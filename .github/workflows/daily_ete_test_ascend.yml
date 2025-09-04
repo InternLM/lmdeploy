@@ -29,15 +29,28 @@ jobs:
     timeout-minutes: 150
     container:
       image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
-      options: "--net=host --privileged=true --device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
+      options: >-
+        --net=host
+        --device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3
+        --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7
+        --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc
+        -e PIP_CACHE_DIR=/root/.cache/pip
+        --shm-size=150g
+        --pull missing
+        --memory=256g
+        --cpus=48
+        --security-opt=no-new-privileges:true
+        --health-cmd="npu-smi info"
+        --health-interval=30s
+        --restart=on-failure:5
       volumes:
-        - /usr/local/Ascend/driver:/usr/local/Ascend/driver
-        - /usr/local/sbin:/usr/local/sbin
+        - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        - /usr/local/sbin:/usr/local/sbin:ro
         - /var/log/npu/slog:/var/log/npu/slog
         - /var/log/npu/profiling:/var/log/npu/profiling
         - /var/log/npu/dump:/var/log/npu/dump
         - /var/log/npu:/usr/slog
-        - /etc/hccn.conf:/etc/hccn.conf
+        - /etc/hccn.conf:/etc/hccn.conf:ro
         - /root/qa_test:/test
         - /mnt:/mnt
     steps:
