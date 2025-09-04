@@ -7,7 +7,7 @@
 > \[!IMPORTANT\]
 > 我们已经在阿里云上提供了构建完成的寒武纪云端加速卡镜像。
 > 请使用下面的命令来拉取镜像:
-> 
+>
 > `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/camb:latest`
 
 ## 离线批处理

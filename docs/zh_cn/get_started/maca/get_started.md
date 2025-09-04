@@ -85,4 +85,3 @@ lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device maca
 docker run -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/maca:latest \
     bash -i -c "lmdeploy chat --backend pytorch --device maca internlm/internlm2_5-7b-chat"
 ```
-

@@ -8,13 +8,13 @@ Here is the [supported model list](../../supported_models/supported_models.md#Py
 > \[!IMPORTANT\]
 > We have uploaded a docker image with KUNPENG CPU to aliyun.
 > Please try to pull the image by following command:
-> 
+>
 > Atlas 800T A3:
-> 
+>
 > `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:a3-latest`
-> 
+>
 > (Atlas 800T A3 currently supports only the Qwen-series with eager mode.)
-> 
+>
 > Atlas 800T A2:
 >
 > `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`

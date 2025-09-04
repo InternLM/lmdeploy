@@ -8,7 +8,7 @@ Here is the [supported model list](../../supported_models/supported_models.md#Py
 > \[!IMPORTANT\]
 > We have uploaded a docker image to aliyun.
 > Please try to pull the image by following command:
-> 
+>
 > `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/maca:latest`
 
 ## Offline batch inference

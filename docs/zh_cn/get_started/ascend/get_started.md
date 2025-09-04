@@ -7,18 +7,18 @@
 > \[!IMPORTANT\]
 > 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像。
 > 请使用下面的命令来拉取镜像:
-> 
+>
 > Atlas 800T A3:
 > `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:a3-latest`
 > （Atlas 800T A3目前只支持Qwen系列的算子模式下运行）
-> 
+>
 > Atlas 800T A2:
 > `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`
-> 
+>
 > Atlas 300I Duo:
 > `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`
 > （Atlas 300I Duo目前只支持非eager模式）
-> 
+>
 > 如果您希望自己构建环境，请参考[这里](../../../../docker)的dockerfile来自己构建。
 
 ## 离线批处理
