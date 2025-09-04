@@ -193,13 +193,13 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        for (const auto& s : specs) {
-            std::cout << s.kernel->name()          //
-                      << " swizzle=" << s.swizzle  //
-                      << ", splits=" << s.splits   //
-                      << ", measured=" << s.measured << "ms\n";
-            break;
-        }
+        // for (const auto& s : specs) {
+        //     std::cout << s.kernel->name()          //
+        //               << " swizzle=" << s.swizzle  //
+        //               << ", splits=" << s.splits   //
+        //               << ", measured=" << s.measured << "ms\n";
+        //     break;
+        // }
 
         if (!specs.empty()) {
             cache_.Insert(ctx.desc(), specs.front());
