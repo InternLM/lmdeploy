@@ -21,11 +21,10 @@ env:
   TMPDIR: /mnt/deeplink/docker-tmp
   RAY_TMPDIR: /mnt/deeplink/docker-tmp
 
-
+jobs:
   test_quantization:
-    needs: download_pkgs
     if: ${{!cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'quant') }}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, ascend-013]
     timeout-minutes: 150
     container:
       image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
@@ -85,7 +84,7 @@ env:
 
   test_tools:
     if: ${{!cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'tools')}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, ascend-013]
     needs: test_quantization
     timeout-minutes: 300
     strategy:
@@ -104,7 +103,6 @@ env:
         include:
           - backend: turbomind
             model: llm
-            function: local_case
     container:
       image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
       options: "--net=host --privileged=true --device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
@@ -187,7 +185,7 @@ env:
 
   # get_coverage_report:
   #   if: ${{!cancelled()}}
-  #   runs-on: [self-hosted, linux-a100]
+  #   runs-on: [self-hosted, ascend-013]
   #   needs: [test_tools, test_restful, test_pipeline, test_benchmark]
   #   timeout-minutes: 5
   #   container:
