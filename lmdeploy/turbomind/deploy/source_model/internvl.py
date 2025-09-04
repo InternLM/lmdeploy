@@ -112,7 +112,7 @@ class InternVLModel(LlamaModel):
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
         arch = config.architectures[0]
-        if arch == 'InternVLChatModel':
+        if arch == 'InternVLChatModel' or arch == 'InternVLForConditionalGeneration':
             relations = dict(InternLM2ForCausalLM=('internlm2', InternVL2Reader),
                              LlamaForCausalLM=('llama', InternVLReader),
                              Qwen2ForCausalLM=('qwen2', InternVLReader),
