@@ -259,7 +259,7 @@ class AsyncEngine(LogitsMixin):
         self.model_name = model_name if model_name else model_path
         chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(chat_template_name)
+            chat_template_config = ChatTemplateConfig(chat_template_name, model_path=model_path)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
@@ -600,6 +600,14 @@ class AsyncEngine(LogitsMixin):
                                 tools: Optional[List[object]] = None,
                                 enable_thinking: Optional[bool] = None,
                                 **kwargs):
+        # Change multimodal data to openai text messages, i.e.,
+        # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
+        # [{'role': 'user', 'content': 'hi']
+        if isinstance(prompt, list) and any(isinstance(msg['content'], list) for msg in prompt):
+            prompt = [
+                msg if isinstance(msg['content'], str) else dict(role=msg['role'], content=msg['content'][0]['text'])
+                for msg in prompt
+            ]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
