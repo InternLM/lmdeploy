@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 150
     container:
       image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
-      options: "--net=host --privileged=true --device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
+      options: "--device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
       volumes:
         - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
         - /usr/local/sbin:/usr/local/sbin:ro
@@ -101,7 +101,7 @@ jobs:
       #       function: chat
     container:
       image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
-      options: "--net=host --privileged=true --device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
+      options: "--device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
       volumes:
         - /usr/local/Ascend/driver:/usr/local/Ascend/driver
         - /usr/local/sbin:/usr/local/sbin
