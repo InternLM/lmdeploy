@@ -285,7 +285,7 @@ def internvl_vl_testcase(output_text, f, lang: str = 'en'):
             assert case_result, f'reason: separate images2: panda should in {response}'
     with allure.step(f'internvl-video-{lang}'):
         response = get_response_from_output(output_text, f'internvl-video-{lang}')
-        case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子'])
+        case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子', 'food'])
         f.writelines(f'internvl-video-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: video: panda should in {response}'

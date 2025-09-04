@@ -53,6 +53,7 @@ turbomind_quatization:
     gptq:
         - empty
     no_kvint4:
+        - meta-llama/Llama-3.2-1B-Instruct
         - OpenGVLab/InternVL3-2B-Instruct
         - OpenGVLab/InternVL3-1B-Instruct
         - OpenGVLab/InternVL2_5-1B
@@ -73,6 +74,9 @@ pytorch_quatization:
     w8a8:
         - meta-llama/Llama-3.2-3B-Instruct
     no_kvint4:
+        - meta-llama/Llama-3.2-1B-Instruct
+        - OpenGVLab/InternVL3-2B-Instruct
+        - OpenGVLab/InternVL3-1B-Instruct
         - OpenGVLab/InternVL2_5-1B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-1.7B
