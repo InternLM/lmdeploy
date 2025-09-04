@@ -121,7 +121,7 @@ public:
 
         desc_.stages     = Gemm::Stages;
         desc_.split_k    = 1;  // Gemm::kSplitK;
-        desc_.group_axis = 0;
+        desc_.group_axis = is_grouped_gemm ? 0 : -1;
 
         desc_.arch = Gemm::Arch::value;
 

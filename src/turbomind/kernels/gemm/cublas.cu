@@ -17,8 +17,9 @@ public:
         if (0) {
             cublasSetMathMode(cublas_, CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
         }
-        desc_         = {};
-        desc_.backend = 1;
+
+        desc_.backend    = 1;
+        desc_.group_axis = -1;
 
         info_.chunk_size_k      = 1;
         info_.dynamic_smem_size = 0;
