@@ -1,25 +1,14 @@
-# 华为昇腾（Atlas 800T A3 & Atlas 800T A2 & Atlas 300I Duo）
+# 寒武纪云端加速卡
 
-我们基于 LMDeploy 的 PytorchEngine，增加了华为昇腾设备的支持。所以，在华为昇腾上使用 LDMeploy 的方法与在英伟达 GPU 上使用 PytorchEngine 后端的方法几乎相同。在阅读本教程之前，请先阅读原版的[快速开始](../get_started.md)。
+我们基于 LMDeploy 的 PytorchEngine，增加了寒武纪云端加速卡设备的支持。所以，在寒武纪云端加速卡上使用 LDMeploy 的方法与在英伟达 GPU 上使用 PytorchEngine 后端的方法几乎相同。在阅读本教程之前，请先阅读原版的[快速开始](../get_started.md)。
 
 支持的模型列表在[这里](../../supported_models/supported_models.md#PyTorchEngine-其他平台).
 
 > \[!IMPORTANT\]
-> 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像。
+> 我们已经在阿里云上提供了构建完成的寒武纪云端加速卡镜像。
 > 请使用下面的命令来拉取镜像:
 > 
-> Atlas 800T A3:
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:a3-latest`
-> （Atlas 800T A3目前只支持Qwen系列的算子模式下运行）
-> 
-> Atlas 800T A2:
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`
-> 
-> Atlas 300I Duo:
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`
-> （Atlas 300I Duo目前只支持非eager模式）
-> 
-> 如果您希望自己构建环境，请参考[这里](../../../../docker)的dockerfile来自己构建。
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/camb:latest`
 
 ## 离线批处理
 

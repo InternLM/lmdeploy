@@ -3,7 +3,7 @@
 The usage of lmdeploy on a Huawei Ascend device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
 
-Here is the [supported model list](../../supported_models/supported_models.md#PyTorchEngine-on-Huawei-Ascend-Platform).
+Here is the [supported model list](../../supported_models/supported_models.md#PyTorchEngine-on-Other-Platforms).
 
 > \[!IMPORTANT\]
 > We have uploaded a docker image with KUNPENG CPU to aliyun.
@@ -28,11 +28,6 @@ Here is the [supported model list](../../supported_models/supported_models.md#Py
 > To build the environment yourself, refer to the Dockerfiles [here](../../../../docker).
 
 ## Offline batch inference
-
-> \[!TIP\]
-> Graph mode has been supported on Atlas 800T A2.
-> Users can set `eager_mode=False` to enable graph mode, or, set `eager_mode=True` to disable graph mode.
-> (Please source `/usr/local/Ascend/nnal/atb/set_env.sh` before enabling graph mode)
 
 ### LLM inference
 
@@ -75,7 +70,7 @@ lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5
 Run the following commands to launch docker container for lmdeploy LLM serving:
 
 ```bash
-docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest \
     bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5-7b-chat"
 ```
 
@@ -90,7 +85,7 @@ lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2
 Run the following commands to launch docker container for lmdeploy VLM serving:
 
 ```bash
-docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest \
     bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2-2B"
 ```
 
@@ -105,7 +100,7 @@ lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend
 Run the following commands to launch lmdeploy chatting after starting container:
 
 ```bash
-docker run -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+docker run -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest \
     bash -i -c "lmdeploy chat --backend pytorch --device ascend internlm/internlm2_5-7b-chat"
 ```
 
