@@ -13,17 +13,17 @@ env:
   LOG_PATH: /test/log
   OFFLINE_REQUIREMENTS: /test/lmdeploy_hw/requirements_ascend.txt
   # Default values for former workflow_dispatch inputs
-  BACKEND: "['turbomind', 'pytorch']"
-  MODEL: "['llm','mllm']"
+  BACKEND: '["turbomind", "pytorch"]'
+  MODEL: '["llm","mllm"]'
   FUNCTION: '["pipeline", "restful", "chat"]'
   OFFLINE_MODE: false
-  REGRESSION_FUNC: "['quant', 'pipeline', 'restful', 'chat']"
+  REGRESSION_FUNC: '["quant", "pipeline", "restful", "chat"]'
   TMPDIR: /mnt/deeplink/docker-tmp
   RAY_TMPDIR: /mnt/deeplink/docker-tmp
 
 jobs:
   test_quantization:
-    if: ${{!cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'quant') }}
+    if: ${{ !cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'quant') }}
     runs-on: [self-hosted, ascend-013]
     timeout-minutes: 150
     container:
@@ -42,10 +42,10 @@ jobs:
     steps:
       - name: Copy repository and Artifacts
         run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
+          cp -r ${{ env.TEST_CODE_PATH }}/. .
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+          python3 -m pip install -r ${{ env.OFFLINE_REQUIREMENTS }}
       - name: Install lmdeploy
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
@@ -57,33 +57,24 @@ jobs:
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf ${{env.LOG_PATH}}/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
-          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
+          rm -rf ${{ env.LOG_PATH }}/*
+          mkdir ${{ env.REPORT_DIR }}/.pytest_cache -p
+          ln -s ${{ env.REPORT_DIR }}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
-        if: contains(fromJSON(env.BACKEND), 'turbomind')
+        if: ${{ contains(fromJSON(env.BACKEND), 'turbomind') }}
         run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} --clean-alluredir ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
-        if: contains(fromJSON(env.BACKEND), 'pytorch')
+        if: ${{ contains(fromJSON(env.BACKEND), 'pytorch') }}
         run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      # - name: Clear workfile
-      #   if: always()
-      #   run: |
-      #     chmod -R 777 $REPORT_DIR
-      #     export workdir=$(pwd)
-      #     cd ..
-      #     rm -rf $workdir
-      #     mkdir $workdir
-      #     chmod -R 777 $workdir
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
 
   test_tools:
-    if: ${{!cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'tools')}}
+    if: ${{ !cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'tools') }}
     runs-on: [self-hosted, ascend-013]
     needs: test_quantization
     timeout-minutes: 300
@@ -103,6 +94,7 @@ jobs:
         include:
           - backend: turbomind
             model: llm
+            function: chat
     container:
       image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
       options: "--net=host --privileged=true --device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
@@ -119,10 +111,10 @@ jobs:
     steps:
       - name: Copy repository and Artifacts
         run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
+          cp -r ${{ env.TEST_CODE_PATH }}/. .
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+          python3 -m pip install -r ${{ env.OFFLINE_REQUIREMENTS }}
       - name: Install lmdeploy
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
@@ -134,88 +126,42 @@ jobs:
           cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf ${{env.LOG_PATH}}/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
-          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
+          rm -rf ${{ env.LOG_PATH }}/*
+          mkdir ${{ env.REPORT_DIR }}/.pytest_cache -p
+          ln -s ${{ env.REPORT_DIR }}/.pytest_cache autotest
       - name: Test lmdeploy - chat
         continue-on-error: true
-        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
+        if: ${{ (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat' }}
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline
         continue-on-error: true
-        if: matrix.function == 'pipeline'
+        if: ${{ matrix.function == 'pipeline' }}
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful
         continue-on-error: true
-        if: matrix.function == 'restful'
+        if: ${{ matrix.function == 'restful' }}
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      # - name: Clear workfile
-      #   if: always()
-      #   run: |
-      #     chmod -R 777 $REPORT_DIR
-      #     export workdir=$(pwd)
-      #     cd ..
-      #     rm -rf $workdir
-      #     mkdir $workdir
-      #     chmod -R 777 $workdir
-
-  # get_coverage_report:
-  #   if: ${{!cancelled()}}
-  #   runs-on: [self-hosted, ascend-013]
-  #   needs: [test_tools, test_restful, test_pipeline, test_benchmark]
-  #   timeout-minutes: 5
-  #   container:
-  #     image: openmmlab/lmdeploy:latest-cu11
-  #     options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-  #     volumes:
-  #       - /nvme/github-actions/pip-cache:/root/.cache/pip
-  #       - /nvme/github-actions/packages:/root/packages
-  #       - /nvme/qa_test_models:/nvme/qa_test_models
-  #       - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-  #   steps:
-  #     - name: Copy repository and Artifacts
-  #       run: cp -r ${{env.TEST_CODE_PATH}}/. .
-  #     - name: Install lmdeploy
-  #       run: |
-  #         python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-  #         python3 -m pip install -r requirements/test.txt
-  #     - name: Get coverage report
-  #       run: |
-  #         pip install coverage
-  #         coverage combine ${{env.REPORT_DIR}}
-  #         coverage xml -o ${{env.REPORT_DIR}}/coverage.xml
-  #         coverage report -m
-  #         mv .coverage ${{env.REPORT_DIR}}/.coverage
-  #     - name: Clear workfile
-  #       if: always()
-  #       run: |
-  #         chmod -R 777 $REPORT_DIR
-  #         export workdir=$(pwd)
-  #         cd ..
-  #         rm -rf $workdir
-  #         mkdir $workdir
-  #         chmod -R 777 $workdir
+          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
