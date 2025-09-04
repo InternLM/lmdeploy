@@ -4,6 +4,7 @@
 
 #include <array>
 #include <tuple>
+#include <type_traits>
 
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -30,12 +31,14 @@ struct GemmDesc {
     QuantDesc quant_b;
     Epilogue  epilogue;
     int       batch_dim;
-    int       sched;
+    int       group_axis;
     int       m;
     int       n;
     int       k;
     int       num;
 };
+
+static_assert(std::is_trivially_copyable_v<GemmDesc>);
 
 inline GemmDesc transpose(GemmDesc d)
 {
@@ -50,6 +53,9 @@ inline GemmDesc transpose(GemmDesc d)
     std::swap(d.quant_a, d.quant_b);
     std::swap(d.m, d.n);
     d.batch_dim = 1 - d.batch_dim;
+    if (d.group_axis >= 0) {
+        d.group_axis = 1 - d.group_axis;
+    }
     return d;
 }
 
@@ -129,12 +135,20 @@ struct KernelDesc {
     int2      c_tile;
     int       stages;
     bool      split_k;
-    int       sched;
+    int       group_axis;
     int       backend;
     bool      transpose;
+};
 
-    // set by `KernelImpl`
-    int                max_active_ctas;
+static_assert(std::is_trivially_copyable_v<KernelDesc>);
+
+struct KernelInfo {
+    int dynamic_smem_size;
+    int max_active_ctas;
+    int chunk_size_k;
+
+    std::string name;
+
     cudaFuncAttributes attr;
 };
 

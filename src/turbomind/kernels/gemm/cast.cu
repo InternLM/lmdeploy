@@ -193,4 +193,20 @@ interleave_output_dims_impl(uint16_t* fused, const uint16_t* a, const uint16_t* 
 template void
 interleave_output_dims_impl(uint32_t* fused, const uint32_t* a, const uint32_t* b, int m, int k, cudaStream_t st);
 
+__global__ void adjust_ue8m0_scale_for_half_kernel(uint8_t* data, int n)
+{
+    int64_t idx = threadIdx.x + (int64_t)blockDim.x * blockIdx.x;
+    if (idx < n) {
+        /// TODO: saturate the quantized values accordingly
+        data[idx] = max(0, min(30, (int)data[idx] + 15 - 127));  // exponent 31 is INF in half
+    }
+}
+
+void AdjustUe8m0ScaleForHalf(uint8_t* data, int n, cudaStream_t st)
+{
+    constexpr int block = 512;
+    const int     grid  = cdiv(n, block);
+    adjust_ue8m0_scale_for_half_kernel<<<grid, block, 0, st>>>(data, n);
+}
+
 }  // namespace turbomind

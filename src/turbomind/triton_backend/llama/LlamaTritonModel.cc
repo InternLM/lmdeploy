@@ -144,6 +144,33 @@ static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
     }
 }
 
+DataType weight_type_from_string(std::string str)
+{
+    if (str == "fp16" || str == "float16") {
+        return kFloat16;
+    }
+    else if (str == "bf16" || str == "bfloat16") {
+        return kBfloat16;
+    }
+    else if (str == "fp32") {
+        return kFloat32;
+    }
+    else if (str == "int8") {
+        return kUint8;
+    }
+    else if (str == "int4") {
+        return kUint4;
+    }
+    else if (str == "fp8") {
+        return kFloat8_e4m3;
+    }
+    else if (str == "e2m1") {
+        return kFloat4_e2m1;
+    }
+    TM_CHECK(0) << "unsupported weight type: " << str;
+    return {};
+}
+
 template<typename T>
 std::map<std::string, std::pair<std::regex, T>> getLoraPattern(std::string pattern, T (*func)(const std::string& s))
 {
@@ -392,29 +419,8 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
 
-    const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
-    if (weight_type_str == "fp16" || weight_type_str == "float16") {
-        model_param_.weight_type = kFloat16;
-    }
-    else if (weight_type_str == "bf16" || weight_type_str == "bfloat16") {
-        model_param_.weight_type = kBfloat16;
-    }
-    else if (weight_type_str == "fp32") {
-        model_param_.weight_type = kFloat32;
-    }
-    else if (weight_type_str == "int8") {
-        model_param_.weight_type = kUint8;
-    }
-    else if (weight_type_str == "int4") {
-        model_param_.weight_type = kUint4;
-    }
-    else if (weight_type_str == "fp8") {
-        model_param_.weight_type = kFloat8_e4m3;
-    }
-    else {
-        std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";
-        FT_CHECK(0);
-    }
+    model_param_.weight_type        = weight_type_from_string(model_reader["weight_type"].as<std::string>());
+    model_param_.expert_weight_type = weight_type_from_string(model_reader["expert_weight_type"].as<std::string>());
 
     if (auto method = get_moe_method()) {
         moe_param_.method = *method;

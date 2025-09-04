@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/data_type.h"
 
@@ -220,6 +222,9 @@ inline __device__ T round(float x)
     else if constexpr (std::is_same_v<T, uint32_t>) {
         asm("cvt.rni.sat.u32.f32 %0, %1;\n" : "=r"(y) : "f"(x));
     }
+    else if constexpr (std::is_same_v<T, int32_t>) {
+        asm("cvt.rni.sat.s32.f32 %0, %1;\n" : "=r"(y) : "f"(x));
+    }
     else {
         static_assert(!std::is_same_v<T, T>, "not implemented");
     }
@@ -238,6 +243,9 @@ inline __device__ T round(half x)
     }
     else if constexpr (std::is_same_v<T, uint32_t>) {
         asm("cvt.rni.sat.u32.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
+    }
+    else if constexpr (std::is_same_v<T, int32_t>) {
+        asm("cvt.rni.sat.s32.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
     }
     else {
         static_assert(!std::is_same_v<T, T>, "not implemented");
@@ -689,6 +697,88 @@ struct ConvertKvCache<uint8_t, T> {
         PRAGMA_UNROLL
         for (int i = 0; i < N; ++i) {
             vo[i] = vo[i] * scale_ + zero_;
+        }
+        return vo;
+    }
+};
+
+template<class T>
+struct ConvertKvCache<fp4_e2m1_t, T> {
+
+    __device__ static Array<bfloat16_t, 8> cvt_bf16x8_e2m1(const Array<fp4_e2m1_t, 8>& vi)
+    {
+        const uint32_t& x = (const uint32_t&)vi;
+
+        constexpr uint32_t S  = 0x80008000U;
+        constexpr uint32_t EM = 0x01C001C0U;
+
+        Array<uint32_t, 4> vo;
+
+        // clang-format off
+        vo[0] = (x << 12 & S) | (x << 6 & EM);
+        vo[1] = (x <<  8 & S) | (x << 2 & EM);
+        vo[2] = (x <<  4 & S) | (x >> 2 & EM);
+        vo[3] = (x <<  0 & S) | (x >> 6 & EM);
+        // clang-format on
+
+        constexpr uint32_t e  = (127U - 1U + 127U) << 7U;
+        constexpr uint32_t ee = e << 16U | e;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < 4; ++i) {
+#if TURBOMIND_ARCH_SM90
+            asm("mul.rn.bf16x2 %0, %1, %2;" : "=r"(vo[i]) : "r"(vo[i]), "r"(ee));
+#else
+            asm("fma.rn.bf16x2 %0, %1, %2, %3;" : "=r"(vo[i]) : "r"(vo[i]), "r"(ee), "r"(0));
+#endif
+        }
+
+        return (Array<bfloat16_t, 8>&)vo;
+    }
+
+    __device__ static Array<half, 8> cvt_f16x8_e2m1(const Array<fp4_e2m1_t, 8>& vi)
+    {
+        const uint32_t& x = (const uint32_t&)vi;
+
+        constexpr uint32_t S  = 0x80008000U;
+        constexpr uint32_t EM = 0x0E000E00U;
+
+        Array<uint32_t, 4> vo;
+
+        // clang-format off
+        vo[0] = (x << 12 & S) | (x << 9 & EM);
+        vo[1] = (x <<  8 & S) | (x << 5 & EM);
+        vo[2] = (x <<  4 & S) | (x << 1 & EM);
+        vo[3] = (x <<  0 & S) | (x >> 3 & EM);
+        // clang-format on
+
+        constexpr uint32_t e  = (15U - 1U + 15U) << 10U;
+        constexpr uint32_t ee = e << 16U | e;
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < 4; ++i) {
+            asm volatile("mul.f16x2 %0, %1, %2;" : "=r"(vo[i]) : "r"(vo[i]), "r"(ee));
+        }
+
+        return (Array<half, 8>&)vo;
+    }
+
+    template<int N>
+    __device__ static auto convert(const Array<fp4_e2m1_t, N>& vi)
+    {
+        Array<T, N> vo;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 8) {
+            auto& v = (Array<T, 8>&)vo[i];
+            if constexpr (std::is_same_v<T, bfloat16_t>) {
+                v = cvt_bf16x8_e2m1((Array<fp4_e2m1_t, 8>&)vi[i]);
+            }
+            else if constexpr (std::is_same_v<T, half_t>) {
+                v = cvt_f16x8_e2m1((Array<fp4_e2m1_t, 8>&)vi[i]);
+            }
+            else {
+                static_assert(N != N, "not implemented");
+            }
         }
         return vo;
     }
