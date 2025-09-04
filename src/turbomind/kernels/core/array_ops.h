@@ -287,6 +287,12 @@ inline __device__ void Load(Array<T, N>& dst, const T* src)
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
         (uint1&)dst = *(const uint1*)src;
     }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
+        (uint16_t&)dst = *(const uint16_t*)src;
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
+        (uint8_t&)dst = *(const uint8_t*)src;
+    }
     else if constexpr (sizeof(Array<T, N>) % sizeof(uint4) == 0) {  //  uncoalesced
         static_assert(bitsof<T> % 8 == 0, "raw pointer arithmetic of sub-byte types");
         constexpr int M = sizeof(Array<T, N>) / sizeof(uint4);

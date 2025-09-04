@@ -124,7 +124,7 @@ int Convert(const void*         S,  //
             static constexpr bool kIsValid  = kPackSize % unit_size(type_c<Dtype>) == 0;
             constexpr Pack        pack      = mma | operand | pack_num;
 
-            if constexpr (kIsValid) {
+            if constexpr (kIsValid || operand == OPERAND_U) {
                 // Launch conversion kernel
                 Convert_v2_Impl<Config<Operand, Dtype, pack_num_tag>>(S, Sdesc, D, Ddesc, stream);
                 // Set leading dimension for destination
@@ -135,7 +135,7 @@ int Convert(const void*         S,  //
             }
 
             // std::cerr << __PRETTY_FUNCTION__ << "\n";
-            // std::cerr << kPackSize << " " << unit_size(type_c<Dtype>) << "\n";
+            std::cerr << "unsupported : " << kPackSize << " " << unit_size(type_c<Dtype>) << "\n";
         }
 
         return false;
@@ -172,6 +172,8 @@ int Convert(const void*         S,  //
             switch (Ddesc.type) {
                 case kUint32:
                     return dispatch_4(mma, operand, order, type_c<uint32_t>, type_c<uint32_t>);
+                case kUint8:
+                    return dispatch_4(mma, operand, order, type_c<uint8_t>, type_c<uint8_t>);
                 default:
                     return false;
             }
@@ -252,6 +254,11 @@ get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool for
             }
             else if (sm == 70) {
                 return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
+            }
+        }
+        else if (dtype == kFloat4_e2m1) {
+            if (sm >= 80) {
+                return {kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1};
             }
         }
     }
