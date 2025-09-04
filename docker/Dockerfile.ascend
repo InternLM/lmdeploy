@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.cache \
     pip install --no-cache-dir -U pip build && \
     python -m build -w -o /wheels -v .
 
-FROM ${BASE_IMAGE} AS final
+FROM ${ASCEND_DEVICE}_base AS final
 
 RUN --mount=type=cache,target=/root/.cache \
     pip config set global.index-url  https://mirrors.aliyun.com/pypi/simple  && \
