@@ -1815,7 +1815,7 @@ void LlamaBatch::InitializeBufferAndKVCache(bool skip_kvcache)
         const auto get_free_size = [&] {  //
             size_t free{}, total{};
             check_cuda_error(cudaMemGetInfo(&free, &total));
-            return AllReduce(model_->comm_->h_tp_mem_group, free, comm::RedOp::kMin);
+            return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
         };
 
         sequence_manager_.reset(new SequenceManager{model_->layer_num_,

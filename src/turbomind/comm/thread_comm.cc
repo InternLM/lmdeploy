@@ -29,7 +29,7 @@ struct ThreadCommImpl: public HostCommImpl {
         int next_offset()
         {
             std::lock_guard lock{mutex_};
-            TM_CHECK(offset_ < channels_.size() / n_);
+            TM_CHECK(offset_ < channels_.size());
             offset_ += n_;
             return offset_;
         }
