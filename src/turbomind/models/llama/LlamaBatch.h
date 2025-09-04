@@ -120,7 +120,7 @@ public:
 
     ~LlamaBatch();
 
-    void InitializeBufferAndKVCache(bool skip_kvcache = false);
+    void InitializeBufferAndKVCache();
 
     void FreeBufferAndKVCache();
 

@@ -350,8 +350,7 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     engine_param_.mlp_tp_size   = engine_reader["mlp_tp_size"].as<int>();
     engine_param_.mlp_tp_rank   = 0;
 
-    engine_param_.devices    = engine_reader["devices"].as<std::vector<int>>();
-    engine_param_.empty_init = engine_reader["empty_init"].as<bool>(false);
+    engine_param_.devices = engine_reader["devices"].as<std::vector<int>>();
 
     {
         auto tp                             = engine_param_.attn_tp_size;
@@ -596,10 +595,8 @@ void LlamaTritonModel::sleep(int device_id, int level)
         weights_[device_id]->to_device(kCPU);
     }
 
-    if (engines_[device_id]) {
-        // free kv cache
-        engines_[device_id]->FreeBufferAndKVCache();
-    }
+    // free kv cache
+    engines_[device_id]->FreeBufferAndKVCache();
 }
 
 void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tags)
@@ -620,8 +617,7 @@ void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tag
         }
     }
 
-    if (keys.find("kv_cache") != keys.end() && engines_[device_id]) {
-        engines_[device_id]->FreeBufferAndKVCache();
+    if (keys.find("kv_cache") != keys.end()) {
         engines_[device_id]->InitializeBufferAndKVCache();
     }
 }

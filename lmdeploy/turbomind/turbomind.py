@@ -165,7 +165,6 @@ class TurboMind:
 
     def _load_weights(self):
         """Load weights."""
-        self._get_model_params()
 
         with torch.cuda.device(self.devices[0]):
             self._tm_model.export()
@@ -207,11 +206,8 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _get_model_params(self):
+    def _get_model_params(self, model_comm, tm_params: dict):
         """Get turbomind model params when loading from hf."""
-
-        model_comm = self.model_comm
-        tm_params = self._tm_model.tm_params
 
         def _get_params(device_id, que):
             rank = self.node_id * self.gpu_count + device_id
@@ -233,7 +229,6 @@ class TurboMind:
                     tm_params[k] = [v]
                 else:
                     tm_params[k].append(v)
-        logger.warning(f'get {len(tm_params)} model params')
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """Postprocess turbomind config by."""
@@ -279,6 +274,10 @@ class TurboMind:
         self._create_weight(model_comm)
         # output model
         self._tm_model = tm_model
+        # get tm params
+        tm_params = tm_model.tm_params
+        self._get_model_params(model_comm, tm_params)
+        logger.warning(f'get {len(tm_params)} model params')
         return model_comm
 
     def sleep(self, level: int = 1):
@@ -315,7 +314,6 @@ class TurboMind:
             return func(*args).clone()
 
         if not hasattr(self, '_export_iter'):
-            self._get_model_params()
             que = Queue()
             tm_model = self._tm_model
             tm_model.input_model.model_path = que
