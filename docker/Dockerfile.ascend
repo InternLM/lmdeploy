@@ -26,5 +26,3 @@ RUN --mount=type=cache,target=/root/.cache \
 
 RUN --mount=type=cache,target=/wheels,from=builder,source=/wheels \
     pip install --no-cache-dir /wheels/*.whl
-
-ENTRYPOINT []
