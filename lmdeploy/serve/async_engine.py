@@ -600,6 +600,14 @@ class AsyncEngine(LogitsMixin):
                                 tools: Optional[List[object]] = None,
                                 enable_thinking: Optional[bool] = None,
                                 **kwargs):
+        # Change multimodal data to openai text messages, i.e.,
+        # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
+        # [{'role': 'user', 'content': 'hi']
+        if isinstance(prompt, list) and any(isinstance(msg['content'], list) for msg in prompt):
+            prompt = [
+                msg if isinstance(msg['content'], str) else dict(role=msg['role'], content=msg['content'][0]['text'])
+                for msg in prompt
+            ]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
