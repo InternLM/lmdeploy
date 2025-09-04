@@ -2,7 +2,6 @@
 import dataclasses
 import json
 import uuid
-from abc import abstractmethod
 from typing import List, Literal, Optional, Union
 
 from mmengine import Registry
@@ -124,7 +123,7 @@ class ChatTemplateConfig:
                            '"AutoTokenizer.apply_chat_template" is used instead')
             self.model_name = 'hf'
         if self.model_name in MODELS.module_dict.keys():
-            model: BaseModel = MODELS.get(self.model_name)(**attrs)
+            model = MODELS.get(self.model_name)(**attrs)
         else:
             logger.warning(f'Could not find {self.model_name} in registered models. '
                            f'Register {self.model_name} using the BaseChatTemplate.')
@@ -162,53 +161,7 @@ class ChatTemplateConfig:
 
 
 @MODELS.register_module(name='base')
-class BaseModel:
-    """Base model."""
-
-    def __init__(self, capability='chat', stop_words=None, **kwargs):
-        self.stop_words = stop_words
-        self.capability = capability
-
-    def get_prompt(self, prompt, sequence_start=True):
-        """Return the prompt that is concatenated with other elements in the
-        chat template.
-
-        Args:
-            prompt (str): user's input prompt
-            sequence_start (bool): indicator for the first round chat of a
-               session sequence
-        Returns:
-            str: the concatenated prompt
-        """
-        return prompt
-
-    @abstractmethod
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        """Return the prompt that is concatenated with other elements in the
-        chat template. When messages arg is a string, return
-        self.get_prompt(messages). When messages arg is a chat history, return
-        translated prompt from chat history.
-
-        Args:
-            messages (str | List): user's input prompt
-        Returns:
-            str: the concatenated prompt
-        """
-        if isinstance(messages, str):
-            return self.get_prompt(messages)
-        # chat history processing in derived classes
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        return None
-
-
-class BaseChatTemplate(BaseModel):
+class BaseChatTemplate:
     """Base Chat template."""
 
     def __init__(self,
@@ -222,8 +175,9 @@ class BaseChatTemplate(BaseModel):
                  separator='',
                  tool='',
                  eotool='',
+                 capability='chat',
+                 stop_words=None,
                  **kwargs):
-        super().__init__(**kwargs)
         self.system = system
         self.meta_instruction = meta_instruction
         self.user = user
@@ -234,6 +188,8 @@ class BaseChatTemplate(BaseModel):
         self.assistant = assistant
         self.tool = tool
         self.eotool = eotool
+        self.stop_words = stop_words
+        self.capability = capability
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -286,6 +242,15 @@ class BaseChatTemplate(BaseModel):
             return ret[:-len(eox_map['assistant'])]  # prefix of response
         ret += f'{self.assistant}'
         return ret
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        return None
 
 
 @MODELS.register_module(name='cogvlm')
@@ -542,7 +507,7 @@ class CodeLlama(Llama2):
 
 
 @MODELS.register_module(name='chatglm')
-class ChatGLM2(BaseModel):
+class ChatGLM2(BaseChatTemplate):
 
     def __init__(self, user='问：', eoh='\n\n', assistant='答：', eoa='\n\n', **kwargs):
         super().__init__(**kwargs)
