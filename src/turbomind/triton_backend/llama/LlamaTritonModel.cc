@@ -498,9 +498,6 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
     comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
     comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
 
-    // kvcache manager may be initialized by another thread, use same h_tp_group may cause conflict
-    comm.h_tp_mem_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
-
     if (comm_size_ > 1) {
         comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
         //

@@ -16,27 +16,15 @@ namespace turbomind::comm {
 
 struct ThreadCommImpl: public HostCommImpl {
 
-    constexpr static int kMaxSplits = 32;
-
     class State {
     public:
-        explicit State(int n): n_{n}, channels_(n * n * kMaxSplits) {}
+        explicit State(int n): n_{n}, channels_(n * n) {}
         std::atomic<void*>& channel(int from, int to)
         {
             return channels_[from * n_ + to];
         }
 
-        int next_offset()
-        {
-            std::lock_guard lock{mutex_};
-            TM_CHECK(offset_ < channels_.size());
-            offset_ += n_;
-            return offset_;
-        }
-
     private:
-        std::mutex                     mutex_;
-        int                            offset_{0};
         int                            n_;
         std::deque<std::atomic<void*>> channels_;
     };
@@ -44,8 +32,6 @@ struct ThreadCommImpl: public HostCommImpl {
     std::shared_ptr<State> state_;
 
     int rank_;  // global rank
-
-    int offset_{0};
 
     std::vector<int> l2g_;
     std::vector<int> g2l_;
@@ -60,9 +46,6 @@ struct ThreadCommImpl: public HostCommImpl {
     ThreadCommImpl(std::vector<int> l2g, std::vector<int> g2l, std::shared_ptr<State> state, int rank):
         state_{std::move(state)}, rank_{rank}, l2g_{std::move(l2g)}, g2l_{std::move(g2l)}
     {
-        int offset = (this->rank() == 0) ? state_->next_offset() : 0;
-        comm::Broadcast(this, offset, 0);
-        offset_ = offset;
     }
 
     int rank() const override
@@ -82,7 +65,7 @@ struct ThreadCommImpl: public HostCommImpl {
 
     std::atomic<void*>& channel(int from, int to)
     {
-        return state_->channel(from + offset_, to);
+        return state_->channel(from, to);
     }
 
     std::shared_ptr<HostCommImpl> Split(int color, int key) override
