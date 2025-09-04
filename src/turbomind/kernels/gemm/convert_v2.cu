@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
@@ -124,7 +125,7 @@ int Convert(const void*         S,  //
             static constexpr bool kIsValid  = kPackSize % unit_size(type_c<Dtype>) == 0;
             constexpr Pack        pack      = mma | operand | pack_num;
 
-            if constexpr (kIsValid || operand == OPERAND_U) {
+            if constexpr (kIsValid || is_UV(operand)) {
                 // Launch conversion kernel
                 Convert_v2_Impl<Config<Operand, Dtype, pack_num_tag>>(S, Sdesc, D, Ddesc, stream);
                 // Set leading dimension for destination
@@ -224,66 +225,6 @@ int Convert(const void*         S,  //
 
     // -1 on failure
     return dispatch() - 1;
-}
-
-std::tuple<Order, Pack, Order, Pack>
-get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool force_simt)
-{
-    if (is_fused_moe) {
-        if (dtype == kBfloat16 && sm >= 80) {
-            return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
-        }
-
-        if (dtype == kFloat16) {
-            if (sm >= 80) {
-                return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
-            }
-            else if (sm == 75) {
-                return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
-            }
-            else if (sm == 70) {
-                return {kColMajor, HMMA_884 | OPERAND_B | 1, {}, {}};
-            }
-        }
-        else if (dtype == kUint4) {
-            if (sm >= 80) {
-                return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
-            }
-            else if (sm == 75) {
-                return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
-            }
-            else if (sm == 70) {
-                return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
-            }
-        }
-        else if (dtype == kFloat4_e2m1) {
-            if (sm >= 80) {
-                return {kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1};
-            }
-        }
-    }
-    else {
-        if (dtype == kUint4) {
-            if (force_simt) {
-                return {kColMajor, HMMA_SIMT | OPERAND_B | 1, kRowMajor, HMMA_SIMT | OPERAND_V | 1};
-            }
-            if (sm >= 80) {
-                return {kRowMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
-            }
-            else if (sm == 75) {
-                return {kRowMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
-            }
-            else if (sm == 70) {
-                return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
-            }
-        }
-    }
-
-    std::cerr << "not implemented: dtype=" << to_string(dtype) << ", is_fused_moe=" << is_fused_moe << ", sm=" << sm
-              << std::endl;
-    std::abort();
-
-    return {};
 }
 
 namespace {
