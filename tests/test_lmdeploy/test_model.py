@@ -349,7 +349,7 @@ def test_interns1(model_path, enable_thinking, has_user_sys):
 @pytest.mark.parametrize('model_path', ['Qwen/Qwen1.5-7B-Chat', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3-8B'])
 def test_HFChatTemplate_get_prompt_sequence_start_False_Qwen(model_path):
     model = MODELS.get('hf')(model_path=model_path)
-    assert model.stop_words == '<|im_end|>'
+    assert model.stop_words == ['<|im_end|>']
 
     prompt = 'How to apply chat template using transformers?'
     assert model.get_prompt(prompt,
@@ -375,7 +375,7 @@ def test_HFChatTemplate_llama(model_path):
 @pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-V3'])
 def test_HFChatTemplate_DeepSeek_V3(model_path):
     model = MODELS.get('hf')(model_path=model_path)
-    assert model.stop_words == '<｜end▁of▁sentence｜>'
+    assert model.stop_words == ['<｜end▁of▁sentence｜>']
 
     prompt = 'How to apply chat template using transformers?'
     assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜>'
@@ -384,7 +384,7 @@ def test_HFChatTemplate_DeepSeek_V3(model_path):
 @pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-R1'])
 def test_HFChatTemplate_DeepSeek_thinking(model_path):
     model = MODELS.get('hf')(model_path=model_path)
-    assert model.stop_words == '<｜end▁of▁sentence｜>'
+    assert model.stop_words == ['<｜end▁of▁sentence｜>']
 
     prompt = 'How to apply chat template using transformers?'
     assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜><think>\n'

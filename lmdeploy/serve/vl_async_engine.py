@@ -73,6 +73,14 @@ class VLAsyncEngine(AsyncEngine):
                 isinstance(message['content'], list) and any(item['type'] in ['image_url', 'image_data']
                                                              for item in message['content']) for message in messages)
             if not has_multimodal_input:
+                # Change multimodal data to openai text messages, i.e.,
+                # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
+                # [{'role': 'user', 'content': 'hi']
+                messages = [
+                    msg if isinstance(msg['content'], str) else dict(role=msg['role'],
+                                                                     content=msg['content'][0]['text'])
+                    for msg in messages
+                ]
                 return await super()._get_prompt_input(messages,
                                                        do_preprocess,
                                                        sequence_start,

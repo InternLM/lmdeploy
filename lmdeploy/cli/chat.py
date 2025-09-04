@@ -36,8 +36,7 @@ def build_pipe(model_path, backend, **kwargs):
     chat_template_config = None
     if chat_template:
         from .utils import get_chat_template
-        chat_template_config = get_chat_template(chat_template)
-
+        chat_template_config = get_chat_template(chat_template, model_path)
     pipe = pipeline(model_path,
                     backend_config=engine_config,
                     chat_template_config=chat_template_config,
