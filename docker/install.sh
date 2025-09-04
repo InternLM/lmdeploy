@@ -35,7 +35,7 @@ if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     FA_VERSION=2.7.3
     TORCH_VERSION="<2.7"
 else
-    FA_VERSION=2.8.2
+    FA_VERSION=2.8.3
     TORCH_VERSION=""
 fi
 
