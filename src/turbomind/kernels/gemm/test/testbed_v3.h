@@ -239,6 +239,10 @@ struct Testbed_v3: Parameter {
         quant.emplace(input_dim, output_dim, data_type, false, weight_type, group_size);
         dequant.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
 
+        Buffer_<unsigned> rbits;
+        // rbits = {original.weight.size(), kDEVICE};
+        // rng_.RandomBytes(Tensor{rbits});
+
         /// Weights are allocated in MN-major, but some quantization requires K-major tensor
 
         if (weight_type == data_type) {
@@ -256,6 +260,7 @@ struct Testbed_v3: Parameter {
                               quant.zeros.t(),
                               dequant.weight.t(),
                               original.weight.t(),
+                              {},
                               group_size);
         }
         else if (weight_type == kFloat4_e2m1) {
@@ -264,6 +269,7 @@ struct Testbed_v3: Parameter {
                               {},
                               dequant.weight.t(),
                               original.weight.t(),
+                              rbits,
                               group_size);
         }
         else {

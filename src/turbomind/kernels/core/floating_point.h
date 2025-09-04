@@ -29,8 +29,11 @@ struct FloatingPoint {
     static constexpr float min_denormal = 1 / exp2(exponent_bias - 1 + mantissa_bits);
 
     // Modified from `__nv_cvt_double_to_fp8` in <cuda_fp8.hpp>
-    __device__ static unsigned from_f32(float x)
+    template<class R>
+    __device__ static unsigned from_f32(float x, R rbits)
     {
+        constexpr bool stochastic = std::is_same_v<R, unsigned>;
+
         // 1/2 LSB of the target format, positioned in single precision mantissa
         constexpr int half_ulp = 1U << (23U - mantissa_bits - 1U);
 
@@ -52,11 +55,21 @@ struct FloatingPoint {
         }
         else if (absx >= min_normal) {  // normal
             res = (exp << mantissa_bits) | mantissa;
+
+            unsigned round_mask = (half_ulp << 1U) - 1U;
             // rounded-off bits
-            unsigned round = xbits & ((half_ulp << 1U) - 1U);
-            // round-to-nearest-even adjustment
-            if ((round > half_ulp) || ((round == half_ulp) && (mantissa & 1U))) {
-                res += 1U;
+            unsigned round = xbits & round_mask;
+            if constexpr (stochastic) {
+                // stochastic rounding (.rs) adjustment
+                if (round + (rbits & round_mask) > round_mask) {
+                    res += 1U;
+                }
+            }
+            else {
+                // round-to-nearest-even (.rn) adjustment
+                if ((round > half_ulp) || ((round == half_ulp) && (mantissa & 1U))) {
+                    res += 1U;
+                }
             }
         }
         else {  // denormal
@@ -65,11 +78,21 @@ struct FloatingPoint {
             mantissa |= 1U << mantissa_bits;
             // additional round-off due to denormalization
             res = mantissa >> shift;
+
+            unsigned round_mask = (half_ulp << (shift + 1U)) - 1U;
             // rounded-off bits, including implicit leading bit
-            unsigned round = (xbits | (1U << 23U)) & ((half_ulp << (shift + 1U)) - 1U);
-            // round-to-nearest-even adjustment
-            if ((round > (half_ulp << shift)) || ((round == (half_ulp << shift)) && (res & 1U))) {
-                res += 1U;
+            unsigned round = (xbits | (1U << 23U)) & round_mask;
+            if constexpr (stochastic) {
+                // stochastic rounding (.rs) adjustment
+                if (round + (rbits & round_mask) > round_mask) {
+                    res += 1U;
+                }
+            }
+            else {
+                // round-to-nearest-even (.rn) adjustment
+                if ((round > (half_ulp << shift)) || ((round == (half_ulp << shift)) && (res & 1U))) {
+                    res += 1U;
+                }
             }
         }
 

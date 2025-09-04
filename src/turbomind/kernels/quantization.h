@@ -10,11 +10,12 @@ void QuantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> scale_, const Tensor& src, 
 
 void DequantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> src_, const Tensor& scale, cudaStream_t st);
 
-void QuantizeGroupwise(Tensor quant,    // (m,k)
-                       Tensor scales,   // (m,k/g)
-                       Tensor zeros,    // (m,k/g)
-                       Tensor dequant,  // (m,k)
-                       Tensor src,      // (m,k)
-                       int    group_size);
+void QuantizeGroupwise(Tensor            quant,    // (m,k)
+                       Tensor            scales,   // (m,k/g)
+                       Tensor            zeros,    // (m,k/g)
+                       Tensor            dequant,  // (m,k)
+                       Tensor            src,      // (m,k)
+                       Buffer_<unsigned> rbits,    // (m*k)
+                       int               group_size);
 
 }  // namespace turbomind

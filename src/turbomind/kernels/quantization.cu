@@ -370,9 +370,10 @@ struct IntegralQuantizer {
     static constexpr int bits  = bits_;
     static constexpr int max_q = (1 << bits) - 1;
 
-    template<class T, int N>
+    template<class T, int N, class R>
     __device__ void operator()(const Array<T, N>&    x,  //
                                const Array<bool, N>& pred,
+                               const R&              rbits,
                                Array<Q, N>&          q,
                                Array<T, N>&          d,
                                T&                    scale,
@@ -429,9 +430,16 @@ struct FloatingPointQuantizer {
 
     static constexpr int bits = traits::bits;
 
-    template<int N, class Z>
+    float pre_rounding_scale_;
+
+    __host__ __device__ FloatingPointQuantizer(float pre_rounding_scale = 1.f): pre_rounding_scale_{pre_rounding_scale}
+    {
+    }
+
+    template<int N, class Z, class R>
     __device__ void operator()(const Array<T, N>&    x,  //
                                const Array<bool, N>& pred,
+                               const R&              rbits,
                                Array<Q, N>&          q,
                                Array<T, N>&          d,
                                Scale&                scale,
@@ -470,8 +478,8 @@ struct FloatingPointQuantizer {
 
         PRAGMA_UNROLL
         for (int i = 0; i < N; ++i) {
-            q[i] = traits::from_f32(f[i] / scale_f32);
-            d[i] = traits::to_f32(q[i]) * scale_f32;
+            q[i] = traits::from_f32((f[i] * pre_rounding_scale_) / scale_f32, rbits[i]);
+            d[i] = (traits::to_f32(q[i]) * scale_f32) / pre_rounding_scale_;
         }
     }
 };
@@ -482,19 +490,20 @@ template<int vec_size,
          class Q = typename Quantizer::Q,
          class S = typename Quantizer::Scale,
          class Z = typename Quantizer::Zero>
-__global__ void QuantizeGroupwise_Kernel(Quantizer     quantizer,
-                                         Q*            q,
-                                         S*            s,
-                                         Z*            z,
-                                         T*            d,
-                                         const T*      x,
-                                         Array<int, 2> stride_q,
-                                         Array<int, 2> stride_s,
-                                         Array<int, 2> stride_d,
-                                         Array<int, 2> stride_x,
-                                         int           M,
-                                         int           K,
-                                         int           G)
+__global__ void QuantizeGroupwise_Kernel(Quantizer       quantizer,
+                                         Q*              q,
+                                         S*              s,
+                                         Z*              z,
+                                         T*              d,
+                                         const T*        x,
+                                         const unsigned* r,
+                                         Array<int, 2>   stride_q,
+                                         Array<int, 2>   stride_s,
+                                         Array<int, 2>   stride_d,
+                                         Array<int, 2>   stride_x,
+                                         int             M,
+                                         int             K,
+                                         int             G)
 {
     if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
         static constexpr bool has_zero = !std::is_void_v<Z>;
@@ -512,10 +521,15 @@ __global__ void QuantizeGroupwise_Kernel(Quantizer     quantizer,
             Array<T, vec_size>    x_vec;
             Array<bool, vec_size> p_vec;
 
+            Array<unsigned, vec_size> r_vec;
+
             PRAGMA_UNROLL
             for (int i = 0; i < vec_size; ++i) {
                 p_vec[i] = k + i < K;
                 x_vec[i] = p_vec[i] ? x[stride_x[0] * m + stride_x[1] * (k + i)] : T{0};
+                if (r) {
+                    r_vec[i] = p_vec[i] ? r[m * K + k] : 0;
+                }
             }
 
             Array<Q, vec_size> q_vec;
@@ -524,7 +538,11 @@ __global__ void QuantizeGroupwise_Kernel(Quantizer     quantizer,
             S                                    scale;
             std::conditional_t<has_zero, Z, int> zero{};
 
-            quantizer(x_vec, p_vec, q_vec, d_vec, scale, zero, threads_per_group);
+            auto invoke = [&](auto rbits) {
+                quantizer(x_vec, p_vec, rbits, q_vec, d_vec, scale, zero, threads_per_group);
+            };
+
+            r ? invoke(r_vec) : invoke(Array<char, vec_size>{});
 
             PRAGMA_UNROLL
             for (int i = 0; i < vec_size; ++i) {
@@ -547,12 +565,13 @@ __global__ void QuantizeGroupwise_Kernel(Quantizer     quantizer,
     }
 }
 
-void QuantizeGroupwise(Tensor quant,    // (m,k)
-                       Tensor scales,   // (m,k/g)
-                       Tensor zeros,    // (m,k/g)
-                       Tensor dequant,  // (m,k)
-                       Tensor src,      // (m,k)
-                       int    group_size)
+void QuantizeGroupwise(Tensor            quant,    // (m,k)
+                       Tensor            scales,   // (m,k/g)
+                       Tensor            zeros,    // (m,k/g)
+                       Tensor            dequant,  // (m,k)
+                       Tensor            src,      // (m,k)
+                       Buffer_<unsigned> rbits,    // (m*k)
+                       int               group_size)
 {
     // std::cout << quant << std::endl;
     // std::cout << scales << std::endl;
@@ -605,6 +624,7 @@ void QuantizeGroupwise(Tensor quant,    // (m,k)
                                                                  zeros.data_or((Z*)nullptr),
                                                                  dequant.data<T>(),
                                                                  src.data<T>(),
+                                                                 rbits.data_or(nullptr),
                                                                  stride_2d(proxy),
                                                                  stride_2d(scales),
                                                                  stride_2d(dequant),
