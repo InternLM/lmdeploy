@@ -23,10 +23,10 @@ from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelCo
 from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
+from ..strategies import build_strategy_factory
 from .base import EngineBase
 from .engine_checker import EngineChecker
 from .executor import build_executor
-from .logits_process import SamplingInputs
 from .model_agent import BatchedOutputs
 from .request import Request, RequestManager, RequestType, Response
 
@@ -382,6 +382,13 @@ class Engine(EngineBase):
                                        distributed_executor_backend=engine_config.distributed_executor_backend,
                                        dtype=engine_config.dtype)
         self.executor.init()
+
+        # strategies
+        self.strategy_factory = build_strategy_factory(self.model_config, self.executor.misc_config)
+        self.sampling_strategy = self.strategy_factory.build_sampling_strategy()
+        self.model_agent_strategy = self.strategy_factory.build_model_agent_strategy()
+        self.engine_strategy = self.strategy_factory.build_engine_strategy(cache_config=cache_config,
+                                                                           scheduler_config=scheduler_config)
 
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
@@ -847,7 +854,7 @@ class Engine(EngineBase):
         if model_metas is None:
             model_metas = [None] * len(running)
         if self.model_config.model_paradigm == 'dllm':
-            dllm_mask = batched_outputs.dllm_mask
+            dllm_mask = batched_outputs.extra_outputs.dllm_mask
             stop_pos = batched_outputs.stop_pos
             return self._update_running_dllm(running, next_token_ids, dllm_mask, stopped, model_metas, is_decoding,
                                              stop_pos)
@@ -923,71 +930,15 @@ class Engine(EngineBase):
 
     def _make_forward_inputs(self, prefill: bool, enable_empty: bool = False):
         """Make forward inputs."""
-        prefill_interval = self.scheduler_config.prefill_interval
-
-        def __get_prealloc(prefill_interval: int):
-            model_paradigm = self.model_config.model_paradigm
-            if model_paradigm == 'dllm':
-                block_size = self.cache_config.block_size
-                dllm_block_length = self.misc_config.dllm_config.dllm_block_length
-                num_blocks = min(prefill_interval // 2, block_size // dllm_block_length)
-                return num_blocks * dllm_block_length
-            else:
-                return prefill_interval
-
-        def __get_num_loops(is_prefill: bool, prefill_interval: int):
-            model_paradigm = self.model_config.model_paradigm
-            if is_prefill:
-                return 1
-            if model_paradigm == 'dllm':
-                block_size = self.cache_config.block_size
-                dllm_block_length = self.misc_config.dllm_config.dllm_block_length
-                max_num_loops = block_size // dllm_block_length * 2
-                num_loops = min(prefill_interval, max_num_loops)
-                return num_loops
-            else:
-                return prefill_interval
-
-        def __get_num_appendable_ids(seqs: SeqList):
-            """Get num appendable ids."""
-            num_appendable = [seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
-            num_appendable = torch.tensor(num_appendable)
-            if self.model_config.model_paradigm == 'dllm':
-                dllm_block_length = self.misc_config.dllm_config.dllm_block_length
-                remain = [seq.num_valid_ids % dllm_block_length for seq in seqs]
-                num_appendable += torch.tensor(remain)
-            return num_appendable
-
-        def __get_dllm_mask(seqs: SeqList):
-            """Get dllm mask."""
-            if self.model_config.model_paradigm != 'dllm':
-                return None
-            dllm_masks = [seq.dllm_mask for seq in seqs]
-            dllm_masks = torch.as_tensor(np.concatenate(dllm_masks))
-            return dllm_masks
 
         def __need_logits(seqs: SeqList):
             """Need logits."""
             return any(seq.return_logits for seq in seqs)
 
-        def __make_sampling_inputs(seqs: SeqList):
-            pad_id = self.model_config.bos_token_id
-            pad_id = 0 if pad_id is None else pad_id
-            if self.model_config.model_paradigm == 'dllm':
-                from .logits_process import SamplingInputsDLLM
-                return SamplingInputsDLLM.from_sampling_params(seqs,
-                                                               pad_token_id=pad_id,
-                                                               dllm_config=self.misc_config.dllm_config)
-            return SamplingInputs.from_sampling_params(seqs, pad_token_id=pad_id)
-
-        def __get_output_start_pos(seqs: SeqList):
-            pos = [seq.output_start_pos for seq in seqs]
-            return torch.tensor(pos)
-
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
-        prealloc_size = __get_prealloc(prefill_interval)
+        prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
         scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
 
         if enable_empty and len(scheduler_output.running) == 0:
@@ -996,9 +947,10 @@ class Engine(EngineBase):
         # schedule decoding if no valid prefill reqs.
         if prefill and len(scheduler_output.running) == 0 and self.engine_config.role != EngineRole.Prefill:
             prefill = False
+            prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
 
-        num_loops = __get_num_loops(prefill, prefill_interval)
+        num_loops = self.engine_strategy.get_num_loops(not prefill)
         running = scheduler_output.running
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
@@ -1008,11 +960,10 @@ class Engine(EngineBase):
 
         # create inputs
         inputs = self.create_model_inputs(running, prefill)
-        sampling_inputs = __make_sampling_inputs(running)
-        num_appendable_ids = __get_num_appendable_ids(running)
+        sampling_inputs = self.sampling_strategy.make_sampling_inputs(running)
         return_logits = __need_logits(running)
-        dllm_mask = __get_dllm_mask(running)
-        output_start_pos = __get_output_start_pos(running)
+        extra_inputs = self.model_agent_strategy.make_extra_inputs(running)
+        stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
 
         sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
         return dict(
@@ -1022,12 +973,11 @@ class Engine(EngineBase):
             swap_out_map=swap_out_map,
             loop_count=num_loops,
             sampling_inputs=sampling_inputs,
-            num_appendable_ids=num_appendable_ids,
+            stopping_criteria=stopping_criteria,
             return_logits=return_logits,
             is_dummy=False,
             sync_long_context=sync_long_context,
-            dllm_mask=dllm_mask,
-            output_start_pos=output_start_pos,
+            extra_inputs=extra_inputs,
         )
 
     async def _await_forward_event(self, forward_event: asyncio.Event):

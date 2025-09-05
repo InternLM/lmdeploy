@@ -7,7 +7,6 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 from lmdeploy.messages import LogitsProcessor
-from lmdeploy.pytorch.config import DLLMConfig
 from lmdeploy.tokenizer import Tokenizer
 
 from ..messages import SchedulerSequence
@@ -113,44 +112,6 @@ def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor, guided
 SeqList = List[SchedulerSequence]
 
 
-def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: 'SamplingInputs'):
-    """Gather history."""
-    if sampling_inputs.repetition_penalty is None and not any(sampling_inputs.logits_processors):
-        return None
-    batch = len(seqs)
-    max_len = max(seq.num_valid_ids for seq in seqs)
-    output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
-    for idx, seq in enumerate(seqs):
-        h_len = seq.num_valid_ids
-        if h_len == 0:
-            continue
-        h_ids = torch.from_numpy(seq.valid_ids)
-        output[idx, -h_len:] = h_ids
-    return output
-
-
-def _gather_guided_input_ids(pad_id: int, seqs: SeqList, sampling_inputs: 'SamplingInputs'):
-    """Gather input ids for guided decode."""
-    if not any(sampling_inputs.response_formats or ()):
-        return None
-    batch = len(seqs)
-    max_len = max(seq.num_new_tokens for seq in seqs)
-    output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
-    for idx, seq in enumerate(seqs):
-        h_len = seq.num_new_tokens
-        if h_len == 0:
-            continue
-        h_ids = torch.from_numpy(seq.generated_ids)
-        output[idx, -h_len:] = h_ids
-    return output
-
-
-def _get_num_ignore_eos(seqs: SeqList):
-    """Get num ignore eos."""
-    ret = [seq.sampling_param.min_new_tokens - seq.num_new_tokens for seq in seqs]
-    return torch.tensor(ret)
-
-
 @dataclass
 class SamplingInputs:
     temperature: torch.Tensor = None
@@ -174,140 +135,6 @@ class SamplingInputs:
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0
 
-    @classmethod
-    def from_sampling_params(cls, seqs: List[SchedulerSequence], pad_token_id: int = 0):
-        """From samplingg params."""
-        batch_size = len(seqs)
-        temperature = [None] * batch_size
-        repetition_penalty = [None] * batch_size
-        top_k = [None] * batch_size
-        top_p = [None] * batch_size
-        min_p = [None] * batch_size
-        bad_words = [None] * batch_size
-        stop_words = [None] * batch_size
-        random_seeds = [torch.seed() & 0xffffffff] * batch_size
-        random_offsets = [None] * batch_size
-        response_formats = [None] * batch_size
-        logits_processors = [None] * batch_size
-        num_logprobs = [None] * batch_size
-
-        def __gather_params():
-            """Gather params."""
-            for idx, seq in enumerate(seqs):
-                param = seq.sampling_param
-                temperature[idx] = param.temperature
-                repetition_penalty[idx] = param.repetition_penalty
-                top_k[idx] = param.top_k
-                top_p[idx] = param.top_p
-                min_p[idx] = param.min_p
-                random_offsets[idx] = seq.num_valid_ids
-                response_formats[idx] = param.response_format
-                if param.random_seed is not None:
-                    random_seeds[idx] = param.random_seed & 0xffffffff
-
-                bw = param.bad_words
-                sw = param.stop_words
-                if (not param.ignore_eos and seq.num_new_tokens < param.min_new_tokens):
-                    bw = bw + sw
-                bad_words[idx] = bw
-                stop_words[idx] = sw
-                logits_processors[idx] = param.logits_processors
-                num_logprobs[idx] = param.num_logprobs
-
-        def __get_topp(top_p):
-            """Get topp."""
-            min_top_p = min(top_p)
-            if min_top_p == 1.0:
-                top_p = None
-            else:
-                top_p = torch.tensor(top_p)
-            return top_p, min_top_p
-
-        def __get_minp(min_p):
-            """Get minp."""
-            max_min_p = max(min_p)
-            if max_min_p == 0.0:
-                min_p = None
-            else:
-                min_p = torch.Tensor(min_p)
-            return min_p
-
-        def __get_bad_words(bad_words):
-            """Get bad words."""
-            max_bw_len = max(len(bw) for bw in bad_words)
-            if max_bw_len == 0:
-                return None, None
-            if all(len(bw) == max_bw_len for bw in bad_words):
-                ret = torch.tensor(bad_words)
-                mask = torch.ones_like(ret, dtype=bool)
-                return ret, mask
-            ret = torch.full((batch_size, max_bw_len), -1, dtype=torch.int64)
-            for idx, bw in enumerate(bad_words):
-                bw_len = len(bw)
-                if bw_len == 0:
-                    continue
-                bw = ret.new_tensor(bw)
-                ret[idx, :bw_len] = bw
-
-            mask = ret >= 0
-            ret = ret.where(mask, 0)
-            return ret, mask
-
-        __gather_params()
-
-        if all(rp == 1.0 for rp in repetition_penalty):
-            repetition_penalty = None
-        else:
-            repetition_penalty = torch.tensor(repetition_penalty)
-
-        temperature = torch.tensor(temperature)
-
-        bad_words, bad_mask = __get_bad_words(bad_words)
-        stop_words, stop_mask = __get_bad_words(stop_words)
-
-        max_top_k = max(top_k)
-        if min(top_k) <= 0:
-            max_top_k = 0
-        if max_top_k == 1:
-            top_k = None
-            top_p, min_top_p = None, 1.0
-            min_p = None
-            random_seeds = None
-            random_offsets = None
-        else:
-            top_k = torch.tensor(top_k)
-            top_p, min_top_p = __get_topp(top_p)
-            min_p = __get_minp(min_p)
-            random_seeds = torch.tensor(random_seeds)
-            random_offsets = torch.tensor(random_offsets)
-
-        max_num_logprobs = max(num_logprobs)
-
-        sampling_input = cls(
-            temperature=temperature,
-            bad_words=bad_words,
-            bad_mask=bad_mask,
-            stop_words=stop_words,
-            stop_mask=stop_mask,
-            repetition_penalty=repetition_penalty,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            random_seeds=random_seeds,
-            random_offsets=random_offsets,
-            response_formats=tuple(response_formats),
-            max_top_k=max_top_k,
-            min_top_p=min_top_p,
-            logits_processors=logits_processors,
-            max_num_logprobs=max_num_logprobs,
-            batch_size=batch_size,
-        )
-
-        sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
-        sampling_input.guided_input_ids = _gather_guided_input_ids(pad_token_id, seqs, sampling_input)
-        sampling_input.num_ignore_eos = _get_num_ignore_eos(seqs)
-        return sampling_input
-
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         out_dict = dict()
@@ -319,71 +146,6 @@ class SamplingInputs:
             out_dict[k] = v
 
         return SamplingInputs(**out_dict)
-
-    def step(self, next_token_ids: torch.Tensor, **kwargs):
-        """To next step."""
-        self.num_ignore_eos = self.num_ignore_eos - 1
-        if self.all_ids is not None:
-            self.all_ids = torch.cat([self.all_ids, next_token_ids[:, None]], 1)
-        if self.guided_input_ids is not None:
-            self.guided_input_ids = torch.cat([self.guided_input_ids, next_token_ids[:, None]], 1)
-
-
-@dataclass
-class SamplingInputsDLLM(SamplingInputs):
-
-    @classmethod
-    def from_sampling_params(cls, seqs: List[SchedulerSequence], pad_token_id: int = 0, dllm_config: DLLMConfig = None):
-        """From samplingg params."""
-        out = super().from_sampling_params(seqs, pad_token_id)
-        assert dllm_config is not None
-        dllm_block_length = dllm_config.dllm_block_length
-
-        # repeat tensor
-        update_attr_names = [
-            'temperature',
-            'bad_words',
-            'bad_mask',
-            'stop_words',
-            'stop_mask',
-            'repetition_penalty',
-            'top_k',
-            'top_p',
-            'min_p',
-            'random_seeds',
-            'random_offsets',
-            'all_ids',
-            'guided_input_ids',
-            'num_ignore_eos',
-        ]
-        for name in update_attr_names:
-            attr = getattr(out, name)
-            if attr is None:
-                continue
-            repeats = (dllm_block_length, ) + (1, ) * (attr.dim())
-            attr = attr[None].repeat(*repeats).flatten(0, 1)
-            setattr(out, name, attr)
-
-        if len(out.response_formats) > 0:
-            new_resp_formats = []
-            for resp in out.response_formats:
-                new_resp_formats += [resp] * dllm_block_length
-            out.response_formats = tuple(new_resp_formats)
-
-        out.batch_size *= dllm_block_length
-
-        return out
-
-    def step(self, next_token_ids: torch.Tensor, dllm_mask: torch.Tensor, **kwargs):
-        """To next step."""
-        from lmdeploy.pytorch import consts
-        batch_size = self.batch_size
-        dllm_block_size = next_token_ids.numel() // batch_size
-        DLLM_UNMASKED = consts.DLLM_UNMASKED
-        is_unmasked = (dllm_mask == DLLM_UNMASKED).view(batch_size, -1).all(dim=1, keepdim=True)
-        num_ignore_eos = self.num_ignore_eos.view(batch_size, -1)
-        num_ignore_eos = torch.where(is_unmasked, num_ignore_eos - dllm_block_size, num_ignore_eos)
-        self.num_ignore_eos = num_ignore_eos.flatten()
 
 
 def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):

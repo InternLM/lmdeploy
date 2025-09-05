@@ -57,7 +57,7 @@ class SamplingParam:
     num_logprobs: int = -1
 
     @classmethod
-    def from_gen_config(self, gen_config: GenerationConfig):
+    def from_gen_config(cls, gen_config: GenerationConfig):
         """From gen config."""
         min_new_tokens = gen_config.min_new_tokens or 0
 
@@ -161,7 +161,7 @@ SeqMap = Dict[int, 'SchedulerSequence']
 class SequenceMeta:
     """Meta data shared by all sequence."""
     block_size: int
-    model_paradigm: str = 'llm'
+    model_paradigm: str = 'ar'
     dllm_block_length: int = 1
     dllm_mask_token: int = 151669
 
@@ -908,6 +908,6 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
 
 
 SEQ_CLS_MAP = dict(
-    llm=SchedulerSequenceDefault,
+    ar=SchedulerSequenceDefault,
     dllm=SchedulerSequenceDLLM,
 )

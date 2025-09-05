@@ -9,6 +9,7 @@ from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
+from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 from lmdeploy.utils import get_logger
 
 from ..graph_runner import GraphRunner
@@ -147,6 +148,11 @@ class CUDAGraphRunner(GraphRunner):
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
         self.has_try_compile_model: bool = False
 
+        # strategy factory
+        build_ctx = model.ctx_mgr.build_ctx
+        strategy_factory: StrategyFactoryBase = build_ctx.strategy_factory
+        self.cudagraph_strategy = strategy_factory.build_cudagraph_strategy()
+
     def check_enable_graph(self):
         """Check enable graph."""
         if self.backend_config.eager_mode:
@@ -191,13 +197,7 @@ class CUDAGraphRunner(GraphRunner):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
         assert is_decoding
-        model_paradigm = self.model_config.model_paradigm
-        if model_paradigm == 'dllm':
-            step_mgr = get_step_ctx_manager()
-            build_ctx = step_mgr.build_ctx
-            dllm_block_length = build_ctx.dllm_config.dllm_block_length
-            return max_batches * dllm_block_length
-        return max_batches
+        return self.cudagraph_strategy.get_max_tokens(max_batches)
 
     def __call__(self, **kwargs):
         """call."""

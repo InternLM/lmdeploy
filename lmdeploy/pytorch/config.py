@@ -200,7 +200,7 @@ class ModelConfig:
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
     use_flash_mla: bool = False
-    model_paradigm: str = 'llm'
+    model_paradigm: str = 'ar'
     dllm_mask_token: int = 0
 
     def get_head_size(self):
@@ -304,7 +304,6 @@ class MiscConfig:
     hf_overrides: Dict[str, Any] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
-    dllm_block_length: int = 1
     dllm_config: DLLMConfig = None
 
     @classmethod
@@ -323,7 +322,6 @@ class MiscConfig:
                           model_format=engine_config.model_format,
                           hf_overrides=engine_config.hf_overrides,
                           disable_vision_encoder=engine_config.disable_vision_encoder,
-                          dllm_block_length=engine_config.dllm_block_length,
                           logprobs_mode=engine_config.logprobs_mode,
                           dllm_config=dllm_config)
         return misc_config

@@ -1,0 +1,35 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+from functools import lru_cache
+
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+
+from ..base.engine import EngineStrategy
+
+
+class DLLMEngineStrategy(EngineStrategy):
+    """DLLM Engine Strategy."""
+
+    def __init__(self, scheduler_config: SchedulerConfig, cache_config: CacheConfig, dllm_block_length: int) -> None:
+        self.scheduler_config = scheduler_config
+        self.cache_config = cache_config
+        self.dllm_block_length = dllm_block_length
+
+    @lru_cache(maxsize=2)
+    def get_prealloc_size(self, is_decoding: bool) -> int:
+        """Get prealloc_size."""
+        if not is_decoding:
+            return 0
+        block_size = self.cache_config.block_size
+        dllm_block_length = self.dllm_block_length
+        num_blocks = min(self.scheduler_config.prefill_interval // 2, block_size // dllm_block_length)
+        return num_blocks * dllm_block_length
+
+    @lru_cache(maxsize=2)
+    def get_num_loops(self, is_decoding: bool) -> int:
+        """Get num_loops."""
+        if not is_decoding:
+            return 1
+        block_size = self.cache_config.block_size
+        dllm_block_length = self.dllm_block_length
+        num_blocks = min(self.scheduler_config.prefill_interval // 2, block_size // dllm_block_length)
+        return num_blocks * dllm_block_length

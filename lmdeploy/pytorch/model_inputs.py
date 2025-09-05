@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal
 
 import torch
 from torch.profiler import record_function
@@ -11,6 +11,9 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 
 
 @dataclass
@@ -147,7 +150,7 @@ class ModelInputs:
         assert self.is_decoding
         if step_seqlens is None:
             step_seqlens = self.seq_length
-        self.history_lengths = self.history_lengths + step_seqlens
+        self.history_lengths += step_seqlens
         self.max_kv_seqlen += self.max_q_seqlen
         self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
@@ -280,47 +283,6 @@ class ModelInputs:
     def build_dp_meta(self):
         """Build dp meta."""
         self.dp_meta = DPMeta.build(self.input_ids.numel())
-
-    @classmethod
-    @record_function('make_dummy_input')
-    def make_dummy(cls,
-                   batch_size: int,
-                   is_decoding: bool,
-                   device: str = 'cpu',
-                   dummy_block_id: int = 0,
-                   vocab_size: int = 1,
-                   build_ctx: 'BuildModelContext' = None):
-        """Make dummy inputs."""
-        model_paradigm = build_ctx.model_paradigm
-        if model_paradigm == 'dllm':
-            block_size = build_ctx.dllm_config.dllm_block_length
-            max_q_seqlen = block_size
-        else:
-            max_q_seqlen = 1
-        num_tokens = batch_size * max_q_seqlen
-        max_kv_seqlen = max_q_seqlen
-        input_ids = torch.randint(0, vocab_size, (
-            1,
-            num_tokens,
-        ), dtype=torch.long, device=device)
-        seq_length = torch.ones((batch_size, ), dtype=torch.long, device=device)
-        history_lengths = torch.zeros((batch_size, ), dtype=torch.long, device=device)
-        block_offsets = torch.full((batch_size, 1), dummy_block_id, dtype=torch.long, device=device)
-        num_ignored_history = torch.zeros((batch_size, ), dtype=torch.long, device=device)
-        local_adapter_ids = torch.zeros((batch_size, ), dtype=torch.long, device=device)
-
-        return cls(
-            input_ids=input_ids,
-            seq_length=seq_length,
-            history_lengths=history_lengths,
-            block_offsets=block_offsets,
-            is_decoding=is_decoding,
-            num_ignored_history=num_ignored_history,
-            max_q_seqlen=max_q_seqlen,
-            max_kv_seqlen=max_kv_seqlen,
-            sum_kv_seqlen=batch_size,
-            local_adapter_ids=local_adapter_ids,
-        )
 
     def log_info(self):
         """Get log info."""
@@ -475,8 +437,8 @@ class StepContext:
 class BuildModelContext:
     """Context for building model."""
     disable_vision_encoder: bool = False
-    model_paradigm: str = 'llm'
     dllm_config: DLLMConfig = None
+    strategy_factory: 'StrategyFactoryBase' = None
 
 
 class StepContextManager:
