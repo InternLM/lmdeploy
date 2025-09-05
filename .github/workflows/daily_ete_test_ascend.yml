@@ -49,7 +49,6 @@ jobs:
           python3 -m pip install -r ${{ env.OFFLINE_REQUIREMENTS }}
       - name: Install lmdeploy
         run: |
-          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy --no-deps
           python3 -m pip install -r requirements/test.txt
           python3 -m pip install transformers==4.53.1
       - name: Check env
@@ -121,7 +120,6 @@ jobs:
           python3 -m pip install -r ${{ env.OFFLINE_REQUIREMENTS }}
       - name: Install lmdeploy
         run: |
-          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
