@@ -187,5 +187,5 @@ jobs:
       - name: Build and push Docker image
         run: |
           echo $TAG
-          docker build . -t lmdeploy:ascend -f docker/Dockerfile.ascend --platform linux/arm64 --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+          docker build . -t ${TAG} -f docker/Dockerfile.ascend --platform linux/arm64 --build-arg PYTHON_VERSION=${PYTHON_VERSION}
           docker push $TAG
