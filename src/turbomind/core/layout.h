@@ -57,7 +57,7 @@ public:
     }
 
     template<class... Is>
-    auto strides(Is... is)
+    auto strides(Is... is) const
     {
         return std::make_tuple(stride(is)...);
     }

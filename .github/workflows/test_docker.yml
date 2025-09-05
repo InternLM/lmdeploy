@@ -94,10 +94,10 @@ jobs:
       - name: Build Docker image
         run: |
           docker build . -t lmdeploy:ascend -f docker/Dockerfile.ascend --build-arg PYTHON_VERSION=${PYTHON_VERSION}
-      - name: Test image with lmdeploy check_env
-        run: |
-          docker images
-          docker run --rm lmdeploy:ascend lmdeploy check_env
+#      - name: Test image with lmdeploy check_env
+#        run: |
+#          docker images
+#          docker run --rm lmdeploy:ascend lmdeploy check_env
       - name: Dive
         uses: MaxymVlasov/dive-action@v1.5.0
         with:

@@ -238,7 +238,7 @@ class SubCliServe:
                                                    communicator=args.communicator,
                                                    enable_metrics=args.enable_metrics,
                                                    hf_overrides=args.hf_overrides)
-        chat_template_config = get_chat_template(args.chat_template)
+        chat_template_config = get_chat_template(args.chat_template, args.model_path)
 
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)

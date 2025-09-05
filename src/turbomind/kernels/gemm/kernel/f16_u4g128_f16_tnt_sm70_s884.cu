@@ -23,7 +23,8 @@ void Registry::f16_u4g128_f16_tnt_sm70_s884()
                                  Striding::kFlat,
                                  Striding::kFlat,
                                  Striding::kFlat,
-                                 GemmScheduler<kColMajor>>;
+                                 kColMajor,
+                                 -1>;
 
         using namespace cache_policy;
 

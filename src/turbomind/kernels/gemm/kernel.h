@@ -22,6 +22,8 @@ struct KernelMetric {
 
 class Kernel {
 public:
+    Kernel(): desc_{}, info_{} {}
+
     virtual ~Kernel() = default;
 
     virtual int Launch(const Operation&    operation,
@@ -47,13 +49,18 @@ public:
     // true if this kernel can be used to compute the gemm
     virtual bool is_feasible(const GemmDesc& desc) const noexcept;
 
-    virtual int GetMaxSplits(const int4& shape, int64_t tiles, size_t bsize, size_t psize) const = 0;
+    virtual int GetMaxSwizzle(const int4& shape) const = 0;
 
-    virtual int GetSwizzle(int m, int n, int k, int splits, int swizzle) const = 0;
+    virtual int GetMaxSplits(const int4& shape, int swizzle, size_t bsize, size_t psize) const = 0;
 
     const KernelDesc& desc() const noexcept
     {
         return desc_;
+    }
+
+    const KernelInfo& info() const noexcept
+    {
+        return info_;
     }
 
     int3 cta_tile_size() const noexcept
@@ -68,7 +75,7 @@ public:
 
     int chunk_size_k() const noexcept
     {
-        return chunk_size_k_;
+        return info_.chunk_size_k;
     }
 
     int stages() const noexcept
@@ -88,23 +95,19 @@ public:
 
     int smem_size() const noexcept
     {
-        return smem_size_;
+        return info_.attr.sharedSizeBytes + info_.dynamic_smem_size;
     }
 
     std::string name() const
     {
-        return name_;
+        return info_.name;
     }
 
 protected:
     std::string GetName() const;
 
     KernelDesc desc_;
-
-    int chunk_size_k_;
-    int smem_size_;
-
-    std::string name_;
+    KernelInfo info_;
 };
 
 struct ClusteringParam {

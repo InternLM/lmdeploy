@@ -17,27 +17,31 @@ struct PopulateParam {
 
 class Context {
 public:
-    virtual ~Context() = default;
-
     explicit Context(const cudaDeviceProp& prop);
 
-    virtual std::optional<GemmDesc> Init(const Operation&    operation,
-                                         const MatrixLayout& Adesc,
-                                         const MatrixLayout& Udesc,
-                                         const MatrixLayout& Bdesc,
-                                         const MatrixLayout& Vdesc,
-                                         const MatrixLayout& Cdesc,
-                                         const MatrixLayout& Ddesc) = 0;
+    bool Init(const Operation&    operation,
+              const MatrixLayout& Adesc,
+              const MatrixLayout& Udesc,
+              const MatrixLayout& Bdesc,
+              const MatrixLayout& Vdesc,
+              const MatrixLayout& Cdesc,
+              const MatrixLayout& Ddesc);
 
-    virtual std::vector<Kernel*> Filter(const std::vector<Kernel*>& kernels) const = 0;
+    std::vector<Kernel*> Filter(const std::vector<Kernel*>& kernels) const;
 
-    virtual std::vector<LaunchSpec> Populate(const Kernel& kernel, const PopulateParam& param) const = 0;
+    std::vector<LaunchSpec> Populate(const Kernel& kernel, const PopulateParam& param) const;
 
-    virtual std::vector<LaunchSpec> Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const = 0;
+    std::vector<LaunchSpec> Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const;
 
-    virtual Tape Schedule(const LaunchSpec& spec) = 0;
+    const GemmDesc& desc() const
+    {
+        return desc_;
+    }
 
-    virtual bool is_dynamic_sched() const noexcept = 0;
+    const GemmDesc& get_desc(const Kernel& kernel) const
+    {
+        return kernel.desc().transpose ? desc_trans_ : desc_;
+    }
 
     // Alignment
     // (align_m, align_n, align_k) -> is_aligned
@@ -57,118 +61,8 @@ protected:
     int arch_{};
     int sm_count_{};
 
-    std::optional<GemmDesc> desc_{};
-};
-
-class StaticGemmContext: public Context {
-public:
-    explicit StaticGemmContext(const cudaDeviceProp& prop);
-
-    std::optional<GemmDesc> Init(const Operation&    operation,
-                                 const MatrixLayout& Adesc,
-                                 const MatrixLayout& Udesc,
-                                 const MatrixLayout& Bdesc,
-                                 const MatrixLayout& Vdesc,
-                                 const MatrixLayout& Cdesc,
-                                 const MatrixLayout& Ddesc) override;
-
-    std::vector<Kernel*> Filter(const std::vector<Kernel*>& kernels) const override;
-
-    std::vector<LaunchSpec> Populate(const Kernel& kernel, const PopulateParam& param) const override;
-
-    std::vector<LaunchSpec> Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const override;
-
-    Tape Schedule(const LaunchSpec&) override
-    {
-        return {};
-    }
-
-    bool is_dynamic_sched() const noexcept override
-    {
-        return false;
-    }
-
-protected:
-};
-
-class DynamicGemmContext: public StaticGemmContext {
-public:
-    DynamicGemmContext(const cudaDeviceProp& prop, cudaStream_t stream);
-
-    ~DynamicGemmContext() override;
-
-    Tape Schedule(const LaunchSpec&) override;
-
-    bool is_dynamic_sched() const noexcept override
-    {
-        return true;
-    }
-
-protected:
-    cudaStream_t stream_;
-    Tape         tape_;
-    int4         last_shape_{};
-    LaunchSpec   last_spec_{};
-};
-
-class MoeGemmContext: public Context {
-public:
-    MoeGemmContext(int experts, int experts_per_token, const cudaDeviceProp& prop, cudaStream_t stream);
-
-    ~MoeGemmContext() override;
-
-    std::optional<GemmDesc> Init(const Operation&    operation,
-                                 const MatrixLayout& Adesc,
-                                 const MatrixLayout& Udesc,
-                                 const MatrixLayout& Bdesc,
-                                 const MatrixLayout& Vdesc,
-                                 const MatrixLayout& Cdesc,
-                                 const MatrixLayout& Ddesc) override;
-
-    std::vector<Kernel*> Filter(const std::vector<Kernel*>& kernels) const override;
-
-    // batch size
-    // m: cdiv(exp_per_tok * tokens, experts)
-
-    // FMA_all:
-    // m: exp_per_tok * tokens
-    // n: output_dims
-    // k:  input_dims
-
-    // MIO:
-    // A: exp_per_tok * tokens * input_dims
-    // C: exp_per_tok * tokens * output_dims
-    // B: experts * output_dims * input_dims
-
-    std::vector<LaunchSpec> Populate(const Kernel& kernel, const PopulateParam& param) const override;
-
-    std::vector<LaunchSpec> Swizzle(const LaunchSpec& spec, const std::vector<int>& swizzle) const override;
-
-    bool is_dynamic_sched() const noexcept override
-    {
-        return true;
-    }
-
-    Tape Schedule(const LaunchSpec&) override;
-
-    void update(int expert_num, int experts_per_token, const int* offsets)
-    {
-        expert_num_        = expert_num;
-        experts_per_token_ = experts_per_token;
-        offsets_           = offsets;
-    }
-
-protected:
-    int expert_num_;
-    int experts_per_token_;
-
-    cudaStream_t stream_;
-
-    int        output_dim_;
-    int        input_dim_;
-    int        tokens_;
-    const int* offsets_;
-    Tape       tape_;
+    GemmDesc desc_{};
+    GemmDesc desc_trans_{};
 };
 
 }  // namespace turbomind::gemm

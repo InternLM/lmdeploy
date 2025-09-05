@@ -30,7 +30,8 @@ void Registry::sm80_s16816_dynamic()
                               Striding::kIndexed,                  // indexed input
                               Striding::kBlocked,
                               Striding::kBlocked,
-                              DynamicScheduler<kColMajor>>;
+                              kColMajor,
+                              0>;
 
         // clang-format off
         Add<C::Type<256, 128,  64, 4, 2, 1, D, D, 3,   0 , 1, 1>>();
@@ -64,7 +65,8 @@ void Registry::sm80_s16816_dynamic()
                               Striding::kIndexed,                         // indexed input
                               Striding::kBlocked,
                               Striding::kBlocked,
-                              DynamicScheduler<kColMajor>>;
+                              kColMajor,
+                              0>;
 
         // clang-format off
         Add<C::Type<256, 128,  64, 4, 2, 1, D, D, 3,   0 , 1, 1>>();
@@ -99,7 +101,8 @@ void Registry::sm80_s16816_dynamic()
                               Striding::kIndexed,                     // indexed input
                               Striding::kBlocked,
                               Striding::kBlocked,
-                              DynamicScheduler<kColMajor>>;
+                              kColMajor,
+                              0>;
 
         // clang-format off
         Add<C::Type<128, 256,  32, 2, 4, 1, D, D, 3,   0 , 1, 128>>();  // 10 + 5 + 4 + 10 + 10, 37
