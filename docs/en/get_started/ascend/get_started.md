@@ -17,11 +17,11 @@ Here is the [supported model list](../../supported_models/supported_models.md#Py
 >
 > Atlas 800T A2:
 >
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:a2-latest`
 >
 > 300I Duo:
 >
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:300i-duo-latest`
 >
 > (Atlas 300I Duo currently works only with graph mode.)
 >
