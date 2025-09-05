@@ -64,7 +64,7 @@ lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5
 也可以运行以下命令启动容器运行LLM模型服务。
 
 ```bash
-docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest \
+docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:a2-latest \
     bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend internlm/internlm2_5-7b-chat"
 ```
 
@@ -79,7 +79,7 @@ lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2-
 也可以运行以下命令启动容器运行VLM模型服务。
 
 ```bash
-docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest \
+docker run -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:a2-latest \
     bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend OpenGVLab/InternVL2-2B"
 ```
 
@@ -94,7 +94,7 @@ lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend
 也可以运行以下命令使启动容器后开启lmdeploy聊天
 
 ```bash
-docker run -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910blatest \
+docker run -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:a2-latest \
     bash -i -c "lmdeploy chat --backend pytorch --device ascend internlm/internlm2_5-7b-chat"
 ```
 
