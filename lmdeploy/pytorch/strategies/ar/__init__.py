@@ -2,6 +2,7 @@
 from typing import TYPE_CHECKING
 
 from lmdeploy.pytorch.config import ModelConfig
+from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.strategies.base.cudagraph import CudagraphStrategy
@@ -47,3 +48,7 @@ class ARStrategyFactory(StrategyFactoryBase):
         """Build engine strategy."""
         from .engine import AREngineStrategy
         return AREngineStrategy(cache_config=cache_config, scheduler_config=scheduler_config)
+
+    def build_sequence_strategy(self) -> SequenceStrategy:
+        from .sequence import ARSequenceStrategy
+        return ARSequenceStrategy()

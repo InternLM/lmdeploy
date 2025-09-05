@@ -2,6 +2,7 @@
 from typing import TYPE_CHECKING
 
 from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
+from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.strategies.base.cudagraph import CudagraphStrategy
@@ -51,3 +52,8 @@ class DLLMStrategyFactory(StrategyFactoryBase):
         return DLLMEngineStrategy(cache_config=cache_config,
                                   scheduler_config=scheduler_config,
                                   dllm_block_length=self.dllm_block_length)
+
+    def build_sequence_strategy(self) -> SequenceStrategy:
+        from .sequence import DLLMSequenceStrategy
+        return DLLMSequenceStrategy(block_size=self.dllm_block_length,
+                                    dllm_mask_token=self.model_config.dllm_mask_token)

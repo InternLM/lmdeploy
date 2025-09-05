@@ -10,10 +10,10 @@ if TYPE_CHECKING:
     from .model_agent import ModelAgentStrategy
     from .model_inputs import ModelInputsStrategy
     from .sampling import SamplingStrategy
+    from .sequence import SequenceStrategy
 
 
 class StrategyFactoryBase(ABC):
-    pass
 
     @abstractmethod
     def build_cudagraph_strategy(self) -> 'CudagraphStrategy':
@@ -39,4 +39,9 @@ class StrategyFactoryBase(ABC):
     def build_engine_strategy(self, cache_config: 'CacheConfig',
                               scheduler_config: 'SchedulerConfig') -> 'EngineStrategy':
         """Build engine strategy."""
+        pass
+
+    @abstractmethod
+    def build_sequence_strategy(self) -> 'SequenceStrategy':
+        """Build sequence strategy."""
         pass

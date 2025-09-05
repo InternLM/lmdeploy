@@ -39,7 +39,9 @@ class TestBlockTire:
 
     @pytest.fixture
     def seq_manager(self, block_size):
-        seq_meta = SequenceMeta(block_size)
+        from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+        strategy = ARSequenceStrategy()
+        seq_meta = SequenceMeta(block_size, strategy=strategy)
         yield SequenceManager(seq_meta)
 
     def test_allocate(self, block_trie, block_mgr, seq_manager):

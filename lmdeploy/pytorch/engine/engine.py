@@ -139,13 +139,10 @@ def _build_misc_config(engine_config: PytorchEngineConfig):
     return misc_config
 
 
-def _build_seq_meta(cache_config: CacheConfig, model_config: ModelConfig, engine_config: PytorchEngineConfig):
+def _build_seq_meta(cache_config: CacheConfig, strategy: Any):
     from lmdeploy.pytorch.messages import SequenceMeta
 
-    seq_meta = SequenceMeta(cache_config.block_size,
-                            model_paradigm=model_config.model_paradigm,
-                            dllm_block_length=engine_config.dllm_block_length,
-                            dllm_mask_token=model_config.dllm_mask_token)
+    seq_meta = SequenceMeta(cache_config.block_size, strategy=strategy)
     return seq_meta
 
 
@@ -389,11 +386,12 @@ class Engine(EngineBase):
         self.model_agent_strategy = self.strategy_factory.build_model_agent_strategy()
         self.engine_strategy = self.strategy_factory.build_engine_strategy(cache_config=cache_config,
                                                                            scheduler_config=scheduler_config)
+        self.seq_strategy = self.strategy_factory.build_sequence_strategy()
 
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.seq_meta = _build_seq_meta(cache_config, self.model_config, engine_config)
+        self.seq_meta = _build_seq_meta(cache_config, strategy=self.seq_strategy)
         self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
 
         # engine args
@@ -807,60 +805,6 @@ class Engine(EngineBase):
 
         return model_inputs
 
-    def _update_running_default(self, running: SeqList, next_token_ids: torch.Tensor, stopped: List[bool],
-                                model_metas: List[Any], is_decoding: bool):
-        """Update running default."""
-        next_token_ids = next_token_ids.numpy()
-        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
-        for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
-            if msg.status != MessageStatus.LOCKED:
-                continue
-            update_token = token
-
-            # fill token
-            msg.update_token_ids(update_token, model_meta=model_meta, mode=update_mode)
-            if stop:
-                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
-
-    def _update_running_dllm(self, running: SeqList, next_token_ids: torch.Tensor, dllm_mask: torch.Tensor,
-                             stopped: List[bool], model_metas: List[Any], is_decoding: bool, stop_pos: torch.Tensor):
-        batch_size = len(running)
-        next_token_ids = next_token_ids.view(batch_size, -1).numpy()
-        dllm_mask = dllm_mask.view(batch_size, -1).numpy()
-        stop_pos = stop_pos.tolist()
-        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
-        for idx, token in enumerate(next_token_ids):
-            msg = running[idx]
-            stop = stopped[idx]
-            model_meta = model_metas[idx]
-            mask = dllm_mask[idx]
-            if msg.status != MessageStatus.LOCKED:
-                continue
-            update_token = token
-            update_mask = mask
-
-            # fill token
-            msg.update_token_ids(update_token, dllm_mask=update_mask, model_meta=model_meta, mode=update_mode)
-            if stop:
-                msg.set_stop_pos(stop_pos[idx])
-                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
-
-    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, is_decoding: bool):
-        """Update scheduler."""
-        next_token_ids = batched_outputs.next_token_ids
-        stopped = batched_outputs.stopped
-        stopped = stopped.tolist()
-        model_metas = batched_outputs.model_metas
-        if model_metas is None:
-            model_metas = [None] * len(running)
-        if self.model_config.model_paradigm == 'dllm':
-            dllm_mask = batched_outputs.extra_outputs.dllm_mask
-            stop_pos = batched_outputs.stop_pos
-            return self._update_running_dllm(running, next_token_ids, dllm_mask, stopped, model_metas, is_decoding,
-                                             stop_pos)
-        else:
-            return self._update_running_default(running, next_token_ids, stopped, model_metas, is_decoding)
-
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
                                  model_metas: List[Dict[str, Any]]):
         """Update scheduler."""
@@ -891,7 +835,7 @@ class Engine(EngineBase):
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
-        self.update_running(running, batched_outputs, is_decoding)
+        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
