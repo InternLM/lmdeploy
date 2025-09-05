@@ -36,7 +36,7 @@ class ExecutorBase:
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.dist_config = dist_config
-        self.misc_config = misc_config,
+        self.misc_config = misc_config
         self.tokenizer = tokenizer
         self.dp = dist_config.dp
         self.tp = dist_config.tp

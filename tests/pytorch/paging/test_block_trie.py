@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.messages import SchedulerSession
+from lmdeploy.pytorch.messages import SchedulerSession, SequenceManager, SequenceMeta
 from lmdeploy.pytorch.paging.block_manager import build_block_manager
 from lmdeploy.pytorch.paging.block_trie import BlockTrie
 
@@ -37,9 +37,17 @@ class TestBlockTire:
     def block_trie(self, cache_config, block_mgr):
         yield BlockTrie(cache_config, block_mgr)
 
-    def test_allocate(self, block_trie, block_mgr, block_size):
+    @pytest.fixture
+    def seq_manager(self, block_size):
+        from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+        strategy = ARSequenceStrategy()
+        seq_meta = SequenceMeta(block_size, strategy=strategy)
+        yield SequenceManager(seq_meta)
+
+    def test_allocate(self, block_trie, block_mgr, seq_manager):
         allocator = block_trie.allocator
-        sess = SchedulerSession(0, block_size)
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
         token_ids = ([1] * block_size + [2] * block_size)
         token_ids += [3] * (block_size // 2)
         seq = sess.add_sequence(token_ids)
@@ -75,9 +83,10 @@ class TestBlockTire:
         assert node in block_trie.leaves
         assert len(block_trie.leaves) == 1
 
-    def test_match(self, block_trie, block_mgr, block_size):
+    def test_match(self, block_trie, block_mgr, seq_manager):
         allocator = block_trie.allocator
-        sess = SchedulerSession(0, block_size)
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
 
         # initialize cache
         token_ids = ([1] * block_size + [2] * block_size)
@@ -112,9 +121,10 @@ class TestBlockTire:
         ref_cnt = allocator.get_ref_count(logical_blocks.get_real_blocks())
         assert np.array_equal(ref_cnt, [4, 3])
 
-    def test_evict(self, block_trie, block_size, num_gpu_blocks):
+    def test_evict(self, block_trie, seq_manager, num_gpu_blocks):
         block_mgr = block_trie.block_manager
-        sess = SchedulerSession(0, block_size)
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
         token_ids = ([1] * block_size * (num_gpu_blocks - 1))
         token_ids += [2] * (block_size // 2)
         seq = sess.add_sequence(token_ids)

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal
 
 import torch
 from torch.profiler import record_function
@@ -9,8 +9,11 @@ from torch.profiler import record_function
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import ModelConfig
+from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 
 
 @dataclass
@@ -142,12 +145,14 @@ class ModelInputs:
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
 
-    def update(self, input_ids: torch.LongTensor):
+    def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
         assert self.is_decoding
-        self.history_lengths = self.history_lengths + 1
-        self.max_kv_seqlen += 1
-        self.sum_kv_seqlen += self.seq_length.numel()
+        if step_seqlens is None:
+            step_seqlens = self.seq_length
+        self.history_lengths += step_seqlens
+        self.max_kv_seqlen += self.max_q_seqlen
+        self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -279,38 +284,6 @@ class ModelInputs:
         """Build dp meta."""
         self.dp_meta = DPMeta.build(self.input_ids.numel())
 
-    @classmethod
-    @record_function('make_dummy_input')
-    def make_dummy(cls,
-                   batch_size: int,
-                   is_decoding: bool,
-                   device: str = 'cpu',
-                   dummy_block_id: int = 0,
-                   vocab_size: int = 1):
-        """Make dummy inputs."""
-        input_ids = torch.randint(0, vocab_size, (
-            1,
-            batch_size,
-        ), dtype=torch.long, device=device)
-        seq_length = torch.ones((batch_size, ), dtype=torch.long, device=device)
-        history_lengths = torch.zeros((batch_size, ), dtype=torch.long, device=device)
-        block_offsets = torch.full((batch_size, 1), dummy_block_id, dtype=torch.long, device=device)
-        num_ignored_history = torch.zeros((batch_size, ), dtype=torch.long, device=device)
-        local_adapter_ids = torch.zeros((batch_size, ), dtype=torch.long, device=device)
-
-        return cls(
-            input_ids=input_ids,
-            seq_length=seq_length,
-            history_lengths=history_lengths,
-            block_offsets=block_offsets,
-            is_decoding=is_decoding,
-            num_ignored_history=num_ignored_history,
-            max_q_seqlen=1,
-            max_kv_seqlen=1,
-            sum_kv_seqlen=batch_size,
-            local_adapter_ids=local_adapter_ids,
-        )
-
     def log_info(self):
         """Get log info."""
         ret = (f'num_tokens={self.input_ids.numel()}, batch_size={self.seq_length.numel()}'
@@ -426,17 +399,26 @@ class StepContext:
         """Get position ids."""
         q_seqlens = inputs.seq_length
         history_seqlens = inputs.history_lengths
+        max_q_seqlen = inputs.max_q_seqlen
 
         # decoding
-        if inputs.is_decoding:
+        if max_q_seqlen == 1:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
             position_ids = history_seqlens.unsqueeze(-1).clone()
             position_ids = position_ids.flatten()
             return attention_mask, position_ids
 
         num_tokens = inputs.input_ids.numel()
-        max_q_seqlen = inputs.max_q_seqlen
+        batch_size = inputs.seq_length.numel()
         device = q_seqlens.device
+
+        # batch with same seqlens
+        if max_q_seqlen * batch_size == num_tokens:
+            attention_mask = None
+            ranges = torch.arange(0, max_q_seqlen, device=device)
+            position_ids = history_seqlens[:, None] + ranges[None, :]
+            position_ids = position_ids.flatten()
+            return attention_mask, position_ids
 
         # get mask
         mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
@@ -451,14 +433,24 @@ class StepContext:
         return attention_mask, position_ids_1d
 
 
+@dataclass
+class BuildModelContext:
+    """Context for building model."""
+    disable_vision_encoder: bool = False
+    dllm_config: DLLMConfig = None
+    strategy_factory: 'StrategyFactoryBase' = None
+
+
 class StepContextManager:
 
-    def __init__(self):
+    def __init__(self, build_ctx: BuildModelContext = None):
         self._current_ctx = None
+        build_ctx = build_ctx or BuildModelContext()
+        self.build_ctx = build_ctx
 
-    @staticmethod
     @record_function('build_step_context')
     def build_context(
+        self,
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,

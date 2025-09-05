@@ -142,15 +142,15 @@ class CudaGraphMixin:
             new_inputs['cross_attn_metadata'] = cross_attn_metadata
 
         if is_decoding:
-            new_inputs['input_ids'] = input_buffers['input_ids'][:, :new_batch_size]
-            new_inputs['position_ids'] = input_buffers['position_ids'][:, :new_batch_size]
+            new_inputs['input_ids'] = input_buffers['input_ids'][:, :num_tokens]
+            new_inputs['position_ids'] = input_buffers['position_ids'][:, :num_tokens]
         else:
             new_inputs['input_ids'] = input_buffers['input_ids']
             new_inputs['position_ids'] = input_buffers['position_ids']
 
         if inputs_embeds is not None:
             if is_decoding:
-                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds'][:, :new_batch_size]
+                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds'][:, :num_tokens]
             else:
                 new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
 

@@ -9,9 +9,9 @@ import sys
 from typing import Any, Dict
 
 import torch
-from attr import dataclass
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.model_inputs import BuildModelContext, StepContextManager
 from lmdeploy.utils import get_logger
 
 from ..config import ModelConfig
@@ -188,10 +188,11 @@ def _get_model_class(config, module_map):
 def build_model_from_hf_config(model_config: PretrainedConfig,
                                dtype: torch.dtype = None,
                                device: torch.device = None,
+                               ctx_mgr: StepContextManager = None,
                                build_model_ctx: 'BuildModelContext' = None):
     """Build model from hf config."""
-    from lmdeploy.pytorch.model_inputs import StepContextManager
-    ctx_mgr = StepContextManager()
+    if ctx_mgr is None:
+        ctx_mgr = StepContextManager(build_model_ctx)
     module_map = _get_module_map()
     if device is None:
         device = torch.device('cuda')
@@ -331,12 +332,6 @@ def add_adapters(model: torch.nn.Module,
             load_lora_weights(model, state_dict.items(), adapter_id=adapter_id)
 
     return target_infos
-
-
-@dataclass
-class BuildModelContext:
-    """Context for building model."""
-    disable_vision_encoder: bool = False
 
 
 BUILD_MODEL_CTX = BuildModelContext()

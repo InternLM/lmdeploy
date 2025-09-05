@@ -56,7 +56,8 @@ def _load_kv(ptrs, boundary_check: tl.constexpr):
 def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, history_mask,
                        kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
                        logit_softcapping: tl.constexpr, k_bound: tl.constexpr, v_bound: tl.constexpr,
-                       shared_kv: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_DK1: tl.constexpr):
+                       shared_kv: tl.constexpr, block_sparse_size: tl.constexpr, BLOCK_N: tl.constexpr,
+                       BLOCK_DK1: tl.constexpr):
     k_ptrs = tl.advance(k_ptrs, (0, loop_start))
     v_ptrs = tl.advance(v_ptrs, (loop_start, 0))
     if BLOCK_DK1:
@@ -77,7 +78,11 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
             qk *= sm_scale
             qk = softcapping(qk, logit_softcapping)
             qk = qk * tl_log2(math.e)
-            qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
+            if block_sparse_size > 1:
+                offs_mask = (start_n + offs_n) // block_sparse_size * block_sparse_size
+                qk_mask = (history_mask[:, None]) >= offs_mask[None, :]
+            else:
+                qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
             if window_size > 0:
                 qk_mask = qk_mask and ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
             qk = tl.where(
@@ -180,6 +185,7 @@ def _flash_prefill_fwd_kernel(
     window_size: tl.constexpr,
     logit_softcapping: tl.constexpr,
     shared_kv: tl.constexpr,
+    block_sparse_size: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_DK: tl.constexpr,
@@ -295,6 +301,7 @@ def _flash_prefill_fwd_kernel(
                                        k_bound=k_bound0,
                                        v_bound=v_bound0,
                                        shared_kv=shared_kv,
+                                       block_sparse_size=block_sparse_size,
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
 
@@ -322,6 +329,7 @@ def _flash_prefill_fwd_kernel(
                                        k_bound=k_bound1,
                                        v_bound=v_bound1,
                                        shared_kv=shared_kv,
+                                       block_sparse_size=block_sparse_size,
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
     # epilogue
@@ -440,6 +448,7 @@ def flash_attention_fwd(
     logit_softcapping: float = None,
     sinks: Tensor = None,
     causal: bool = True,
+    block_sparse_size: int = 1,
     kv_layout: str = 'hsd',
 ):
     """Varlen flash Attention forward.
@@ -534,6 +543,7 @@ def flash_attention_fwd(
         window_size=window_size,
         logit_softcapping=logit_softcapping,
         shared_kv=shared_kv,
+        block_sparse_size=block_sparse_size,
         BLOCK_DK=BLOCK_DK,
         BLOCK_DK1=BLOCK_DK1,
         BLOCK_DV=BLOCK_DV,
