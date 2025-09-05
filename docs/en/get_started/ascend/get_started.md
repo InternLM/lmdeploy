@@ -1,5 +1,6 @@
-# Get Started with Huawei Ascend (Atlas 800T A3 & Atlas 800T A2 & Atlas 300I Duo)
+# Get Started with Huawei Ascend
 
+We currently support running lmdeploy on **Atlas 800T A3, Atlas 800T A2 and Atlas 300I Duo**.
 The usage of lmdeploy on a Huawei Ascend device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
 
