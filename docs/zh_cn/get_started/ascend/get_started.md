@@ -13,10 +13,10 @@
 > （Atlas 800T A3目前只支持Qwen系列的算子模式下运行）
 >
 > Atlas 800T A2:
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:a2-latest`
 >
 > Atlas 300I Duo:
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:300i-duo-latest`
 > （Atlas 300I Duo目前只支持非eager模式）
 >
 > 如果您希望自己构建环境，请参考[这里](../../../../docker)的dockerfile来自己构建。
