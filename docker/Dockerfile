@@ -21,6 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
 RUN --mount=type=cache,target=/root/.cache \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
     apt-get update -y && \
     apt-get install -y --no-install-recommends \
         tzdata wget curl openssh-server ssh sudo git-core \
@@ -60,6 +61,7 @@ COPY docker/install.sh /tmp/install.sh
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/wheels,from=builder,source=/wheels \
     --mount=type=cache,target=/nccl,from=builder,source=/nccl \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
     /tmp/install.sh
 
 # explicitly set ptxas path for triton
