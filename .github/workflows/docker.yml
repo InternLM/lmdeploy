@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: 'prod'
     strategy:
+      fail-fast: false
       matrix:
         cuda_version: ['cu12.8', cu12, cu11]
     env:
