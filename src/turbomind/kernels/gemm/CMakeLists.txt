@@ -20,8 +20,6 @@ add_library(gemm2
         kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm75_s16816.cu
         kernel/f16_u4g128_f16_tnt_sm70_s884.cu
-        # kernel/f16_u4g128_f16_tnt_sm75_simt.cu
-        # kernel/u4g128_f16_f16_nnn_sm80_s16816.cu
         kernel/sm90_mxfp4.cu
         kernel/sm80_mxfp4.cu
         kernel/sm70_s884_dynamic.cu

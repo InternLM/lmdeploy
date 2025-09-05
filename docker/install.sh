@@ -1,6 +1,7 @@
 #!/bin/bash -ex
 
 export DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
+sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list
 apt-get update -y
 apt-get install -y --no-install-recommends \
     tzdata wget curl ssh sudo git-core libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1
@@ -35,7 +36,7 @@ if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     FA_VERSION=2.7.3
     TORCH_VERSION="<2.7"
 else
-    FA_VERSION=2.8.2
+    FA_VERSION=2.8.3
     TORCH_VERSION=""
 fi
 

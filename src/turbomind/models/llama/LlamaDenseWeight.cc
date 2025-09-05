@@ -1,3 +1,4 @@
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include <utility>
 
@@ -12,8 +13,85 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
+
+namespace gemm {
+
+std::tuple<Order, Pack, Order, Pack>
+get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool force_simt)
+{
+    // Trivial case: floating point & dense GEMM
+    if (!is_fused_moe && (dtype == kHalf || dtype == kBfloat16 || dtype == kFloat)) {
+        return {kColMajor, OPERAND_A, {}, {}};
+    }
+
+    if (dtype == kFloat4_e2m1) {
+        if (sm >= 80) {
+            return {kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1};
+        }
+        else if (sm >= 75) {
+            return {kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1};
+        }
+        else if (sm >= 70) {
+            return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
+        }
+    }
+
+    if (is_fused_moe) {
+        if (dtype == kBfloat16 && sm >= 80) {
+            return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
+        }
+
+        if (dtype == kFloat16) {
+            if (sm >= 80) {
+                return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
+            }
+            else if (sm == 75) {
+                return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
+            }
+            else if (sm == 70) {
+                return {kColMajor, HMMA_884 | OPERAND_B | 1, {}, {}};
+            }
+        }
+        else if (dtype == kUint4) {
+            if (sm >= 80) {
+                return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+            }
+            else if (sm == 75) {
+                return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+            }
+            else if (sm == 70) {
+                return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
+            }
+        }
+    }
+    else {
+        if (dtype == kUint4) {
+            if (force_simt) {
+                return {kColMajor, HMMA_SIMT | OPERAND_B | 1, kRowMajor, HMMA_SIMT | OPERAND_V | 1};
+            }
+            if (sm >= 80) {
+                return {kRowMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+            }
+            else if (sm == 75) {
+                return {kRowMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
+            }
+            else if (sm == 70) {
+                return {kColMajor, HMMA_884 | OPERAND_B | 1, kRowMajor, HMMA_884 | OPERAND_V | 1};
+            }
+        }
+    }
+
+    std::cerr << "not implemented: dtype=" << to_string(dtype) << ", is_fused_moe=" << is_fused_moe << ", sm=" << sm
+              << std::endl;
+    std::abort();
+
+    return {};
+}
+
+}  // namespace gemm
 
 void LlamaDenseWeight::emplace(
     int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size)
@@ -57,199 +135,133 @@ void LlamaDenseWeight::emplace(
         register_parameter("scales", scales);
         register_parameter("zeros", zeros);
     }
+
+    k_desc = {};
+    q_desc = {};
+
+    // default case: floating point, N-major
+    k_desc.type  = weight.dtype();
+    k_desc.order = gemm::kRowMajor;
+    k_desc.rows  = input_dim;
+    k_desc.cols  = output_dim;
+    k_desc.ld    = output_dim;
 }
 
-static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt, cudaStream_t st)
-{
-    TM_CHECK_EQ(dense.weight_type, data_type_v<uint4_t>);
-
-    using namespace gemm;
-
-    auto [order_b, pack_b, order_v, pack_v] =
-        get_weight_and_scales_layout(data_type_v<uint4_t>, is_fused_moe, getSMVersion(), use_simt);
-
-    if (order_b == kColMajor) {
-        Buffer trans{dense.input_dim * dense.output_dim, data_type_v<uint4_t>, kDEVICE};
-        transpose_u4(
-            (uint4_t*)trans.raw_data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim, dense.output_dim, st);
-        cudaMemcpyAsync(
-            dense.weight.raw_data(), trans.raw_data(), dense.input_dim * dense.output_dim / 2, cudaMemcpyDefault, st);
-    }
-
-    Buffer_<uint16_t> tmp_w{dense.input_dim * dense.output_dim, kDEVICE};
-    extend_to_u16(tmp_w.data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim * dense.output_dim, st);
-    sync_check_cuda_error();
-
-    MatrixLayout w_desc{
-        data_type_v<half_t>,
-        order_b,
-        (int)dense.input_dim,   // k
-        (int)dense.output_dim,  // n
-        order_b == kRowMajor ? (int)dense.output_dim : (int)dense.input_dim,
-    };
-
-    MatrixLayout k_desc = w_desc;
-    k_desc.type         = data_type_v<uint4_t>;
-    k_desc.pack         = pack_b;
-
-    cudaMemsetAsync(dense.weight.raw_data(), 0, dense.input_dim * dense.output_dim / 2, st);
-
-    FT_CHECK(Convert(tmp_w.data(), w_desc, dense.weight.raw_data(), k_desc, st) == 0);
-    sync_check_cuda_error();
-
-    const int scale_count = (dense.input_dim / dense.group_size) * dense.output_dim;
-
-    Buffer_<half> tmp_q{scale_count * 2, kDEVICE};
-    fuse_scales_and_zeros(tmp_q.data(), dense.scales.data<half>(), dense.zeros.data<half>(), scale_count, st);
-    sync_check_cuda_error();
-
-    dense.scales = {};
-    dense.zeros  = {};
-
-    dense.scales_zeros = Tensor_<half>{{scale_count, 2}, kDEVICE};
-
-    MatrixLayout s_desc{
-        data_type_v<uint32_t>,
-        order_v,
-        (int)dense.input_dim / dense.group_size,  // k
-        (int)dense.output_dim,                    // n
-        (int)dense.output_dim,
-    };
-
-    MatrixLayout q_desc = s_desc;
-    q_desc.pack         = pack_v;
-
-    FT_CHECK(Convert(tmp_q.data(), s_desc, dense.scales_zeros.raw_data(), q_desc, st) == 0);
-    sync_check_cuda_error();
-
-    dense.k_desc = k_desc;
-    dense.q_desc = q_desc;
-}
-
-static void convert_e2m1(LlamaDenseWeight& dense, cudaStream_t st)
-{
-    TM_CHECK_EQ(dense.weight_type, data_type_v<fp4_e2m1_t>);
-
-    using namespace gemm;
-
-    auto [order_a, pack_a, order_u, pack_u] =
-        get_weight_and_scales_layout(data_type_v<fp4_e2m1_t>, true, getSMVersion(), false);
-
-    TM_CHECK(order_a == kColMajor);
-
-    Buffer_<uint16_t> tmp_w{dense.input_dim * dense.output_dim, kDEVICE};
-    extend_to_u16(tmp_w.data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim * dense.output_dim, st);
-    sync_check_cuda_error();
-
-    MatrixLayout w_desc{
-        dense.data_type,
-        order_a,
-        (int)dense.output_dim,  // m
-        (int)dense.input_dim,   // k
-        (int)dense.output_dim,
-        // order_a == kRowMajor ? (int)dense.input_dim : (int)dense.output_dim,
-    };
-
-    MatrixLayout k_desc = w_desc;
-    k_desc.type         = data_type_v<uint4_t>;
-    k_desc.pack         = pack_a;
-
-    cudaMemsetAsync(dense.weight.raw_data(), 0, dense.weight.byte_size(), st);
-
-    FT_CHECK(Convert(tmp_w.data(), w_desc, dense.weight.raw_data(), k_desc, st) == 0);
-    sync_check_cuda_error();
-
-    k_desc.type = data_type_v<fp4_e2m1_t>;
-
-    // weight is placed at B
-    k_desc = transpose(k_desc);
-
-    auto tmp_q = empty_like(dense.scales);
-    Copy(dense.scales, tmp_q);
-
-    if (dense.data_type == kHalf) {
-        AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), st);
-    }
-
-    MatrixLayout s_desc{
-        data_type_v<uint8_t>,
-        order_u,
-        (int)dense.output_dim,                    // n
-        (int)dense.input_dim / dense.group_size,  // k
-        (int)dense.output_dim,
-    };
-
-    MatrixLayout q_desc = s_desc;
-    q_desc.pack         = pack_u;
-
-    FT_CHECK(Convert(tmp_q.raw_data(), s_desc, dense.scales.raw_data(), q_desc, st) == 0);
-    sync_check_cuda_error();
-
-    dense.k_desc = k_desc;
-    dense.q_desc = q_desc;
-}
-
-static void convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt, cudaStream_t st)
+static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
 {
     using namespace gemm;
 
-    if (!is_fused_moe) {
-        dense.k_desc = {dense.weight.dtype(),  //
-                        kRowMajor,
-                        dense.input_dim,
-                        dense.output_dim,
-                        (int)dense.weight.stride(0)};
-        return;
-    }
+    auto [order_w, pack_w, order_s, pack_s] =
+        get_weight_and_scales_layout(dense.weight_type, is_grouped, getSMVersion(), false);
 
-    /// TODO: unify data types
-    auto data_type = dense.data_type;
+    const bool is_A = get_operand_tag(pack_w) == OPERAND_A;
+    const bool is_B = !is_A;
 
-    const auto [order_b, pack_b, order_v, pack_v] =
-        get_weight_and_scales_layout(data_type, is_fused_moe, getSMVersion(), use_simt);
+    if (get_pack_num(pack_w)) {
 
-    const int input_dim  = dense.input_dim;
-    const int output_dim = dense.output_dim;
+        const bool is_K_major = (is_A && order_w == kRowMajor) || (is_B && order_w == kColMajor);
 
-    TM_CHECK(dense.weight.is_contiguous());
+        const int bits = byte_size(dense.weight_type, 8);
 
-    Buffer_<uint16_t> tmp{input_dim * output_dim, kDEVICE};
+        Tensor_<uint16_t> tmp{{dense.input_dim, dense.output_dim}, kDEVICE};
 
-    if (order_b == kColMajor) {
-        invokeTransposeAxis01(tmp.data(), (uint16_t*)dense.weight.raw_data(), input_dim, output_dim, 1, st);
+        if (bits == 4) {
+            extend_to_u16(tmp.data(), (const uint4_t*)dense.weight.raw_data(), tmp.size(), st);
+            sync_check_cuda_error();
+        }
+        else if (bits == 16) {
+            check_cuda_error(
+                cudaMemcpyAsync(tmp.raw_data(), dense.weight.raw_data(), tmp.byte_size(), cudaMemcpyDefault, st));
+        }
+
+        if (is_K_major) {
+            Tensor_<uint16_t> trans{{dense.output_dim, dense.input_dim}, kDEVICE};
+            invokeTransposeAxis01(trans.data(), tmp.data(), dense.input_dim, dense.output_dim, 1, st);
+            tmp = trans;
+        }
+
+        MatrixLayout w_desc{
+            dense.data_type,
+            order_w,
+            (int)dense.output_dim,  // M
+            (int)dense.input_dim,   // K
+            is_K_major ? (int)dense.input_dim : (int)dense.output_dim,
+        };
+
+        if (is_B) {
+            std::swap(w_desc.rows, w_desc.cols);
+        }
+
+        MatrixLayout k_desc = w_desc;
+        // Converter does not recognize e2m1
+        k_desc.type = bits == 4 ? data_type_v<uint4_t> : dense.weight_type;
+        k_desc.pack = pack_w;
+
+        check_cuda_error(cudaMemsetAsync(dense.weight.raw_data(), 0, dense.weight.byte_size(), st));
+
+        FT_CHECK(Convert(tmp.data(), w_desc, dense.weight.raw_data(), k_desc, st) == 0);
         sync_check_cuda_error();
+
+        k_desc.type = dense.weight_type;
+        if (is_A) {
+            k_desc = transpose(k_desc);
+        }
+        dense.k_desc = k_desc;
     }
-    else {
-        check_cuda_error(
-            cudaMemcpyAsync(tmp.data(), dense.weight.raw_data(), dense.weight.byte_size(), cudaMemcpyDefault, st));
-    }
 
-    MatrixLayout src{
-        data_type,
-        order_b,
-        input_dim,   // k
-        output_dim,  // n
-        order_b == kRowMajor ? output_dim : input_dim,
-    };
+    if (get_pack_num(pack_s)) {
+        Tensor   tmp_q;
+        DataType scale_type;
 
-    MatrixLayout dst = src;
-    dst.pack         = pack_b;
+        if (dense.zeros) {  // AWQ/GPTQ fuse scales and zeros
+            tmp_q = {{dense.scales.size(), 2}, kHalf, kDEVICE};
+            fuse_scales_and_zeros(
+                tmp_q.data<half>(), dense.scales.data<half>(), dense.zeros.data<half>(), dense.scales.size(), st);
+            scale_type = kUint32;  // half2
+        }
+        else {
+            tmp_q = empty_like(dense.scales);
+            Copy(dense.scales, tmp_q);
+            scale_type = kUint8;  // ue8m0
+        }
 
-    if (pack_b) {
-        FT_CHECK(Convert(tmp.data(), src, dense.weight.raw_data(), dst, st) == 0);
+        if (dense.data_type == kHalf && dense.weight_type == kFloat4_e2m1) {  // MXFP4
+            AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), st);
+            sync_check_cuda_error();
+        }
+
+        MatrixLayout s_desc{
+            scale_type,
+            order_s,
+            (int)dense.output_dim,                    // M
+            (int)dense.input_dim / dense.group_size,  // K
+            (int)dense.output_dim,                    // always MN-major
+        };
+
+        if (is_B) {
+            std::swap(s_desc.rows, s_desc.cols);
+        }
+
+        MatrixLayout q_desc = s_desc;
+        q_desc.pack         = pack_s;
+
+        FT_CHECK(Convert(tmp_q.raw_data(), s_desc, dense.scales.raw_data(), q_desc, st) == 0);
         sync_check_cuda_error();
-    }
-    else {
-        check_cuda_error(
-            cudaMemcpyAsync(dense.weight.raw_data(), tmp.data(), dense.weight.byte_size(), cudaMemcpyDefault, st));
-    }
 
-    dense.k_desc = dst;
+        // weight is placed at B in `Linear`
+        if (is_A) {
+            q_desc = transpose(q_desc);
+        }
+        dense.q_desc = q_desc;
+    }
 }
 
-static void convert_f8(LlamaDenseWeight& dense, cudaStream_t stream)
+static void ConvertBlockscaleFP8Native(LlamaDenseWeight& dense, cudaStream_t stream)
 {
     using namespace gemm;
+
+    TM_CHECK_GE(getSMVersion(), 90);
+    TM_CHECK_EQ(dense.data_type, data_type_v<bfloat16_t>);
 
     auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
         using T = decltype(dtype);
@@ -278,20 +290,11 @@ void LlamaDenseWeight::prepare(bool fused_moe, bool use_simt)
 
     auto stream = core::Context::stream().handle();
 
-    if (weight_type == data_type_v<uint4_t>) {
-        TM_CHECK_EQ(data_type, data_type_v<half_t>);
-        convert_u4(*this, fused_moe, use_simt, stream);
-    }
-    else if (weight_type == data_type_v<fp8_e4m3_t>) {
-        TM_CHECK_EQ(data_type, data_type_v<bfloat16_t>);
-        convert_f8(*this, stream);
-    }
-    else if (weight_type == data_type_v<fp4_e2m1_t>) {
-        // TM_CHECK_EQ(data_type, data_type_v<bfloat16_t>);
-        convert_e2m1(*this, stream);
+    if (weight_type == data_type_v<fp8_e4m3_t> && weight_quant.type == gemm::QuantType::kB) {
+        ConvertBlockscaleFP8Native(*this, stream);
     }
     else {
-        convert_fp(*this, fused_moe, use_simt, stream);
+        Convert(*this, fused_moe, stream);
     }
 }
 
