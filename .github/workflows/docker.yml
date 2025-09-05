@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: 'prod'
     strategy:
+      fail-fast: false
       matrix:
         cuda_version: ['cu12.8', cu12, cu11]
     env:
@@ -80,7 +81,7 @@ jobs:
           echo $TAG
           docker build . -f docker/Dockerfile -t ${TAG} --build-arg CUDA_VERSION=${CUDA_VERSION}
           docker push $TAG
-      - name: Push Docker image latest-cu12 as latest
+      - name: Push Docker image as latest
         if: endsWith(env.TAG, 'latest-cu12') == true
         run: |
           export latest_TAG=${TAG_PREFIX}:latest
