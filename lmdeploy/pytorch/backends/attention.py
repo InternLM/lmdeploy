@@ -93,6 +93,7 @@ class AttentionBuilder(ABC, Generic[T]):
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
+        block_sparse_size: int = 1,
         **kwargs,
     ) -> AttentionImpl[T]:
         """build."""
