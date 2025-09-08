@@ -151,7 +151,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
-  <li>gpt-oss (20b - 120b)</li>
+  <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>
 <td>
@@ -207,7 +207,7 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
+自 v0.10.0 起，LMDeploy 预编译包默认基于 CUDA 12.8 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
 
 ## 离线批处理
 

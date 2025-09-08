@@ -150,7 +150,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
-  <li>gpt-oss (20b - 120b)</li>
+  <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>
 <td>
@@ -206,7 +206,7 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
+The default prebuilt package is compiled on **CUDA 12.8** since v0.10.0.
 For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](docs/en/get_started/installation.md).
 
 ## Offline Batch Inference
