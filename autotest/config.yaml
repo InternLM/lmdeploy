@@ -84,7 +84,6 @@ turbomind_chat_model:
     - lmdeploy/llama2-chat-7b-w4
     - baichuan-inc/Baichuan2-7B-Chat
     - 01-ai/Yi-6B-Chat
-    - 01-ai/Yi-VL-6B
     - liuhaotian/llava-v1.5-13b
     - liuhaotian/llava-v1.6-vicuna-7b
     - deepseek-ai/DeepSeek-R1-Distill-Llama-8B
@@ -189,7 +188,6 @@ turbomind_vl_model:
     - Qwen/Qwen2-VL-7B-Instruct
     - liuhaotian/llava-v1.5-13b
     - liuhaotian/llava-v1.6-vicuna-7b
-    - 01-ai/Yi-VL-6B
     - deepseek-ai/deepseek-vl-1.3b-chat
     - openbmb/MiniCPM-Llama3-V-2_5
     - openbmb/MiniCPM-V-2_6
@@ -314,7 +312,6 @@ pytorch_quatization:
         - mistralai/Mistral-7B-Instruct-v0.3
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
-        - microsoft/Phi-4-mini-instruct
         - internlm/internlm2_5-20b
         - internlm/internlm2_5-7b
         - meta-llama/Meta-Llama-3-1-8B-Instruct
