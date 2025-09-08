@@ -11,6 +11,16 @@ Here is the [supported model list](../../supported_models/supported_models.md#Py
 >
 > `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/camb:latest`
 
+> \[!IMPORTANT\]
+> Currently, launching multi-device inference on Cambricon accelerators requires manually starting Ray.
+>
+> Below is an example for a 2-devices setup：
+> 
+> ```shell
+>  export MLU_VISIBLE_DEVICES=0,1
+>  ray start --head --resources='{"MLU": 2}'
+>  ```
+
 ## Offline batch inference
 
 ### LLM inference
