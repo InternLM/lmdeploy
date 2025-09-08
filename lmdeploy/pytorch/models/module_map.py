@@ -223,6 +223,7 @@ MODULE_MAP.update({
 # SDAR
 MODULE_MAP.update({
     'SDARForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.sdar.SDARForCausalLM',
+    'SDARMoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.sdar_moe.SDARMoeForCausalLM',
 })
 
 CUSTOM_MODULE_MAP = dict()

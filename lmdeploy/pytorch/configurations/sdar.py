@@ -7,7 +7,7 @@ class SDARModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type == 'sdar'
+        return hf_config.model_type in ['sdar', 'sdar_moe']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
