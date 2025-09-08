@@ -613,7 +613,7 @@ class ArgumentHelper:
     @staticmethod
     def dllm_block_length(parser):
         """dllm_block_length for dllm."""
-        return parser.add_argument('--dllm-block-length', type=int, default=1, help='Block length for dllm')
+        return parser.add_argument('--dllm-block-length', type=int, default=None, help='Block length for dllm')
 
     @staticmethod
     def dllm_unmasking_strategy(parser):

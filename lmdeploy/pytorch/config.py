@@ -202,6 +202,7 @@ class ModelConfig:
     use_flash_mla: bool = False
     model_paradigm: str = 'ar'
     dllm_mask_token: int = 0
+    dllm_block_length: int = None
 
     def get_head_size(self):
         """Get head size."""
@@ -309,12 +310,9 @@ class MiscConfig:
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
         """From engine config."""
-        denoising_steps = engine_config.dllm_denoising_steps
-        if denoising_steps is None:
-            denoising_steps = engine_config.dllm_block_length // 2
         dllm_config = DLLMConfig(dllm_block_length=engine_config.dllm_block_length,
                                  unmasking_strategy=engine_config.dllm_unmasking_strategy,
-                                 denoising_steps=denoising_steps,
+                                 denoising_steps=engine_config.dllm_denoising_steps,
                                  confidence_threshold=engine_config.dllm_confidence_threshold)
         misc_config = cls(custom_module_map=engine_config.custom_module_map,
                           empty_init=engine_config.empty_init,

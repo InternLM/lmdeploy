@@ -377,7 +377,7 @@ class PytorchEngineConfig:
     logprobs_mode: str = None
 
     # dllm
-    dllm_block_length: int = 1
+    dllm_block_length: int = None
     dllm_unmasking_strategy: str = 'low_confidence_dynamic'
     dllm_denoising_steps: int = None
     dllm_confidence_threshold: float = 0.85

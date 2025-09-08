@@ -21,7 +21,25 @@ class DLLMStrategyFactory(StrategyFactoryBase):
         """config."""
         self.model_config = model_config
         self.dllm_config = dllm_config
-        self.dllm_block_length = self.dllm_config.dllm_block_length
+
+        # update dllm_block_length
+        self.dllm_block_length = self._update_dllm_block_length()
+
+    def _update_dllm_block_length(self):
+        """Update dllm_block_length."""
+        if self.dllm_config.dllm_block_length is None:
+            dllm_block_length = self.model_config.dllm_block_length
+        else:
+            dllm_block_length = self.dllm_config.dllm_block_length
+
+        assert dllm_block_length is not None, 'dllm_block_length should be set in model_config or dllm_config'
+
+        self.dllm_config.dllm_block_length = dllm_block_length
+        self.model_config.dllm_block_length = dllm_block_length
+
+        if self.dllm_config.denoising_steps is None:
+            self.dllm_config.denoising_steps = dllm_block_length
+        return dllm_block_length
 
     def build_cudagraph_strategy(self) -> 'CudagraphStrategy':
         """Build cudagraph strategy."""
