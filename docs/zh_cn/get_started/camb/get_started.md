@@ -12,11 +12,11 @@
 
 > \[!IMPORTANT\]
 > 目前寒武纪加速卡上启动多卡推理需要手动启动ray。下面是一个2卡的例子：
-> 
+>
 > ```shell
 >  export MLU_VISIBLE_DEVICES=0,1
 >  ray start --head --resources='{"MLU": 2}'
->  ```
+> ```
 
 ## 离线批处理
 

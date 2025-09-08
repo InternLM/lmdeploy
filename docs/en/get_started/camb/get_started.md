@@ -15,11 +15,11 @@ Here is the [supported model list](../../supported_models/supported_models.md#Py
 > Currently, launching multi-device inference on Cambricon accelerators requires manually starting Ray.
 >
 > Below is an example for a 2-devices setup：
-> 
+>
 > ```shell
 >  export MLU_VISIBLE_DEVICES=0,1
 >  ray start --head --resources='{"MLU": 2}'
->  ```
+> ```
 
 ## Offline batch inference
 
