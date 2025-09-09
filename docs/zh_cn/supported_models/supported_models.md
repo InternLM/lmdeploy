@@ -47,6 +47,7 @@
 |               GLM4               |       9B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            CodeGeeX4             |       9B       | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |              Molmo               |    7B-D,72B    | MLLM |    Yes    |   Yes   |   Yes   |  No   |
+|             gpt-oss              |    20B,120B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 
 “-” 表示还没有验证。
 
