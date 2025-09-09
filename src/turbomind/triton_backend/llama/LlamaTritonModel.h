@@ -86,8 +86,7 @@ private:
 
     std::vector<std::unique_ptr<comm::HostGroupId>> group_ids_;
 
-    std::shared_ptr<Gateway>               gateway_;
-    std::function<std::shared_ptr<void>()> ffi_ctx_factory_;
+    std::shared_ptr<Gateway> gateway_;
 
     // Weights & engine instances for the ranks
     std::vector<std::shared_ptr<LlamaWeight>> weights_;

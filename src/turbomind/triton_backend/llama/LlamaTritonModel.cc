@@ -240,9 +240,7 @@ LlamaTritonModel::~LlamaTritonModel()
 {
     FT_CHECK(weights_.size() == engines_.size());
 
-    if (gateway_) {
-        gateway_->shutdown();
-    }
+    gateway_->shutdown();
 
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
@@ -391,7 +389,6 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     handleMissingParams();
 
     gateway_ = std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory);
-    ffi_ctx_factory_ = ffi_ctx_factory;
 
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
@@ -608,7 +605,6 @@ void LlamaTritonModel::sleep(int device_id, int level)
     // free model (kv cache and buffer)
     if (device_id == 0) {
         gateway_->shutdown();
-        gateway_.reset();
     }
     engines_[device_id].reset();
     contexts_[device_id]->allocator->trim(0);
@@ -635,8 +631,7 @@ void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tag
 
     if (keys.find("kv_cache") != keys.end()) {
         if (device_id == 0) {
-            gateway_ =
-                std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory_);
+            gateway_->startup();
         }
         TM_CHECK(contexts_[device_id] != nullptr);
         contexts_[device_id]->comm.h_comm->Sync();
