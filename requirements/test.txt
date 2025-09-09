@@ -5,7 +5,7 @@ pytest
 pytest-assume
 pytest-cov
 pytest-order
-pytest-rerunfailures!=16.0
+pytest-rerunfailures
 pytest-sugar
 pytest-xdist
 pyyaml
