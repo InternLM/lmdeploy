@@ -738,8 +738,13 @@ class Engine(EngineBase):
         if not is_decoding:
             seq_length = [len(tokens) for tokens in token_ids]
             seq_length = torch.tensor(seq_length, dtype=torch.long)
+            max_q_seqlen = seq_length.max().item()
         else:
             seq_length = torch.ones(batch_size, dtype=torch.long)
+            max_q_seqlen = 1
+        kv_seqlens = seq_length + history_lengths
+        max_kv_seqlen = kv_seqlens.max().item()
+        sum_kv_seqlen = kv_seqlens.sum().item()
 
         # block offsets
         block_offsets = self.scheduler.get_block_tables(messages)
@@ -759,6 +764,9 @@ class Engine(EngineBase):
             block_offsets=block_offsets,
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
+            max_q_seqlen=max_q_seqlen,
+            max_kv_seqlen=max_kv_seqlen,
+            sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
         )
 
@@ -1086,7 +1094,7 @@ class Engine(EngineBase):
                         resp=msg.resp,
                         finish=False,
                         token_ids=np.array(token_ids),
-                        metrics_info=req_metrics,
+                        req_metrics=req_metrics,
                     )
                     outputs[session_id] = out
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])

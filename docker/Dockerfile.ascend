@@ -1,29 +1,28 @@
-ARG CANN_TAG=8.1.RC1-python3.11-oe2403lts
+# Run the following command in the root directory of lmdeploy to build the image:
+# DOCKER_BUILDKIT=1 docker build --network=host -t lmdeploy_dlinfer:a2 -f  docker/Dockerfile.ascend .
+ARG ASCEND_DEVICE=ascend_a2
+ARG ASCEND_HUB=swr.cn-south-1.myhuaweicloud.com/ascendhub
 
-FROM openeuler/cann:${CANN_TAG} AS builder
-ARG PYTHON_VERSION=3.10
+FROM ${ASCEND_HUB}/cann:8.1.rc1-910b-ubuntu22.04-py3.10 AS ascend_a2_base
 
-RUN --mount=type=cache,target=/root/.cache \
-    pip install -v uv && \
-    uv venv -v -p python${PYTHON_VERSION} --seed /opt/py3
+FROM ${ASCEND_HUB}/cann:8.1.rc1-310p-ubuntu22.04-py3.10 AS ascend_300i_base
 
-ENV PATH=/opt/py3/bin:$PATH
+FROM ${ASCEND_DEVICE}_base AS builder
 ENV LMDEPLOY_TARGET_DEVICE=ascend
-
-COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
-
+COPY . .
 RUN --mount=type=cache,target=/root/.cache \
-    pip install --upgrade pip build && \
+    pip config set global.index-url https://mirrors.aliyun.com/pypi/simple && \
+    pip config set global.trusted-host mirrors.aliyun.com && \
+    pip install --no-cache-dir -U pip build && \
     python -m build -w -o /wheels -v .
 
-FROM openeuler/cann:${CANN_TAG} AS final
-COPY --from=builder /root/.local /root/.local
-COPY --from=builder /opt/py3 /opt/py3
-ENV PATH=/opt/py3/bin:$PATH
+FROM ${ASCEND_DEVICE}_base AS final
 
 RUN --mount=type=cache,target=/root/.cache \
-    --mount=type=cache,target=/wheels,from=builder,source=/wheels \
-    pip install /wheels/*.whl
+    pip config set global.index-url  https://mirrors.aliyun.com/pypi/simple  && \
+    pip config set global.trusted-host  mirrors.aliyun.com  && \
+    pip install --no-cache-dir torch==2.3.1 torch-npu==2.3.1 torchvision==0.18.1
 
-ENTRYPOINT []
+RUN --mount=type=cache,target=/wheels,from=builder,source=/wheels \
+    pip install --no-cache-dir /wheels/*.whl

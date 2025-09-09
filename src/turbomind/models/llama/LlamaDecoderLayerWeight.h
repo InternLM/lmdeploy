@@ -61,6 +61,7 @@ private:
 
     DataType data_type_;
     DataType weight_type_;
+    DataType expert_weight_type_;
 
     int  bit_size_;
     bool attn_bias_;

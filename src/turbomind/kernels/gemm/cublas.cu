@@ -17,9 +17,14 @@ public:
         if (0) {
             cublasSetMathMode(cublas_, CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
         }
-        desc_         = {};
-        desc_.backend = 1;
-        name_         = GetName();
+
+        desc_.backend    = 1;
+        desc_.group_axis = -1;
+
+        info_.chunk_size_k      = 1;
+        info_.dynamic_smem_size = 0;
+
+        info_.name = GetName();
     }
 
     int Launch(const Operation&    operation,
@@ -108,7 +113,7 @@ public:
         if (desc.quant_a || desc.quant_b) {
             return false;
         }
-        if (desc.sched) {
+        if (desc.group_axis >= 0) {
             return false;
         }
         if (desc.order_c != kColMajor) {
@@ -126,14 +131,14 @@ public:
         return true;
     }
 
-    int GetMaxSplits(const int4&, int64_t, size_t, size_t) const override
-    {
-        return 1;
-    }
-
-    int GetSwizzle(int m, int n, int k, int splits, int swizzle) const override
+    int GetMaxSwizzle(const int4&) const override
     {
         return 0;
+    }
+
+    int GetMaxSplits(const int4&, int, size_t, size_t) const override
+    {
+        return 1;
     }
 
 private:

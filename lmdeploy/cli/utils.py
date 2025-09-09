@@ -7,6 +7,10 @@ import sys
 from collections import defaultdict
 from typing import Any, List
 
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
+
 
 class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
     """Formatter to output default value and type in help information."""
@@ -64,10 +68,12 @@ def get_lora_adapters(adapters: List[str]):
     return output
 
 
-def get_chat_template(chat_template: str):
+def get_chat_template(chat_template: str, model_path: str = None):
     """Get chat template config.
 
-    Args     chat_template(str): it could be a builtin chat template name,     or a chat template json file
+    Args:
+        chat_template(str): it could be a builtin chat template name, or a chat template json file
+        model_path(str): the model path, used to check deprecated chat template names
     """
     import os
 
@@ -76,12 +82,19 @@ def get_chat_template(chat_template: str):
         if os.path.isfile(chat_template):
             return ChatTemplateConfig.from_json(chat_template)
         else:
-            from lmdeploy.model import MODELS
+            from lmdeploy.model import DEPRECATED_CHAT_TEMPLATE_NAMES, MODELS, REMOVED_CHAT_TEMPLATE_NAMES
+            if chat_template in REMOVED_CHAT_TEMPLATE_NAMES:
+                raise ValueError(f"The chat template '{chat_template}' has been removed. "
+                                 f'Please refer to the latest chat templates in '
+                                 f'https://lmdeploy.readthedocs.io/en/latest/advance/chat_template.html')
+            if chat_template in DEPRECATED_CHAT_TEMPLATE_NAMES:
+                logger.warning(f"The chat template '{chat_template}' is deprecated and fallback to hf chat template.")
+                chat_template = 'hf'
             assert chat_template in MODELS.module_dict.keys(), \
                 f"chat template '{chat_template}' is not " \
                 f'registered. The builtin chat templates are: ' \
                 f'{MODELS.module_dict.keys()}'
-            return ChatTemplateConfig(model_name=chat_template)
+            return ChatTemplateConfig(model_name=chat_template, model_path=model_path)
     else:
         return None
 
@@ -126,7 +139,7 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'awq', 'gptq', 'fp8'],
+                                   choices=['hf', 'awq', 'gptq', 'fp8', 'mxfp4'],
                                    help='The format of input model. `hf` means `hf_llama`, '
                                    '`awq` represents the quantized model by AWQ,'
                                    ' and `gptq` refers to the quantized model by GPTQ')
@@ -388,7 +401,7 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def device(parser, default: str = 'cuda', choices: List[str] = ['cuda', 'ascend', 'maca', 'camb', 'ppu']):
+    def device(parser, default: str = 'cuda', choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',
@@ -526,7 +539,7 @@ class ArgumentHelper:
         return parser.add_argument('--max-log-len',
                                    type=int,
                                    default=None,
-                                   help='Max number of prompt characters or prompt tokens being'
+                                   help='Max number of prompt characters or prompt tokens being '
                                    'printed in log. Default: Unlimited')
 
     @staticmethod
@@ -552,8 +565,9 @@ class ArgumentHelper:
         return parser.add_argument('--communicator',
                                    type=str,
                                    default='nccl',
-                                   choices=['nccl', 'native'],
-                                   help='Communication backend for multi-GPU inference')
+                                   choices=['nccl', 'native', 'cuda-ipc'],
+                                   help='Communication backend for multi-GPU inference. The "native" option is '
+                                   'deprecated and serves as an alias for "cuda-ipc"')
 
     @staticmethod
     def enable_microbatch(parser):
@@ -572,7 +586,7 @@ class ArgumentHelper:
     @staticmethod
     def enable_metrics(parser):
         """Add argument enable_metrics to parser."""
-        parser.add_argument('--enable-metrics', action='store_true', default=False, help='enable metrics system')
+        return parser.add_argument('--enable-metrics', action='store_true', default=False, help='enable metrics system')
 
     # For Disaggregation
     @staticmethod
@@ -581,9 +595,9 @@ class ArgumentHelper:
                                    type=str,
                                    default='Hybrid',
                                    choices=['Hybrid', 'Prefill', 'Decode'],
-                                   help='Hybrid for Non-Disaggregated Engine;'
-                                   'Prefill for Disaggregated Prefill Engine;'
-                                   'Decode for Disaggregated Decode Engine;')
+                                   help='Hybrid for Non-Disaggregated Engine; '
+                                   'Prefill for Disaggregated Prefill Engine; '
+                                   'Decode for Disaggregated Decode Engine')
 
     @staticmethod
     def migration_backend(parser):
@@ -596,19 +610,19 @@ class ArgumentHelper:
     @staticmethod
     def disable_vision_encoder(parser):
         """Disable loading vision encoder."""
-        parser.add_argument('--disable-vision-encoder',
-                            action='store_true',
-                            default=False,
-                            help='enable metrics system')
+        return parser.add_argument('--disable-vision-encoder',
+                                   action='store_true',
+                                   default=False,
+                                   help='enable metrics system')
 
     @staticmethod
     def logprobs_mode(parser):
         """The mode of logprobs."""
-        parser.add_argument('--logprobs-mode',
-                            type=str,
-                            default=None,
-                            choices=[None, 'raw_logits', 'raw_logprobs'],
-                            help='The mode of logprobs.')
+        return parser.add_argument('--logprobs-mode',
+                                   type=str,
+                                   default=None,
+                                   choices=[None, 'raw_logits', 'raw_logprobs'],
+                                   help='The mode of logprobs.')
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

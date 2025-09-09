@@ -27,7 +27,8 @@ void Registry::sm70_s884_dynamic()
                             Striding::kIndexed,    // indexed input
                             Striding::kBlocked,
                             Striding::kBlocked,
-                            DynamicScheduler<kColMajor>>;
+                            kColMajor,
+                            0>;
 
         // clang-format off
         Add<C::Type<256, 128,  16, 4, 2, 1, D, D, 2,   0 , 1, 1, 128, 128>>();
@@ -56,7 +57,8 @@ void Registry::sm70_s884_dynamic()
                             Striding::kIndexed,        // indexed input
                             Striding::kBlocked,
                             Striding::kBlocked,
-                            DynamicScheduler<kColMajor>>;
+                            kColMajor,
+                            0>;
 
         // clang-format off
         Add<C::Type<128, 256,  16, 2, 4, 1, D, D, 2,   0 , 1, 128, 128, 128>>();
@@ -70,6 +72,30 @@ void Registry::sm70_s884_dynamic()
         Add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type< 16, 256,  32, 1, 4, 1, D, S, 2, true, 1, 128>>();
         Add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 128>>();
+        // clang-format on
+    }
+
+    if constexpr (1) {
+        using C = Sm70_s884<Operand_A<half>,             // A
+                            Transform_Default,           // tarnsform A
+                            VoidOperand,                 // U
+                            Operand_B_Pack<fp4_e2m1_t>,  // B
+                            Transform_HMMA_SIMT_B,       // transform B,
+                            Operand_V_Pack<uint8_t>,     // V
+                            kRowMajor,                   // order_C
+                            half,                        // Tc
+                            Striding::kIndexed,          // indexed input
+                            Striding::kBlocked,
+                            Striding::kBlocked,
+                            kColMajor,
+                            0>;
+
+        // clang-format off
+        Add<C::Type<128, 128,  16, 2, 2, 1, D, D, 2, true, 1, 32,  64, 128>>();
+        Add<C::Type< 64, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32,  32, 128>>();
+        Add<C::Type< 32, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type< 16, 128,  32, 1, 4, 1, D, S, 2, true, 1, 32>>();
+        Add<C::Type<  8, 128,  64, 1, 4, 1, D, S, 2, true, 1, 32>>();
         // clang-format on
     }
 }

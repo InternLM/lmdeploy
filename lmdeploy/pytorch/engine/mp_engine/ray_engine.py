@@ -8,7 +8,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.ray import RayContext
+from lmdeploy.pytorch.ray import RayContext, get_device_str, get_resource_kwargs
 from lmdeploy.utils import get_logger
 
 from .base import MPEngine
@@ -127,9 +127,11 @@ class RayMPEngine(MPEngine):
 
         runtime_env = dict()
         _update_runtime_envs(runtime_env)
+        device_str = get_device_str(engine_config.device_type)
+        resource_kwargs = get_resource_kwargs(device_str=device_str, resource_used=0.01)
         worker = ray.remote(
             num_cpus=0,
-            num_gpus=0.01,
+            **resource_kwargs,
             scheduling_strategy=scheduling_strategy,
             runtime_env=runtime_env,
         )(RayEngineWorker).remote(model_path, tokenizer, engine_config, **kwargs)

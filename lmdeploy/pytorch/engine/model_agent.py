@@ -328,6 +328,7 @@ class BaseModelAgent:
 
         self.stream = torch.cuda.Stream()
         self.out_stream = torch.cuda.Stream()
+        self.cache_stream = torch.cuda.Stream()
 
         self.dist_ctx = dist_ctx
         self.device_ctx = device_ctx
@@ -387,13 +388,26 @@ class BaseModelAgent:
     def warmup(self):
         """warmup."""
         # TODO: disable for now, do not remove the comments.
+        with self.all_context():
+            max_batches = self.cache_config.max_batches
+            num_tokens = max_batches
 
-        # # warmup prefill
-        # with self.all_context():
-        #     inputs = ModelInputs.make_dummy(1, False, device='cuda')
-        #     self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
-        #     inputs = ModelInputs.make_dummy(self.cache_config.max_batches, True, device='cuda')
-        #     self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+            # warmup prefill
+            inputs = ModelInputs.make_dummy(max_batches,
+                                            is_decoding=False,
+                                            device='cuda',
+                                            vocab_size=self.model_config.vocab_size)
+            self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+
+            # warmup decoding(with cuda graph)
+            capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
+            capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
+            for num_tokens in capture_batch_sizes:
+                inputs = ModelInputs.make_dummy(num_tokens,
+                                                is_decoding=True,
+                                                device='cuda',
+                                                vocab_size=self.model_config.vocab_size)
+                self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
 
     async def _async_model_forward(
         self,
@@ -938,7 +952,8 @@ class BaseModelAgent:
                                             self.model_config,
                                             rank=self.rank,
                                             tp_rank=self.tp_rank,
-                                            world_size=tp)
+                                            world_size=tp,
+                                            cache_stream=self.cache_stream)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)

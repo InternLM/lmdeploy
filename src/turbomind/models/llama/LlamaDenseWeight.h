@@ -197,4 +197,6 @@ struct MoeFfnWeight: core::Module {
     MoeParam::Method method{};
 };
 
+void LinkExperts(std::function<LlamaDenseWeight*(int)> experts, int n, LlamaDenseWeight& d);
+
 }  // namespace turbomind

@@ -25,6 +25,13 @@ ______________________________________________________________________
 
 <details open>
 <summary><b>2025</b></summary>
+
+- \[2025/09\] TurboMind supports MXFP4 on NVIDIA GPUs starting from V100, achieving 1.5x the performmance of vLLM on H800 for openai gpt-oss models!
+- \[2025/06\] Comprehensive inference optimization for FP8 MoE Models
+- \[2025/06\] DeepSeek PD Disaggregation deployment is now supported through integration with [DLSlime](https://github.com/DeepLink-org/DLSlime) and [Mooncake](https://github.com/kvcache-ai/Mooncake). Huge thanks to both teams!
+- \[2025/04\] Enhance DeepSeek inference performance by integration deepseek-ai techniques: FlashMLA, DeepGemm, DeepEP, MicroBatch and eplb
+- \[2025/01\] Support DeepSeek V3 and R1
+
 </details>
 
 <details close>
@@ -127,7 +134,8 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
-  <li>GLM4 (9B)</li>
+  <li>GLM-4 (9B)</li>
+  <li>GLM-4-0414 (9B, 32B)</li>
   <li>CodeGeeX4 (9B)</li>
   <li>YI (6B-34B)</li>
   <li>Mistral (7B)</li>
@@ -142,6 +150,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
+  <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>
 <td>
@@ -158,6 +167,9 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>InternVL3 (1B-78B)</li>
+  <li>InternVL3.5 (1B-241BA28B)</li>
+  <li>Intern-S1 (241B)</li>
+  <li>Intern-S1-mini (8.3B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
@@ -167,6 +179,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3-vision (4.2B)</li>
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
+  <li>GLM-4.1V-Thinking (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>
@@ -193,7 +206,7 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
+The default prebuilt package is compiled on **CUDA 12.8** since v0.10.0.
 For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](docs/en/get_started/installation.md).
 
 ## Offline Batch Inference
@@ -262,6 +275,15 @@ We appreciate all contributions to LMDeploy. Please refer to [CONTRIBUTING.md](.
     author={LMDeploy Contributors},
     howpublished = {\url{https://github.com/InternLM/lmdeploy}},
     year={2023}
+}
+```
+
+```bibtex
+@article{zhang2025efficient,
+  title={Efficient Mixed-Precision Large Language Model Inference with TurboMind},
+  author={Zhang, Li and Jiang, Youhe and He, Guoliang and Chen, Xin and Lv, Han and Yao, Qian and Fu, Fangcheng and Chen, Kai},
+  journal={arXiv preprint arXiv:2508.15601},
+  year={2025}
 }
 ```
 
