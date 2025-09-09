@@ -262,8 +262,6 @@ class InternVLVisionModel(VisonModel):
                                                sequence_start,
                                                tools=tools,
                                                enable_thinking=enable_thinking)
-        # import pdb; pdb.set_trace()
-        # FIXME: should double check here, different from provided one, in terms of something like </img>\n<img> words
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self,
