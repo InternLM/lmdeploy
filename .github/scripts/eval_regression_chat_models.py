@@ -91,6 +91,7 @@ pytorch_qwen2_5_72b_instruct_model = deepcopy(lmdeploy_qwen2_5_72b_instruct_mode
 pytorch_qwen2_5_32b_instruct_model = deepcopy(lmdeploy_qwen2_5_32b_instruct_model)
 pytorch_qwen2_7b_instruct_model = deepcopy(lmdeploy_qwen2_7b_instruct_model)
 pytorch_yi_1_5_34b_chat_model = deepcopy(lmdeploy_yi_1_5_34b_chat_model)
+pytorch_deepseek_v2_5_1210_model['engine_config']['cache_max_entry_count'] = 0.6
 
 lmdeploy_glm4_9b_chat_model_native = deepcopy(lmdeploy_glm4_9b_chat_model)
 lmdeploy_deepseek_r1_distill_qwen_32b_model_native = deepcopy(lmdeploy_deepseek_r1_distill_qwen_32b_model)
