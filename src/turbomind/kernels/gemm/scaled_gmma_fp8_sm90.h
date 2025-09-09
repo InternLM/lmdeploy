@@ -66,7 +66,7 @@ struct ScaledGmmaFP8_TN {
     using FragU = float[ITER_M][PIPE_M][BATCH_M][2];
     using FragV = float[2];
 
-    using FragC = typename Operation::CRegisters[PIPE_M][PIPE_N][BATCH_M][BATCH_N];
+    typedef typename Operation::CRegisters FragC[PIPE_M][PIPE_N][BATCH_M][BATCH_N];
 
     using AccumC = FragC[ITER_M][ITER_N];
 
