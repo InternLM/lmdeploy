@@ -44,7 +44,7 @@ def apply_rotary_pos_emb_qk_kernel(
     feat_mask = feat_offset_l < half_size
     feat_offset_l = feat_offset_l % half_size
     feat_offset_h = half_size + feat_offset_l
-    seq_mask = pos_mask[:, None] and feat_mask[None, :]
+    seq_mask = pos_mask[:, None] & feat_mask[None, :]
     cs_offset_l = pos_offset[:, None] * feat_size + feat_offset_l[None, :]
     cs_offset_h = pos_offset[:, None] * feat_size + feat_offset_h[None, :]
     q_elem_type = Q.dtype.element_ty
