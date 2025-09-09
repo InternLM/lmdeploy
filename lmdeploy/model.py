@@ -742,7 +742,11 @@ class HFChatTemplate(BaseChatTemplate):
             self.system_start, self.system_end = self._role_instruction('system')
             self.user_start, self.user_end = self._role_instruction('user')
             self.assistant_start, self.assistant_end = self._role_instruction('assistant')
-            self.stop_words = [self.tokenizer.eos_token]
+            self.stop_words = []
+            if hasattr(self.tokenizer, 'eos_token') and self.tokenizer.eos_token is not None:
+                self.stop_words.append(self.tokenizer.eos_token)
+            if hasattr(self.tokenizer, 'eot_token') and self.tokenizer.eot_token is not None:
+                self.stop_words.append(self.tokenizer.eot_token)
         except Exception as e:
             raise ValueError(f'Try apply_chat_template failed: {e}')
 
