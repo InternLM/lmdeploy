@@ -2,7 +2,7 @@
 from typing import Dict, List, Optional
 
 import torch
-from transformers import AutoConfig, AutoModel, CLIPImageProcessor
+from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -110,6 +110,11 @@ class InternVLVisionModel(VisonModel):
         patch_size = self.hf_config.vision_config.patch_size
         downsample_ratio = self.hf_config.downsample_ratio
         self.image_tokens_per_patch = int((force_image_size // patch_size)**2 * (downsample_ratio**2))
+
+        if 'internvl3_5' in self.model_path.lower():
+            IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
+            tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True, use_fast=False)
+            self.image_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
 
     def build_model(self):
         """Build the vision part of a VLM model when backend is turbomind, or
@@ -257,6 +262,8 @@ class InternVLVisionModel(VisonModel):
                                                sequence_start,
                                                tools=tools,
                                                enable_thinking=enable_thinking)
+        # import pdb; pdb.set_trace()
+        # FIXME: should double check here, different from provided one, in terms of something like </img>\n<img> words
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self,
