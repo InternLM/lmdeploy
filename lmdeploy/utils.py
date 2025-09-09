@@ -389,6 +389,8 @@ def is_bf16_supported(device_type: str = 'cuda'):
         return True
     elif device_type == 'camb':
         return True
+    elif device_type == 'rocm':
+        return True
     else:
         return False
 

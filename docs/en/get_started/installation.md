@@ -55,3 +55,24 @@ pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.10.0.zip
 ```
 
 If you want to build LMDeploy with support for Ascend, Cambricon, or MACA, install LMDeploy with the corresponding `LMDEPLOY_TARGET_DEVICE` environment variable.
+
+LMDeploy also supports installation on AMD GPUs with ROCm.
+
+```shell
+#The recommended way is to use the official ROCm PyTorch Docker image with pre-installed dependencies:
+docker run -it \
+    --cap-add=SYS_PTRACE \
+    --security-opt seccomp=unconfined \
+    --device=/dev/kfd \
+    --device=/dev/dri \
+    --group-add video \
+    --ipc=host \
+    --network=host \
+    --shm-size 32G \
+    -v /root:/workspace \
+    rocm/pytorch:latest
+
+
+#Once inside the container, install LMDeploy with ROCm support:
+LMDEPLOY_TARGET_DEVICE=rocm pip install  git+https://github.com/InternLM/lmdeploy.git
+```
