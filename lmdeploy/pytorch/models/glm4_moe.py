@@ -537,9 +537,7 @@ class Glm4MoeForCausalLM(nn.Module, CudaGraphMixin):
         ]
 
         # TODO, zhouxinyu, skip MTP related weights now
-        # 46 = 45 + 1
-        nextn_layer_idx = self.config.num_hidden_layers + self.config.num_nextn_predict_layers
-        mtp_param_list = ['enorm', 'hnorm', 'eh_proj', 'shared_head', 'mtp_block', f'model.layers.{nextn_layer_idx}']
+        mtp_param_list = ['enorm', 'hnorm', 'eh_proj', 'shared_head', 'mtp_block', 'model.layers.46']
 
         # expert map
         num_experts = self.config.n_routed_experts
