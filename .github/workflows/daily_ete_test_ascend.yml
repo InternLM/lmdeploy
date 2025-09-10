@@ -28,16 +28,11 @@ on:
         description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
         type: string
         default: '["pipeline", "restful", "chat"]'
-      offline_mode:
-        required: true
-        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
-        type: boolean
-        default: false
       regression_func:
         required: true
         description: 'regression functions'
         type: string
-        default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
+        default: "['tools']"
 
 env:
   REPORT_DIR: /test/test-reports/${{ github.run_id }}
@@ -77,6 +72,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
   test_quantization:
+    needs: download_pkgs
     if: ${{ !cancelled() }}
     runs-on: [self-hosted, ascend-013]
     timeout-minutes: 150
