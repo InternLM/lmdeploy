@@ -207,7 +207,17 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-自 v0.10.0 起，LMDeploy 预编译包默认基于 CUDA 12.8 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
+自 v0.3.0 版本起，默认预编译包基于 **CUDA 12** 编译。
+
+若使用 GeForce RTX 50 系列显卡，请安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
+
+```shell
+export LMDEPLOY_VERSION=0.10.0
+export PYTHON_VERSION=310
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
+如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
 
 ## 离线批处理
 
