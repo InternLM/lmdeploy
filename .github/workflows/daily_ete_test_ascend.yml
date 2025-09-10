@@ -1,30 +1,83 @@
-name: daily_ete_test
+name: daily_ete_test_ascend
 
 on:
-  push:
-    branches:
-      - hw_runner
+  workflow_dispatch:
+    inputs:
+      repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is InternLM'
+        type: string
+        default: 'InternLM/lmdeploy'
+      repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      backend:
+        required: true
+        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
+        type: string
+        default: "['turbomind', 'pytorch']"
+      model:
+        required: true
+        description: 'Set testcase module filter: llm, vllm. Default contains all models'
+        type: string
+        default: "['llm','mllm']"
+      function:
+        required: true
+        description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
+        type: string
+        default: '["pipeline", "restful", "chat"]'
+      offline_mode:
+        required: true
+        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+        type: boolean
+        default: false
+      regression_func:
+        required: true
+        description: 'regression functions'
+        type: string
+        default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
 
 env:
   REPORT_DIR: /test/test-reports/${{ github.run_id }}
   COV_PARAM: --cov /usr/local/python3.10.5/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: ${{ github.event_name == 'push' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
-  TEST_CODE_PATH: /test/lmdeploy_hw
+  TEST_CODE_PATH: /test/test_pkg/lmdeploy/${{ github.run_id }}
   LOG_PATH: /test/log
-  OFFLINE_REQUIREMENTS: /test/lmdeploy_hw/requirements_ascend.txt
-  # Default values for former workflow_dispatch inputs
-  BACKEND: '["turbomind", "pytorch"]'
-  MODEL: '["llm","mllm"]'
-  FUNCTION: '["pipeline", "restful", "chat"]'
-  OFFLINE_MODE: false
-  REGRESSION_FUNC: '["quant", "pipeline", "restful", "chat"]'
   TMPDIR: /mnt/deeplink/docker-tmp
   RAY_TMPDIR: /mnt/deeplink/docker-tmp
 
 jobs:
+  download_pkgs:
+    if: ${{!cancelled()}}
+    runs-on: [self-hosted, ascend-013]
+    timeout-minutes: 50
+    container:
+      image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
+      options: "--device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
+      volumes:
+        - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+        - /usr/local/sbin:/usr/local/sbin:ro
+        - /var/log/npu/slog:/var/log/npu/slog
+        - /var/log/npu/profiling:/var/log/npu/profiling
+        - /var/log/npu/dump:/var/log/npu/dump
+        - /var/log/npu:/usr/slog
+        - /etc/hccn.conf:/etc/hccn.conf:ro
+        - /root/qa_test:/test
+        - /mnt:/mnt
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+        if: ${{ !cancelled() }}
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository
+        if: ${{ !cancelled() }}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
   test_quantization:
     if: ${{ !cancelled() }}
-    # if: ${{ !cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'quant') }}
     runs-on: [self-hosted, ascend-013]
     timeout-minutes: 150
     container:
@@ -43,11 +96,11 @@ jobs:
     steps:
       - name: Copy repository and Artifacts
         run: |
-          cp -r ${{ env.TEST_CODE_PATH }}/. .
+          cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r ${{ env.OFFLINE_REQUIREMENTS }}
-      - name: Install lmdeploy
+          python3 -m pip install -r requirements_ascend.txt
+      - name: Install lmdeploy - offline
         run: |
           python3 -m pip install -r requirements/test.txt
           python3 -m pip install transformers==4.53.1
@@ -62,42 +115,48 @@ jobs:
           ln -s ${{ env.REPORT_DIR }}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
-        if: ${{ !cancelled() }}
-        # if: ${{ contains(fromJSON(env.BACKEND), 'turbomind') }}
+        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{ env.REPORT_DIR }} --clean-alluredir ${{ env.COV_PARAM }} || true
-          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
-        if: ${{ !cancelled() }}
-        # if: ${{ contains(fromJSON(env.BACKEND), 'pytorch') }}
+        if: contains(fromJSON(github.event.inputs.backend), 'pytorch')
         run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
-          mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Clear workfile
+        if: always()
+        run: |
+          chmod -R 777 $REPORT_DIR
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
 
   test_tools:
-    if: ${{ !cancelled() }}
-    # if: ${{ !cancelled() && contains(fromJSON(env.REGRESSION_FUNC), 'tools') }}
+    if: ${{!cancelled() && contains(fromJSON(github.event.inputs.regression_func), 'tools')}}
     runs-on: [self-hosted, ascend-013]
     needs: test_quantization
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      # matrix:
-      #   backend: ${{ fromJSON(env.BACKEND) }}
-      #   model: ${{ fromJSON(env.MODEL) }}
-      #   function: ${{ fromJSON(env.FUNCTION) }}
-      #   exclude:
-      #     - backend: turbomind
-      #       model: mllm
-      #       function: chat
-      #     - backend: pytorch
-      #       model: mllm
-      #       function: chat
-      #   include:
-      #     - backend: turbomind
-      #       model: llm
-      #       function: chat
+      matrix:
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
+        function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
+        exclude:
+          - backend: turbomind
+            model: mllm
+            function: chat
+          - backend: pytorch
+            model: mllm
+            function: chat
+        include:
+          - backend: turbomind
+            model: llm
+            function: local_case
     container:
       image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
       options: "--device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
@@ -133,8 +192,7 @@ jobs:
           ln -s ${{ env.REPORT_DIR }}/.pytest_cache autotest
       - name: Test lmdeploy - chat
         continue-on-error: true
-        if: ${{ !cancelled() }}
-        # if: ${{ (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat' }}
+        if: ${{ (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat' }}
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_1 and not pr_test' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
@@ -146,8 +204,7 @@ jobs:
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline
         continue-on-error: true
-        if: ${{ !cancelled() }}
-        # if: ${{ matrix.function == 'pipeline' }}
+        if: ${{ matrix.function == 'pipeline' }}
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and not pr_test' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
@@ -159,8 +216,7 @@ jobs:
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful
         continue-on-error: true
-        if: ${{ !cancelled() }}
-        # if: ${{ matrix.function == 'restful' }}
+        if: ${{ matrix.function == 'restful' }}
         run: |
           pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and not pr_test' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
@@ -170,3 +226,12 @@ jobs:
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
           pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_8 and not pr_test' --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Clear workfile
+        if: always()
+        run: |
+          chmod -R 777 $REPORT_DIR
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir
