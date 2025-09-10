@@ -113,13 +113,13 @@ jobs:
         continue-on-error: true
         if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --device ascend --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
         if: contains(fromJSON(github.event.inputs.backend), 'pytorch')
         run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --device ascend --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
