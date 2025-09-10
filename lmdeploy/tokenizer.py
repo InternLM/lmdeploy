@@ -3,6 +3,7 @@ import json
 import os.path as osp
 from collections import deque
 from dataclasses import dataclass
+from functools import partial
 from typing import List, Optional, Sequence, Tuple, Union
 
 from lmdeploy.utils import get_logger
@@ -385,6 +386,10 @@ class GptOssTokenizer(HuggingFaceTokenizer):
         super(GptOssTokenizer, self).__init__(model_dir)
         try:
             import openai_harmony  # noqa: F401
+            from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
+            encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+            self.role = Role.ASSISTANT
+            self.parser = partial(StreamableParser, encoding, role=Role.ASSISTANT)
         except ImportError:
             raise ImportError('Please install openai_harmony by `pip install openai_harmony`')
 
@@ -394,9 +399,7 @@ class GptOssTokenizer(HuggingFaceTokenizer):
                                  skip_special_tokens: bool = True,
                                  spaces_between_special_tokens: bool = True):
         if not hasattr(state, 'stream'):
-            from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
-            encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
-            state.stream = StreamableParser(encoding, role=Role.ASSISTANT)
+            state.stream = self.parser()
             ids_offset = state.ids_offset
             for token_id in all_input_ids[:ids_offset]:
                 state.stream.process(token_id)
@@ -405,7 +408,7 @@ class GptOssTokenizer(HuggingFaceTokenizer):
         stream = state.stream
         for token_id in all_input_ids[state.ids_offset:]:
             stream.process(token_id)
-            if stream.current_channel in ['final', 'analysis'] and stream.current_role == Role.ASSISTANT:
+            if stream.current_channel in ['final', 'analysis'] and stream.current_role == self.role:
                 response += stream.last_content_delta or ''
 
         state.ids_offset = len(all_input_ids)
