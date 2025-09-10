@@ -436,6 +436,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         request.session_id,
         gen_config=gen_config,
         tools=tools,
+        reasoning_effort=request.reasoning_effort,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,

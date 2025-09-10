@@ -598,6 +598,7 @@ class AsyncEngine(LogitsMixin):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
+                                reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
                                 enable_thinking: Optional[bool] = None,
                                 **kwargs):
         # Change multimodal data to openai text messages, i.e.,
@@ -615,7 +616,11 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools, enable_thinking=enable_thinking)
+        prompt = chat_template.messages2prompt(prompt,
+                                               sequence_start,
+                                               tools=tools,
+                                               enable_thinking=enable_thinking,
+                                               reasoning_effort=reasoning_effort)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -662,6 +667,7 @@ class AsyncEngine(LogitsMixin):
             session_id: int,
             gen_config: Optional[GenerationConfig] = None,
             tools: Optional[List[object]] = None,
+            reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
             stream_response: bool = True,
             sequence_start: bool = True,
             sequence_end: bool = True,  # no interactive mode by default
@@ -721,6 +727,7 @@ class AsyncEngine(LogitsMixin):
                                                         sequence_start,
                                                         adapter_name,
                                                         tools=tools,
+                                                        reasoning_effort=reasoning_effort,
                                                         enable_thinking=enable_thinking)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']

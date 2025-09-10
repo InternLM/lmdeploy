@@ -378,11 +378,11 @@ class ChatGLMTokenizer(HuggingFaceTokenizer):
         self.model._pad = __pad
 
 
-class GptOSSTokenizer(HuggingFaceTokenizer):
+class GptOssTokenizer(HuggingFaceTokenizer):
     """Tokenizer of GPT-OSS."""
 
     def __init__(self, model_dir: str):
-        super(GptOSSTokenizer, self).__init__(model_dir)
+        super(GptOssTokenizer, self).__init__(model_dir)
         try:
             import openai_harmony  # noqa: F401
         except ImportError:
@@ -431,7 +431,7 @@ class Tokenizer:
         elif config_tokenizer_class == 'ChatGLMTokenizer':
             self.model = ChatGLMTokenizer(model_path)
         elif is_gpt_oss:
-            self.model = GptOSSTokenizer(model_path)
+            self.model = GptOssTokenizer(model_path)
         else:
             self.model = HuggingFaceTokenizer(model_path)
         self.logger = get_logger('lmdeploy')
