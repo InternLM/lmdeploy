@@ -107,7 +107,7 @@ jobs:
           python3 -m pip install -r requirements_ascend.txt
       - name: Install lmdeploy - test
         run: |
-          python3 -m pip install -r requirements/test.txt       
+          python3 -m pip install -r requirements/test.txt -i https://mirrors.aliyun.com/pypi/simple/    
       - name: Check env
         run: |
           python3 -m pip list
@@ -186,7 +186,7 @@ jobs:
           python3 -m pip install -r requirements_ascend.txt
       - name: Install lmdeploy - test
         run: |
-          python3 -m pip install -r requirements/test.txt   
+          python3 -m pip install -r requirements/test.txt -i https://mirrors.aliyun.com/pypi/simple/   
       - name: Check env
         run: |
           python3 -m pip list
