@@ -47,6 +47,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |               GLM4               |        9B        | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            CodeGeeX4             |        9B        | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |              Molmo               |     7B-D,72B     | MLLM |    Yes    |   Yes   |   Yes   |  No   |
+|             gpt-oss              |     20B,120B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 
 "-" means not verified yet.
 

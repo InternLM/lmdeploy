@@ -27,6 +27,7 @@ ______________________________________________________________________
 <summary><b>2025</b></summary>
 </details>
 
+- 【2025年9月】TurboMind 引擎支持 MXFP4，适用于 NVIDIA V100 及以上 GPU。在 H800 上推理 openai gpt-oss 模型，性能可达 vLLM 的 1.5倍！
 - 【2025年6月】深度优化 FP8 MoE 模型推理
 - 【2025年6月】集成[DLSlime](https://github.com/DeepLink-org/DLSlime)和[Mooncake](https://github.com/kvcache-ai/Mooncake)，实现DeepSeek PD分离部署，向两个团队表示诚挚的感谢！
 - 【2025年4月】集成deepseek-ai组件FlashMLA、DeepGemm、DeepEP、MicroBatch、eplb等，提升DeepSeek推理性能
@@ -150,6 +151,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
+  <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>
 <td>
@@ -205,7 +207,7 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
+自 v0.10.0 起，LMDeploy 预编译包默认基于 CUDA 12.8 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
 
 ## 离线批处理
 
