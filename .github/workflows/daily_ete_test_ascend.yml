@@ -28,6 +28,11 @@ on:
         description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
         type: string
         default: '["pipeline", "restful", "chat"]'
+      offline_mode:
+        required: true
+        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+        type: boolean
+        default: false
       regression_func:
         required: true
         description: 'regression functions'
@@ -93,13 +98,14 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy - dependency
-        run: |
-          python3 -m pip install -r requirements_ascend.txt
       - name: Install lmdeploy - offline
+        if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install -r requirements/test.txt
           python3 -m pip install transformers==4.53.1
+          python3 -m pip install -r requirements_ascend.txt
+      - name: Install lmdeploy - test
+        run: |
+          python3 -m pip install -r requirements/test.txt       
       - name: Check env
         run: |
           python3 -m pip list
@@ -170,17 +176,18 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{ env.TEST_CODE_PATH }}/. .
-      - name: Install lmdeploy - dependency
+      - name: Install lmdeploy - offline
+        if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install -r ${{ env.OFFLINE_REQUIREMENTS }}
-      - name: Install lmdeploy
+          python3 -m pip install transformers==4.53.1
+          python3 -m pip install -r requirements_ascend.txt
+      - name: Install lmdeploy - test
         run: |
-          python3 -m pip install -r requirements/test.txt
+          python3 -m pip install -r requirements/test.txt   
       - name: Check env
         run: |
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf ${{ env.LOG_PATH }}/*
