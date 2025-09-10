@@ -28,11 +28,11 @@ on:
         description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
         type: string
         default: '["pipeline", "restful", "chat"]'
-      offline_mode:
-        required: true
-        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
-        type: boolean
-        default: false
+      # offline_mode:
+      #   required: true
+      #   description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+      #   type: boolean
+      #   default: false
       regression_func:
         required: true
         description: 'regression functions'
@@ -101,10 +101,9 @@ jobs:
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
+        # if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install transformers==4.53.1
-          python3 -m pip install -r requirements_ascend.txt
+          python3 -m pip install -r requirements_ascend.txt -i https://mirrors.aliyun.com/pypi/simple/   
       - name: Install lmdeploy - test
         run: |
           python3 -m pip install -r requirements/test.txt -i https://mirrors.aliyun.com/pypi/simple/    
@@ -180,10 +179,9 @@ jobs:
         run: |
           cp -r ${{ env.TEST_CODE_PATH }}/. .
       - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
+        # if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install transformers==4.53.1
-          python3 -m pip install -r requirements_ascend.txt
+          python3 -m pip install -r requirements_ascend.txt -i https://mirrors.aliyun.com/pypi/simple/   
       - name: Install lmdeploy - test
         run: |
           python3 -m pip install -r requirements/test.txt -i https://mirrors.aliyun.com/pypi/simple/   
