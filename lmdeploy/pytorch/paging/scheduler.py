@@ -189,6 +189,7 @@ class Scheduler:
         copy_map: Dict[int, int] = dict()
         running: SeqList = []
         token_count = 0
+        prealloc_size = self.num_spec_tokens or self.num_spec_tokens - 1
 
         def _to_running(seq: SchedulerSequence):
             """To running."""
@@ -196,7 +197,6 @@ class Scheduler:
             running.append(seq)
             nonlocal token_count
             token_count += seq.num_token_ids
-            token_count += self.num_spec_tokens
             token_count += len(seq.spec_token_ids)
 
         def __evict_for_seq(seq: SchedulerSequence, waiting):
@@ -205,7 +205,7 @@ class Scheduler:
             hanging = reversed(self.hanging)
             waiting = reversed(waiting)
             evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size=self.num_spec_tokens)
+            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size=prealloc_size)
 
         def _reorder_waiting():
             """Reorder waiting."""
@@ -218,7 +218,7 @@ class Scheduler:
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
-            cur_token_count = token_count + seq.num_token_ids + self.num_spec_tokens + len(seq.spec_token_ids)
+            cur_token_count = token_count + seq.num_token_ids + len(seq.spec_token_ids)
             if (len(running) > 0 and cur_token_count > self.cache_config.max_prefill_token_num):
                 break
 
@@ -228,7 +228,7 @@ class Scheduler:
                 break
 
             # allocate session memory
-            self.block_manager.allocate(seq, prealloc_size=self.num_spec_tokens)
+            self.block_manager.allocate(seq, prealloc_size=prealloc_size)
             _to_running(seq)
 
             seq.record_event(EventType.SCHEDULED)

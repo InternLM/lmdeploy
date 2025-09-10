@@ -706,7 +706,7 @@ class BaseModelAgent:
             def get_output(self):
                 """Get tmp_output."""
                 if not return_logits:
-                    return self._output[:, -1:]
+                    return self._output[:, -1:], None
                 torch.cuda.synchronize()
                 return self._output, self._aux_output
 

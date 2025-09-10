@@ -250,9 +250,6 @@ class InputsMakerAsync(InputsMakerBase):
         return ret
 
     def do_prefill_default(self):
-        if self.spec_decoding:
-            return True
-
         # decoding if no waiting
         scheduler = self.scheduler
         if not scheduler.has_waiting():
@@ -298,7 +295,7 @@ class InputsMakerAsync(InputsMakerBase):
         else:
             num_running = scheduler.num_running()
             is_decoding = self.forward_inputs['inputs'].is_decoding
-            running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding else 0
+            running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding or self.spec_decoding else 0
 
             if num_running > running_threshold:
                 enable = True
@@ -1269,7 +1266,6 @@ class Engine(EngineBase):
                 if idx == num_loops - 1:
                     scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
-
                 # send output
                 out = await self.executor.get_output_async()
                 if out is not None:
