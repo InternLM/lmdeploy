@@ -224,45 +224,49 @@ void QuantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> scale_, const Tensor& src, 
     TM_CHECK(src.is_contiguous());
     TM_CHECK_EQ(src.ndim(), 2);
 
-    using T      = bfloat16_t;
-    using Tout   = fp8_e4m3_t;
-    using Tscale = float;
+    auto invoke = [&](auto t) {
+        using T      = decltype(t);
+        using Tout   = fp8_e4m3_t;
+        using Tscale = float;
 
-    constexpr int block_size = 128;
-    constexpr int vec_size   = 8;
+        constexpr int block_size = 128;
+        constexpr int vec_size   = 8;
 
-    const auto [num, dim] = src.shapes(0, 1);
+        const auto [num, dim] = src.shapes(0, 1);
 
-    const int bnum = cdiv<int>(num, block_size);
-    const int bdim = cdiv<int>(dim, block_size);
+        const int bnum = cdiv<int>(num, block_size);
+        const int bdim = cdiv<int>(dim, block_size);
 
-    constexpr int cta_size = 1024;
-    const dim3    grid(bnum, bdim);
+        constexpr int cta_size = 1024;
+        const dim3    grid(bnum, bdim);
 
-    auto& out   = out_.get();
-    auto& scale = scale_.get();
+        auto& out   = out_.get();
+        auto& scale = scale_.get();
 
-    if (!out) {
-        out = Tensor_<Tout>{src.layout(), kDEVICE};
-    }
-    else {
-        TM_CHECK(out.layout() == src.layout());
-    }
+        if (!out) {
+            out = Tensor_<Tout>{src.layout(), kDEVICE};
+        }
+        else {
+            TM_CHECK(out.layout() == src.layout());
+        }
 
-    if (!scale) {
-        scale = Tensor_<Tscale>({bnum, bdim}, kDEVICE);
-    }
-    else {
-        TM_CHECK(std::make_tuple(bnum, bdim) == scale.shapes(0, 1));
-    }
+        if (!scale) {
+            scale = Tensor_<Tscale>({bnum, bdim}, kDEVICE);
+        }
+        else {
+            TM_CHECK(std::make_tuple(bnum, bdim) == scale.shapes(0, 1));
+        }
 
-    quant_symm_block<vec_size, cta_size, block_size><<<grid, cta_size, 0, st>>>(  //
-        out.data<Tout>(),
-        scale.data<Tscale>(),
-        src.data<T>(),
-        448.f,
-        num,
-        dim);
+        quant_symm_block<vec_size, cta_size, block_size><<<grid, cta_size, 0, st>>>(  //
+            out.data<Tout>(),
+            scale.data<Tscale>(),
+            src.data<T>(),
+            448.f,
+            num,
+            dim);
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), invoke);
 }
 
 template<int vec_size, int cta_size, int block_size, class Tout, class Tscale, class T>
@@ -297,37 +301,45 @@ __global__ void dequant_symm_block(Tout* out, const T* src, const Tscale* scales
 
 void DequantizeSymmBlock(Ref<Tensor> out_, Ref<Tensor> src_, const Tensor& scale, cudaStream_t st)
 {
-    using T      = fp8_e4m3_t;
-    using Tout   = bfloat16_t;
-    using Tscale = float;
+    auto invoke = [&](auto tout) {
+        using T      = fp8_e4m3_t;
+        using Tout   = decltype(tout);
+        using Tscale = float;
 
-    constexpr int block_size = 128;
-    constexpr int vec_size   = 8;
+        constexpr int block_size = 128;
+        constexpr int vec_size   = 8;
 
-    auto& out = out_.get();
-    auto& src = src_.get();
+        auto& out = out_.get();
+        auto& src = src_.get();
 
-    if (!out) {
-        out = Tensor_<Tout>{src.layout(), kDEVICE};
+        if (!out) {
+            out = Tensor_<Tout>{src.layout(), kDEVICE};
+        }
+        else {
+            TM_CHECK(out.layout() == src.layout());
+        }
+
+        const auto [num, dim] = src.shapes(0, 1);
+
+        const int bnum = cdiv<int>(num, block_size);
+        const int bdim = cdiv<int>(dim, block_size);
+
+        constexpr int cta_size = 1024;
+        const dim3    grid(bnum, bdim);
+
+        dequant_symm_block<vec_size, cta_size, block_size><<<grid, cta_size, 0, st>>>(  //
+            out.data<Tout>(),
+            src.data<T>(),
+            scale.data<Tscale>(),
+            num,
+            dim);
+    };
+
+    if (!out_.get()) {
+        return invoke(nv_bfloat16{});
     }
-    else {
-        TM_CHECK(out.layout() == src.layout());
-    }
 
-    const auto [num, dim] = src.shapes(0, 1);
-
-    const int bnum = cdiv<int>(num, block_size);
-    const int bdim = cdiv<int>(dim, block_size);
-
-    constexpr int cta_size = 1024;
-    const dim3    grid(bnum, bdim);
-
-    dequant_symm_block<vec_size, cta_size, block_size><<<grid, cta_size, 0, st>>>(  //
-        out.data<Tout>(),
-        src.data<T>(),
-        scale.data<Tscale>(),
-        num,
-        dim);
+    TM_DISPATCH_PRIMARY_DTYPES(out_.get().dtype(), invoke);
 }
 
 template<int start_bit, int end_bit, class D, class T>

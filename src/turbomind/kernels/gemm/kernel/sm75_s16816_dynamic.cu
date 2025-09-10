@@ -1,5 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/gemm/arch/config_sm75_s16816.h"
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/registry.h"
@@ -86,12 +88,39 @@ void Registry::sm75_s16816_dynamic()
                               kRowMajor,
                               1>;
 
+        // clang-format off
         Add<C::Type<128, 128, 32, 4, 1, 1, D, D, 2, false, 32, 1, 128, 64>>();
-        Add<C::Type<128, 64, 32, 4, 1, 1, D, D, 2, false, 32, 1>>();
-        Add<C::Type<128, 32, 32, 4, 1, 1, D, D, 2, false, 32, 1>>();
-        Add<C::Type<128, 16, 32, 4, 1, 1, D, D, 2, false, 32, 1>>();
-        Add<C::Type<128, 16, 64, 4, 1, 1, D, D, 2, false, 32, 1>>();
-        Add<C::Type<64, 16, 64, 4, 1, 1, D, D, 2, false, 32, 1>>();
+        Add<C::Type<128,  64, 32, 4, 1, 1, D, D, 2, false, 32, 1>>();
+        Add<C::Type<128,  32, 32, 4, 1, 1, D, D, 2, false, 32, 1>>();
+        Add<C::Type<128,  16, 32, 4, 1, 1, D, D, 2, false, 32, 1>>();
+        Add<C::Type<128,  16, 64, 4, 1, 1, D, D, 2, false, 32, 1>>();
+        Add<C::Type< 64,  16, 64, 4, 1, 1, D, D, 2, false, 32, 1>>();
+        // clang-format on
+    }
+
+    if constexpr (1) {
+        using C = Sm75_s16816<Operand_A_Pack<fp8_e4m3_t, kColMajor, 1>,  // A
+                              Transform_HMMA_16816<0, 1>,                // tarnsform A
+                              Operand_UV_Pack<uint16_t, false>,          // U
+                              Operand_B<half_t, kRowMajor>,              // B
+                              Transform_Default,                         // transform B
+                              VoidOperand,                               // V
+                              kColMajor,                                 // order_C
+                              half_t,                                    // Tc
+                              Striding::kBlocked,
+                              Striding::kIndexed,  // indexed input
+                              Striding::kBlocked,
+                              kRowMajor,
+                              1>;
+
+        // clang-format off
+        Add<C::Type<128, 128, 32, 4, 1, 1, D, D, 2, true, 128, 1, 128, 64>>();
+        Add<C::Type<128,  64, 32, 4, 1, 1, D, D, 2, true, 128, 1>>();
+        Add<C::Type<128,  32, 32, 4, 1, 1, D, D, 2, true, 128, 1>>();
+        Add<C::Type<128,  16, 32, 4, 1, 1, D, D, 2, true, 128, 1>>();
+        Add<C::Type<128,  16, 64, 4, 1, 1, D, D, 2, true, 128, 1>>();
+        Add<C::Type< 64,  16, 64, 4, 1, 1, D, D, 2, true, 128, 1>>();
+        // clang-format on
     }
 }
 

@@ -26,8 +26,6 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
     sm90_mxfp4();
 
     cublas_float();
-
-    // u4g128_f16_f16_nnn_sm80_s16816();
 }
 
 bool Registry::Add(std::unique_ptr<Kernel> kernel)

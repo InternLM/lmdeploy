@@ -6,7 +6,7 @@ add_library(gemm2
         registry.cu
         dispatch_cache.cu
         gpu_metric.cu
-        convert_v2.cu
+        convert_v3.cu
         cast.cu
         unpack.cu
         context.cu
