@@ -73,8 +73,8 @@ def run_pipeline_chat_test(config,
                     case_result, reason = assert_result(get_response_from_output_by_prompt(output_text, case, prompt),
                                                         prompt_detail.values(), model_name)
                     if not case_result:
-                        print(case + ' result: {case_result} , reason:' + reason + '\n')
-                    f.writelines(case + ' result: {case_result} , reason:' + reason + '\n')
+                        print(f'{case} result: {case_result}, reason: {reason} \n')
+                    f.writelines(f'{case} result: {case_result}, reason: {reason} \n')
                 with assume:
                     assert case_result, reason
     allure.attach.file(pipeline_chat_log, attachment_type=allure.attachment_type.TEXT)
@@ -156,15 +156,15 @@ def run_pipeline_vl_chat_test(config,
         with allure.step('multi-turn1'):
             response = get_response_from_output(output_text, 'multi-turn1')
             case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
-            f.writelines(f'multi-turn1 pic result: {case_result} reason:  tiger should in {response} \n')
+            f.writelines(f'multi-turn1 pic result: {case_result} reason:  ski should in {response} \n')
             with assume:
-                assert case_result, f'reason: batch-example1: tiger should in {response}'
+                assert case_result, f'reason: batch-example1: ski should in {response}'
         with allure.step('multi-turn2'):
             response = get_response_from_output(output_text, 'multi-turn2')
             case_result = any(word in response.lower() for word in ['滑雪', 'ski'])
-            f.writelines(f'multi-turn2 pic result: {case_result} reason: tiger should in {response} \n')
+            f.writelines(f'multi-turn2 pic result: {case_result} reason: ski should in {response} \n')
             with assume:
-                assert case_result, f'reason: batch-example1: tiger should in {response}'
+                assert case_result, f'reason: batch-example1: ski should in {response}'
         if not is_smoke:
             if 'internvl' in model_case.lower() and 'internvl2-4b' not in model_case.lower():
                 internvl_vl_testcase(output_text, f)
