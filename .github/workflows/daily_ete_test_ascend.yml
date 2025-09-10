@@ -47,6 +47,7 @@ env:
   LOG_PATH: /test/log
   TMPDIR: /mnt/deeplink/docker-tmp
   RAY_TMPDIR: /mnt/deeplink/docker-tmp
+  HF_ENDPOINT: https://hf-mirror.com
 
 jobs:
   download_pkgs:
