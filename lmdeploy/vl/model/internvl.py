@@ -76,6 +76,9 @@ class InternVLVisionModel(VisonModel):
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+        IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        self.image_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
 
     def build_preprocessor(self):
         self.config = self.hf_config
@@ -110,11 +113,6 @@ class InternVLVisionModel(VisonModel):
         patch_size = self.hf_config.vision_config.patch_size
         downsample_ratio = self.hf_config.downsample_ratio
         self.image_tokens_per_patch = int((force_image_size // patch_size)**2 * (downsample_ratio**2))
-
-        if 'internvl3_5' in self.model_path.lower():
-            IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
-            tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True, use_fast=False)
-            self.image_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
 
     def build_model(self):
         """Build the vision part of a VLM model when backend is turbomind, or

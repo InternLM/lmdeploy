@@ -24,10 +24,9 @@ from .utils.model import DeployModelMixin, vlm_model
 
 class Gating(nn.Module):
 
-    def __init__(self, hidden_size=2048, expansion_factor=4, dropout=0.1, use_checkpoint=True):
+    def __init__(self, hidden_size=2048, expansion_factor=4, dropout=0.1):
         super().__init__()
 
-        self.use_checkpoint = use_checkpoint
         mid_dim = hidden_size * expansion_factor
 
         def mlp_block(in_dim, out_dim):
@@ -51,18 +50,10 @@ class Gating(nn.Module):
         )
 
     def forward(self, x):
-        if self.use_checkpoint:
-            import torch.utils.checkpoint as cp
-
-            x = x + cp.checkpoint(self.block1, x)
-            x = x + cp.checkpoint(self.block2, x)
-            x = x + cp.checkpoint(self.block3, x)
-            x = x + cp.checkpoint(self.block4, x)
-        else:
-            x = x + self.block1(x)
-            x = x + self.block2(x)
-            x = x + self.block3(x)
-            x = x + self.block4(x)
+        x = x + self.block1(x)
+        x = x + self.block2(x)
+        x = x + self.block3(x)
+        x = x + self.block4(x)
 
         logits = self.gate(x)  # shape: [B, 2]
         probs = torch.softmax(logits, dim=-1)
@@ -567,21 +558,9 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         input_ids = input_ids.reshape(B * N)
 
         N, C = input_embeds.shape
-        input_ids = input_ids.squeeze(0)  # (N,)
-        selected = (input_ids == img_context_token_id)
-        padded = torch.cat(
-            [torch.tensor([0], device=selected.device),
-             selected.int(),
-             torch.tensor([0], device=selected.device)])
-        diff = torch.diff(padded)
-
-        starts = (diff == 1).nonzero(as_tuple=True)[0]
-        ends = (diff == -1).nonzero(as_tuple=True)[0]
-        lengths = ends - starts
+        lengths, starts, ends = self.get_image_num_per_sample(input_ids, img_context_token_id)
 
         keep_mask = torch.ones(N, dtype=torch.bool, device=input_embeds.device)
-
-        delete_flags = torch.zeros(N, dtype=torch.int32, device=input_embeds.device)
 
         total_blocks = 0
         block_counts = []
@@ -603,10 +582,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
                 if compress:
                     keep_mask[block_start + 64:block_end] = False
-                    delete_flags[block_start + 64:block_end] = 1
-
-        cumulative_deletes = torch.cumsum(delete_flags, dim=0)
-        cumulative_deletes = torch.cat([cumulative_deletes, cumulative_deletes[-1:].clone()], dim=0)
 
         # update
         new_input_embeds = input_embeds[keep_mask.to(input_embeds.device), :]
@@ -632,7 +607,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         ends = (diff == -1).nonzero(as_tuple=True)[0]
         lengths = ends - starts
 
-        return lengths
+        return lengths, starts, ends
 
     def split_and_merge(self, features: torch.Tensor, split_sizes: torch.Tensor):
         """
@@ -651,8 +626,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
     def extract_feature_flash(self, pixel_values, lengths):
 
-        with torch.no_grad():
-            vit_embeds_1024 = self.vision_model(pixel_values)
+        vit_embeds_1024 = self.vision_model(pixel_values)
 
         vit_embeds_1024 = vit_embeds_1024[:, 1:, :]
         h = w = int(vit_embeds_1024.shape[1]**0.5)
@@ -683,7 +657,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         self._mark_dynamic_once(pixel_values, [0])
 
-        lengths = self.get_image_num_per_sample(input_ids, img_context_token_id) / 256
+        lengths, starts, ends = self.get_image_num_per_sample(input_ids, img_context_token_id)
+        lengths = lengths // 256
         lengths_sum = torch.ones(int(lengths.sum().item()), dtype=torch.int64)
         lengths = lengths_sum.repeat_interleave(1)
         vit_embeds_64, vit_embeds_256, gate_result = self.extract_feature_flash(pixel_values, lengths)
@@ -692,12 +667,9 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         gate_result = (gate_result[:, 0] >= relative_threshold_value) & (gate_result[:, 0]
                                                                          > self.flash_absolute_threshold)
 
-        selected_embeds = []
-        for i in range(gate_result.size(0)):
-            if gate_result[i]:
-                selected_embeds.append(vit_embeds_64[i])
-            else:
-                selected_embeds.append(vit_embeds_256[i])
+        selected_embeds = [
+            vit_embeds_64[i] if gate_result[i] else vit_embeds_256[i] for i in range(gate_result.size(0))
+        ]
 
         vit_embeds = torch.cat(selected_embeds, dim=0)
 
