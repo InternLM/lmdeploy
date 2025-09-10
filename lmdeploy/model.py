@@ -760,6 +760,8 @@ class HFChatTemplate(BaseChatTemplate):
             # Workaround for internlm/Intern-S1: the chat template expects a <think> tag appended,
             # but when enable_thinking=None is specified, the <think> tag is omitted.
             kwargs.pop('enable_thinking')
+        if kwargs.get('reasoning_effort', None) is None:
+            kwargs.pop('reasoning_effort')
         add_generation_prompt = messages[-1]['role'] != 'assistant'
         if sequence_start:
             prompt = self.tokenizer.apply_chat_template(messages,
