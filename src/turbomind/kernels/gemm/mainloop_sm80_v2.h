@@ -362,7 +362,7 @@ struct MainloopSm80_v2 {
                     smem_group_iter_U.Advance();
                     smem_group_iter_V.Advance();
                 }
-                
+
                 TransformA::apply(frag_A, (k + 1) % ITER_K, data_A, data_U, UU);
                 TransformB::apply(frag_B, (k + 1) % ITER_K, data_B, data_V, VV);
             }

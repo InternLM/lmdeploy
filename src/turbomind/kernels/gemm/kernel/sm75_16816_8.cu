@@ -18,7 +18,7 @@ void Registry::sm75_16816_8() {
         using Cg = Config_E4M3<kColMajor, 1>;
         Add<Cg::Type<256, 128,  32, 8, 1, 1, D, D, 3, true, 128, 1, 128, 128>>();
         Add<Cg::Type<256,  64,  32, 4, 1, 1, D, D, 3, true, 128, 1, 128,  64>>();
-        Add<Cg::Type<128, 128,  32, 4, 1, 1, D, D, 3, true, 128, 1, 128,  64>>();  
+        Add<Cg::Type<128, 128,  32, 4, 1, 1, D, D, 3, true, 128, 1, 128,  64>>();
         Add<Cg::Type<128,  96,  32, 4, 1, 1, D, D, 3, true, 128, 1>>();
         Add<Cg::Type<128,  64,  32, 4, 1, 1, D, D, 3, true, 128, 1>>();
         Add<Cg::Type<128,  32,  32, 4, 1, 1, S, D, 3, true, 128, 1>>();
