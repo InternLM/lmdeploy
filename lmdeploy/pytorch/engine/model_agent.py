@@ -505,7 +505,8 @@ class BaseModelAgent:
             ret = await __forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 # fetch seq_length from the returned context, since models may change it (e.g. InternVL-Flash)
-                seq_length = ret.get('seq_length', None)
+                seq_length = ret['seq_length']
+                assert seq_length is not None, 'seq_length cannot be None'
                 last_token_loc = seq_length.cumsum(0) - 1
 
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]

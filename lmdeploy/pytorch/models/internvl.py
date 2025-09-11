@@ -31,10 +31,10 @@ class Gating(nn.Module):
 
         def mlp_block(in_dim, out_dim):
             return nn.Sequential(
-                nn.Linear(in_dim, out_dim),
+                nn.Linear(in_dim, out_dim, bias=True),
                 nn.GELU(),
                 nn.Dropout(dropout),
-                nn.Linear(out_dim, in_dim),
+                nn.Linear(out_dim, in_dim, bias=True),
                 nn.Dropout(dropout),
                 nn.LayerNorm(in_dim),
             )
@@ -46,7 +46,7 @@ class Gating(nn.Module):
 
         self.gate = nn.Sequential(
             nn.LayerNorm(hidden_size),
-            nn.Linear(hidden_size, 2)  # 2 experts
+            nn.Linear(hidden_size, 2, bias=True)  # 2 experts
         )
 
     def forward(self, x):
@@ -462,8 +462,12 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         self.downsample_ratio = config.downsample_ratio
         self.mlp1 = nn.Sequential(
             nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio)**2, dtype=dtype, device=device),
-            nn.Linear(vit_hidden_size * int(1 / self.downsample_ratio)**2, llm_hidden_size, dtype=dtype, device=device),
-            nn.GELU(), nn.Linear(llm_hidden_size, llm_hidden_size, dtype=dtype, device=device))
+            nn.Linear(vit_hidden_size * int(1 / self.downsample_ratio)**2,
+                      llm_hidden_size,
+                      bias=True,
+                      dtype=dtype,
+                      device=device), nn.GELU(),
+            nn.Linear(llm_hidden_size, llm_hidden_size, bias=True, dtype=dtype, device=device))
 
         # for Mono-InternVL
         if self.is_mono:
@@ -483,10 +487,11 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio)**4, dtype=dtype, device=device),
                 nn.Linear(vit_hidden_size * int(1 / self.downsample_ratio)**4,
                           llm_hidden_size * 2,
+                          bias=True,
                           dtype=dtype,
                           device=device), nn.GELU(), nn.Dropout(0.1),
-                nn.Linear(llm_hidden_size * 2, llm_hidden_size * 2, dtype=dtype, device=device), nn.GELU(),
-                nn.Dropout(0.1), nn.Linear(llm_hidden_size * 2, llm_hidden_size, dtype=dtype, device=device))
+                nn.Linear(llm_hidden_size * 2, llm_hidden_size * 2, bias=True, dtype=dtype, device=device), nn.GELU(),
+                nn.Dropout(0.1), nn.Linear(llm_hidden_size * 2, llm_hidden_size, bias=True, dtype=dtype, device=device))
 
             self.pooling_before_gating = CrossAttentionPooling(dim=vit_hidden_size)
             self.gating = Gating(hidden_size=vit_hidden_size)
@@ -592,7 +597,16 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         new_input_ids = new_input_ids.reshape(B, -1)
         new_input_embeds = new_input_embeds.reshape(B, -1, C)
 
-        return new_input_embeds, new_input_ids, new_image_mask
+        # since multiple sequences may concat together, we need to update the seqlens individually
+        # we calculate compressed token len for each sequence, and get new len for each sequence
+        crt_ctx = self.ctx_mgr.current_context()
+        seq_lengths = crt_ctx.q_seqlens
+        # split the keep_mask into chunks corresponding to each original sequence
+        mask_chunks = torch.split(keep_mask, seq_lengths.tolist())
+        # the new length of each sequence is the number of tokens kept (sum of True values)
+        new_seq_lengths = [chunk.sum().item() for chunk in mask_chunks]
+
+        return new_input_embeds, new_input_ids, new_image_mask, new_seq_lengths
 
     def get_image_num_per_sample(self, input_ids: torch.Tensor, img_context_token_id: int):
         input_ids = input_ids.squeeze(0)  # (N,)
@@ -674,16 +688,16 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         vit_embeds = torch.cat(selected_embeds, dim=0)
 
         # compress visual tokens in sentence
-        lang_embeds, input_ids, image_mask = self.compress_visual_tokens_in_sentence(
+        lang_embeds, input_ids, image_mask, seq_lens = self.compress_visual_tokens_in_sentence(
             input_embeds=lang_embeds,
             input_ids=input_ids,
             img_context_token_id=img_context_token_id,
             gate_result=gate_result,
         )
 
-        return vit_embeds, lang_embeds, input_ids, image_mask
+        return vit_embeds, lang_embeds, input_ids, image_mask, seq_lens
 
-    def update_context(self, new_input_ids: torch.Tensor):
+    def update_context(self, new_input_ids: torch.Tensor, new_seqlens: List[torch.Tensor]) -> StepContext:
         """Update the current context with new input_ids."""
         from lmdeploy.pytorch.model_inputs import ModelInputs
 
@@ -692,22 +706,22 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             raise RuntimeError('Cannot update a non-existent context.')
 
         device = new_input_ids.device
-        new_seq_len = new_input_ids.size(-1)
+        new_seqlens = torch.tensor(new_seqlens, device=device, dtype=torch.long)
 
         # create new model inputs
         new_model_inputs = ModelInputs(input_ids=new_input_ids,
-                                       seq_length=torch.tensor([new_seq_len], device=device, dtype=torch.long),
+                                       seq_length=new_seqlens,
                                        history_lengths=torch.tensor([0], device=device, dtype=torch.long),
                                        block_offsets=crt_ctx.block_offsets,
                                        is_decoding=False,
                                        num_ignored_history=torch.tensor([0], device=device, dtype=torch.long),
-                                       max_q_seqlen=new_seq_len,
-                                       max_kv_seqlen=new_seq_len,
-                                       sum_kv_seqlen=new_seq_len,
+                                       max_q_seqlen=new_seqlens.max().item(),
+                                       max_kv_seqlen=new_seqlens.max().item(),
+                                       sum_kv_seqlen=new_seqlens.sum().item(),
                                        model_metas=[None])
 
         # build and set new context
-        # NOTE: we keep original block_offsets, vision_inputs and kv_caches, might be wrong
+        # NOTE: we keep original block_offsets, vision_inputs and kv_caches
         new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config)
         new_ctx.vision_inputs = crt_ctx.vision_inputs
         new_ctx.kv_caches = crt_ctx.kv_caches
@@ -737,13 +751,13 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 lang_embeds = self.language_model.get_input_embeddings()(input_ids)
             else:
                 # extract feature and compress visual tokens
-                vit_embeds, lang_embeds, new_input_ids, new_image_mask = self.extract_and_compress(
-                    pixel_values=pixel_values, input_ids=input_ids, img_context_token_id=image_token_id)
+                vit_embeds, lang_embeds, new_input_ids, new_image_mask, new_seqlens = self.extract_and_compress(
+                    pixel_values, input_ids, image_token_id)
                 input_ids = new_input_ids
                 image_mask = new_image_mask
 
                 # update context and relevant attributes
-                ctx = self.update_context(new_input_ids=new_input_ids)
+                ctx = self.update_context(new_input_ids, new_seqlens)
                 position_ids = ctx.position_ids
                 attn_metadata = ctx.attn_metadata
 
