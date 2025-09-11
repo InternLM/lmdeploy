@@ -16,7 +16,7 @@ void Registry::sm75_16816_16()
 {
     if constexpr (1) {
         // clang-format off
-        using C = Config_F16_g<kColMajor>;
+        using C = Config_F16<kColMajor, 0>;
         Add<C::Type<128, 256,  32, 2, 4, 1, D, D, 2,    0, 1, 1, 128, 128>>();
         Add<C::Type<128, 128,  32, 2, 2, 1, D, D, 2, true, 1, 1,  64, 128>>();
         Add<C::Type< 96,  64,  64, 2, 2, 1, D, D, 2, true, 1, 1>>();

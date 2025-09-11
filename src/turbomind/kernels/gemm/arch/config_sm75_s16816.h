@@ -157,17 +157,17 @@ using Config_E4M3 = Sm75_s16816<kColMajor,
                                 group_axis>;
 
 template<Order raster_order, int group_axis = -1>
-using Config_F16_g = Sm75_s16816<kColMajor,
-                                 Operand_A<half, kRowMajor>,          // A
-                                 Transform_Default,                   // tarnsform A
-                                 VoidOperand,                         // U
-                                 Operand_B_Pack<half, kRowMajor, 1>,  // B
-                                 Transform_Default,                   // transform B
-                                 VoidOperand,                         // V
-                                 kRowMajor,                           // order_C
-                                 half,                                // Tc
-                                 raster_order,
-                                 group_axis>;
+using Config_F16 = Sm75_s16816<kColMajor,
+                               Operand_A<half, kRowMajor>,          // A
+                               Transform_Default,                   // tarnsform A
+                               VoidOperand,                         // U
+                               Operand_B_Pack<half, kRowMajor, 1>,  // B
+                               Transform_Default,                   // transform B
+                               VoidOperand,                         // V
+                               kRowMajor,                           // order_C
+                               half,                                // Tc
+                               raster_order,
+                               group_axis>;
 
 }  // namespace sm75_s16816
 

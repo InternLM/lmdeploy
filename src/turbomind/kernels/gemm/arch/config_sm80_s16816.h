@@ -178,6 +178,6 @@ using Config_F16_g = Sm80_s16816<Arch,
                                  kRowMajor,                        // order_C
                                  T,                                // Tc
                                  raster_order,                     // raster order
-                                 -1>;                              // group axis
+                                 0>;                              // group axis
 
 }  // namespace turbomind::gemm::sm80_s16816
