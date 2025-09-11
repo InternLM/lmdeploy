@@ -8,23 +8,6 @@ namespace turbomind::gemm {
 Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
     device_prop_{std::move(device_prop)}, arch_{device_prop_->major * 100 + device_prop_->minor * 10}
 {
-    // f16_u4g128_f16_tnt_sm70_s884();
-    // f16_u4g128_f16_tnt_sm75_s16816();
-    // f16_u4g128_f16_tnt_sm80_s16816();
-    // f16_u4g128_f16_tnt_sm90_s16816();
-
-    // sm70_s884_dynamic();
-    // sm75_s16816_dynamic();
-    // sm80_s16816_dynamic<half>();
-    // sm90_s16816_dynamic<half>();
-    // sm80_s16816_dynamic<nv_bfloat16>();
-    // sm90_s16816_dynamic<nv_bfloat16>();
-
-    // sm90_s64n32_dynamic();
-
-    // sm80_mxfp4();
-    // sm90_mxfp4();
-
     sm90_16816_4();
     sm90_16816_8();
     sm90_16816_16();
