@@ -17,22 +17,17 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: "['turbomind', 'pytorch']"
+        default: "['pytorch']"
       model:
         required: true
         description: 'Set testcase module filter: llm, vllm. Default contains all models'
         type: string
-        default: "['llm','mllm']"
+        default: "['llm']"
       function:
         required: true
         description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
         type: string
         default: '["pipeline", "restful", "chat"]'
-      # offline_mode:
-      #   required: true
-      #   description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
-      #   type: boolean
-      #   default: false
       regression_func:
         required: true
         description: 'regression functions'
@@ -41,13 +36,12 @@ on:
 
 env:
   REPORT_DIR: /test/test-reports/${{ github.run_id }}
-  COV_PARAM: --cov /usr/local/python3.10.5/lib/python3.10/site-packages/lmdeploy
+  COV_PARAM: --cov /usr/local/python3.10.17/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: ${{ github.event_name == 'push' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
   TEST_CODE_PATH: /test/test_pkg/lmdeploy/${{ github.run_id }}
-  LOG_PATH: /test/log
+  LOG_PATH: /test/log/${{ github.run_id }}
   TMPDIR: /mnt/deeplink/docker-tmp
   RAY_TMPDIR: /mnt/deeplink/docker-tmp
-  HF_ENDPOINT: https://hf-mirror.com
 
 jobs:
   download_pkgs:
@@ -78,71 +72,11 @@ jobs:
       - name: Copy repository
         if: ${{ !cancelled() }}
         run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
-  test_quantization:
-    needs: download_pkgs
-    if: ${{ !cancelled() }}
-    runs-on: [self-hosted, ascend-013]
-    timeout-minutes: 150
-    container:
-      image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
-      options: "--device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
-      volumes:
-        - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
-        - /usr/local/sbin:/usr/local/sbin:ro
-        - /var/log/npu/slog:/var/log/npu/slog
-        - /var/log/npu/profiling:/var/log/npu/profiling
-        - /var/log/npu/dump:/var/log/npu/dump
-        - /var/log/npu:/usr/slog
-        - /etc/hccn.conf:/etc/hccn.conf:ro
-        - /root/qa_test:/test
-        - /mnt:/mnt
-        - /root/.cache/pip:/root/.cache/pip
-    steps:
-      - name: Copy repository and Artifacts
-        run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy - offline
-        # if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install -r requirements_ascend.txt -i https://mirrors.aliyun.com/pypi/simple/   
-      - name: Install lmdeploy - test
-        run: |
-          python3 -m pip install -r requirements/test.txt -i https://mirrors.aliyun.com/pypi/simple/    
-      - name: Check env
-        run: |
-          python3 -m pip list
-          lmdeploy check_env
-          rm -rf allure-results
-          # remove tmp log in testcase
-          rm -rf ${{ env.LOG_PATH }}/*
-          mkdir ${{ env.REPORT_DIR }}/.pytest_cache -p
-          ln -s ${{ env.REPORT_DIR }}/.pytest_cache autotest
-      - name: Test lmdeploy - quantization w4a16
-        continue-on-error: true
-        if: contains(fromJSON(github.event.inputs.backend), 'turbomind')
-        run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --device ascend --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - quantization w8a8
-        continue-on-error: true
-        if: contains(fromJSON(github.event.inputs.backend), 'pytorch')
-        run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --device ascend --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Clear workfile
-        if: always()
-        run: |
-          chmod -R 777 $REPORT_DIR
-          export workdir=$(pwd)
-          cd ..
-          rm -rf $workdir
-          mkdir $workdir
-          chmod -R 777 $workdir
 
   test_tools:
     if: ${{!cancelled() && contains(fromJSON(github.event.inputs.regression_func), 'tools')}}
     runs-on: [self-hosted, ascend-013]
-    needs: test_quantization
+    needs: download_pkgs
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -157,10 +91,6 @@ jobs:
           - backend: pytorch
             model: mllm
             function: chat
-        include:
-          - backend: turbomind
-            model: llm
-            function: local_case
     container:
       image: crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest
       options: "--device=/dev/davinci0 --device=/dev/davinci1 --device=/dev/davinci2 --device=/dev/davinci3 --device=/dev/davinci4 --device=/dev/davinci5 --device=/dev/davinci6 --device=/dev/davinci7 --device=/dev/davinci_manager --device=/dev/devmm_svm --device=/dev/hisi_hdc -e PIP_CACHE_DIR=/root/.cache/pip --shm-size=150g --pull never"
@@ -180,12 +110,11 @@ jobs:
         run: |
           cp -r ${{ env.TEST_CODE_PATH }}/. .
       - name: Install lmdeploy - offline
-        # if: ${{inputs.offline_mode}}
         run: |
-          python3 -m pip install -r requirements_ascend.txt -i https://mirrors.aliyun.com/pypi/simple/   
+          python3 -m pip install -r requirements_ascend.txt -i https://mirrors.aliyun.com/pypi/simple/
       - name: Install lmdeploy - test
         run: |
-          python3 -m pip install -r requirements/test.txt -i https://mirrors.aliyun.com/pypi/simple/   
+          python3 -m pip install -r requirements/test.txt -i https://mirrors.aliyun.com/pypi/simple/
       - name: Check env
         run: |
           python3 -m pip list
@@ -199,37 +128,37 @@ jobs:
         continue-on-error: true
         if: ${{ (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat' }}
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_1 and not pr_test' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_1 and test_ascend' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_2 and not pr_test' -n 4 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_2 and test_ascend' -n 4 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_4 and not pr_test' -n 2 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_4 and test_ascend' -n 2 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_8 and not pr_test' --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{ matrix.backend }}.py -m 'gpu_num_8 and test_ascend' --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline
         continue-on-error: true
         if: ${{ matrix.function == 'pipeline' }}
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and not pr_test' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and test_ascend' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_2 and not pr_test' -n 4 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_2 and test_ascend' -n 4 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_4 and not pr_test' -n 2 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_4 and test_ascend' -n 2 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_8 and not pr_test' --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_8 and test_ascend' --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful
         continue-on-error: true
         if: ${{ matrix.function == 'restful' }}
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and not pr_test' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_1 and test_ascend' -n 8 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_2 and not pr_test' -n 4 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_2 and test_ascend' -n 4 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_4 and not pr_test' -n 2 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_4 and test_ascend' -n 2 --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_8 and not pr_test' --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{ matrix.backend }}_${{ matrix.model }}.py -m 'gpu_num_8 and test_ascend' --device ascend --alluredir=${{ env.REPORT_DIR }} ${{ env.COV_PARAM }} || true
           mv .coverage ${{ env.REPORT_DIR }}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()

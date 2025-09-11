@@ -13,6 +13,7 @@ BACKEND_KVINT = 'pytorch-kvint'
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, model_type='vl_model'))
 def test_pipeline_chat_tp1(config, model, worker_id):
     if 'gw' in worker_id:
@@ -24,6 +25,7 @@ def test_pipeline_chat_tp1(config, model, worker_id):
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, model_type='vl_model'))
 def test_pipeline_chat_tp2(config, model, worker_id):
     if 'gw' in worker_id:
@@ -36,6 +38,7 @@ def test_pipeline_chat_tp2(config, model, worker_id):
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, model_type='vl_model'))
 def test_pipeline_chat_tp4(config, model, worker_id):
     if 'gw' in worker_id:

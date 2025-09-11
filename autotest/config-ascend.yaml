@@ -7,7 +7,7 @@ dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split
 env_tag: a100
 
 tp_config:
-    Qwen3-0.6B: 2
+    Qwen2.5-32B-Instruct: 2
 
 
 turbomind_chat_model:
@@ -43,9 +43,9 @@ turbomind_quatization:
 
 pytorch_quatization:
     awq:
-        - /Qwen3-0.6B
+        - meta-llama/Meta-Llama-3-8B-Instruct
     w8a8:
-        - /Qwen3-0.6B
+        - meta-llama/Meta-Llama-3-8B-Instruct
     no_kvint4:
         - /Qwen3-0.6B
     no_kvint8:
