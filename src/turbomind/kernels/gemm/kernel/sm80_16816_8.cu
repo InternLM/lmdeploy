@@ -31,6 +31,7 @@ void Registry::sm80_16816_8()
         Add<Cg::Type<128,  16,  32, 4, 1, 1, S, D, 5, true, 128, 1>>();
 
         using C8 = Config_E4M3<Sm80, bfloat16_t, 8, kColMajor, 1>;
+        Add<C8::Type<256, 8,  64, 4, 1, 1, S, D, 3, true, 128, 1>>();
         Add<C8::Type<128, 8,  64, 4, 1, 1, S, D, 3, true, 128, 1>>();
         Add<C8::Type< 64, 8, 128, 4, 1, 1, S, D, 3, true, 128, 1>>();
         // clang-format on

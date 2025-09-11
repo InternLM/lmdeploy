@@ -106,7 +106,7 @@ struct Sm80_s16816 {
 };
 
 template<class Arch, class T, Order raster_order>  // kColMajor
-using Config_U4_d = Sm80_s16816<Sm80,
+using Config_U4_d = Sm80_s16816<Arch,
                                 T,                                      // mma dtype
                                 kColMajor,                              // mma iter order
                                 Operand_A<half, kRowMajor>,             // A
