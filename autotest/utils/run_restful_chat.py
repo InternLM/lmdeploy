@@ -164,8 +164,8 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
 
     result = True
 
-    api_client = APIClient(url)
-    model_name = api_client.available_models[0]
+    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
+    model_name = client.models.list().data[0].id
 
     messages = []
     msg = ''
@@ -176,18 +176,17 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1, max_tokens=256):
-            output_message = output.get('choices')[0].get('message')
-            messages.append(output_message)
+        response = client.chat.completions.create(model=model_name, messages=messages, temperature=0.01, top_p=0.8)
 
-            output_content = output_message.get('content')
-            file.writelines('output:' + output_content + '\n')
+        output_content = response.choices[0].message.content
+        file.writelines('output:' + output_content + '\n')
+        messages.append({'role': 'assistant', 'content': output_content})
 
-            case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
-            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
-            if not case_result:
-                msg += reason
-            result = result & case_result
+        case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
+        file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
+        if not case_result:
+            msg += reason
+        result = result & case_result
     file.close()
     return result, restful_log, msg
 
@@ -458,9 +457,9 @@ def test_qwen_multiple_round_prompt(client, model):
         """Get temperature at a location and date.
 
         Args:
-            location: The location to get the temperature for, in the format "City, State, Country".
-            date: The date to get the temperature for, in the format "Year-Month-Day".
-            unit: The unit to return the temperature in. Defaults to "celsius". (choices: ["celsius", "fahrenheit"])
+            location: The location to get the temperature for, in the format 'City, State, Country'.
+            date: The date to get the temperature for, in the format 'Year-Month-Day'.
+            unit: The unit to return the temperature in. Defaults to 'celsius'. (choices: ['celsius', 'fahrenheit'])
 
         Returns:
             the temperature, the location, the date and the unit in a dict
@@ -618,7 +617,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
                 },
             }
         }]
-        messages = [{'role': 'user', 'content': "What's the weather like in Boston today?"}]
+        messages = [{'role': 'user', 'content': 'What\'s the weather like in Boston today?'}]
         response = client.chat.completions.create(model=model_name,
                                                   messages=messages,
                                                   temperature=0.01,
