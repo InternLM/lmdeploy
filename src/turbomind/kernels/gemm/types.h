@@ -182,8 +182,7 @@ struct Operation {
     QuantDesc      quant_a;
     QuantDesc      quant_b;
     int            batch_dim;
-    Context*       context;
-    void*          reserved;
+    // void*          reserved;
 };
 
 inline Operation transpose(Operation o)

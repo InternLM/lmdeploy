@@ -24,7 +24,7 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
                                float        eps,
                                cudaStream_t st);
 
-void ApplyBias(Tensor& x, const Tensor& bias, const Buffer_<int>& offsets, cudaStream_t st);
+void ApplyBias(Tensor& x, const Tensor& bias, const Buffer_<int>& offsets, float scale, cudaStream_t st);
 
 void ApplyBias(Tensor& x, const Tensor& bias, cudaStream_t st);
 

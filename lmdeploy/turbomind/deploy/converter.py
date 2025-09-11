@@ -56,6 +56,9 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     elif model_format == 'fp8':
         weight_type = 'fp8'
         group_size = 128
+    elif model_format == 'mxfp4':
+        weight_type = 'e2m1'
+        group_size = 32
     else:
         torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
         TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
@@ -66,7 +69,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
             weight_type = 'bfloat16'
 
     if dtype == 'auto':
-        weight_type = weight_type if weight_type in ['float16', 'bfloat16', 'int4', 'fp8'] else 'float16'
+        weight_type = weight_type if weight_type in ['float16', 'bfloat16', 'int4', 'fp8', 'e2m1'] else 'float16'
     elif dtype in ['float16', 'bfloat16']:
         if weight_type == 'int4':
             logger.warning(f'The model {model_path} is a quantized model, so the '
@@ -76,12 +79,30 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     else:
         assert 0, f'unsupported specified data type {dtype}'
 
+    expert_weight_type = weight_type
+
+    if model_arch == 'GptOssForCausalLM':
+        weight_type = 'bfloat16'
+
+    if not is_bf16_supported():
+
+        def fallback(type):
+            if type == 'bfloat16':
+                logger.warning('data type fallback to float16 since '
+                               'torch.cuda.is_bf16_supported is False')
+                return 'float16'
+            return type
+
+        weight_type = fallback(weight_type)
+        expert_weight_type = fallback(expert_weight_type)
+
     if weight_type == 'bfloat16' and not is_bf16_supported():
         logger.warning('data type fallback to float16 since '
                        'torch.cuda.is_bf16_supported is False')
         weight_type = 'float16'
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
+    config.model_config.expert_weight_type = expert_weight_type
     config.model_config.model_format = model_format
     config.model_config.group_size = group_size
     config.model_config.session_len = session_len
@@ -134,6 +155,8 @@ def get_tm_model(model_path,
                 f'unsupported quant config: {quant_config}'
         elif quant_method == 'fp8':
             pass
+        elif quant_method == 'mxfp4':
+            _group_size = 32
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 

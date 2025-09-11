@@ -433,6 +433,14 @@ def _kernel_meta_sm12x(BLOCK_DK: int, shared_kv: bool):
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
+def _kernel_meta_rocm(BLOCK_DK: int, shared_kv: bool):
+    BLOCK_N = 32
+    BLOCK_M = 32 if BLOCK_DK > 128 else 64
+    num_warps = 4
+    num_stages = 1
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
 def flash_attention_fwd(
     q_states: Tensor,
     k_states: Tensor,
@@ -500,17 +508,21 @@ def flash_attention_fwd(
     shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
 
     num_warps = 4
-    if _nv_cap[0] < 8:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
-    elif _nv_cap[0] < 9:
-        if _nv_cap[1] in [6, 9]:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
-        else:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
-    elif _nv_cap[0] < 10:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
+    hip_mode = getattr(torch.version, 'hip', None) is not None
+    if hip_mode:
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_rocm(BLOCK_DK, shared_kv)
     else:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)
+        if _nv_cap[0] < 8:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
+        elif _nv_cap[0] < 9:
+            if _nv_cap[1] in [6, 9]:
+                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
+            else:
+                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
+        elif _nv_cap[0] < 10:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
+        else:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)
 
     BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](

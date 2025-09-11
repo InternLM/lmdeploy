@@ -146,6 +146,12 @@ public:
         return layout_.stride(i);
     }
 
+    template<class... Is>
+    auto strides(Is&&... is) const
+    {
+        return layout_.strides(((Is &&) is)...);
+    }
+
     bool is_contiguous() const noexcept
     {
         return layout().is_contiguous();
