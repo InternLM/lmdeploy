@@ -4,6 +4,8 @@
 
 #include <memory>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/gateway.h"
 
@@ -54,6 +56,7 @@ protected:
 
     std::shared_ptr<TensorMap> inputs_;
     std::shared_ptr<TensorMap> outputs_;
+    std::shared_ptr<xgrammar::CompiledGrammar> compiled_grammar_;
 };
 
 }  // namespace turbomind
