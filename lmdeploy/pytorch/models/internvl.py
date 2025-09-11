@@ -24,7 +24,7 @@ from .utils.model import DeployModelMixin, vlm_model
 
 class Gating(nn.Module):
 
-    def __init__(self, hidden_size=2048, expansion_factor=4, dropout=0.1):
+    def __init__(self, hidden_size=2048, expansion_factor=4):
         super().__init__()
 
         mid_dim = hidden_size * expansion_factor
@@ -33,9 +33,9 @@ class Gating(nn.Module):
             return nn.Sequential(
                 nn.Linear(in_dim, out_dim, bias=True),
                 nn.GELU(),
-                nn.Dropout(dropout),
+                nn.Identity(),
                 nn.Linear(out_dim, in_dim, bias=True),
-                nn.Dropout(dropout),
+                nn.Identity(),
                 nn.LayerNorm(in_dim),
             )
 
@@ -489,9 +489,9 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                           llm_hidden_size * 2,
                           bias=True,
                           dtype=dtype,
-                          device=device), nn.GELU(), nn.Dropout(0.1),
+                          device=device), nn.GELU(), nn.Identity(),
                 nn.Linear(llm_hidden_size * 2, llm_hidden_size * 2, bias=True, dtype=dtype, device=device), nn.GELU(),
-                nn.Dropout(0.1), nn.Linear(llm_hidden_size * 2, llm_hidden_size, bias=True, dtype=dtype, device=device))
+                nn.Identity(), nn.Linear(llm_hidden_size * 2, llm_hidden_size, bias=True, dtype=dtype, device=device))
 
             self.pooling_before_gating = CrossAttentionPooling(dim=vit_hidden_size)
             self.gating = Gating(hidden_size=vit_hidden_size)
@@ -653,7 +653,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         gate = self.pooling_before_gating(vit_embeds_1024_split_and_merge)
         gate = self.gating(gate)
 
-        vit_embeds_256 = vit_embeds_1024.clone()
+        vit_embeds_256 = vit_embeds_1024
 
         with torch.no_grad():
             vit_embeds_64 = self.pixel_shuffle(vit_embeds_1024, scale_factor=self.downsample_ratio**2)
@@ -697,7 +697,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         return vit_embeds, lang_embeds, input_ids, image_mask, seq_lens
 
-    def update_context(self, new_input_ids: torch.Tensor, new_seqlens: List[torch.Tensor]) -> StepContext:
+    def update_context(self, new_input_ids: torch.Tensor, new_seqlens: List[int]) -> StepContext:
         """Update the current context with new input_ids."""
         from lmdeploy.pytorch.model_inputs import ModelInputs
 
