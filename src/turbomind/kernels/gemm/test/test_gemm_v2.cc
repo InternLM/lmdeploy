@@ -73,9 +73,9 @@ int main()
 
     // p.max_batch_size = 256;
 
-    p.input_dim         = 16384;
-    p.output_dim        = 16384;
-    p.max_batch_size    = 16384;
+    p.input_dim      = 16384;
+    p.output_dim     = 16384;
+    p.max_batch_size = 16384;
 
     // p.input_dim         = 2880;
     // p.output_dim        = 5760;

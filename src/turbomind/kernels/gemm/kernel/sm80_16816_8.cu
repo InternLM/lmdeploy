@@ -12,7 +12,8 @@ using namespace cache_policy;
 using S = cache_policy::Stream;
 using D = cache_policy::Default;
 
-void Registry::sm80_16816_8() {
+void Registry::sm80_16816_8()
+{
     if constexpr (1) {
         // clang-format off
         using Cd = Config_E4M3<Sm80, bfloat16_t, 16, kColMajor>;

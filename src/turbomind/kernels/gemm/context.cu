@@ -223,7 +223,8 @@ std::vector<LaunchSpec> Context::Populate(const Kernel& kernel, const PopulatePa
         const int64_t mio_cost_c = byte_size(desc.type_c, (int64_t)m * n) * (splits - 1) * 2 * num;
         const int64_t mio_cost   = mio_cost_a + mio_cost_b + mio_cost_c;
 
-        // std::cout << kernel.name() << " " << splits << " " << waves << " " << (float)mio_cost << " " << (float)mma_cost
+        // std::cout << kernel.name() << " " << splits << " " << waves << " " << (float)mio_cost << " " <<
+        // (float)mma_cost
         //           << "\n";
 
         // metrics.emplace_back(splits, KernelMetric{mio_cost, mma_cost});

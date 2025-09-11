@@ -191,7 +191,7 @@ struct Testbed_v3: Parameter {
             offsets[i + 1] = offsets[i] + count[i];
         }
 
-        for (const auto& x: count) {
+        for (const auto& x : count) {
             std::cout << x << " ";
         }
         std::cout << "\n";
