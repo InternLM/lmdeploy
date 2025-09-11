@@ -125,7 +125,7 @@ def fused_moe_blocked_f8_kernel(
     k_start = BLOCK_SIZE_K
     offs_ksa = k_start // group_ak
     offs_ksb = k_start // group_bk
-    a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & k_start < K, other=1.0)
+    a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & (k_start < K), other=1.0)
     b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
     acc_scale1 = tl.maximum(a_scale * b_scale, 1e-12)
     acc_ratio = acc_scale0 / acc_scale1
@@ -136,7 +136,7 @@ def fused_moe_blocked_f8_kernel(
         k_start = (k + 2) * BLOCK_SIZE_K
         offs_ksa = k_start // group_ak
         offs_ksb = k_start // group_bk
-        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & k_start < K, other=1.0)
+        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & (k_start < K), other=1.0)
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
         # load ab
