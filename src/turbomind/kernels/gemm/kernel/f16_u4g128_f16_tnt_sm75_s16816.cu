@@ -25,7 +25,8 @@ void Registry::f16_u4g128_f16_tnt_sm75_s16816()
                               Striding::kFlat,
                               Striding::kFlat,
                               Striding::kFlat,
-                              GemmScheduler<kColMajor>>;
+                              kColMajor,
+                              -1>;
 
         using S = cache_policy::Stream;
         using D = cache_policy::Default;

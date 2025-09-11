@@ -36,8 +36,7 @@ def build_pipe(model_path, backend, **kwargs):
     chat_template_config = None
     if chat_template:
         from .utils import get_chat_template
-        chat_template_config = get_chat_template(chat_template)
-
+        chat_template_config = get_chat_template(chat_template, model_path)
     pipe = pipeline(model_path,
                     backend_config=engine_config,
                     chat_template_config=chat_template_config,
@@ -54,6 +53,14 @@ def build_gen_config(**kwargs):
     return gen_config
 
 
+def get_adapter_name(adapters=None, **kwargs):
+    if adapters is None:
+        return None
+    from .utils import get_lora_adapters
+    adapters = get_lora_adapters(adapters)
+    return list(adapters.keys())[0]
+
+
 def main(model_path, backend, **kwargs):
     if backend != 'pytorch':
         # set auto backend mode
@@ -61,6 +68,7 @@ def main(model_path, backend, **kwargs):
 
     pipe = build_pipe(model_path, backend, **kwargs)
     gen_config = build_gen_config(**kwargs)
+    adapter_name = get_adapter_name(**kwargs)
 
     quit = False
     while not quit:
@@ -79,7 +87,7 @@ def main(model_path, backend, **kwargs):
                     break
                 if prompt.strip() == '':
                     continue
-                resps = sess(prompt)
+                resps = sess(prompt, adapter_name=adapter_name)
                 try:
                     for resp in resps:
                         print(resp.text, end='', flush=True)

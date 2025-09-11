@@ -368,8 +368,8 @@ struct Epilogue_ {
     template<class FragC>
     __device__ void operator()(FragC&               frag_C,
                                const int4&          tile_offset,
-                               const int4&          tiled_shape,
                                const int2&          extents,
+                               int                  splits,
                                int                  tile_id,
                                bool                 is_last,
                                const EpilogueParam& param,
@@ -399,7 +399,7 @@ struct Epilogue_ {
             }
         }
 
-        if (SplitK_ && tiled_shape.z > 1) {
+        if (SplitK_ && splits > 1) {
             int* barrier = &param.locks[tile_id];
 
             sem_wait(barrier, tile_offset.z, threadIdx.x == 0);

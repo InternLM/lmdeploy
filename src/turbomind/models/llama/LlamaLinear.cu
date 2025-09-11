@@ -106,8 +106,7 @@ struct LlamaLinear::Impl {
                  const Tensor&           input,  //
                  const LlamaDenseWeight& dense,
                  const Buffer_<int>&     indices,
-                 const Buffer_<int>&     offsets,
-                 gemm::Context*          context)
+                 const Buffer_<int>&     offsets)
     {
         using namespace gemm;
 
@@ -118,11 +117,6 @@ struct LlamaLinear::Impl {
         op.quant_b   = dense.weight_quant;
         op.batch_dim = 0;
 
-        /// TODO: eliminate dynamic context
-        if (dense.weight_type != kFloat8_e4m3) {
-            op.context = context;
-        }
-
         auto&& [A, desc_A, U, desc_U] = GetOperandA(dense, input, indices, offsets);
         auto&& [B, desc_B, V, desc_V] = GetOperandB(dense);
 
@@ -131,6 +125,8 @@ struct LlamaLinear::Impl {
             int dim = dense.epilogue == Epilogue::kGatedSilu ? dense.output_dim / 2 : dense.output_dim;
             D       = Tensor{{desc_A.rows, dim}, dense.data_type, kDEVICE};
         }
+
+        // std::cout << "D: " << D << " " << desc_B.num << "\n";
 
         MatrixLayout desc_D{
             output.dtype(),
@@ -181,15 +177,14 @@ Tensor LlamaLinear::Forward(const Tensor&           input,  //
                             const LlamaDenseWeight& weight,
                             std::optional<Tensor>   output)
 {
-    return Forward(input, weight, {}, {}, output, nullptr);
+    return Forward(input, weight, {}, {}, output);
 }
 
 Tensor LlamaLinear::Forward(const Tensor&           input,  //
                             const LlamaDenseWeight& weight,
                             const Buffer_<int>&     indices,
                             const Buffer_<int>&     offsets,
-                            std::optional<Tensor>   output,
-                            gemm::Context*          context)
+                            std::optional<Tensor>   output)
 {
     Tensor in = input.view({-1, input.shape(-1)});
     Tensor out;
@@ -198,7 +193,7 @@ Tensor LlamaLinear::Forward(const Tensor&           input,  //
         out = output->view({-1, output->shape(-1)});
     }
 
-    impl_->Forward(out, in, weight, indices, offsets, context);
+    impl_->Forward(out, in, weight, indices, offsets);
 
     return out;
 }

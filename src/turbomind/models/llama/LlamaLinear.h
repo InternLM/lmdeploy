@@ -22,8 +22,7 @@ public:
                    const LlamaDenseWeight& weight,
                    const Buffer_<int>&     indices,
                    const Buffer_<int>&     offsets,
-                   std::optional<Tensor>   output  = {},
-                   gemm::Context*          context = {});
+                   std::optional<Tensor>   output = {});
 
     void set_measure(bool measure);
 

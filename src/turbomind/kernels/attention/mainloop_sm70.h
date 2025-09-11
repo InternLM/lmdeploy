@@ -107,6 +107,8 @@ struct Mainloop<arch::Sm70, Impl_> {
             Impl::ComputePV(state_PV, frag_O, 0, nop, [&] {});
 
             gmem_K.Save(tmp_K);
+
+            offset_K -= CTA_S;
         };
 
         for (int mask_iter = max(1, mask_iter_back); tile_iter > 0 && mask_iter > 0; --tile_iter, --mask_iter) {

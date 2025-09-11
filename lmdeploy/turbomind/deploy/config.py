@@ -68,6 +68,7 @@ class ModelConfig:
     size_per_head: int = 128
     group_size: int = 64
     weight_type: str = None
+    expert_weight_type: str = None
     session_len: int = None
     attn_tp_size: int = 1
     mlp_tp_size: int = 1

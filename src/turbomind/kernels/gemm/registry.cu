@@ -9,7 +9,6 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
     device_prop_{std::move(device_prop)}, arch_{device_prop_->major * 100 + device_prop_->minor * 10}
 {
     f16_u4g128_f16_tnt_sm70_s884();
-    f16_u4g128_f16_tnt_sm75_simt();
     f16_u4g128_f16_tnt_sm75_s16816();
     f16_u4g128_f16_tnt_sm80_s16816();
     f16_u4g128_f16_tnt_sm90_s16816();
@@ -23,6 +22,9 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
 
     sm90_s64n32_dynamic();
 
+    sm80_mxfp4();
+    sm90_mxfp4();
+
     cublas_float();
 
     // u4g128_f16_f16_nnn_sm80_s16816();
@@ -31,23 +33,28 @@ Registry::Registry(std::shared_ptr<cudaDeviceProp> device_prop):
 bool Registry::Add(std::unique_ptr<Kernel> kernel)
 {
     bool is_valid = true;
+
     if (!is_arch_compatible(kernel->arch(), arch_)) {
         is_valid = false;
     }
-    if ((int)device_prop_->sharedMemPerBlockOptin < kernel->smem_size()) {
-        is_valid = false;
-    }
+
     // if (is_valid) {
     //     std::cout << "register: " << kernel->name()                                        //
     //               << ", shared: " << (kernel->smem_size() >> 10) << " KB"                  //
-    //               << ", regs: " << kernel->desc().attr.numRegs                             //
-    //               << ", local: " << (float)kernel->desc().attr.localSizeBytes << " bytes"  //
-    //               << ", max_active_ctas: " << kernel->desc().max_active_ctas * is_valid << " \n";
+    //               << ", regs: " << kernel->info().attr.numRegs                             //
+    //               << ", local: " << (float)kernel->info().attr.localSizeBytes << " bytes"  //
+    //               << ", max_active_ctas: " << kernel->info().max_active_ctas << " \n";
     // }
+
+    if ((int)device_prop_->sharedMemPerBlockOptin < kernel->smem_size()) {
+        is_valid = false;
+    }
+
     if (is_valid) {
         ptrs_.push_back(kernels_.emplace_back(transpose(*kernel)).get());
         ptrs_.push_back(kernels_.emplace_back(std::move(kernel)).get());
     }
+
     return true;
 }
 

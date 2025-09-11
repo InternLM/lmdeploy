@@ -72,7 +72,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
           python3 -m pip install -e .
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/flash_attn-2.8.0.post2-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/flash_attn-2.8.3+cu12torch2.8cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
       - name: Check env
         run: |
           python3 -m pip list
