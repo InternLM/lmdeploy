@@ -40,8 +40,8 @@ env:
   FAIL_CONFIG: ${{ github.event_name == 'push' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
   TEST_CODE_PATH: /test/test_pkg/lmdeploy/${{ github.run_id }}
   LOG_PATH: /test/log/${{ github.run_id }}
-  TMPDIR: /mnt/deeplink/docker-tmp
-  RAY_TMPDIR: /mnt/deeplink/docker-tmp
+  TMPDIR: /mnt/deeplink/docker-tmp/qa_tmp
+  RAY_TMPDIR: /mnt/deeplink/docker-tmp/qa_tmp/ray
 
 jobs:
   download_pkgs:
