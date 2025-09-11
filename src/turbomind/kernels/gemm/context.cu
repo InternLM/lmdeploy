@@ -191,6 +191,7 @@ std::vector<LaunchSpec> Context::Populate(const Kernel& kernel, const PopulatePa
 
     std::vector<LaunchSpec> specs;
 
+    /// TODO: revise this according to the lastest scheduler
     for (int splits = 1; splits <= max_splits; ++splits) {
         // Split quantization, penalize uneven splits
         const int64_t split_ceil_k = cdiv(chunk_cnt_k, splits) * kernel.chunk_size_k();
@@ -222,7 +223,7 @@ std::vector<LaunchSpec> Context::Populate(const Kernel& kernel, const PopulatePa
         const int64_t mio_cost_c = byte_size(desc.type_c, (int64_t)m * n) * (splits - 1) * 2 * num;
         const int64_t mio_cost   = mio_cost_a + mio_cost_b + mio_cost_c;
 
-        // std::cout << name() << " " << splits << " " << waves << " " << (float)mio_cost << " " << (float)mma_cost
+        // std::cout << kernel.name() << " " << splits << " " << waves << " " << (float)mio_cost << " " << (float)mma_cost
         //           << "\n";
 
         // metrics.emplace_back(splits, KernelMetric{mio_cost, mma_cost});

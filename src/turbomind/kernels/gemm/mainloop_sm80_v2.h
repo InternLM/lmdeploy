@@ -228,8 +228,8 @@ struct MainloopSm80_v2 {
     {
         static_assert(MMA::kAtomK == 1);
 
-        static constexpr int UU = 1;  // ceil_div(GroupSizeU_, MMA_Map::TileK);
-        static constexpr int VV = 1;  // ceil_div(GroupSizeV_, MMA_Map::TileK);
+        static constexpr int UU = ceil_div(GroupSizeU_, MMA_Map::TileK);
+        static constexpr int VV = ceil_div(GroupSizeV_, MMA_Map::TileK);
 
         // mma_iter_x = tile_iter_x * atom_x
         typename MMA_Atom::FragA frag_A[MMA::kTileIterK][MMA::kMmaIterM];
@@ -350,31 +350,19 @@ struct MainloopSm80_v2 {
             for (int k = 0; k < ITER_K; ++k) {
                 // preload for next iter
                 preload((k + 1) % ITER_K);
-                PRAGMA_UNROLL
-                for (int n = 0; n < MMA::kMmaIterN; ++n) {
-                    PRAGMA_UNROLL
-                    for (int m = 0; m < MMA::kMmaIterM; ++m) {
-                        int mm = n % 2 ? (MMA::kMmaIterM - m - 1) : m;
-                        MMA_Atom::fma(frag_C[mm][n], frag_A[k][mm], frag_B[k][n], frag_C[mm][n]);
-                    }
-                }
-                // PRAGMA_UNROLL
-                // for (int m = 0; m < MMA::kMmaIterM; ++m) {
-                //     PRAGMA_UNROLL
-                //     for (int n = 0; n < MMA::kMmaIterN; ++n) {
-                //         int nn = n;
-                //         int mm = m;
-                //         MMA_Atom::fma(frag_C[mm][nn], frag_A[k][mm], frag_B[k][nn], frag_C[mm][nn]);
-                //     }
-                // }
+
+                MMA::mma_k_iter(frag_C, frag_A[k], frag_B[k], frag_C);
+
                 if constexpr (kFusePrefetch) {
                     prefetch_batch((k + 1) % ITER_K);
                 }
+
                 if (k + 1 == ITER_K - 1) {
                     advance_and_wait_smem_stage();
                     smem_group_iter_U.Advance();
                     smem_group_iter_V.Advance();
                 }
+                
                 TransformA::apply(frag_A, (k + 1) % ITER_K, data_A, data_U, UU);
                 TransformB::apply(frag_B, (k + 1) % ITER_K, data_B, data_V, VV);
             }

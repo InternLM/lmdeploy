@@ -159,6 +159,7 @@ struct Testbed_v3: Parameter {
 
         std::mt19937 g{};
 
+        /// TODO: Control the distribution
         auto expert_ids = SampleUniform(bsz, expert_num, experts_per_token, g);
 
         std::uniform_real_distribution<float> dist(1e-3, 1.f);
@@ -189,6 +190,11 @@ struct Testbed_v3: Parameter {
         for (int i = 0; i < expert_num; ++i) {
             offsets[i + 1] = offsets[i] + count[i];
         }
+
+        for (const auto& x: count) {
+            std::cout << x << " ";
+        }
+        std::cout << "\n";
 
         Buffer_<int> f2n(expert_ids.size(), kCPU);
         Buffer_<int> en2f(expert_ids.size(), kCPU);
