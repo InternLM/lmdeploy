@@ -78,7 +78,7 @@ jobs:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
     timeout-minutes: 480
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -144,7 +144,7 @@ jobs:
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
