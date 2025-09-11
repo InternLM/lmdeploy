@@ -79,7 +79,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
             qk = qk * tl_log2(math.e)
             qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
             if window_size > 0:
-                qk_mask = qk_mask and ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+                qk_mask = qk_mask & ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
             qk = tl.where(
                 qk_mask,
                 qk,
@@ -218,7 +218,7 @@ def _flash_prefill_fwd_kernel(
     offs_dk = tl.multiple_of(tl.max_contiguous(offs_dk % head_dim_k, BLOCK_DK), BLOCK_DK)
     off_q = ((q_start_loc + offs_m[:, None]) * stride_qs + head_id * stride_qh + offs_dk[None, :] * stride_qd)
     q_ptrs = q_ptr + off_q
-    q = tl.load(q_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk[None, :]))
+    q = tl.load(q_ptrs, mask=((offs_m[:, None] < q_seqlen) & mask_dk[None, :]))
 
     k_ptrs = tl.make_block_ptr(
         base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
@@ -252,7 +252,7 @@ def _flash_prefill_fwd_kernel(
         offs_dk1 = tl.multiple_of(tl.max_contiguous(offs_dk1 % head_dim_k, BLOCK_DK1), BLOCK_DK1)
         offs_q1 = ((q_start_loc + offs_m[:, None]) * stride_qs + head_id * stride_qh + offs_dk1[None, :] * stride_qd)
         q1_ptrs = q_ptr + offs_q1
-        q1 = tl.load(q1_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk1[None, :]))
+        q1 = tl.load(q1_ptrs, mask=((offs_m[:, None] < q_seqlen) & mask_dk1[None, :]))
         k1_ptrs = tl.make_block_ptr(
             base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
             shape=(head_dim_k, kv_seqlen),

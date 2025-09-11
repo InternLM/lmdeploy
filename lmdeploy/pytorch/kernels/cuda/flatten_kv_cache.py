@@ -74,10 +74,10 @@ def _flatten_kv_cache(
                offs_dv[None, :] * stride_vod)
 
     kc = tl.load(kc_ptrs)
-    tl.store(ko_ptrs, kc, mask=mask_bs[:, None] and mask_dk[None, :])
+    tl.store(ko_ptrs, kc, mask=mask_bs[:, None] & mask_dk[None, :])
     if HEAD_DIM_V > 0:
         vc = tl.load(vc_ptrs)
-        tl.store(vo_ptrs, vc, mask=mask_bs[:, None] and mask_dv[None, :])
+        tl.store(vo_ptrs, vc, mask=mask_bs[:, None] & mask_dv[None, :])
 
 
 @triton.jit
@@ -181,7 +181,7 @@ def _flatten_kv_cache_quant(
     kz = tl.load(ksz_ptrs + stride_kszd)
     ksz = ks * kz
     kq = (kc * ks[:, None] - ksz[:, None]).to(ko_ptr.dtype.element_ty)
-    tl.store(ko_ptrs, kq, mask=mask_bs[:, None] and mask_dok[None, :])
+    tl.store(ko_ptrs, kq, mask=mask_bs[:, None] & mask_dok[None, :])
     vc = tl.load(vc_ptrs)
     if quant_policy == 4:
         vc = _dequant_int4(vc, HEAD_DIM_V, BLOCK_DV)
@@ -189,7 +189,7 @@ def _flatten_kv_cache_quant(
     vz = tl.load(vsz_ptrs + stride_vszd)
     vsz = vs * vz
     vq = (vc * vs[:, None] - vsz[:, None]).to(vo_ptr.dtype.element_ty)
-    tl.store(vo_ptrs, vq, mask=mask_bs[:, None] and mask_dov[None, :])
+    tl.store(vo_ptrs, vq, mask=mask_bs[:, None] & mask_dov[None, :])
 
 
 def flatten_kv_cache(k_caches: Tensor,

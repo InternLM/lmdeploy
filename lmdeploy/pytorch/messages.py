@@ -114,13 +114,18 @@ class SamplingParam:
         logprobs = gen_config.logprobs
         if logprobs is None:
             logprobs = -1
+
+        random_seed = gen_config.random_seed
+        if random_seed is None:
+            import random
+            random_seed = random.getrandbits(64)
         return SamplingParam(top_p=top_p,
                              top_k=top_k,
                              min_p=min_p,
                              temperature=temperature,
                              repetition_penalty=repetition_penalty,
                              ignore_eos=gen_config.ignore_eos,
-                             random_seed=gen_config.random_seed,
+                             random_seed=random_seed,
                              stop_words=stop_words,
                              bad_words=bad_words,
                              response_format=response_format,

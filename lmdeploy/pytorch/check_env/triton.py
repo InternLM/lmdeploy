@@ -3,7 +3,7 @@ from packaging import version
 
 from .base import BaseChecker
 
-MAX_TRITON_VERSION = '3.3.1'
+MAX_TRITON_VERSION = '3.4.0'
 MIN_TRITON_VERSION = '3.0.0'
 
 
