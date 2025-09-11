@@ -206,7 +206,16 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-The default prebuilt package is compiled on **CUDA 12.8** since v0.10.0.
+The default prebuilt package is compiled on **CUDA 12** since v0.3.0.
+
+For the GeForce RTX 50 series, please install the LMDeploy prebuilt package complied with **CUDA 12.8**
+
+```shell
+export LMDEPLOY_VERSION=0.10.0
+export PYTHON_VERSION=310
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
 For more information on installing on CUDA 11+ platform, or for instructions on building from source, please refer to the [installation guide](docs/en/get_started/installation.md).
 
 ## Offline Batch Inference
