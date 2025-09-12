@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 from torch import Tensor
@@ -13,6 +12,9 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
 from .block import LogicalTokenBlocks
+
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
 logger = get_logger('lmdeploy')
 
@@ -56,7 +58,7 @@ class SamplingParam:
     num_logprobs: int = -1
 
     @classmethod
-    def from_gen_config(self, gen_config: GenerationConfig):
+    def from_gen_config(cls, gen_config: GenerationConfig):
         """From gen config."""
         min_new_tokens = gen_config.min_new_tokens or 0
 
@@ -158,28 +160,32 @@ class MessageStatus(enum.Enum):
     MIGRATION_DONE = enum.auto()
 
 
-_SEQ_COUNT = 0
-
-
-def _new_msg_id():
-    """Get a new message id."""
-    global _SEQ_COUNT
-    seq_id = _SEQ_COUNT
-    _SEQ_COUNT += 1
-    return seq_id
-
-
 SeqMap = Dict[int, 'SchedulerSequence']
+
+
+@dataclass
+class SequenceMeta:
+    """Meta data shared by all sequence."""
+    block_size: int
+    strategy: 'SequenceStrategy' = None
 
 
 class SequenceManager:
     """Sequence manager."""
 
-    def __init__(self) -> None:
+    def __init__(self, seq_meta: SequenceMeta) -> None:
         self._seq_map: SeqMap = dict()
         self._status_seq_map: Dict[MessageStatus, SeqMap] = dict()
         for status in MessageStatus:
             self._status_seq_map[status] = dict()
+
+        self.seq_meta = seq_meta
+        self._seq_count = 0
+
+    def _new_seq_id(self):
+        seq_id = self._seq_count
+        self._seq_count += 1
+        return seq_id
 
     def get_all_sequences(self):
         """Get all sequences."""
@@ -223,12 +229,23 @@ class SequenceManager:
             new_status_map[seq_id] = seq
 
 
+def _to_ndarray(token_ids) -> np.ndarray:
+    """To ndarray."""
+    if isinstance(token_ids, Tensor):
+        token_ids = token_ids.numpy()
+    elif not isinstance(token_ids, np.ndarray):
+        token_ids = np.array(token_ids)
+    if token_ids.ndim == 0:
+        token_ids = token_ids[None]
+    return token_ids
+
+
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, block_size: int, seq_manager: SequenceManager = None) -> None:
+    def __init__(self, session_id: int, seq_manager: SequenceManager) -> None:
         self.session_id = session_id
-        self.block_size = block_size
+        self.seq_meta = seq_manager.seq_meta
         self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: SeqMap = dict()
         self.seq_manager = seq_manager
@@ -237,48 +254,38 @@ class SchedulerSession:
                      token_ids: Tensor,
                      sampling_param: SamplingParam = None,
                      adapter_name: str = None,
-                     return_logits: bool = False,
                      multimodals: MultiModalInputs = None,
                      input_embeddings: List[InputEmbeddings] = None,
                      migration_request: Optional[MigrationRequest] = None,
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
-        if isinstance(token_ids, Tensor):
-            token_ids = token_ids.numpy()
-        elif not isinstance(token_ids, np.ndarray):
-            token_ids = np.array(token_ids)
-        if token_ids.ndim == 0:
-            token_ids = token_ids.unsqueeze(0)
         if sampling_param is None:
             sampling_param = SamplingParam()
 
-        seq = SchedulerSequence(
-            seq_id=_new_msg_id(),
-            session=self,
-            history_cache=HistoryTokenIds(token_ids),
-            num_new_tokens=0,
-            sampling_param=sampling_param,
-            adapter_name=adapter_name,
-            arrive_time=time.perf_counter(),
-            history_embeddings=HistoryEmbeddings(input_embeddings),
-            history_multimodals=HistoryMultiModals(multimodals),
-            return_logits=return_logits,
-            migration_request=migration_request,
-            resp_cache=resp_cache,
-            preserve_cache=preserve_cache,
+        seq_id = self.seq_manager._new_seq_id()
+        seq = self.seq_meta.strategy.make_sequence(seq_id=seq_id,
+                                                   session=self,
+                                                   sampling_param=sampling_param,
+                                                   adapter_name=adapter_name,
+                                                   migration_request=migration_request,
+                                                   resp_cache=resp_cache,
+                                                   preserve_cache=preserve_cache)
+        seq.update_token_ids(
+            token_ids,
+            multimodals=multimodals,
+            embeddings=input_embeddings,
+            mode=UpdateTokenMode.INPUTS,
         )
         self.sequences[seq.seq_id] = seq
-        if self.seq_manager is not None:
-            self.seq_manager.add_sequence(seq)
+        self.seq_manager.add_sequence(seq)
         return seq
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
         assert seq.seq_id in self.sequences
         self.sequences.pop(seq.seq_id)
-        if self.seq_manager is not None:
-            self.seq_manager.remove_sequence(seq)
+        self.seq_manager.remove_sequence(seq)
 
 
 def _div_up(x, n):
@@ -342,9 +349,9 @@ class HistoryTokenIds:
     """History token ids."""
     ALLOC_SIZE = 512
 
-    def __init__(self, token_ids: np.ndarray = None):
+    def __init__(self, token_ids: np.ndarray = None, dtype: np.dtype = np.int64):
         if token_ids is None:
-            self._token_ids = np.empty((self.ALLOC_SIZE, ), dtype=np.int64)
+            self._token_ids = np.empty((self.ALLOC_SIZE, ), dtype=dtype)
             self._num_real = 0
         else:
             self._token_ids = token_ids
@@ -362,6 +369,11 @@ class HistoryTokenIds:
     def get_real(self):
         """Get logical blocks."""
         return self._token_ids[:self._num_real]
+
+    def resize(self, size: int):
+        """Set size."""
+        assert size <= self._num_real
+        self._num_real = size
 
     def __setitem__(self, *args, **kwargs):
         """Set values."""
@@ -397,7 +409,7 @@ class HistoryTokenIds:
 
 class HistoryMultiModals:
 
-    def __init__(self, multimodals: MultiModalInputs):
+    def __init__(self, multimodals: MultiModalInputs = None):
         if multimodals is None:
             multimodals = dict()
         self.multimodals = multimodals
@@ -453,6 +465,13 @@ class HistoryMultiModals:
         return out_len
 
 
+class UpdateTokenMode(enum.Enum):
+    """Update token mode."""
+    INPUTS = enum.auto()
+    PREFILL = enum.auto()
+    DECODE = enum.auto()
+
+
 @dataclass
 class SchedulerSequence:
     """Scheduler message."""
@@ -466,9 +485,8 @@ class SchedulerSequence:
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
     adapter_name: str = None
     arrive_time: float = 0.0
+    output_start_pos: int = 0
     meta: Any = None
-    return_logits: bool = False
-    random_offsets: int = 0
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
@@ -483,23 +501,20 @@ class SchedulerSequence:
 
     def __post_init__(self):
         """Post init."""
-        self._num_history_ids: int = 0
+        self._seq_meta: SequenceMeta = self.session.seq_meta
         self._num_history_images: int = 0
-        self._num_images: int = len(self.history_embeddings)
+        self._num_history_ids: int = 0
         self._num_token_ids: int = len(self.history_cache)
 
+        # vlm
+        self._num_images: int = len(self.history_embeddings)
         self._num_history_cross: int = 0
         self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
 
     @property
     def block_size(self) -> int:
         """Block size."""
-        return self.session.block_size
-
-    @property
-    def history_len(self) -> int:
-        """Get history length."""
-        return self._num_history_ids
+        return self._seq_meta.block_size
 
     @property
     def history_image_num(self) -> int:
@@ -519,7 +534,7 @@ class SchedulerSequence:
     @property
     def token_ids(self) -> np.ndarray:
         """Token ids."""
-        start = self.history_len
+        start = self.num_history_ids
         end = start + self._num_token_ids
         return self.history_cache._token_ids[start:end]
 
@@ -533,12 +548,23 @@ class SchedulerSequence:
     @property
     def history_ids(self) -> np.ndarray:
         """History ids."""
-        return self.history_cache._token_ids[:self.history_len]
+        return self.history_cache._token_ids[:self.num_history_ids]
 
     @property
     def all_ids(self) -> np.ndarray:
         """Full token ids."""
         return self.history_cache._token_ids[:self.num_all_ids]
+
+    @property
+    def valid_ids(self) -> np.ndarray:
+        """Valid token ids."""
+        return self.history_cache._token_ids[:self.num_valid_ids]
+
+    @property
+    def generated_ids(self) -> np.ndarray:
+        end = self.num_valid_ids
+        start = end - self.num_new_tokens
+        return self.history_cache._token_ids[start:end]
 
     @property
     def num_history_ids(self):
@@ -550,13 +576,17 @@ class SchedulerSequence:
         return self._num_token_ids
 
     @property
+    def num_valid_ids(self):
+        return self._num_history_ids + self._num_token_ids
+
+    @property
     def num_images(self):
         return self._num_images
 
     @property
     def num_all_ids(self):
         """Num all tokens."""
-        return self.history_len + self._num_token_ids
+        return self._num_history_ids + self._num_token_ids
 
     @property
     def num_cross(self):
@@ -582,14 +612,14 @@ class SchedulerSequence:
     def status(self):
         return self._status
 
+    @property
+    def return_logits(self):
+        return self.sampling_param.out_logits
+
     @status.setter
     def status(self, value: MessageStatus):
         self.seq_manager.update_sequence_status(self, value)
         self._status = value
-
-    def num_all_tokens(self):
-        """Num all tokens."""
-        return self.num_all_ids
 
     def num_all_cross_tokens(self):
         """Num of all cross tokens."""
@@ -601,79 +631,45 @@ class SchedulerSequence:
         end = self.num_all_ids
         return self.history_multimodals.get_datas(start, end)
 
-    def update_token_ids(self,
-                         token_ids: Tensor,
-                         multimodals: MultiModalInputs = None,
-                         embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None,
-                         append_tokens: bool = False):
-        """Update token ids, old token ids will be added to history."""
-        old_num_history_ids = self._num_history_ids
-
-        # update history
-        if not append_tokens:
-            self._num_history_ids += self._num_token_ids
-
-        # update history image nums
-        self._num_history_images += self._num_images
-        self._num_images = 0
-        if embeddings is not None:
-            new_embeddings = [emb.move_position(self._num_history_ids) for emb in embeddings]
-            self._num_images = len(new_embeddings)
-            self.history_embeddings.append(new_embeddings)
-
-        # update multimodals
-        if multimodals is not None:
-            multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_all_ids)
-            self.history_multimodals.add_inputs(multimodals)
-
-        # cross
-        self._num_history_cross += self._num_cross
-        if multimodals is not None:
-            self._num_cross = self.history_multimodals.get_encoder_len(old_num_history_ids, self._num_history_ids)
-        else:
-            self._num_cross = 0
-
-        if model_meta is not None:
-            self.model_meta = model_meta
-
-        if isinstance(token_ids, Tensor):
-            token_ids = token_ids.numpy()
-        elif not isinstance(token_ids, np.ndarray):
-            token_ids = np.array(token_ids)
-        if token_ids.ndim == 0:
-            token_ids = token_ids[None]
-        if append_tokens:
-            self._num_token_ids += len(token_ids)
-        else:
-            self._num_token_ids = len(token_ids)
-        self.history_cache.append(token_ids)
-        self.random_offsets += 1
-        self.arrive_time = time.perf_counter()
-
-    def set_step(self, step: int):
-        """Set step."""
-        num_all_ids = self.num_all_ids
-        # update step for vlm
-        if len(self.history_embeddings) > 0:
-            new_step, self._num_history_images, self._num_images = \
-                self.history_embeddings.get_step(step)
-            assert 0 <= new_step <= step
-            step = new_step
-        self._num_history_ids = step
-        self._num_token_ids = num_all_ids - step
-        self.num_ignored_history = min(step, self.num_ignored_history)
-
-        self.model_meta = None
-
-        # cross
-        if self.history_multimodals is not None:
-            self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
-            self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
-
     def record_event(
         self,
         event_type: EventType,
         timestamp: Optional[float] = None,
     ) -> None:
         self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
+
+    def _update_embeddings(self, embeddings: List[InputEmbeddings]):
+        """Update input embeddings."""
+        self._num_history_images += self._num_images
+        if embeddings is None:
+            self._num_images = 0
+            return
+        new_embeddings = [emb.move_position(self._num_history_ids) for emb in embeddings]
+        self._num_images = len(new_embeddings)
+        self.history_embeddings.append(new_embeddings)
+
+    def _update_multimodals(self, multimodals: MultiModalInputs):
+        """Update input multimodals."""
+        self._num_history_cross += self._num_cross
+        if multimodals is None:
+            self._num_cross = 0
+            return
+        multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
+        self.history_multimodals.add_inputs(multimodals)
+
+        # for mllama
+        self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, self._num_history_ids)
+
+    def update_token_ids(self,
+                         token_ids: Tensor,
+                         multimodals: MultiModalInputs = None,
+                         embeddings: List[InputEmbeddings] = None,
+                         model_meta: Dict[str, Any] = None,
+                         mode: UpdateTokenMode = UpdateTokenMode.INPUTS,
+                         **kwargs):
+        """Update token ids, old token ids will be added to history."""
+        raise NotImplementedError('NotImplemented')
+
+    def set_step(self, step: int):
+        """Set step."""
+        raise NotImplementedError('NotImplemented')

@@ -150,6 +150,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
+  <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>

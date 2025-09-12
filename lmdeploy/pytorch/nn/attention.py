@@ -37,6 +37,7 @@ class Attention(nn.Module):
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
+        block_sparse_size: int = 1,
         **kwargs,
     ):
         super().__init__()
@@ -61,6 +62,7 @@ class Attention(nn.Module):
             causal=causal,
             use_flash_mla=use_flash_mla,
             learnable_sink=learnable_sink,
+            block_sparse_size=block_sparse_size,
             **kwargs,
         )
 

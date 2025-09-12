@@ -62,6 +62,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         sliding_window: int = None,
         logit_softcapping: float = None,
         causal: bool = True,
+        block_sparse_size: int = 1,
         **kwargs,
     ):
         super().__init__(
@@ -91,6 +92,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         world_size, rank = get_tp_world_rank()
         self.alibi_head_offset = self.num_heads * rank
         self.alibi_num_heads = self.num_heads * world_size
+        self.block_sparse_size = block_sparse_size
 
     def forward(
         self,
@@ -116,7 +118,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
         if attn_metadata.is_decoding:
-            max_q_seqlen = 1
+            max_q_seqlen = self.block_sparse_size
         else:
             max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         fill_max_q_seqlen = max_q_seqlen
@@ -213,6 +215,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 logit_softcapping=self.logit_softcapping,
                 sinks=learnable_sink,
                 causal=self.causal,
+                block_sparse_size=self.block_sparse_size,
             )
 
         return attn_output
@@ -528,9 +531,11 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
+        block_sparse_size: int = 1,
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
+        enable_fa3 = use_fa3 and not alibi and not learnable_sink and block_sparse_size == 1
         if use_flash_mla is True:
             return FlashMLAImpl(num_heads,
                                 head_size,
@@ -542,7 +547,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                 logical_softcapping=logical_softcapping,
                                 causal=causal,
                                 **kwargs)
-        elif use_fa3 and not alibi and not learnable_sink:
+        elif enable_fa3:
             return FA3Impl(num_heads,
                            head_size,
                            scale=scale,
@@ -563,4 +568,5 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                        sliding_window=sliding_window,
                                        logical_softcapping=logical_softcapping,
                                        causal=causal,
+                                       block_sparse_size=block_sparse_size,
                                        **kwargs)

@@ -151,6 +151,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
+  <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>
