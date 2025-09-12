@@ -37,48 +37,40 @@ template<typename T>
 void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-}
-
-template<>
-void GuidedDecodeMaskLayer<float>::Forward(TensorMap& args)
-{
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-
-    const auto           bitmask_size = xgrammar::GetBitmaskSize(vocab_size_padded_);
-    std::vector<int32_t> result(bitmask_size);
-    std::vector<int64_t> shape = {bitmask_size};
 
     Tensor_<float> logits = args.at("logits");
     const size_t   bsz    = logits.shape(0);
+    Tensor_<float> logits_buf{logits.shape(), kCPU};
+    std::vector<int64_t> logits_shape = {bsz, logits.shape(1)};
 
     FT_CHECK(bsz == matchers_.size());
 
+    const auto           bitmask_size = xgrammar::GetBitmaskSize(vocab_size_padded_);
+    Tensor_<int32_t>     bitmask{{bsz, bitmask_size}, kCPU};
+    std::vector<int64_t> bitmap_shape = {bsz, bitmask_size};
+
+    DLTensor bitmask_dltensor{bitmask.data(), DLDevice{kDLCPU, 0}, static_cast<int32_t>(bitmap_shape.size()), xgrammar::GetBitmaskDLType(), bitmap_shape.data(), nullptr, 0};
+    DLTensor logits_dltensor{logits_buf.data(), DLDevice{kDLCPU, 0}, static_cast<int32_t>(logits_shape.size()), DLDataType{kDLFloat, 32, 1}, logits_shape.data(), nullptr, 0};
+
+    std::cerr << ">> logits shape: "<< logits.shape() << std::endl << ">> vocab_size_padded_: " << vocab_size_padded_ << std::endl;
+    std::cerr << ">> logits device: "<< to_string(logits.device().type) << std::endl;
+
+    // TODO: Speedup
+
     for (size_t i = 0; i < bsz; ++i) {
         const auto& matcher = matchers_[i];
-
         if (matcher) {
-            DLTensor bitmask_dltensor{result.data(),
-                                      DLDevice{kDLCPU, 0},
-                                      static_cast<int32_t>(shape.size()),
-                                      xgrammar::GetBitmaskDLType(),
-                                      shape.data(),
-                                      nullptr,
-                                      0};
-
-            matcher->FillNextTokenBitmask(&bitmask_dltensor);
-
-            DLTensor logits_dltensor{logits.slice(i).data<float>(),
-                                     DLDevice{kDLCPU, 0},
-                                     shape.size(),
-                                     DLDataType{kDLFloat, 32, 1},
-                                     shape.data(),
-                                     nullptr,
-                                     0};
-
-            xgrammar::ApplyTokenBitmaskInplaceCPU(&logits_dltensor, bitmask_dltensor, vocab_size_padded_, std::nullopt);
+            matcher->FillNextTokenBitmask(&bitmask_dltensor, i, true);
         }
     }
+
+    Copy(logits, logits_buf);
+
+    xgrammar::ApplyTokenBitmaskInplaceCPU(&logits_dltensor, bitmask_dltensor, vocab_size_, std::nullopt);
+
+    Copy(logits_buf, logits);
 }
+
 
 template class GuidedDecodeMaskLayer<float>;
 
