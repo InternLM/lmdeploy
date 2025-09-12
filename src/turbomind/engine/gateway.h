@@ -199,7 +199,7 @@ private:
     SeqId2Rank seqid2rank_;
 
     std::atomic<uint32_t> next_;
-    bool                  running_{false};
+    bool                  running_;
 };
 
 }  // namespace turbomind
