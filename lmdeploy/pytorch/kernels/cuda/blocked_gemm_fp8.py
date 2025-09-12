@@ -132,15 +132,23 @@ def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_
     return _quant_fp8_launcher(A, group_size, out, scales)
 
 
+def _gemm_fp8_tma_pre_hook(nargs):
+    BLOCK_M = nargs['BLOCK_M']
+    BLOCK_N = nargs['BLOCK_N']
+    BLOCK_K = nargs['BLOCK_K']
+    nargs['desc_a'].block_shape = (BLOCK_M, BLOCK_K)
+    nargs['desc_b'].block_shape = (BLOCK_N, BLOCK_K)
+
+
 @triton.autotune(configs=[
     triton.Config({
         'BLOCK_M': 128,
         'BLOCK_N': 128,
-    }, num_stages=3, num_warps=8),
+    }, num_stages=3, num_warps=8, pre_hook=_gemm_fp8_tma_pre_hook),
     triton.Config({
         'BLOCK_M': 128,
         'BLOCK_N': 64,
-    }, num_stages=3, num_warps=4)
+    }, num_stages=3, num_warps=4, pre_hook=_gemm_fp8_tma_pre_hook)
 ],
                  key=['N', 'K'])
 @triton.jit
@@ -162,7 +170,6 @@ def _gemm_fp8_tma_kernel(
     stride_bsn: tl.constexpr,
     stride_cm,
     stride_cn: tl.constexpr,
-    dtype: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
@@ -200,8 +207,8 @@ def _gemm_fp8_tma_kernel(
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
         # load ab
-        a = tl._experimental_descriptor_load(desc_a, [off_m, off_k], [BLOCK_M, BLOCK_K], dtype)
-        b = tl._experimental_descriptor_load(desc_b, [off_n, off_k], [BLOCK_N, BLOCK_K], dtype).T
+        a = desc_a.load([off_m, off_k])
+        b = desc_b.load([off_n, off_k]).T
 
         # mma
         accumulator = tl.dot(a, b, acc=accumulator * acc_ratio[:, None])
@@ -348,41 +355,17 @@ def blocked_gemm_fp8(A: Tensor,
 
     # run_tma = False
     if run_tma:
-        from .utils import TmaAutoTuneHelper
+        from .utils import TensorDescriptor
 
-        desc_helper = TmaAutoTuneHelper()
-        desc_helper.init_tma_descriptor('desc_a')
-        desc_helper.init_tma_descriptor('desc_b')
-
-        desc_a = desc_helper.get_tma_descriptor_kernel_param('desc_a')
-        desc_b = desc_helper.get_tma_descriptor_kernel_param('desc_b')
+        dummy_block = (1, 1)
+        desc_a = TensorDescriptor.from_tensor(A, block_shape=dummy_block)
+        desc_b = TensorDescriptor.from_tensor(B.T, block_shape=dummy_block)
 
         def _grid_tma(META):
             """Grid tma."""
             BLOCK_M = META['BLOCK_M']
             BLOCK_N = META['BLOCK_N']
-            desc_helper.fill_2d_tma_descriptor('desc_a',
-                                               A.data_ptr(),
-                                               dim1=M,
-                                               dim0=K,
-                                               block_dim1=BLOCK_M,
-                                               block_dim0=BLOCK_K,
-                                               element_size=A.element_size())
-            desc_helper.fill_2d_tma_descriptor('desc_b',
-                                               B.data_ptr(),
-                                               dim1=N,
-                                               dim0=K,
-                                               block_dim1=BLOCK_N,
-                                               block_dim0=BLOCK_K,
-                                               element_size=B.element_size())
             return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
-
-        if A.dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz):
-            dtype = tl.float8e4nv
-        elif A.dtype in (torch.float8_e5m2, torch.float8_e5m2fnuz):
-            dtype = tl.float8e5
-        else:
-            raise RuntimeError(f'Not supported dtype: {A.dtype}')
 
         _gemm_fp8_tma_kernel[_grid_tma](
             desc_a,
@@ -402,13 +385,8 @@ def blocked_gemm_fp8(A: Tensor,
             stride_bsn=B_scale.stride(1),
             stride_cm=C.stride(0),
             stride_cn=C.stride(1),
-            dtype=dtype,
-            # BLOCK_M=BLOCK_M,
-            # BLOCK_N=BLOCK_N,
             BLOCK_K=BLOCK_K,
             GROUP_M=8,
-            # num_warps=num_warps,
-            # num_stages=num_stages,
         )
     else:
         _gemm_fp8_kernel[grid](

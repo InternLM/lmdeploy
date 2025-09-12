@@ -81,7 +81,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     if not _is_bf16_supported_by_device():
         cmd += ' --cache-max-entry-count 0.5'
-    if str(config.get('env_tag')) == '3090':
+    if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         cmd += ' --cache-max-entry-count 0.5'
 
     start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')

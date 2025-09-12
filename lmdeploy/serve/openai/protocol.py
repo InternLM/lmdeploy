@@ -135,6 +135,7 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
+    reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None
     response_format: Optional[ResponseFormat] = Field(default=None, examples=[None])  # noqa
     # additional argument of lmdeploy
     do_preprocess: Optional[bool] = True
