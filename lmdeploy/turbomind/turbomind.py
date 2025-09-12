@@ -918,6 +918,8 @@ class TurboMindInstance:
                                                 input_meta=input_meta,
                                                 gen_config=gen_config)
 
+        assert gen_config.response_format is None
+
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
         inputs = _np_dict_to_tm_dict(inputs)
