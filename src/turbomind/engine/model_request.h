@@ -40,7 +40,7 @@ public:
     };
 
     OutputParam Forward(InputParam param, std::function<void()> cb);
-    void setGrammar(std::shared_ptr<xgrammar::CompiledGrammar> grammar);
+    void        setGrammar(const xgrammar::CompiledGrammar& grammar);
 
 protected:
     Gateway* const gateway_;
@@ -55,8 +55,8 @@ protected:
 
     std::weak_ptr<Request> request_;
 
-    std::shared_ptr<TensorMap> inputs_;
-    std::shared_ptr<TensorMap> outputs_;
+    std::shared_ptr<TensorMap>                 inputs_;
+    std::shared_ptr<TensorMap>                 outputs_;
     std::shared_ptr<xgrammar::CompiledGrammar> grammar_;
 };
 
