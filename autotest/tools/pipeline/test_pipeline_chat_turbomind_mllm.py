@@ -180,7 +180,6 @@ def test_pipeline_chat_fallback_backend_kvint8_tp1(config, model, communicator, 
                               is_smoke=True)
 
 
-
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
@@ -199,7 +198,6 @@ def test_pipeline_chat_fallback_backend_kvint8_tp2(config, model, communicator, 
                                   'communicator': communicator
                               },
                               is_smoke=True)
-
 
 
 @pytest.mark.pipeline_chat
