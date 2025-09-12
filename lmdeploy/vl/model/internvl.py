@@ -2,7 +2,7 @@
 from typing import Dict, List, Optional
 
 import torch
-from transformers import AutoConfig, AutoModel, CLIPImageProcessor
+from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -76,6 +76,9 @@ class InternVLVisionModel(VisonModel):
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+        IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        self.image_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
 
     def build_preprocessor(self):
         self.config = self.hf_config
