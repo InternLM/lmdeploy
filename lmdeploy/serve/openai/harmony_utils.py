@@ -22,7 +22,7 @@ def get_encoding():
     return _harmony_encoding
 
 
-def get_streamable_parser_for_assistant() -> StreamableParser:
+def get_streamable_parser_for_assistant() -> 'StreamableParser':
     return StreamableParser(get_encoding(), role=Role.ASSISTANT)
 
 
