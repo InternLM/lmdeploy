@@ -18,6 +18,8 @@
 
 #include <vector>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
 
 #include "src/turbomind/engine/request.h"
@@ -34,6 +36,7 @@ public:
     void Forward(TensorMap&) override;
 
 private:
+    std::vector<std::shared_ptr<xgrammar::GrammarMatcher>> matchers_;
 };
 
 }  // namespace turbomind

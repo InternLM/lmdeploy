@@ -494,6 +494,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "set_grammar",
             [](ModelRequest* model_request, const xgrammar::CompiledGrammar& grammar) {
+                TM_LOG_INFO("Set grammar for model_request");
                 model_request->setGrammar(grammar);
             },
             py::call_guard<py::gil_scoped_release>(),
