@@ -31,5 +31,6 @@ class DLLMEngineStrategy(EngineStrategy):
             return 1
         block_size = self.cache_config.block_size
         dllm_block_length = self.dllm_block_length
-        num_blocks = min(self.scheduler_config.prefill_interval // 2, block_size // dllm_block_length)
-        return num_blocks * dllm_block_length
+        max_num_loops = block_size // dllm_block_length * 2
+        num_loops = min(self.scheduler_config.prefill_interval, max_num_loops)
+        return num_loops
