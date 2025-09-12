@@ -461,8 +461,12 @@ std::unique_ptr<ModelRequest> LlamaTritonModel::createModelInstance(int device_i
 {
     FT_CHECK(engines_[device_id] != nullptr);
 
-    return std::make_unique<ModelRequest>(
+    auto model_inst = std::make_unique<ModelRequest>(
         gateway_.get(), dtype_, engine_param_.session_len, model_param_.vocab_size, model_param_.hidden_units);
+    if (grammar_) {
+        model_inst->setGrammar(grammar_);
+    }
+    return model_inst;
 }
 
 void LlamaTritonModel::createSharedWeights(int device_id, int rank)
@@ -685,6 +689,10 @@ int LlamaTritonModel::getTensorParaSize()
 int LlamaTritonModel::getPipelineParaSize()
 {
     return 1;
+}
+
+void LlamaTritonModel::setGrammar(const xgrammar::CompiledGrammar& grammar) {
+    grammar_ = std::make_shared<xgrammar::CompiledGrammar>(grammar);
 }
 
 }  // namespace turbomind
