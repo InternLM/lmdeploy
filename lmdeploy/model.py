@@ -737,12 +737,15 @@ class HFChatTemplate(BaseChatTemplate):
 
     def __init__(self, model_path: str = '', **kwargs):
         try:
-            from transformers import AutoTokenizer
+            from transformers import AutoTokenizer, PretrainedConfig
             self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
             self.system_start, self.system_end = self._role_instruction('system')
             self.user_start, self.user_end = self._role_instruction('user')
             self.assistant_start, self.assistant_end = self._role_instruction('assistant')
             self.stop_words = [self.tokenizer.eos_token]
+            cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
+            if cfg.architectures[0] == 'GptOssForCausalLM':
+                self.stop_words.append('<|call|>')
         except Exception as e:
             raise ValueError(f'Try apply_chat_template failed: {e}')
 
