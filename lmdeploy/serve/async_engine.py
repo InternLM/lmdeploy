@@ -439,6 +439,10 @@ class AsyncEngine(LogitsMixin):
             tags (List[str]): The tags to wake up. Values must be in `("weights", "kv_cache")`
         """
         self.engine.wakeup(tags)
+        # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instance
+        if self.backend == 'turbomind' and (tags is None or 'kv_cache' in tags):
+            self.instances = [self.engine.create_instance() for _ in range(self.instance_num)]
+            self.free_insts = None
 
     def _get_limiter(self):
         if not self.limiter:

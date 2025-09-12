@@ -853,7 +853,7 @@ LlamaBatch::~LlamaBatch()
 LlamaBatch::LlamaBatch(DataType                 data_type,
                        const EngineParam&       param,
                        std::unique_ptr<LlamaV2> model,  // ! This is moved
-                       std::unique_ptr<Context> ctx,    // ! This is moved
+                       std::shared_ptr<Context> ctx,
                        std::shared_ptr<Gateway> gateway,
                        int                      device_id,
                        int                      dp_rank):
@@ -1906,9 +1906,6 @@ void LlamaBatch::DestroyCommunicators()
 
     FreeSymmBuffers();
     comm_.h_comm->Sync();
-
-    // Destroy device communicator
-    comm_.d_comm = {};
 
     cudaStreamSynchronize(stream_);
     comm_.h_comm->Sync();
