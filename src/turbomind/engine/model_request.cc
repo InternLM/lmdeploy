@@ -127,8 +127,8 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->output_ids      = outputs_->at("output_ids");
     r->sequence_length = outputs_->at("sequence_length");
 
-    if (compiled_grammar_) {
-        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*compiled_grammar_);
+    if (grammar_) {
+        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*grammar_);
     }
 
     // Keep a weak reference for canceling the request
@@ -137,6 +137,11 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     gateway_->push({std::move(r)});
 
     return OutputParam{outputs_, state, metrics};
+}
+
+void ModelRequest::setGrammar(std::shared_ptr<xgrammar::CompiledGrammar> grammar)
+{
+    grammar_ = grammar;
 }
 
 }  // namespace turbomind

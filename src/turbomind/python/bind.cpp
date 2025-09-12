@@ -565,6 +565,12 @@ PYBIND11_MODULE(_turbomind, m)
             "device_id"_a,
             "tags"_a,
             "rank"_a)
+        .def(
+            "set_grammar",
+            &LlamaTritonModel::setGrammar,
+            py::call_guard<py::gil_scoped_release>(),
+            "grammar"_a
+        )
         .def("__str__", &LlamaTritonModel::toString)
         .def("__repr__", &LlamaTritonModel::toString)
         .def("get_tensor_para_size", &LlamaTritonModel::getTensorParaSize)
@@ -674,31 +680,18 @@ PYBIND11_MODULE(_xgrammar, m)
                 return TokenizerInfo::DeserializeJSON(str, CommonEncodedVocabType(encoded_vocab));
             });
 
-    py::class_<Grammar> pyGrammar(m, "Grammar");
-    pyGrammar
-        .def("to_string", &Grammar::ToString)
-
-        .def_static("from_ebnf", &Grammar::FromEBNF)
-
-        .def_static("from_json_schema",
-                    &Grammar::FromJSONSchema,
-                    py::arg("schema"),
-                    py::arg("any_whitespace"),
-                    py::arg("indent")     = py::none(),
-                    py::arg("separators") = py::none(),
-                    py::arg("strict_mode"),
-                    py::arg("print_converted_ebnf"),
-                    py::call_guard<py::gil_scoped_release>())
-
-        .def_static("from_regex", &Grammar::FromRegex, py::call_guard<py::gil_scoped_release>())
-
-        .def_static("builtin_json_grammar", &Grammar::BuiltinJSONGrammar)
-
-        .def_static("union", &Grammar::Union, py::call_guard<py::gil_scoped_release>())
-
-        .def_static("concat", &Grammar::Concat, py::call_guard<py::gil_scoped_release>())
-
-        .def("serialize_json", &Grammar::SerializeJSON)
-
-        .def_static("deserialize_json", &Grammar::DeserializeJSON);
+    py::class_<GrammarCompiler> pyGrammarCompiler(m, "GrammarCompiler");
+    pyGrammarCompiler.def(py::init<const TokenizerInfo&, int, bool, int64_t>())
+        .def("compile_json_schema",
+             &GrammarCompiler::CompileJSONSchema,
+             py::call_guard<py::gil_scoped_release>(),
+             py::arg("schema"),
+             py::arg("any_whitespace") = false,
+             py::arg("indent")         = py::none(),
+             py::arg("separators")     = py::none(),
+             py::arg("strict_mode")    = true)
+        .def("compile_regex",
+             &GrammarCompiler::CompileRegex,
+             py::call_guard<py::gil_scoped_release>(),
+             py::arg("schema"));
 }
