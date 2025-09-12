@@ -139,9 +139,9 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     return OutputParam{outputs_, state, metrics};
 }
 
-void ModelRequest::setGrammar(std::shared_ptr<xgrammar::CompiledGrammar> grammar)
+void ModelRequest::setGrammar(const xgrammar::CompiledGrammar& grammar)
 {
-    grammar_ = grammar;
+    grammar_ = std::make_shared<xgrammar::CompiledGrammar>(grammar);
 }
 
 }  // namespace turbomind

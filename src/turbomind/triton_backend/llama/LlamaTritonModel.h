@@ -24,8 +24,6 @@
 #include <string>
 #include <unordered_map>
 
-#include <xgrammar/xgrammar.h>
-
 #include "src/turbomind/comm/device_comm.h"
 
 #include "src/turbomind/engine/gateway.h"
@@ -57,8 +55,6 @@ public:
     void sleep(int device_id, int level);
 
     void wakeup(int device_id, const std::vector<std::string>& tags, int rank);
-
-    void setGrammar(const xgrammar::CompiledGrammar& grammar);
 
     std::string toString();
 
@@ -100,7 +96,6 @@ private:
 
     std::string model_name_;
     std::string model_dir_;
-    std::shared_ptr<xgrammar::CompiledGrammar> grammar_;
 };
 
 }  // namespace turbomind

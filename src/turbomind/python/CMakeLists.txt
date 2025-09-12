@@ -13,8 +13,12 @@ if(NOT pybind11_FOUND)
 endif()
 
 pybind11_add_module(${PROJECT_NAME} bind.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE LlamaTritonBackend xgrammar)
+target_link_libraries(${PROJECT_NAME} PRIVATE LlamaTritonBackend)
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_14)
+
+pybind11_add_module(_xgrammar xgrammar_bind.cpp)
+target_link_libraries(_xgrammar PRIVATE core xgrammar)
+target_compile_features(_xgrammar PRIVATE cxx_std_14)
 
 if (CALL_FROM_SETUP_PY)
   set(_INSTALL_CUDA_RPATH
