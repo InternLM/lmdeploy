@@ -10,11 +10,10 @@ import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from enum import Enum
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -35,6 +34,8 @@ lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
 import _xgrammar as _xgr  # noqa: E402
+
+from .tokenizer_info import TokenizerInfo  # noqa: E402
 
 logger = get_logger('lmdeploy')
 
@@ -107,39 +108,6 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.devices = cfg.devices or list(range(cfg.device_num))
 
 
-# Borrowed from xgrammar's TokenizerInfo.VocabType
-class VocabType(Enum):
-    """The type of the vocabulary.
-
-    Used in TokenizerInfo. XGrammar supports three types of
-    vocabularies: RAW, BYTE_FALLBACK, BYTE_LEVEL.
-    """
-
-    RAW = 0
-    """The vocabulary is in the raw format.
-
-    The tokens in the vocabulary are kept in their original form without any processing. This kind of tokenizer includes
-    the tiktoken tokenizer, e.g. microsoft/Phi-3-small-8k-instruct, Qwen/Qwen-7B-Chat, etc.
-    """
-
-    BYTE_FALLBACK = 1
-    """The vocabulary used in the byte fallback BPE tokenizer.
-
-    The tokens are encoded through the byte-fallback conversion. E.g. "\u001b" -> "<0x1B>", " apple" -> "▁apple". This
-    kind of tokenizer includes meta-llama/Llama-2-7b-chat, microsoft/Phi-3.5-mini-instruct, etc.
-    """
-
-    BYTE_LEVEL = 2
-    """The vocabulary used in the byte level BPE tokenizer.
-
-    The tokens are encoded through the byte-to-unicode conversion, as in
-    https://github.com/huggingface/transformers/blob/87be06ca77166e6a6215eee5a990ab9f07238a18/src/transformers/models/gpt2/tokenization_gpt2.py#L38-L59
-
-    This kind of tokenizer includes meta-llama/Meta-Llama-3-8B-Instruct,
-    meta-llama/Meta-Llama-3.1-8B-Instruct, etc.
-    """
-
-
 class TurboMind:
     """LMDeploy's inference engine.
 
@@ -160,11 +128,6 @@ class TurboMind:
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
-                 decode_grammar: Optional[str] = None,
-                 decode_grammar_type: str = 'json_schema',
-                 decode_grammar_threads: int = 4,
-                 decode_grammar_vocab_size: Optional[int] = None,
-                 decode_grammar_extra: Dict[str, Any] = {},
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
@@ -193,178 +156,6 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = self.config.session_len
-
-        if decode_grammar is not None:
-            tokenizer_info = self._get_xgrammar_tokenizer_info(tokenizer, vocab_size=decode_grammar_vocab_size)
-            compiler = _xgr.GrammarCompiler(tokenizer_info, max_threads=decode_grammar_threads)
-
-            if decode_grammar_type == 'json_schema':
-                grammar = compiler.compile_json_schema(decode_grammar, **decode_grammar_extra)
-            elif decode_grammar_type == 'regex':
-                grammar = compiler.compile_regex(decode_grammar)
-            else:
-                assert False, f'Decode grammar type {decode_grammar_type} should be in ["json_schema", "regex"]'
-
-            self.grammar = grammar
-
-    # Borrowed from xgrammar's TokenizerInfo.from_huggingface
-    def _get_xgrammar_tokenizer_info(
-        self,
-        tokenizer: 'PreTrainedTokenizerBase',  # noqa: F821
-        *,
-        vocab_size: Optional[int] = None,
-        stop_token_ids: Optional[Union[List[int], int]] = None,
-    ) -> 'TokenizerInfo':  # noqa: F821
-        """Construct the tokenizer info from the huggingface tokenizer. This
-        constructor supports various tokenizer backends, including the
-        huggingface fast tokenizer and tiktoken tokenizer. Necessary
-        information is automatically detected from the tokenizer.
-
-        The vocab_size parameter is introduced to handle the misalignment between the model's
-        vocab_size and the tokenizer's vocabulary size. User should pass the model's vocab_size
-        (could be defined in the model config) here. See docs of vocab_size for more details.
-
-        The stop token ids is by default the eos_token_id of the tokenizer. If there are other
-        stop tokens, you can specify them manually.
-
-        Parameters
-        ----------
-        tokenizer : PreTrainedTokenizerBase
-            The huggingface tokenizer.
-
-        vocab_size : Optional[int], default: None
-            The vocabulary size **defined by the model** (**not the tokenizer**). This equals to the
-            vocab dimension of the model's lm_head. This is the size of the token mask.
-
-            It can be:
-
-            1. the same as the tokenizer's vocabulary size. This is the most common case.
-            2. larger than the tokenizer's vocabulary size. This happens when the model has padding
-               to lm_head, possibly due to aligning lm_head to the power of 2.
-               E.g. Phi-3 and Deepseek-V2.
-            3. smaller than the tokenizer's vocabulary size. This happens when the tokenizer has
-               some added tokens that will not supported by the model. E.g.
-               Llama-3.2 Vision and Molmo-72B-0924 has padded `<|image|>` tokens, but they will not
-               be considered in lm_head or generated by the model.
-
-            model_vocab_size need to be provided for case 2 and 3. If not provided, it will be
-            set to the tokenizer's vocabulary size.
-
-        stop_token_ids : Optional[List[int]], default: None
-            The stop token ids. If not provided, the eos_token_id of the tokenizer will be used.
-
-        Returns
-        -------
-        tokenizer_info : TokenizerInfo
-            The tokenizer info.
-        """
-        from transformers import PreTrainedTokenizerFast
-
-        if isinstance(stop_token_ids, int):
-            stop_token_ids = [stop_token_ids]
-        if isinstance(stop_token_ids, list) and len(stop_token_ids) == 0:
-            raise ValueError('stop_token_ids cannot be empty')
-
-        try:
-            vocab_dict = tokenizer.get_vocab()
-        except AttributeError as e:
-            msg = (f'Cannot get the vocabulary of the tokenizer {type(tokenizer)}. The tokenizer '
-                   'should have a get_vocab method.')
-            raise ValueError(msg) from e
-
-        # Some tokenizer don't have token id 0 or 1 or 2. So the max_id could be larger than the
-        # number of tokens.
-        max_id = max(vocab_dict.values())
-        tokenizer_vocab_size = max(len(vocab_dict), max_id + 1)
-
-        vocab_size = vocab_size or tokenizer_vocab_size
-
-        # maintain tokenizer's indexing
-        encoded_vocab = [''] * vocab_size
-        for token, idx in vocab_dict.items():
-            if idx < vocab_size:
-                encoded_vocab[idx] = token
-
-        if isinstance(tokenizer, PreTrainedTokenizerFast):
-            # huggingface fast tokenizer
-            # - the vocabulary is directly obtained from tokenizer.get_vocab()
-            #   (tokenizer.backend_tokenizer.to_str() may not contain the full vocab, special
-            #   tokens may be omitted)
-            # - the vocab size is obtained from len(tokenizer.get_vocab()) or provided by user
-            # - the vocab type and add_prefix_space are obtained from
-            #   tokenizer.backend_tokenizer.to_str()
-            # - stop token id is provided by user, or auto detected.
-            backend_str = tokenizer.backend_tokenizer.to_str()
-            if stop_token_ids is None:
-                if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
-                    stop_token_ids = [tokenizer.eos_token_id]
-                else:
-                    logger.warning('When constructing TokenizerInfo from a huggingface tokenizer, '
-                                   'stop_token_ids is neither provided by user nor found from the tokenizer. '
-                                   'It will be automatically detected.')
-            metadata = json.loads(_xgr.TokenizerInfo._detect_metadata_from_hf(backend_str))
-            return _xgr.TokenizerInfo(
-                encoded_vocab,
-                vocab_type=metadata['vocab_type'],
-                vocab_size=vocab_size,
-                stop_token_ids=stop_token_ids,
-                add_prefix_space=metadata['add_prefix_space'],
-            )
-
-        elif _xgr.TokenizerInfo._is_tiktoken_tokenizer(tokenizer):
-            # tiktoken tokenizer
-            # e.g. Phi-3-small-8k-instruct, Qwen-7B-Chat, stablelm-2-12b-chat (previously)
-            if stop_token_ids is None:
-                if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
-                    stop_token_ids = [tokenizer.eos_token_id]
-                else:
-                    logger.warning('When constructing TokenizerInfo from a huggingface tokenizer, '
-                                   'stop_token_ids is neither provided by user nor found from the tokenizer. '
-                                   'It will be automatically detected.')
-            return _xgr.TokenizerInfo(
-                encoded_vocab,
-                VocabType.RAW,
-                vocab_size=vocab_size,
-                stop_token_ids=stop_token_ids,
-                add_prefix_space=False,
-            )
-
-        elif _xgr.TokenizerInfo._is_sentencepiece_tokenizer(tokenizer):
-            # sentencepiece tokenizer
-            # e.g. Chatglm3-6b
-            if hasattr(tokenizer, 'sp_model'):
-                sp_model = tokenizer.sp_model
-            elif hasattr(tokenizer, 'tokenizer') and hasattr(tokenizer.tokenizer, 'sp_model'):
-                sp_model = tokenizer.tokenizer.sp_model
-
-            if stop_token_ids is None:
-                if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
-                    stop_token_ids = [tokenizer.eos_token_id]
-                else:
-                    eos_id = sp_model.eos_id()
-                    if eos_id != -1:
-                        stop_token_ids = [eos_id]
-                    else:
-                        logger.warning('When constructing TokenizerInfo from a huggingface tokenizer, '
-                                       'stop_token_ids is neither provided by user nor found from the tokenizer. '
-                                       'It will be automatically detected.')
-            # detect vocab_type of tokenizer
-            if '<0x0A>' in vocab_dict:
-                vocab_type = VocabType.BYTE_FALLBACK
-            else:
-                vocab_type = VocabType.RAW
-
-            return _xgr.TokenizerInfo(
-                encoded_vocab,
-                vocab_type=vocab_type,
-                vocab_size=vocab_size,
-                stop_token_ids=stop_token_ids,
-                add_prefix_space=True,
-            )
-
-        else:
-            # TODO(yixin): unsupported tokenizer
-            raise ValueError(f'Unsupported tokenizer type: {type(tokenizer)}')
 
     def _check_unloaded_tm_params(self):
         tm_params = self._tm_model.tm_params
@@ -761,9 +552,6 @@ class TurboMindInstance:
 
     def _create_model_instance(self, device_id):
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)
-        if hasattr(self.tm_model, 'grammar'):
-            model_inst.set_grammar(self.tm_model.grammar)
-
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
@@ -916,6 +704,26 @@ class TurboMindInstance:
                                                 input_embedding_ranges=input_embedding_ranges,
                                                 input_meta=input_meta,
                                                 gen_config=gen_config)
+
+        if gen_config.response_format is not None:
+            tokenizer = self.tm_model.tokenizer
+            vocab_size = self.tm_model.config.model_config.vocab_size
+            decode_grammar_type = gen_config.response_format['type']
+            decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
+
+            tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
+            compiler = _xgr.GrammarCompiler(tokenizer_info)
+
+            if decode_grammar_type == 'json_schema':
+                decode_grammar = json.dumps(decode_grammar)
+                grammar = compiler.compile_json_schema(decode_grammar)
+            elif decode_grammar_type == 'regex':
+                decode_grammar = str(decode_grammar)
+                grammar = compiler.compile_regex(decode_grammar)
+            else:
+                assert False, f'Decode grammar type {decode_grammar_type} should be in ["json_schema", "regex"]'
+
+            self.model_inst.set_grammar(grammar)
 
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
