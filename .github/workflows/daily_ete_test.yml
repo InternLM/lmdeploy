@@ -39,7 +39,7 @@ on:
         type: string
         default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
   schedule:
-    - cron:  '00 16 * * 0-4'
+    - cron:  '00 14 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -96,7 +96,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -136,7 +136,7 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -152,13 +152,15 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+          python3 -m pip install auto_gptq matplotlib attrdict
+          python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          python3 -m pip install transformers==4.53.1
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
+          python3 -m pip install transformers==4.53.1 datasets==3.6.0 timm
       - name: Check env
         run: |
           python3 -m pip list
@@ -217,7 +219,7 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -322,7 +324,7 @@ jobs:
             model: Intern-S1
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -341,6 +343,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
@@ -405,7 +408,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -424,6 +427,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
@@ -461,7 +465,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -480,6 +484,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
@@ -515,7 +520,7 @@ jobs:
       matrix:
         evaluate_type: ['chat', 'base']
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -539,6 +544,7 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          rm -rf ${{env.DEEPSEEK_VL}}/build
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Install opencompass
         run: |
@@ -588,7 +594,7 @@ jobs:
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -613,7 +619,7 @@ jobs:
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip

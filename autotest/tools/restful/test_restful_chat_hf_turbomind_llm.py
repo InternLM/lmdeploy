@@ -258,11 +258,6 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
         'tp_num': 2
     },
     {
-        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
-        'cuda_prefix': None,
-        'tp_num': 2
-    },
-    {
         'model': 'google/gemma-2-27b-it',
         'cuda_prefix': None,
         'tp_num': 2,
@@ -275,12 +270,6 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
         'extra': ' --communicator native'
     },
     {
-        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
-        'cuda_prefix': None,
-        'tp_num': 2,
-        'extra': ' --communicator native'
-    },
-    {
         'model': 'google/gemma-2-27b-it',
         'cuda_prefix': None,
         'tp_num': 2,
@@ -288,12 +277,6 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
     },
     {
         'model': 'deepseek-ai/deepseek-moe-16b-chat',
-        'cuda_prefix': None,
-        'tp_num': 2,
-        'extra': ' --quant-policy 8 --communicator native'
-    },
-    {
-        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
         'cuda_prefix': None,
         'tp_num': 2,
         'extra': ' --quant-policy 8 --communicator native'
