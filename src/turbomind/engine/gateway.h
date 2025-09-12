@@ -62,8 +62,6 @@ class Gateway {
 public:
     Gateway(int groups, int group_size, std::function<std::shared_ptr<void>()> ctx_factory);
 
-    void startup();
-
     void shutdown();
 
     void push(std::shared_ptr<Request> r)
@@ -178,7 +176,7 @@ public:
 
     void notify(std::vector<Signal> signals)
     {
-        return signal_buffer_->push(std::move(signals));
+        return signal_buffer_.push(std::move(signals));
     }
 
 private:
@@ -193,13 +191,12 @@ private:
 
     std::function<std::shared_ptr<void>()> ctx_factory_;
 
-    std::unique_ptr<SignalBuffer> signal_buffer_;
-    std::thread                   signal_thread_;
+    SignalBuffer signal_buffer_;
+    std::thread  signal_thread_;
 
     SeqId2Rank seqid2rank_;
 
     std::atomic<uint32_t> next_;
-    bool                  running_;
 };
 
 }  // namespace turbomind
