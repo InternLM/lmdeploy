@@ -1,13 +1,17 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/kernels/core/data_type.h"
 #include <cuda_runtime.h>
+
+#include "src/turbomind/core/core.h"
+#include "src/turbomind/kernels/core/data_type.h"
 
 namespace turbomind {
 
 void extend_to_u8(uint8_t* dst, const uint4_t* src, size_t n, cudaStream_t st = {});
 
 void extend_to_u16(uint16_t* dst, const uint4_t* src, size_t n, cudaStream_t st = {});
+
+void extend_to_u16(uint16_t* dst, const uint8_t* src, size_t n, cudaStream_t st);
 
 void compact_to_u4(uint4_t* dst, const uint8_t* src, size_t n, cudaStream_t st = {});
 
@@ -37,5 +41,7 @@ inline void interleave_output_dims(T* fused, const T* a, const T* b, int m, int 
 }
 
 void AdjustUe8m0ScaleForHalf(uint8_t* data, int n, cudaStream_t st);
+
+Tensor BlockscaleToGroupscale(const Tensor& scales, DataType data_type, int block_size);
 
 }  // namespace turbomind

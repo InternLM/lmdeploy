@@ -2,16 +2,21 @@
 
 #pragma once
 
+#include <cuda_pipeline_primitives.h>
+
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/math.h"
+
+#include "src/turbomind/kernels/attention/quantization.h"
+
 #include "src/turbomind/kernels/gemm/cp_async.h"
+#include "src/turbomind/kernels/gemm/format.h"
 #include "src/turbomind/kernels/gemm/iterator_sm70.h"
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/operand.h"
 #include "src/turbomind/kernels/gemm/smem_copy.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
-#include <cuda_pipeline_primitives.h>
 
 template<class T>
 __device__ void print_type(T)
@@ -207,6 +212,83 @@ __global__ void convert_kernel(typename Kernel::Param param)
 {
     Kernel kernel;
     kernel(param, smem_buf);
+}
+
+constexpr bool is_AB(Op_Tag op)
+{
+    if (op == OPERAND_A || op == OPERAND_B) {
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
+constexpr bool is_UV(Op_Tag op)
+{
+    return !is_AB(op);
+}
+
+template<class Dtype>
+constexpr int unit_size(basic_type<Dtype>)
+{
+    return 1;
+}
+
+constexpr int unit_size(basic_type<uint8_t>)
+{
+    return 4;
+}
+
+constexpr int unit_size(basic_type<uint4_t>)
+{
+    return 8;
+}
+
+// MMA     : H_16816, H_1688, H_884, H_SIMT
+// Operand : A, B, U, V
+// Order   : row, col
+// Dtype   : u16, u8, u4 (u6, u3)
+// PackNum : 1, 2, 4
+
+template<class Operand, class Dtype_, int PackNum>
+struct Config {
+    static constexpr int CTA_M = 64;
+    static constexpr int CTA_K = 32;
+
+    static constexpr int BLOCK_SIZE = 32;
+
+    using Stype = typename Operand::Dtype;
+    using Dtype = Dtype_;
+
+    using Kernel = ConvertOperand<CTA_M, CTA_K, PackNum, Operand, Dtype, Converter<Stype, Dtype>>;
+};
+
+template<class Config>
+void Convert_v2_Impl(const void* S, const MatrixLayout& Sdesc, void* D, const MatrixLayout& Ddesc, cudaStream_t stream)
+{
+    using Kernel = typename Config::Kernel;
+    using Stype  = typename Config::Stype;
+    using Dtype  = typename Config::Dtype;
+
+    constexpr int CTA_M = Config::CTA_M;
+
+    static constexpr int kSmemSize = sizeof(typename Kernel::SharedStorage);
+
+    if (kSmemSize > (48 << 10)) {
+        cudaFuncSetAttribute(convert_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize);
+    }
+
+    typename Kernel::Param param{Sdesc.rows, Sdesc.cols, to_param((void*)S, Sdesc), to_param((void*)D, Ddesc)};
+
+    constexpr int threads = Config::BLOCK_SIZE;
+    const int     blocks  = ceil_div(Sdesc.rows, CTA_M);
+
+    // std::cout << __PRETTY_FUNCTION__ << std::endl;
+    // std::cout << __PRETTY_FUNCTION__ << "\nThreadMap:\n";
+    // Print(typename Kernel::GmemIter::ThreadMap{});
+
+    convert_kernel<Kernel><<<blocks, threads, kSmemSize, stream>>>(param);
 }
 
 }  // namespace turbomind::gemm
