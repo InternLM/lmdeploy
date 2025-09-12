@@ -12,6 +12,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/model_request.h"
@@ -488,7 +490,14 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::call_guard<py::gil_scoped_release>(),
             "cb"_a,
-            "session_id"_a);
+            "session_id"_a)
+        .def(
+            "set_grammar",
+            [](ModelRequest* model_request, const xgrammar::CompiledGrammar& grammar) {
+                model_request->setGrammar(grammar);
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "grammar"_a);
 
     // transformer model
     using ft::LlamaTritonModel;
