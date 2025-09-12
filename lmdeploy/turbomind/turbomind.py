@@ -33,6 +33,7 @@ from .supported_models import is_supported
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
+import _xgrammar as _xgr  # noqa: E402
 
 logger = get_logger('lmdeploy')
 
@@ -125,6 +126,11 @@ class TurboMind:
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
+                 decode_grammar: Optional[str] = None,
+                 decode_grammar_type: str = 'json_schema',
+                 decode_grammar_threads: int = 4,
+                 decode_grammar_vocab_size: Optional[int] = None,
+                 decode_grammar_extra: Dict[str, Any] = {},
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
@@ -154,12 +160,25 @@ class TurboMind:
 
         self.session_len = self.config.session_len
 
+        if decode_grammar is not None:
+            tokenizer_info = _xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=decode_grammar_vocab_size)
+            compiler = _xgr.GrammarCompiler(tokenizer_info, max_threads=decode_grammar_threads)
+
+            if decode_grammar_type == 'json_schema':
+                grammar = compiler.compile_json_schema(decode_grammar, **decode_grammar_extra)
+            elif decode_grammar_type == 'regex':
+                grammar = compiler.from_regex(decode_grammar)
+            else:
+                assert False, f'Decode grammar type {decode_grammar_type} should be in ["json_schema", "regex"]'
+
+            self.grammar = grammar
+
     def _check_unloaded_tm_params(self):
         tm_params = self._tm_model.tm_params
         if len(tm_params) > 0:
             uninitialized = list(tm_params.keys())
             logger.warning('the model may not be loaded successfully '
-                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
+                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')  # noqa: E231
 
     def _load_weights(self):
         """Load weights."""
@@ -255,7 +274,7 @@ class TurboMind:
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
         self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
-        logger.info(f'turbomind model config:\n\n'
+        logger.info(f'turbomind model config:\n\n'  # noqa: E231
                     f'{json.dumps(self.config_dict, indent=2)}')
 
     def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
@@ -549,6 +568,9 @@ class TurboMindInstance:
 
     def _create_model_instance(self, device_id):
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)
+        if hasattr(self.tm_model, 'grammar'):
+            model_inst.set_grammar(self.tm_model.grammar)
+
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
