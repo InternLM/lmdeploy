@@ -438,8 +438,9 @@ class AsyncEngine(LogitsMixin):
         """
         self.engine.wakeup(tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instance
-        self.instances = [self.engine.create_instance() for _ in range(self.instance_num)]
-        self.free_insts = None
+        if self.backend == 'turbomind' and (tags is None or 'kv_cache' in tags):
+            self.instances = [self.engine.create_instance() for _ in range(self.instance_num)]
+            self.free_insts = None
 
     def _get_limiter(self):
         if not self.limiter:
