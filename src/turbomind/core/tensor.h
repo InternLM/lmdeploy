@@ -207,9 +207,14 @@ private:
     Buffer buffer_;
 };
 
-inline Tensor empty_like(const Tensor& tensor, std::optional<Device> device = {})
+inline Tensor empty_like(const Tensor& tensor)
 {
-    return Tensor{tensor.layout(), tensor.dtype(), device ? *device : tensor.device()};
+    return Tensor{tensor.layout(), tensor.dtype(), tensor.device()};
+}
+
+inline Tensor empty_like(const Tensor& tensor, Device device)
+{
+    return Tensor{tensor.layout(), tensor.dtype(), device};
 }
 
 inline Tensor empty_like(const Tensor& tensor, DataType dtype)

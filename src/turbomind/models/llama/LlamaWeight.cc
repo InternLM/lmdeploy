@@ -151,22 +151,23 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
     // Wait for the weights to be filled externally
     check_cuda_error(cudaDeviceSynchronize());
 
-    auto to_device = [](Tensor& x) {
-        auto tmp = x;
-        x        = empty_like(tmp, kDEVICE);
-        Copy(tmp, x);
-    };
-
-    to_device(pre_decoder_embedding.weight);
-    to_device(post_decoder_embedding.weight);
-
     auto stream = core::Context::stream().handle();
-
-    post_decoder_embedding.prepare(false, false);
 
     for (auto& layer : decoder_layer_weights) {
         layer->prepare(prop, stream);
     }
+
+    auto to_device = [](Tensor& x) {
+        auto tmp = std::exchange(x, empty_like(x, kDEVICE));
+        Copy(tmp, x);
+        return tmp;
+    };
+
+    // Keep the host tensor until stream synchronization
+    auto tmp_token_embeds = to_device(pre_decoder_embedding.weight);
+    auto tmp_lm_head      = to_device(post_decoder_embedding.weight);
+
+    post_decoder_embedding.prepare();
 
     // Block until processing is done
     check_cuda_error(cudaStreamSynchronize(stream));

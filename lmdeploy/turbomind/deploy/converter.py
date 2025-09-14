@@ -44,7 +44,6 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
         group_size (int): the size of group used by awq model
     """
     register_name = 'tm'
-    weight_type = 'float16'
 
     has_bf16 = is_bf16_supported()
 
@@ -65,6 +64,8 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
         logger.warning('data type fallback to float16 since '
                        'torch.cuda.is_bf16_supported is False')
         dtype = 'float16'
+
+    weight_type = dtype
 
     config = TurbomindModelConfig.from_dict()
 

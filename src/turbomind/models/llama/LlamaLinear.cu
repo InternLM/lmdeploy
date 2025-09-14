@@ -49,7 +49,7 @@ struct LlamaLinear::Impl {
     std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const LlamaDenseWeight& dense)
     {
         const Tensor& B      = dense.weight;
-        const Tensor& V      = dense.scales_zeros ? dense.scales_zeros : dense.scales;
+        const Tensor& V      = dense.scales;
         MatrixLayout  desc_B = dense.k_desc;
         MatrixLayout  desc_V = dense.q_desc;
         return {B, desc_B, V, desc_V};

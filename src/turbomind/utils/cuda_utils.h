@@ -177,8 +177,6 @@ int getDevice();
 
 int getDeviceCount();
 
-bool is_16xx_series(const char* name);
-
 class CudaDeviceGuard {
 public:
     CudaDeviceGuard(int device)

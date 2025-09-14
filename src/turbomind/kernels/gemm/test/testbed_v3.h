@@ -282,9 +282,9 @@ struct Testbed_v3: Parameter {
             TM_CHECK(0);
         }
 
-        original.prepare(0, 0);
-        quant.prepare(expert_num > 0, 0);
-        dequant.prepare(0, 0);
+        original.prepare(0);
+        quant.prepare(expert_num > 0);
+        dequant.prepare(0);
     }
 
     void GetReference()

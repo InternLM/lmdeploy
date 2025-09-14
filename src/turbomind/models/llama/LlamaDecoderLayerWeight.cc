@@ -130,16 +130,14 @@ LlamaDecoderLayerWeight::~LlamaDecoderLayerWeight() = default;
 
 void LlamaDecoderLayerWeight::prepare(const cudaDeviceProp& prop, cudaStream_t st)
 {
-    const bool use_simt = is_16xx_series(prop.name);
-
-    self_attn_weights->prepare(use_simt);
+    self_attn_weights->prepare();
 
     if (ffn_weights) {
-        ffn_weights->prepare(false, use_simt);
+        ffn_weights->prepare(false);
     }
 
     if (moe_weights) {
-        moe_weights->prepare(use_simt);
+        moe_weights->prepare();
     }
 }
 
