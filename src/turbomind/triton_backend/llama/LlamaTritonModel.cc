@@ -144,7 +144,7 @@ static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
     }
 }
 
-DataType weight_type_from_string(std::string str)
+DataType data_type_from_string(std::string str)
 {
     if (str == "fp16" || str == "float16") {
         return kFloat16;
@@ -278,11 +278,10 @@ LlamaTritonModel::~LlamaTritonModel()
     }
 }
 
-LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
-                                   std::string                            model_dir,
+LlamaTritonModel::LlamaTritonModel(std::string                            model_dir,
                                    std::string                            config,
                                    std::function<std::shared_ptr<void>()> ffi_ctx_factory):
-    dtype_{dtype}, model_param_{}, attn_param_{}, moe_param_{}, lora_param_{}, engine_param_{}
+    dtype_{}, model_param_{}, attn_param_{}, moe_param_{}, lora_param_{}, engine_param_{}
 {
     FT_CHECK_WITH_INFO(!(config.empty() && model_dir.empty()), "invalid init options");
 
@@ -308,6 +307,9 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     const auto attention_reader = reader["attention_config"];
     const auto lora_reader      = reader["lora_config"];
     const auto engine_reader    = reader["engine_config"];
+
+    dtype_ = model_param_.data_type = data_type_from_string(model_reader["data_type"].as<std::string>());
+    TM_CHECK(model_param_.data_type == kBfloat16 || model_param_.data_type == kHalf);
 
     model_name_                     = model_reader["model_name"].as<std::string>();
     model_param_.head_num           = model_reader["head_num"].as<int>();
@@ -419,8 +421,8 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
 
-    model_param_.weight_type        = weight_type_from_string(model_reader["weight_type"].as<std::string>());
-    model_param_.expert_weight_type = weight_type_from_string(model_reader["expert_weight_type"].as<std::string>());
+    model_param_.weight_type        = data_type_from_string(model_reader["weight_type"].as<std::string>());
+    model_param_.expert_weight_type = data_type_from_string(model_reader["expert_weight_type"].as<std::string>());
 
     if (auto method = get_moe_method()) {
         moe_param_.method = *method;
@@ -463,10 +465,6 @@ void LlamaTritonModel::createSharedWeights(int device_id, int rank)
     CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
     weights_[rank] =
         std::make_shared<LlamaWeight>(dtype_, model_param_, engine_params_.at(rank), lora_param_, moe_param_);
-    // model inited with model_dir
-    // if (model_dir_ != "") {
-    //     weights_[device_id]->loadModel(model_dir_);
-    // }
 }
 
 TensorMap LlamaTritonModel::getParams(int device_id, int rank)

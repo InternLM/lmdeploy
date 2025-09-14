@@ -74,6 +74,15 @@ void LlamaDenseWeight::emplace(
     k_desc.ld    = output_dim;
 }
 
+void LlamaDenseWeight::preprocess()
+{
+    if (weight_quant.type == gemm::QuantType::kB && input_quant.type == gemm::QuantType::kNone) {
+        // Convert blockwise scales to groupwise scales
+        weight_quant.type = gemm::QuantType::kK;
+        scales            = BlockscaleToGroupscale(scales, data_type, weight_quant.group_size);
+    }
+}
+
 static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
 {
     using namespace gemm;
@@ -161,13 +170,12 @@ static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
                 tmp_q.data<half>(), dense.scales.data<half>(), dense.zeros.data<half>(), dense.scales.size(), st);
             scale_type = kUint32;  // half2
         }
-        else if (dense.weight_quant.type == gemm::QuantType::kB) {
-            tmp_q = BlockscaleToGroupscale(dense.scales, dense.data_type, dense.weight_quant.group_size);
-            dense.weight_quant.type = gemm::QuantType::kK;
-            scale_type              = kUint16;
-            dense.scales            = empty_like(tmp_q);
+        else if (dense.weight_type == kFloat8_e4m3) {  // e4m3
+            tmp_q = empty_like(dense.scales);
+            Copy(dense.scales, tmp_q);
+            scale_type = kUint16;
         }
-        else {
+        else {  // mxfp4
             tmp_q = empty_like(dense.scales);
             Copy(dense.scales, tmp_q);
             scale_type = kUint8;  // ue8m0
@@ -323,6 +331,7 @@ void LlamaAttentionWeight::prepare(bool use_simt)
         &kv_b_proj,
     };
     for (auto& w : weights) {
+        w->preprocess();
         w->prepare(false, use_simt);
     }
 }
@@ -352,6 +361,10 @@ LlamaFfnWeight::LlamaFfnWeight(int            hidden_dim,
     intermediate.emplace(hidden_dim, inter_size, data_type, bias, weight_type, group_size);
 
     output.emplace(inter_size, hidden_dim, data_type, bias, weight_type, group_size);
+
+    if (gating.input_type == kFloat8_e4m3) {  // SM90 FP8*FP8 GEMM, can't fuse
+        this->is_fused_silu = false;
+    }
 
     register_module("w1", gating, tp_rank);
     register_module("w3", intermediate, tp_rank);
@@ -390,6 +403,20 @@ void interleave(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, D
             interleave_output_dims(c.zeros.data<T>(),  //
                                    a.zeros.data<T>(),
                                    b.zeros.data<T>(),
+                                   a.output_dim,
+                                   a.input_dim / a.group_size,
+                                   st);
+        }
+        else if (a.weight_type == kFloat8_e4m3) {
+            interleave_output_dims((uint8_t*)c.weight.raw_data(),  //
+                                   (uint8_t*)a.weight.raw_data(),
+                                   (uint8_t*)b.weight.raw_data(),
+                                   a.output_dim,
+                                   a.input_dim,
+                                   st);
+            interleave_output_dims(c.scales.data<T>(),
+                                   a.scales.data<T>(),
+                                   b.scales.data<T>(),
                                    a.output_dim,
                                    a.input_dim / a.group_size,
                                    st);
@@ -485,25 +512,27 @@ void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
 
     auto stream = core::Context().stream().handle();
 
-    // if (fuse_up_and_gate && gating.weight_type != DataType::kFloat8_e4m3) {
-    if (fuse_up_and_gate) {
-        auto& fused_up_and_gate = fused_gating_intermediate;
+    gating.preprocess();
+    intermediate.preprocess();
 
-        fused_up_and_gate.emplace(gating.input_dim,  //
-                                  gating.output_dim * 2,
-                                  gating.data_type,
-                                  (bool)gating.bias,
-                                  gating.weight_type,
-                                  gating.group_size);
-        register_module("w1w3", fused_up_and_gate, this->tp_rank);
+    if (fuse_up_and_gate) {
+        auto& gate_and_up = fused_gating_intermediate;
+
+        gate_and_up.emplace(gating.input_dim,  //
+                            gating.output_dim * 2,
+                            gating.data_type,
+                            (bool)gating.bias,
+                            gating.weight_type,
+                            gating.group_size);
+        gate_and_up.preprocess();
+        register_module("w1w3", gate_and_up, this->tp_rank);
 
         if (is_fused_silu) {
-            TM_CHECK(!gating.bias);
-            interleave(fused_up_and_gate, gating, intermediate, data_type, stream);
-            fused_up_and_gate.epilogue = gemm::Epilogue::kGatedSilu;
+            interleave(gate_and_up, gating, intermediate, data_type, stream);
+            gate_and_up.epilogue = gemm::Epilogue::kGatedSilu;
         }
         else {
-            chunk(fused_up_and_gate, gating, intermediate, data_type, stream);
+            chunk(gate_and_up, gating, intermediate, data_type, stream);
         }
 
         fused_gating_intermediate.prepare(fused_moe, use_simt);
@@ -516,6 +545,7 @@ void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
         intermediate.prepare(fused_moe, use_simt);
     }
 
+    output.preprocess();
     output.prepare(fused_moe, use_simt);
 }
 
@@ -544,8 +574,12 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
     gate.emplace(hidden_dim, expert_num, data_type, param.router_bias, data_type, 1);
     register_module("gate", gate);
 
-    method        = param.method;
-    fuse_silu_act = fuse_silu_act && method == MoeParam::kFused && weight_type != kFloat8_e4m3 && !mlp_bias;
+    method = param.method;
+
+    const bool is_cublas_gemm = method == MoeParam::kNaive && byte_size(weight_type, 8) == 16;
+    if (is_cublas_gemm || mlp_bias) {
+        fuse_silu_act = false;
+    }
 
     experts.reserve(expert_num);
     for (int i = 0; i < expert_num; ++i) {

@@ -58,6 +58,8 @@ struct LlamaDenseWeight: public core::Module {
 
     void emplace(int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size);
 
+    void preprocess();
+
     void prepare(bool fused_moe, bool use_simt);
 
     LlamaDenseWeight& operator=(std::nullptr_t)

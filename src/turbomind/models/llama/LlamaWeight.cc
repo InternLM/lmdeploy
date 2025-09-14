@@ -86,6 +86,11 @@ void LlamaWeight::initialize()
     register_module("tok_embeddings", pre_decoder_embedding, tp_rank_);
     register_module("output", post_decoder_embedding, tp_rank_);
 
+    /// Lower VRAM pressure on consumer grade GPUs
+    /// TODO: Support token embeds on pinned host memory
+    pre_decoder_embedding.weight  = empty_like(pre_decoder_embedding.weight, kCPU);
+    post_decoder_embedding.weight = empty_like(post_decoder_embedding.weight, kCPU);
+
     decoder_layer_weights.reserve(num_layer_);
     for (int i = 0; i < num_layer_; ++i) {
         decoder_layer_weights.emplace_back(
@@ -145,6 +150,15 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
 
     // Wait for the weights to be filled externally
     check_cuda_error(cudaDeviceSynchronize());
+
+    auto to_device = [](Tensor& x) {
+        auto tmp = x;
+        x        = empty_like(tmp, kDEVICE);
+        Copy(tmp, x);
+    };
+
+    to_device(pre_decoder_embedding.weight);
+    to_device(post_decoder_embedding.weight);
 
     auto stream = core::Context::stream().handle();
 
