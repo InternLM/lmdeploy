@@ -75,6 +75,9 @@ Tensor to_device(const Tensor& src, const Device& device)
     if (src) {
         dst = {src.layout(), src.dtype(), device};
         Copy(src, dst, Context::stream());
+        if ((src.device().type == kCPU || src.device().type == kCPUpinned) && device.type == kDEVICE) {
+            Context::stream().Sync();
+        }
     }
     return dst;
 }
