@@ -596,6 +596,10 @@ void LlamaTritonModel::sleep(int device_id, int level)
 
     CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
 
+    if (level == 1) {
+        TM_CHECK(moe_param_.experts_per_token == 0) << "level 1 sleep not supported for MoE model";
+    }
+
     if (level == 2) {
         // free weights
         weights_[device_id]->release();
