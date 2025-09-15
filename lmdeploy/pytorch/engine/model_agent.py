@@ -699,7 +699,7 @@ class BaseModelAgent:
                 next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
 
                 with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
-                    logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
+                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
 
                     # post sampling
                     next_token_ids, extra_inputs = self.agent_strategy.post_sampling(
@@ -719,7 +719,7 @@ class BaseModelAgent:
 
                 # broadcast next token for TP > 1
                 with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
-                    logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
+                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
 
                 # post sampling
                 next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
