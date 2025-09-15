@@ -11,7 +11,7 @@ namespace turbomind::gemm {
 
 class CublasKernel: public Kernel {
 public:
-    explicit CublasKernel()
+    explicit CublasKernel(): cublas_{}
     {
         cublasCreate(&cublas_);
         if (0) {
@@ -25,6 +25,11 @@ public:
         info_.dynamic_smem_size = 0;
 
         info_.name = GetName();
+    }
+
+    ~CublasKernel() override {
+        cublasDestroy(cublas_);
+        cublas_ = {};
     }
 
     int Launch(const Operation&    operation,
