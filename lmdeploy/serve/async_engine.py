@@ -434,7 +434,11 @@ class AsyncEngine(LogitsMixin):
         """Wake up the model.
 
         Args:
-            tags (List[str]): The tags to wake up. Values must be in `("weights", "kv_cache")`
+            tags: An optional list of tags to reallocate the engine memory
+                for specific memory allocations. Values must be in
+                `("weights", "kv_cache")`. If None, all memory is reallocated.
+                wake_up should be called with all tags (or None) before the
+                engine is used again.
         """
         self.engine.wakeup(tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instance
