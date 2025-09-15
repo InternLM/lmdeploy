@@ -7,6 +7,7 @@
 #include "cute/atom/mma_traits_sm90_gmma.hpp"
 
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/gemm/sm90_utils.h"
 
 namespace turbomind::gemm {
@@ -27,32 +28,32 @@ struct ScaledGmmaFP8_TN {
         using namespace cute::SM90::GMMA;
 
         if constexpr (N % 256 == 0) {
-            return MMA_64x256x32_F32E4M3E4M3_SS_TN<>{};
+            return type_c<MMA_64x256x32_F32E4M3E4M3_SS_TN<>>;
         }
         else if constexpr (N % 224 == 0) {
-            return MMA_64x224x32_F32E4M3E4M3_SS_TN<>{};
+            return type_c<MMA_64x224x32_F32E4M3E4M3_SS_TN<>>;
         }
         else if constexpr (N % 192 == 0) {
-            return MMA_64x192x32_F32E4M3E4M3_SS_TN<>{};
+            return type_c<MMA_64x192x32_F32E4M3E4M3_SS_TN<>>;
         }
         else if constexpr (N % 160 == 0) {
-            return MMA_64x160x32_F32E4M3E4M3_SS_TN<>{};
+            return type_c<MMA_64x160x32_F32E4M3E4M3_SS_TN<>>;
         }
         else if constexpr (N % 128 == 0) {
-            return MMA_64x128x32_F32E4M3E4M3_SS_TN<>{};
+            return type_c<MMA_64x128x32_F32E4M3E4M3_SS_TN<>>;
         }
         else if constexpr (N % 96 == 0) {
-            return MMA_64x96x32_F32E4M3E4M3_SS_TN<>{};
+            return type_c<MMA_64x96x32_F32E4M3E4M3_SS_TN<>>;
         }
         else if constexpr (N % 64 == 0) {
-            return MMA_64x64x32_F32E4M3E4M3_SS_TN<>{};
+            return type_c<MMA_64x64x32_F32E4M3E4M3_SS_TN<>>;
         }
         else {
             static_assert(N == 0, "unsupported configuration");
         }
     }
 
-    using Operation = decltype(select_gmma_operation());
+    using Operation = typename decltype(select_gmma_operation())::type;
 
     static constexpr typename cute::MMA_Traits<Operation>::Shape_MNK OP_Shape{};
 
