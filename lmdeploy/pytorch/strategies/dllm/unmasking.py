@@ -3,7 +3,7 @@ import torch
 from torch.profiler import record_function
 
 from lmdeploy.pytorch import consts
-from lmdeploy.pytorch.config import DLLMConfig
+from lmdeploy.pytorch.config import DLLMConfig, UnmaskingStrategy
 
 DLLM_MASKED = consts.DLLM_MASKED
 DLLM_UNMASKED = consts.DLLM_UNMASKED
@@ -105,11 +105,11 @@ class UnmaskingProcessor:
 
         dllm_mask = dllm_mask.flatten()
         token_ids = torch.where(dllm_mask != DLLM_MASKED, input_ids, token_ids)
-        if strategy == 'low_confidence_static':
+        if strategy == UnmaskingStrategy.LOW_CONFIDENCE_STATIC:
             dllm_mask = self.low_confidence_static(logits, token_ids, dllm_mask)
-        elif strategy == 'low_confidence_dynamic':
+        elif strategy == UnmaskingStrategy.LOW_CONFIDENCE_DYNAMIC:
             dllm_mask = self.low_confidence_dynamic(logits, token_ids, dllm_mask)
-        elif strategy == 'sequential':
+        elif strategy == UnmaskingStrategy.SEQUENTIAL:
             dllm_mask = self.sequential(dllm_mask)
         else:
             raise RuntimeError(f'strategy {strategy} not supported.')
