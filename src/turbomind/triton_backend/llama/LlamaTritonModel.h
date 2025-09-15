@@ -38,10 +38,7 @@ namespace turbomind {
 
 class LlamaTritonModel {
 public:
-    LlamaTritonModel(DataType                               dtype,
-                     std::string                            model_dir,
-                     std::string                            config,
-                     std::function<std::shared_ptr<void>()> ffi_ctx_factory);
+    LlamaTritonModel(std::string model_dir, std::string config, std::function<std::shared_ptr<void>()> ffi_ctx_factory);
 
     ~LlamaTritonModel();
 

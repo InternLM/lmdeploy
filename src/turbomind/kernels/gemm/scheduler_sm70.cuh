@@ -144,6 +144,9 @@ struct SchedulerSm70 {
                 tile_id[axis] -= storage.base_tile_id;
                 shape[axis]   = storage.dynamic_dim;
                 tile.group_id = storage.group_id;
+                // Crucial for the values above to be recognized as warp uniform, `__syncwarp()`
+                // does not prevent modifying CTA scope SMEM from other warps
+                __syncthreads();
             }
         }
 

@@ -58,7 +58,9 @@ struct LlamaDenseWeight: public core::Module {
 
     void emplace(int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size);
 
-    void prepare(bool fused_moe, bool use_simt);
+    void preprocess();
+
+    void prepare(bool fused_moe = 0);
 
     LlamaDenseWeight& operator=(std::nullptr_t)
     {
@@ -81,8 +83,6 @@ struct LlamaDenseWeight: public core::Module {
 
     Tensor scales;
     Tensor zeros;
-
-    Tensor scales_zeros;
 
     DataType data_type;
 
@@ -117,7 +117,7 @@ struct LlamaAttentionWeight: public core::Module {
                          int      window_size,
                          bool     sink);
 
-    void prepare(bool use_simt);
+    void prepare();
 
     LlamaDenseWeight qkv;
     LlamaDenseWeight output;
@@ -153,7 +153,7 @@ struct LlamaFfnWeight: core::Module {
 
     static constexpr bool fuse_up_and_gate = true;
 
-    void prepare(bool fused_moe, bool use_simt);
+    void prepare(bool fused_moe);
 
     LlamaDenseWeight gating;
     LlamaDenseWeight intermediate;
@@ -184,7 +184,7 @@ struct MoeFfnWeight: core::Module {
                  ActivationType  act_type,
                  bool            fuse_silu_act);
 
-    void prepare(bool use_simt);
+    void prepare();
 
     LlamaDenseWeight gate;
     LlamaDenseWeight shared_gate;
