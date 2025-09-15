@@ -9,37 +9,14 @@ env_tag: a100
 tp_config:
     Qwen2.5-32B-Instruct: 2
 
-
-turbomind_chat_model:
-    - /Qwen3-0.6B
-
-
 pytorch_chat_model:
-    - /Qwen3-0.6B
-
-turbomind_vl_model:
     - /Qwen3-0.6B
 
 pytorch_vl_model:
     - /Qwen3-0.6B
 
-
-turbomind_base_model:
-    - /Qwen3-0.6B
-
 pytorch_base_model:
     - /Qwen3-0.6B
-
-turbomind_quatization:
-    no_awq:
-        - /Qwen3-0.6B
-
-    gptq:
-        - /Qwen3-0.6B
-    no_kvint4:
-        - /Qwen3-0.6B
-    no_kvint8:
-        - /Qwen3-0.6B
 
 pytorch_quatization:
     awq:
