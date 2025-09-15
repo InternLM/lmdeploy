@@ -400,9 +400,6 @@ class GptOssTokenizer(HuggingFaceTokenizer):
                                  spaces_between_special_tokens: bool = True):
         if not hasattr(state, 'stream'):
             state.stream = self.parser()
-            ids_offset = state.ids_offset
-            for token_id in all_input_ids[:ids_offset]:
-                state.stream.process(token_id)
 
         response = ''
         stream = state.stream
