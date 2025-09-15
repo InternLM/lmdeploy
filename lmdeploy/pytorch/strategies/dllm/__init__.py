@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
 from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
+from lmdeploy.utils import get_logger
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.strategies.base.cudagraph import CudagraphStrategy
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 
 from ..base import StrategyFactoryBase
+
+logger = get_logger('lmdeploy')
 
 
 class DLLMStrategyFactory(StrategyFactoryBase):
@@ -29,6 +32,10 @@ class DLLMStrategyFactory(StrategyFactoryBase):
         """Update dllm_block_length."""
         if self.dllm_config.dllm_block_length is None:
             dllm_block_length = self.model_config.dllm_block_length
+            if dllm_block_length is None:
+                dllm_block_length = 4
+                logger.warning('Model does not provide dllm_block_length. '
+                               f'Set dllm_block_length={dllm_block_length} as default.')
         else:
             dllm_block_length = self.dllm_config.dllm_block_length
 

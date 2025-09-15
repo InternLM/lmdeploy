@@ -15,5 +15,4 @@ class SDARModelConfigBuilder(AutoModelConfigBuilder):
         cfg = DefaultModelConfigBuilder.build(hf_config, model_path, **kwargs)
         cfg.dllm_mask_token = 151669
         cfg.model_paradigm = 'dllm'
-        cfg.dllm_block_length = 4
         return cfg
