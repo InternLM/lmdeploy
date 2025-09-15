@@ -151,6 +151,7 @@ class BaseOutputModel(ABC):
             # currently, the tensor type should in
             # [torch.float, torch.half, torch.bfloat16, torch.int32]
             torch_tensor = param if param.is_contiguous() else param.contiguous()
+            torch_tensor = torch_tensor.cuda()
             assert torch_tensor.dtype in [torch.int32, torch.float, torch.half, torch.bfloat16, torch.uint8]
             FLOAT_TYPES = [torch.float, torch.half, torch.bfloat16]
             if weight_type == 'fp8':
