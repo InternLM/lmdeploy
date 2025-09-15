@@ -27,7 +27,8 @@ public:
         info_.name = GetName();
     }
 
-    ~CublasKernel() override {
+    ~CublasKernel() override
+    {
         cublasDestroy(cublas_);
         cublas_ = {};
     }
