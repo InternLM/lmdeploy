@@ -2,8 +2,10 @@
 
 cmake_minimum_required(VERSION 3.8)
 
+find_package(Threads)
+
 add_library(host_comm STATIC host_comm.cc thread_comm.cc)
-target_link_libraries(host_comm PRIVATE core logger)
+target_link_libraries(host_comm PRIVATE core logger Threads::Threads)
 set_property(TARGET host_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_library(device_comm STATIC device_comm.cc)
@@ -24,5 +26,8 @@ if (BUILD_MULTI_GPU)
         add_executable(test_comm test_comm.cu)
         target_link_libraries(test_comm PRIVATE device_comm host_comm core pthread nvtx_utils)
         target_compile_options(test_comm PRIVATE -march=native -mtune=native)
+
+        add_executable(test_host_comm test_host_comm.cc)
+        target_link_libraries(test_host_comm PRIVATE host_comm core Threads::Threads)
     endif ()
 endif ()
