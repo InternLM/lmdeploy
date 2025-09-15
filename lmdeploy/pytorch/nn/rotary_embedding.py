@@ -67,9 +67,11 @@ def _get_longrope_parameters(config: PretrainedConfig):
     rope_scaling = config.rope_scaling
     scaling_factor = rope_scaling.get('factor', 1.0)
     long_factor = rope_scaling['long_factor']
-    short_factor = rope_scaling['long_factor']
+    short_factor = rope_scaling['short_factor']
+    original_max_position_embeddings = getattr(config, 'original_max_position_embeddings',
+                                               config.max_position_embeddings)
     original_max_position_embeddings = rope_scaling.get('original_max_position_embeddings',
-                                                        config.max_position_embeddings)
+                                                        original_max_position_embeddings)
     params = LongRoPEScalingParameters(
         long_factor=long_factor,
         short_factor=short_factor,
