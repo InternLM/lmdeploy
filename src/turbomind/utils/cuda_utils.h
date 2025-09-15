@@ -107,16 +107,6 @@ void syncAndCheck(const char* const file, int const line);
         throw std::runtime_error(msg.c_str());                                                                         \
     }
 
-#define checkCUDNN(expression)                                                                                         \
-    {                                                                                                                  \
-        cudnnStatus_t status = (expression);                                                                           \
-        if (status != CUDNN_STATUS_SUCCESS) {                                                                          \
-            std::cerr << "Error on file " << __FILE__ << " line " << __LINE__ << ": " << cudnnGetErrorString(status)   \
-                      << std::endl;                                                                                    \
-            std::exit(EXIT_FAILURE);                                                                                   \
-        }                                                                                                              \
-    }
-
 template<typename T>
 void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr);
 
