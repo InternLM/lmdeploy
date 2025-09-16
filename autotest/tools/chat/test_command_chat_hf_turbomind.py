@@ -261,6 +261,7 @@ def test_hf_turbomind_chat_kvint4_tp8(config, model, communicator, cli_case_conf
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.parametrize('model', [
     'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
     'microsoft/Phi-3-mini-4k-instruct-inner-w8a8'
@@ -288,6 +289,7 @@ def test_hf_turbomind_chat_fallback_backend_tp1(config, model, communicator, cli
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.parametrize('model', [
     'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
     'microsoft/Phi-3-mini-4k-instruct-inner-w8a8'
@@ -315,6 +317,7 @@ def test_hf_turbomind_chat_fallback_backend_kvint8_tp1(config, model, communicat
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_2
+@pytest.mark.other
 @pytest.mark.parametrize('model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_fallback_backend_tp2(config, model, communicator, cli_case_config, worker_id):
@@ -337,6 +340,7 @@ def test_hf_turbomind_chat_fallback_backend_tp2(config, model, communicator, cli
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_2
+@pytest.mark.other
 @pytest.mark.parametrize('model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_fallback_backend_kvint8_tp2(config, model, communicator, cli_case_config, worker_id):
@@ -454,6 +458,7 @@ def test_hf_turbomind_chat_pr_gpu1(config, model, communicator, cli_case_config)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
 def test_modelscope_turbomind_chat_tp1(config, model, cli_case_config, worker_id):
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
