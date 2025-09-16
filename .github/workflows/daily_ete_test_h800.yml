@@ -1,4 +1,4 @@
-name: daily_ete_test_3090
+name: daily_ete_test_h800
 
 on:
   workflow_dispatch:
@@ -37,14 +37,14 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['quant', 'tools']"
+        default: "['quant', 'tools','restful','pipeline']"
   schedule:
     - cron:  '00 14 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
+  OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
@@ -63,7 +63,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.4
+      DOCKER_TAG: cuda12.8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -92,14 +92,14 @@ jobs:
   download_pkgs:
     needs: linux-build
     if: ${{!cancelled()}}
-    runs-on: [self-hosted, 3090-r1]
+    runs-on: [self-hosted, h800-r1]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /data1:/data1
+        - /nvme2/share:/nvme2/share
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -110,7 +110,7 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-3090.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-h800.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
         run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-3090.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
@@ -129,19 +129,19 @@ jobs:
   test_quantization:
     needs: download_pkgs
     if: ${{!cancelled() && contains(needs.download_pkgs.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
-    runs-on: [self-hosted, 3090-r1]
+    runs-on: [self-hosted, h800-r1]
     timeout-minutes: 150
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /data1:/data1
+        - /nvme2/share:/nvme2/share
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -149,7 +149,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install auto_gptq matplotlib
+          python3 -m pip install auto_gptq matplotlib attrdict
           python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |
@@ -169,13 +169,13 @@ jobs:
         continue-on-error: true
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
         run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - quantization w8a8
         continue-on-error: true
         if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'pytorch')
         run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
@@ -189,7 +189,7 @@ jobs:
 
   test_tools:
     if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
-    runs-on: [self-hosted, 3090-r1]
+    runs-on: [self-hosted, h800-r1]
     needs: test_quantization
     timeout-minutes: 300
     strategy:
@@ -210,12 +210,12 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /data1:/data1
+        - /nvme2/share:/nvme2/share
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -226,7 +226,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -241,20 +241,38 @@ jobs:
         continue-on-error: true
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline
         continue-on-error: true
         if: matrix.function == 'pipeline'
         run: |
           pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful
         continue-on-error: true
         if: matrix.function == 'restful'
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_8 and not pr_test' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
         run: |
@@ -267,19 +285,24 @@ jobs:
 
   test_restful:
     if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
-    runs-on: [self-hosted, 3090-r1]
+    runs-on: [self-hosted, h800-r1]
     needs: test_quantization
     strategy:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model: ['Intern-S1', 'internlm2_5-20b-chat', 'internlm2_5-20b']
+        include:
+          - tp: 8
+            model: Intern-S1
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme2/share:/nvme2/share
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -301,52 +324,27 @@ jobs:
           rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Start restful api turbomind
-        if: matrix.backend == 'turbomind'
+      - name: Start restful api
+        if:  matrix.model != 'internlm2_5-20b'
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_chat_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch
-        if: matrix.backend == 'pytorch'
-        run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct --backend pytorch > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
+          sleep 600s
       - name: Test lmdeploy - restful api
-        timeout-minutes: 75
+        if:  matrix.model == 'Intern-S1'
+        timeout-minutes: 30
         run: |
-          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not interns1 and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
-        if: always()
-        run: |
-          kill -15 "$restful_pid"
-      - name: Start restful api turbomind - base
-        if: matrix.backend == 'turbomind'
-        run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch - base
-        if: matrix.backend == 'pytorch'
-        run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct --backend pytorch > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 180s
-      - name: Test lmdeploy - restful api - base
-        timeout-minutes: 40
-        run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Kill api server
-        if: always()
+        if:  matrix.model != 'internlm2_5-20b'
         run: |
           kill -15 "$restful_pid"
       - name: Clear workfile
         if: always()
         run: |
           chmod -R 777 $REPORT_DIR
+          chmod -R 777 /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
@@ -355,11 +353,11 @@ jobs:
 
   get_coverage_report:
     if: ${{!cancelled() && success()}}
-    runs-on: [self-hosted, 3090-r1]
+    runs-on: [self-hosted, h800-r1]
     needs: [test_tools, test_restful]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
