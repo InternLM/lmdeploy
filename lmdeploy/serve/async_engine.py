@@ -625,6 +625,9 @@ class AsyncEngine(LogitsMixin):
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
             )
+        if self.arch == 'GptOssForCausalLM' and (tools is None or len(tools) == 0):
+            # for gpt-oss model, remove this seems more conducive to instruction following.
+            prompt = prompt.replace('commentary, ', '', 1)
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         return {'prompt': prompt, 'input_ids': input_ids}
 
