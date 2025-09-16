@@ -13,10 +13,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch.profiler import ProfilerActivity, profile, record_function
+from transformers import AutoTokenizer
 
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
-from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
@@ -314,7 +314,7 @@ class BaseModelAgent:
 
         self.model_config = model_config
         self.cache_config = cache_config
-        self.tokenizer = Tokenizer(model_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         try:
             self.sampling_vocab_size = len(self.tokenizer)
         except BaseException:
