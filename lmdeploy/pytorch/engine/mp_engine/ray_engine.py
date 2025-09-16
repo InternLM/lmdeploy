@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import pickle
 from typing import Dict
 
 import ray
@@ -112,9 +111,7 @@ class RayMPEngine(MPEngine):
 
     def _create_worker(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None, **kwargs):
         """Create a Ray worker."""
-        try:
-            pickle.dumps(tokenizer)
-        except Exception:
+        if tokenizer is not None:
             logger.warning('Failed to pickle tokenizer. It would be created in subprocess.')
             tokenizer = None
 
