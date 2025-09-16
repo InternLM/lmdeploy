@@ -81,6 +81,15 @@ def _update_engine_config(engine_config: PytorchEngineConfig):
     if engine_config.max_batch_size is None:
         engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
 
+    if engine_config.dllm_block_length is not None:
+        max_prefill_token_num = engine_config.max_prefill_token_num
+        max_batch_size = engine_config.max_batch_size
+        if max_batch_size * engine_config.dllm_block_length > max_prefill_token_num:
+            engine_config.max_batch_size = max_prefill_token_num // engine_config.dllm_block_length
+            logger.warning(f'Update max_batch_size to {engine_config.max_batch_size} '
+                           f'since dllm_block_length({engine_config.dllm_block_length}) * max_batch_size '
+                           f'({max_batch_size}) > max_prefill_token_num ({max_prefill_token_num}).')
+
     if engine_config.dp != 1:
         if engine_config.tp == 1 and engine_config.ep == 1:
             engine_config.dp = 1

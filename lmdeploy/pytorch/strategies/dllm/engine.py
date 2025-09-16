@@ -2,8 +2,11 @@
 from functools import lru_cache
 
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+from lmdeploy.utils import get_logger
 
 from ..base.engine import EngineStrategy
+
+logger = get_logger('lmdeploy')
 
 
 class DLLMEngineStrategy(EngineStrategy):
@@ -13,6 +16,17 @@ class DLLMEngineStrategy(EngineStrategy):
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.dllm_block_length = dllm_block_length
+
+        self._check()
+
+    def _check(self):
+        """check."""
+        max_prefill_token_num = self.cache_config.max_prefill_token_num
+        max_batches = self.cache_config.max_batches
+        if self.dllm_block_length * max_batches > max_prefill_token_num:
+            logger.warning(f'dllm_block_length({self.dllm_block_length}) * max_batch_size ({max_batches}) '
+                           f'> max_prefill_token_num ({max_prefill_token_num}). '
+                           'This may lead to OOM. Consider to reduce max_batch_size or dllm_block_length.')
 
     @lru_cache(maxsize=2)
     def get_prealloc_size(self, is_decoding: bool) -> int:
