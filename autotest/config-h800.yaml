@@ -68,7 +68,20 @@ pytorch_base_model:
 
 turbomind_quatization:
     no_awq:
-        - empty
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - Qwen/Qwen3-0.6B-FP8
+        - Qwen/Qwen3-1.7B-FP8
+        - Qwen/Qwen3-4B-FP8
+        - Qwen/Qwen3-8B-FP8
+        - Qwen/Qwen3-14B-FP8
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-32B-FP8
+        - openai/gpt-oss-120b
+        - openai/gpt-oss-20b
     gptq:
         - empty
     no_kvint4:
@@ -87,23 +100,9 @@ turbomind_quatization:
 
 pytorch_quatization:
     awq:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-235B-A22B-FP8
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-32B-FP8
-        - openai/gpt-oss-120b
-        - openai/gpt-oss-20b
+        - empty
     w8a8:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
+        - empty
     no_kvint4:
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8

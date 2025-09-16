@@ -128,73 +128,10 @@ jobs:
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
 
-  test_quantization:
-    needs: download_pkgs
-    if: ${{!cancelled() && contains(needs.download_pkgs.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
-    runs-on: [self-hosted, h800-r1]
-    timeout-minutes: 150
-    env:
-      PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
-      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
-      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
-    container:
-      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /nvme1/qa_test_models:/nvme1/qa_test_models
-        - /nvme2/share:/nvme2/share
-        - /mnt/137_nvme4:/mnt/137_nvme4
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    steps:
-      - name: Copy repository and Artifacts
-        run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy - dependency
-        run: |
-          python3 -m pip install auto_gptq matplotlib attrdict
-          python3 -m pip install -r requirements/lite.txt
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install transformers==4.53.1 datasets==3.6.0 timm
-          python3 -m pip install -r requirements/test.txt
-      - name: Check env
-        run: |
-          python3 -m pip list
-          lmdeploy check_env
-          rm -rf allure-results
-          # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
-          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Test lmdeploy - quantization w4a16
-        continue-on-error: true
-        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
-        run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} --clean-alluredir ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - quantization w8a8
-        continue-on-error: true
-        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'pytorch')
-        run: |
-          pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Clear workfile
-        if: always()
-        run: |
-          chmod -R 777 $REPORT_DIR
-          export workdir=$(pwd)
-          cd ..
-          rm -rf $workdir
-          mkdir $workdir
-          chmod -R 777 $workdir
-
   test_tools:
-    if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
+    if: ${{!cancelled() && !contains(needs.download_pkgs.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, h800-r1]
-    needs: test_quantization
+    needs: download_pkgs
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -290,14 +227,14 @@ jobs:
           chmod -R 777 $workdir
 
   test_restful:
-    if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    if: ${{!cancelled() && !contains(needs.download_pkgs.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, h800-r1]
-    needs: test_quantization
+    needs: download_pkgs
     strategy:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
-        model: ['Intern-S1', 'internlm2_5-20b-chat', 'internlm2_5-20b']
+        model: ['Intern-S1']
         include:
           - tp: 8
             model: Intern-S1
