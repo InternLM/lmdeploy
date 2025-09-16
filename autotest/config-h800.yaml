@@ -1,10 +1,10 @@
-model_path: /nvme/qa_test_models
-resource_path: /nvme/qa_test_models/resource
-dst_path: /nvme/qa_test_models/autotest_model
-log_path: /nvme/qa_test_models/autotest_model/log
-benchmark_path: /nvme/qa_test_models/benchmark-reports
-dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
-env_tag: 5080
+model_path: /nvme1/qa_test_models
+resource_path: /nvme1/qa_test_models/resource
+dst_path: /nvme1/qa_test_models/autotest_model
+log_path: /nvme1/qa_test_models/autotest_model/log
+benchmark_path: /nvme1/qa_test_models/benchmark-reports
+dataset_path: /nvme1/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+env_tag: h800
 
 tp_config:
     Intern-S1: 8
@@ -13,7 +13,8 @@ tp_config:
     Qwen3-30B-A3B: 2
     Qwen3-32B: 2
     gpt-oss-120b: 2
-
+    gpt-oss-120b-BF16: 4
+    gpt-oss-20b-BF16: 2
 
 turbomind_chat_model:
     - internlm/Intern-S1
@@ -44,8 +45,8 @@ pytorch_chat_model:
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-32B-FP8
-    - openai/gpt-oss-120b
-    - openai/gpt-oss-20b
+    - unsloth/gpt-oss-120b-BF16
+    - unsloth/gpt-oss-20b-BF16
 
 turbomind_vl_model:
     - internlm/Intern-S1
