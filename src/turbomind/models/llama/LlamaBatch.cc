@@ -218,7 +218,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
     int idx = 0;
     for (const auto& r : reqs) {
 
-        if (tp_rank_ == 0) {
+        if (is_driver_) {
             TM_LOG_INFO("[ProcessInferRequests] Request for %llu received.", r->id);
         }
 
@@ -246,7 +246,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
                 s = ptr->tokens.size();
             }
             else if (s > ptr->tokens.size()) {
-                if (tp_rank_ == 0) {
+                if (is_driver_) {
                     TM_LOG_WARNING("[ProcessInferRequests] Skipping invalid step (%d) setting for ID %lu", s, ptr->id);
                 }
                 s = ptr->tokens.size();
@@ -379,7 +379,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         // the actual sequence length is seq_limit_len + 1, hence seq_limit_len must truncated to session_len - 1
         if (state.seq_len_limit[idx] >= session_len_) {
             state.seq_len_limit[idx] = session_len_ - 1;
-            if (tp_rank_ == 0) {
+            if (is_driver_) {
                 const int trunc_output_len = state.seq_len_limit[idx] - state.h_context_length[idx];
                 TM_LOG_WARNING(
                     "[ProcessInferRequests] [%ld] total sequence length (%d + %d) exceeds `session_len` (%d), `max_new_tokens` is truncated to %d",
@@ -870,6 +870,7 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
     tp_rank_(model->tp_rank_),
     data_type_(data_type),
     debug_(isDebug()),
+    is_driver_(param.attn_tp_rank == 0),
     stream_(ctx->stream),
     context_(std::move(ctx)),
     model_(std::move(model)),
@@ -998,7 +999,7 @@ void LlamaBatch::ComputeAndOutputLogits(const Tensor& hidden_states, int first, 
 
     auto logits = model_->postDecodeEmbedding(hidden_states, symm_logits_buf_.buffer());
 
-    if (tp_rank_ == 0) {
+    if (is_driver_) {
         OutputLogits(logits, first, last, GenerationConfig::kAll);
     }
 }
@@ -1159,7 +1160,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // ! Only rank-0 writes to output
-    if (tp_rank_ == 0 && output_logprobs) {
+    if (is_driver_ && output_logprobs) {
         NvtxScope scope("logprobs");
         float*    sampled_logprobs_ptr = h_sampled_logprobs_.data();
         uint32_t* sampled_indexes_ptr  = h_sampled_indexes_.data();
@@ -1186,7 +1187,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // ! Only rank-0 writes to output
-    if (tp_rank_ == 0) {
+    if (is_driver_) {
         NvtxScope scope("output_ids");
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (auto& r = state_->requests[i]) {
@@ -1202,7 +1203,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     // Cache computed blocks to block trie
     sequence_manager_->CachePrompt(state_->sequences, batch_size);
 
-    if (debug_ && tp_rank_ == 0) {
+    if (debug_ && is_driver_) {
         for (int i = 0; i < batch_size; ++i) {
             // ss << (i ? ", " : "") << "(" << state_->h_context_length[i] << "," << state_->h_finished[i] << ")";
             std::vector<int> tokens(state_->h_context_length[i]);
@@ -1243,7 +1244,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
                 // Interrupt should reset r
                 FT_CHECK(!r);
             }
-            else if (r->stream_output && tp_rank_ == 0) {
+            else if (r->stream_output && is_driver_) {
                 const auto seq_len = *r->sequence_length.data();
                 // Create signals by copying the request handles for non-finished streaming requests
                 signals.push_back([this, r, seq_len] {  //
@@ -1270,11 +1271,11 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
 
 auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
 {
-    if (tp_rank_ == 0) {
+    if (is_driver_) {
         TM_LOG_INFO("[Interrupt] slot %d, request %llu, stop %d", index, state_->requests[index]->id, force_stop);
     }
 
-    if (debug_ && tp_rank_ == 0) {
+    if (debug_ && is_driver_) {
         std::vector<int> tokens(state_->h_context_length[index]);
         core::Copy(state_->output_ids.data() + index * session_len_, tokens.size(), tokens.data());
         cudaStreamSynchronize(stream_);
@@ -1350,7 +1351,7 @@ void LlamaBatch::InternalThreadEntry()
 
         std::shared_ptr<RequestData> req;
 
-        if (tp_rank_ == 0) {
+        if (is_driver_) {
             req = std::make_shared<RequestData>();
             {
                 NvtxScope  _("pop");
@@ -1394,7 +1395,7 @@ void LlamaBatch::InternalThreadEntry()
 
         ProcessCancelRequests(req->cancel, signals);
 
-        if (tp_rank_ == 0) {
+        if (is_driver_) {
             gateway_->notify(std::move(signals));
         }
 
@@ -1418,7 +1419,7 @@ void LlamaBatch::InternalThreadEntry()
                 comm_.h_tp_group->Sync();
             }
 
-            if (tp_rank_ == 0) {
+            if (is_driver_) {
                 gateway_->notify(std::move(signals));
             }
         }
@@ -1451,7 +1452,7 @@ bool LlamaBatch::Forward(GenerationState& g)
     const int active_size = state_->active_size;
 
     constexpr int kLogInterval = 10;
-    if (tp_rank_ == 0 && (g.step - 1) % kLogInterval == 0) {
+    if (is_driver_ && (g.step - 1) % kLogInterval == 0) {
         TM_LOG_INFO("------------------------- step = %d -------------------------", g.step - 1);
     }
 
@@ -1531,7 +1532,7 @@ bool LlamaBatch::Forward(GenerationState& g)
         const int dc_batch_size = p ? 0 : pf_offset;
         const int pf_batch_size = mini_batch_size - dc_batch_size;
 
-        if (tp_rank_ == 0) {
+        if (is_driver_) {
             if (pf_batch_size) {
                 const auto max_q =
                     *std::max_element(h_input_length_buf_.data() + first, h_input_length_buf_.data() + last);
@@ -1647,7 +1648,7 @@ bool LlamaBatch::Forward(GenerationState& g)
     });
     AnomalyHandler::instance().Reset();
 
-    if (debug_ && tp_rank_ == 0) {
+    if (debug_ && is_driver_) {
         std::vector<int> curr(active_size);
         core::Copy(token_ids_buf_.data() + g.step * active_size, active_size, curr.data());
         cudaStreamSynchronize(stream_);
@@ -1704,7 +1705,7 @@ void LlamaBatch::Warmup()
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {
         std::ifstream ifs(str);
         const int     n_imported = linear.Import(ifs);
-        if (tp_rank_ == 0) {
+        if (is_driver_) {
             TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
         }
         return;
@@ -1722,7 +1723,7 @@ void LlamaBatch::Warmup()
         bss.push_back(max_forward_token_num_);
     }
 
-    if (tp_rank_ == 0) {
+    if (is_driver_) {
         auto str = Join(bss.begin(), bss.end(), ", ");
         TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
     }
@@ -1745,7 +1746,7 @@ void LlamaBatch::Warmup()
 
         /// NOTE: No explicit barrier can be used here as internal threads are waiting on it now
         for (auto token_num : bss) {
-            if (tp_rank_ == 0) {
+            if (is_driver_) {
                 TM_LOG_INFO("[Gemm2] %d", token_num);
             }
 
@@ -1774,7 +1775,7 @@ void LlamaBatch::Warmup()
 
         auto tock = std::chrono::steady_clock::now();
 
-        if (tp_rank_ == 0) {
+        if (is_driver_) {
             TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
                         std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
         }
@@ -1784,7 +1785,7 @@ void LlamaBatch::Warmup()
     check_cuda_error(cudaStreamSynchronize(stream_));
 
     // Only rank-0 exports the dispatch cache
-    if (tp_rank_ == 0) {
+    if (is_driver_) {
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);
             const auto    n_records = context_->linear->Export(ofs);
@@ -1830,7 +1831,7 @@ void LlamaBatch::InitializeBufferAndKVCache()
 
     const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
     if (max_session_len < session_len_) {
-        if (tp_rank_ == 0) {
+        if (is_driver_) {
             TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
                            session_len_,
                            max_session_len);
@@ -1915,7 +1916,7 @@ void LlamaBatch::DestroyCommunicators()
 
 void LlamaBatch::UpdateMetrics()
 {
-    if (tp_rank_ == 0 && param_.enable_metrics) {
+    if (is_driver_ && param_.enable_metrics) {
         // update schedule metrics
         int total_seqs, active_seqs, cached_seqs;
         std::tie(total_seqs, active_seqs, cached_seqs) = sequence_manager_->seq_stats();
