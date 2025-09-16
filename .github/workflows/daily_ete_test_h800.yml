@@ -100,6 +100,7 @@ jobs:
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme2/share:/nvme2/share
+        - /mnt/137_nvme4:/mnt/137_nvme4
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -142,6 +143,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme2/share:/nvme2/share
+        - /mnt/137_nvme4:/mnt/137_nvme4
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -216,6 +218,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme2/share:/nvme2/share
+        - /mnt/137_nvme4:/mnt/137_nvme4
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -303,6 +306,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme2/share:/nvme2/share
+        - /mnt/137_nvme4:/mnt/137_nvme4
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
