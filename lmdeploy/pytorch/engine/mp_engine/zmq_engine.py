@@ -75,7 +75,6 @@ class ZMQMPEngine(MPEngine):
                  log_level: str = 'WARNING'):
         """Mp process function."""
         from lmdeploy.pytorch.engine import Engine
-        from lmdeploy.tokenizer import Tokenizer
 
         from .zmq_rpc import AsyncRPCServer
 
@@ -90,10 +89,8 @@ class ZMQMPEngine(MPEngine):
         # create engine
         if engine_config is not None:
             engine_config.enable_mp_engine = False
-        tokenizer = Tokenizer(model_path)
         engine = Engine.from_pretrained(
             model_path,
-            tokenizer=tokenizer,
             engine_config=engine_config,
         )
 

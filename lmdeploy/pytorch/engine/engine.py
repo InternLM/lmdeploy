@@ -316,21 +316,18 @@ class Engine(EngineBase):
 
     Args:
         model_path (str): The hugging face model path.
-        tokenizer (lmdeploy.Tokenizer): an instance of lmdeploy.Tokenizer
         engine_config (PytorchEngineConfig): The config of the Engine.
         trust_remote_code (bool): Trust remote code.
     """
 
     def __init__(self,
                  model_path: str,
-                 tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
         # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
 
         # dist args
-        self.tokenizer = tokenizer
         self.tp = engine_config.tp
         self.dp = engine_config.dp
         self.dp_rank = engine_config.dp_rank
@@ -358,15 +355,11 @@ class Engine(EngineBase):
         misc_config = _build_misc_config(engine_config)
 
         # build model agent
-        raw_tokenizer = None
-        if tokenizer is not None:
-            raw_tokenizer = tokenizer.model.model
         self.executor = build_executor(model_path,
                                        cache_config=cache_config,
                                        backend_config=backend_config,
                                        dist_config=dist_config,
                                        misc_config=misc_config,
-                                       tokenizer=raw_tokenizer,
                                        adapters=adapters,
                                        device_type=engine_config.device_type,
                                        distributed_executor_backend=engine_config.distributed_executor_backend,
@@ -406,7 +399,6 @@ class Engine(EngineBase):
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
-                        tokenizer: object,
                         engine_config: PytorchEngineConfig = None,
                         trust_remote_code: bool = True,
                         **kwargs):
@@ -423,7 +415,6 @@ class Engine(EngineBase):
                       on huggingface.co, such as "InternLM/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
-            tokenizer (lmdeploy.Tokenizer): an instance of lmdeploy.Tokenizer
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
         """
@@ -437,7 +428,6 @@ class Engine(EngineBase):
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
-                   tokenizer=tokenizer,
                    engine_config=engine_config,
                    trust_remote_code=trust_remote_code)
 

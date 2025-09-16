@@ -25,13 +25,11 @@ class RayEngineWorker(EngineWorkerBase):
                  **kwargs) -> None:
         """Initialize Ray engine worker."""
         from lmdeploy.pytorch.engine.engine import Engine
-        from lmdeploy.tokenizer import Tokenizer
         logger.setLevel(log_level)
         # create engine
         if engine_config is not None:
             engine_config.enable_mp_engine = False
-        tokenizer = Tokenizer(model_path)
-        engine = Engine.from_pretrained(model_path, tokenizer=tokenizer, engine_config=engine_config, **kwargs)
+        engine = Engine.from_pretrained(model_path, engine_config=engine_config, **kwargs)
         super().__init__(engine)
 
         self._stream_id = 0
