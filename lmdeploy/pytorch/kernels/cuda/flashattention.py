@@ -79,7 +79,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
             qk = qk * tl_log2(math.e)
             qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
             if window_size > 0:
-                qk_mask = qk_mask and ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+                qk_mask = qk_mask & ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
             qk = tl.where(
                 qk_mask,
                 qk,
@@ -218,7 +218,7 @@ def _flash_prefill_fwd_kernel(
     offs_dk = tl.multiple_of(tl.max_contiguous(offs_dk % head_dim_k, BLOCK_DK), BLOCK_DK)
     off_q = ((q_start_loc + offs_m[:, None]) * stride_qs + head_id * stride_qh + offs_dk[None, :] * stride_qd)
     q_ptrs = q_ptr + off_q
-    q = tl.load(q_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk[None, :]))
+    q = tl.load(q_ptrs, mask=((offs_m[:, None] < q_seqlen) & mask_dk[None, :]))
 
     k_ptrs = tl.make_block_ptr(
         base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
@@ -252,7 +252,7 @@ def _flash_prefill_fwd_kernel(
         offs_dk1 = tl.multiple_of(tl.max_contiguous(offs_dk1 % head_dim_k, BLOCK_DK1), BLOCK_DK1)
         offs_q1 = ((q_start_loc + offs_m[:, None]) * stride_qs + head_id * stride_qh + offs_dk1[None, :] * stride_qd)
         q1_ptrs = q_ptr + offs_q1
-        q1 = tl.load(q1_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk1[None, :]))
+        q1 = tl.load(q1_ptrs, mask=((offs_m[:, None] < q_seqlen) & mask_dk1[None, :]))
         k1_ptrs = tl.make_block_ptr(
             base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
             shape=(head_dim_k, kv_seqlen),
@@ -425,6 +425,14 @@ def _kernel_meta_sm12x(BLOCK_DK: int, shared_kv: bool):
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
+def _kernel_meta_rocm(BLOCK_DK: int, shared_kv: bool):
+    BLOCK_N = 32
+    BLOCK_M = 32 if BLOCK_DK > 128 else 64
+    num_warps = 4
+    num_stages = 1
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
 def flash_attention_fwd(
     q_states: Tensor,
     k_states: Tensor,
@@ -491,17 +499,21 @@ def flash_attention_fwd(
     shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
 
     num_warps = 4
-    if _nv_cap[0] < 8:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
-    elif _nv_cap[0] < 9:
-        if _nv_cap[1] in [6, 9]:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
-        else:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
-    elif _nv_cap[0] < 10:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
+    hip_mode = getattr(torch.version, 'hip', None) is not None
+    if hip_mode:
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_rocm(BLOCK_DK, shared_kv)
     else:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)
+        if _nv_cap[0] < 8:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
+        elif _nv_cap[0] < 9:
+            if _nv_cap[1] in [6, 9]:
+                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
+            else:
+                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
+        elif _nv_cap[0] < 10:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
+        else:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)
 
     BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](

@@ -60,12 +60,15 @@ struct Converter<uint16_t, uint8_t> {
     template<int N>
     __device__ Array<uint8_t, N> operator()(const Array<uint16_t, N>& x)
     {
-        // static_assert(sizeof(U) == 2);
-        auto&             vi = (const Array<uint16_t, N>&)x;
+        static_assert(N % 4 == 0);
         Array<uint8_t, N> vo;
         PRAGMA_UNROLL
-        for (int i = 0; i < N; ++i) {
-            vo[i] = static_cast<uint8_t>(vi[i]);
+        for (int i = 0; i < N; i += 4) {
+            // 3120
+            vo[i + 0] = (uint8_t)x[i + 0];
+            vo[i + 1] = (uint8_t)x[i + 2];
+            vo[i + 2] = (uint8_t)x[i + 1];
+            vo[i + 3] = (uint8_t)x[i + 3];
         }
         return vo;
     }

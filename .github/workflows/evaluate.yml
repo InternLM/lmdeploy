@@ -98,7 +98,7 @@ jobs:
       matrix:
         evaluate_type: ['chat', 'base']
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -148,7 +148,7 @@ jobs:
           git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
           cd opencompass
           git checkout ${{ github.event.inputs.oc_repo_ref}}
-          python3 -m pip install -e .
+          python3 -m pip install .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |

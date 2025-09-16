@@ -315,8 +315,7 @@ def test_hf_turbomind_chat_fallback_backend_kvint8_tp1(config, model, communicat
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model',
-                         ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'Qwen/Qwen2.5-VL-32B-Instruct'])
+@pytest.mark.parametrize('model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_fallback_backend_tp2(config, model, communicator, cli_case_config, worker_id):
     usercase = 'chat_testcase'
@@ -338,8 +337,7 @@ def test_hf_turbomind_chat_fallback_backend_tp2(config, model, communicator, cli
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model',
-                         ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'Qwen/Qwen2.5-VL-32B-Instruct'])
+@pytest.mark.parametrize('model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_fallback_backend_kvint8_tp2(config, model, communicator, cli_case_config, worker_id):
     usercase = 'chat_testcase'

@@ -38,10 +38,7 @@ namespace turbomind {
 
 class LlamaTritonModel {
 public:
-    LlamaTritonModel(DataType                               dtype,
-                     std::string                            model_dir,
-                     std::string                            config,
-                     std::function<std::shared_ptr<void>()> ffi_ctx_factory);
+    LlamaTritonModel(std::string model_dir, std::string config, std::function<std::shared_ptr<void>()> ffi_ctx_factory);
 
     ~LlamaTritonModel();
 
@@ -57,7 +54,7 @@ public:
 
     void sleep(int device_id, int level);
 
-    void wakeup(int device_id, const std::vector<std::string>& tags);
+    void wakeup(int device_id, const std::vector<std::string>& tags, int rank);
 
     std::string toString();
 
@@ -86,11 +83,14 @@ private:
 
     std::vector<std::unique_ptr<comm::HostGroupId>> group_ids_;
 
-    std::shared_ptr<Gateway> gateway_;
+    std::shared_ptr<Gateway>               gateway_;
+    std::function<std::shared_ptr<void>()> ffi_ctx_factory_;
 
     // Weights & engine instances for the ranks
     std::vector<std::shared_ptr<LlamaWeight>> weights_;
     std::vector<std::shared_ptr<Engine>>      engines_;
+
+    std::vector<std::shared_ptr<Context>> contexts_;
 
     bool is_fp16_;
 

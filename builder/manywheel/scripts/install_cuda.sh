@@ -3,7 +3,7 @@
 set -ex
 
 function install_118 {
-    echo "Installing CUDA 11.8 and cuDNN 8.7 and NCCL 2.15"
+    echo "Installing CUDA 11.8 and NCCL 2.15"
     rm -rf /usr/local/cuda-11.8 /usr/local/cuda
     # install CUDA 11.8.0 in the same container
     wget -q https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
@@ -11,16 +11,6 @@ function install_118 {
     ./cuda_11.8.0_520.61.05_linux.run --toolkit --silent
     rm -f cuda_11.8.0_520.61.05_linux.run
     rm -f /usr/local/cuda && ln -s /usr/local/cuda-11.8 /usr/local/cuda
-
-    # cuDNN license: https://developer.nvidia.com/cudnn/license_agreement
-    mkdir tmp_cudnn && cd tmp_cudnn
-    wget -q https://developer.download.nvidia.com/compute/redist/cudnn/v8.7.0/local_installers/11.8/cudnn-linux-x86_64-8.7.0.84_cuda11-archive.tar.xz -O cudnn-linux-x86_64-8.7.0.84_cuda11-archive.tar.xz
-    tar xf cudnn-linux-x86_64-8.7.0.84_cuda11-archive.tar.xz
-    cp -a cudnn-linux-x86_64-8.7.0.84_cuda11-archive/include/* /usr/local/cuda/include/
-    cp -a cudnn-linux-x86_64-8.7.0.84_cuda11-archive/lib/* /usr/local/cuda/lib64/
-    cd ..
-    rm -rf tmp_cudnn
-    ldconfig
 
     # NCCL license: https://docs.nvidia.com/deeplearning/nccl/#licenses
     mkdir tmp_nccl && cd tmp_nccl
@@ -34,7 +24,7 @@ function install_118 {
 }
 
 function install_121 {
-    echo "Installing CUDA 12.1 and cuDNN 8.9 and NCCL 2.18.1"
+    echo "Installing CUDA 12.1 and NCCL 2.18.1"
     rm -rf /usr/local/cuda-12.1 /usr/local/cuda
     # install CUDA 12.1.0 in the same container
     wget -q https://developer.download.nvidia.com/compute/cuda/12.1.0/local_installers/cuda_12.1.0_530.30.02_linux.run
@@ -42,16 +32,6 @@ function install_121 {
     ./cuda_12.1.0_530.30.02_linux.run --toolkit --silent
     rm -f cuda_12.1.0_530.30.02_linux.run
     rm -f /usr/local/cuda && ln -s /usr/local/cuda-12.1 /usr/local/cuda
-
-    # cuDNN license: https://developer.nvidia.com/cudnn/license_agreement
-    mkdir tmp_cudnn && cd tmp_cudnn
-    wget -q https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz -O cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz
-    tar xf cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz
-    cp -a cudnn-linux-x86_64-8.9.2.26_cuda12-archive/include/* /usr/local/cuda/include/
-    cp -a cudnn-linux-x86_64-8.9.2.26_cuda12-archive/lib/* /usr/local/cuda/lib64/
-    cd ..
-    rm -rf tmp_cudnn
-    ldconfig
 
     # NCCL license: https://docs.nvidia.com/deeplearning/nccl/#licenses
     mkdir tmp_nccl && cd tmp_nccl
@@ -65,7 +45,7 @@ function install_121 {
 }
 
 function install_124 {
-    echo "Installing CUDA 12.4 and cuDNN 8.9 and NCCL 2.25.1"
+    echo "Installing CUDA 12.4 and NCCL 2.25.1"
     rm -rf /usr/local/cuda-12.4 /usr/local/cuda
     # install CUDA 12.4.1 in the same container
     wget -q https://developer.download.nvidia.com/compute/cuda/12.4.1/local_installers/cuda_12.4.1_550.54.15_linux.run
@@ -73,16 +53,6 @@ function install_124 {
     ./cuda_12.4.1_550.54.15_linux.run --toolkit --silent
     rm -f cuda_12.4.1_550.54.15_linux.run
     rm -f /usr/local/cuda && ln -s /usr/local/cuda-12.4 /usr/local/cuda
-
-    # cuDNN license: https://developer.nvidia.com/cudnn/license_agreement
-    mkdir tmp_cudnn && cd tmp_cudnn
-    wget -q https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz -O cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz
-    tar xf cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz
-    cp -a cudnn-linux-x86_64-8.9.2.26_cuda12-archive/include/* /usr/local/cuda/include/
-    cp -a cudnn-linux-x86_64-8.9.2.26_cuda12-archive/lib/* /usr/local/cuda/lib64/
-    cd ..
-    rm -rf tmp_cudnn
-    ldconfig
 
     # NCCL license: https://docs.nvidia.com/deeplearning/nccl/#licenses
     mkdir tmp_nccl && cd tmp_nccl
@@ -96,7 +66,7 @@ function install_124 {
 }
 
 function install_128 {
-    echo "Installing CUDA 12.8 and cuDNN 8.9 and NCCL 2.25.1"
+    echo "Installing CUDA 12.8 and NCCL 2.25.1"
     rm -rf /usr/local/cuda-12.8 /usr/local/cuda
     # install CUDA 12.8.1 in the same container
     wget -q https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda_12.8.1_570.124.06_linux.run
@@ -104,16 +74,6 @@ function install_128 {
     ./cuda_12.8.1_570.124.06_linux.run --toolkit --silent
     rm -f cuda_12.8.1_570.124.06_linux.run
     rm -f /usr/local/cuda && ln -s /usr/local/cuda-12.8 /usr/local/cuda
-
-    # cuDNN license: https://developer.nvidia.com/cudnn/license_agreement
-    mkdir tmp_cudnn && cd tmp_cudnn
-    wget -q https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz -O cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz
-    tar xf cudnn-linux-x86_64-8.9.2.26_cuda12-archive.tar.xz
-    cp -a cudnn-linux-x86_64-8.9.2.26_cuda12-archive/include/* /usr/local/cuda/include/
-    cp -a cudnn-linux-x86_64-8.9.2.26_cuda12-archive/lib/* /usr/local/cuda/lib64/
-    cd ..
-    rm -rf tmp_cudnn
-    ldconfig
 
     # NCCL license: https://docs.nvidia.com/deeplearning/nccl/#licenses
     mkdir tmp_nccl && cd tmp_nccl

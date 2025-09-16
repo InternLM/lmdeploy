@@ -9,6 +9,8 @@ from .llama import LlamaModel, LlamaReader
 def map_experts(str):
     s = re.sub(r'(experts.*proj)$', r'\1.weight', str)
     s = re.sub(r'(experts.*proj)_bias$', r'\1.bias', s)
+    s = re.sub(r'(experts.*proj)_blocks$', r'\1.blocks', s)
+    s = re.sub(r'(experts.*proj)_scales$', r'\1.scales', s)
     return s
 
 
@@ -23,8 +25,8 @@ class GptOssReader(LlamaReader):
         for key in ['gate_up', 'down']:
             name = f'{self.attn_layer_prefix}.{i}.mlp.experts.{key}_proj.{kind}'
             tensor = self.params.get(name)[e]
-            if tensor.ndim == 2:
-                tensor = tensor.cuda().t()  # experts in unsloth/gpt-oss-20b-BF16 are transposed
+            if kind == 'weight':  # experts in BF16 models are in M-major
+                tensor = tensor.cuda().t()
             if key == 'gate_up':
                 gate, up = tensor[::2], tensor[1::2]
                 result.append(self.transform(gate, kind))

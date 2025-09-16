@@ -146,6 +146,12 @@ public:
         return layout_.stride(i);
     }
 
+    template<class... Is>
+    auto strides(Is&&... is) const
+    {
+        return layout_.strides(((Is &&) is)...);
+    }
+
     bool is_contiguous() const noexcept
     {
         return layout().is_contiguous();
@@ -201,9 +207,14 @@ private:
     Buffer buffer_;
 };
 
-inline Tensor empty_like(const Tensor& tensor, std::optional<Device> device = {})
+inline Tensor empty_like(const Tensor& tensor)
 {
-    return Tensor{tensor.layout(), tensor.dtype(), device ? *device : tensor.device()};
+    return Tensor{tensor.layout(), tensor.dtype(), tensor.device()};
+}
+
+inline Tensor empty_like(const Tensor& tensor, Device device)
+{
+    return Tensor{tensor.layout(), tensor.dtype(), device};
 }
 
 inline Tensor empty_like(const Tensor& tensor, DataType dtype)
@@ -218,8 +229,6 @@ void Copy(const Tensor& src, Ref<Tensor> dst_);
 void Clear(Ref<Tensor> a_, const Stream& stream);
 
 void Clear(Ref<Tensor> a_);
-
-Tensor to_device(const Tensor& src, const Device& device);
 
 #if 0
 

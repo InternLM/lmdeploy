@@ -8,7 +8,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest, EncoderResult
+from lmdeploy.pytorch.disagg.conn.protocol import EncoderResult, MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
@@ -114,13 +114,18 @@ class SamplingParam:
         logprobs = gen_config.logprobs
         if logprobs is None:
             logprobs = -1
+
+        random_seed = gen_config.random_seed
+        if random_seed is None:
+            import random
+            random_seed = random.getrandbits(64)
         return SamplingParam(top_p=top_p,
                              top_k=top_k,
                              min_p=min_p,
                              temperature=temperature,
                              repetition_penalty=repetition_penalty,
                              ignore_eos=gen_config.ignore_eos,
-                             random_seed=gen_config.random_seed,
+                             random_seed=random_seed,
                              stop_words=stop_words,
                              bad_words=bad_words,
                              response_format=response_format,
@@ -155,7 +160,7 @@ class MessageStatus(enum.Enum):
     WAITING_EP_MIGRATION = enum.auto()  # waiting for encoder => prefill migration
     RUNNING_EP_MIGRATION = enum.auto()  # running encoder => prefill migration
     EP_MIGRATION_LOCKED = enum.auto()  # locked during encoder => prefill migration
-    EP_MIGRATION_DONE = enum.auto()    # done encoder => prefill migration
+    EP_MIGRATION_DONE = enum.auto()  # done encoder => prefill migration
 
 
 _SEQ_COUNT = 0

@@ -259,7 +259,7 @@ class AsyncEngine(LogitsMixin):
         self.model_name = model_name if model_name else model_path
         chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(chat_template_name)
+            chat_template_config = ChatTemplateConfig(chat_template_name, model_path=model_path)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
@@ -436,9 +436,17 @@ class AsyncEngine(LogitsMixin):
         """Wake up the model.
 
         Args:
-            tags (List[str]): The tags to wake up. Values must be in `("weights", "kv_cache")`
+            tags: An optional list of tags to reallocate the engine memory
+                for specific memory allocations. Values must be in
+                `("weights", "kv_cache")`. If None, all memory is reallocated.
+                wake_up should be called with all tags (or None) before the
+                engine is used again.
         """
         self.engine.wakeup(tags)
+        # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instance
+        if self.backend == 'turbomind' and (tags is None or 'kv_cache' in tags):
+            self.instances = [self.engine.create_instance() for _ in range(self.instance_num)]
+            self.free_insts = None
 
     def _get_limiter(self):
         if not self.limiter:
@@ -598,8 +606,17 @@ class AsyncEngine(LogitsMixin):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
+                                reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
                                 enable_thinking: Optional[bool] = None,
                                 **kwargs):
+        # Change multimodal data to openai text messages, i.e.,
+        # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
+        # [{'role': 'user', 'content': 'hi']
+        if isinstance(prompt, list) and any(isinstance(msg['content'], list) for msg in prompt):
+            prompt = [
+                msg if isinstance(msg['content'], str) else dict(role=msg['role'], content=msg['content'][0]['text'])
+                for msg in prompt
+            ]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
@@ -607,7 +624,11 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools, enable_thinking=enable_thinking)
+        prompt = chat_template.messages2prompt(prompt,
+                                               sequence_start,
+                                               tools=tools,
+                                               enable_thinking=enable_thinking,
+                                               reasoning_effort=reasoning_effort)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -654,6 +675,7 @@ class AsyncEngine(LogitsMixin):
             session_id: int,
             gen_config: Optional[GenerationConfig] = None,
             tools: Optional[List[object]] = None,
+            reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
             stream_response: bool = True,
             sequence_start: bool = True,
             sequence_end: bool = True,  # no interactive mode by default
@@ -713,6 +735,7 @@ class AsyncEngine(LogitsMixin):
                                                         sequence_start,
                                                         adapter_name,
                                                         tools=tools,
+                                                        reasoning_effort=reasoning_effort,
                                                         enable_thinking=enable_thinking)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']

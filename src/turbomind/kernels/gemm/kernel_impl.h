@@ -2,8 +2,11 @@
 
 #pragma once
 
+#include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
+
 #include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/desc.h"
@@ -26,7 +29,8 @@ public:
     static constexpr int CTA_N = Gemm::CTA_N;
     static constexpr int CTA_K = Gemm::CTA_K;
 
-    using Impl = typename Gemm::Impl;
+    using Impl  = typename Gemm::Impl;
+    using Sched = typename Gemm::Scheduler;
 
     using OpA = typename Gemm::OperandA;
     using OpB = typename Gemm::OperandB;
@@ -68,7 +72,8 @@ public:
 
         desc_.cta_tile = {Gemm::CTA_M, Gemm::CTA_N, Gemm::CTA_K};
         desc_.mma_tile = {Impl::MMA_Map::kGroupM, Impl::MMA_Map::kGroupN, Impl::MMA_Map::kGroupK};
-        chunk_size_k_  = Gemm::kChunkSizeK;
+
+        info_.chunk_size_k = Gemm::kChunkSizeK;
 
         desc_.align.x = OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
         desc_.align.y = OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
@@ -81,28 +86,26 @@ public:
 
         desc_.cluster_shape = {1, 1};
 
-        smem_size_ = sizeof(typename Gemm::SharedStorage);
+        auto func = gemm_kernel<Gemm, GemmParam, EpilogueParam, Sched>;
 
-        desc_.stages  = Impl::Stages;
-        desc_.split_k = Gemm::kSplitK;
-        desc_.sched   = Gemm::kDynamicSched;
+        cudaFuncGetAttributes(&info_.attr, func);
 
-        desc_.arch = Gemm::Arch::value;
+        info_.dynamic_smem_size = sizeof(typename Gemm::SharedStorage);
 
-        using CtaMap = typename Gemm::CtaMap;
-
-        auto func = gemm_kernel<Gemm, GemmParam, EpilogueParam, CtaMap>;
-
-        if (smem_size_ > (48 << 10)) {
-            cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);
+        if (info_.dynamic_smem_size > (48 << 10)) {
+            cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);
         }
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-            &desc_.max_active_ctas, func, Impl::WARPS * WARP_SIZE, smem_size_);
+            &info_.max_active_ctas, func, Impl::WARPS * WARP_SIZE, info_.dynamic_smem_size);
 
-        cudaFuncGetAttributes(&desc_.attr, func);
+        desc_.stages     = Impl::Stages;
+        desc_.split_k    = Gemm::kSplitK;
+        desc_.group_axis = Sched::group_axis;
 
-        name_ = GetName();
+        desc_.arch = Gemm::Arch::value;
+
+        info_.name = GetName();
     }
 
     int Launch(const Operation&    operation,
@@ -125,13 +128,12 @@ public:
                Workspace&          workspace,
                cudaStream_t        stream) override
     {
-        using Map = typename Gemm::CtaMap;
-
         MatrixLayout Adesc = _Adesc;
 
-        [[maybe_unused]] const int m = Ddesc.rows;
-        [[maybe_unused]] const int n = Ddesc.cols;
-        [[maybe_unused]] const int k = Adesc.cols;
+        const int m = Ddesc.rows;
+        const int n = Ddesc.cols;
+        const int k = Adesc.cols;
+        const int l = std::max(1, Ddesc.num);
 
         auto transpose = [](MatrixLayout x) {
             std::swap(x.rows, x.cols);
@@ -142,30 +144,10 @@ public:
         MatrixLayout Bdesc = transpose(_Bdesc);
         MatrixLayout Vdesc = transpose(_Vdesc);
 
-        auto sched = [&] {
-            if constexpr (Gemm::kDynamicSched) {
-                LaunchSpec spec{(Kernel*)this};
-                spec.splits  = splits;
-                spec.swizzle = swizzle;
-                return Map{operation.context->Schedule(spec)};
-            }
-            else {
-                const int chunk_cnt = ceil_div(k, Gemm::kChunkSizeK);
-                // Limit splits by num of chunks to avoid chaos
-                splits = std::min(chunk_cnt, splits);
+        auto max_splits = GetMaxSplits({m, n, k, l}, swizzle, workspace.barriers_size, workspace.partials_size);
 
-                const int2 tiles = get_tiled_shape(m, n, CTA_M, CTA_N);
-                const int4 shape{m, n, k, 1};
-
-                if (splits > 1) {
-                    splits = FixSplits(shape, tiles, splits, workspace);
-                }
-
-                swizzle = Map::get_log_tile(tiles, 1 << swizzle);
-
-                return Map{shape, tiles, splits, swizzle, CTA_K, Gemm::kChunkSizeK};
-            }
-        }();
+        Sched sched{{m, n, k, l}, swizzle, std::min(splits, max_splits)};
+        sched.offsets_ = Ddesc.offsets;
 
         using Ta = typename Gemm::Ta;
         using Tb = typename Gemm::Tb;
@@ -223,21 +205,22 @@ public:
         const auto grid  = sched.get_grid_shape();
         const auto block = Gemm::Impl::WARPS * WARP_SIZE;
 
+        // std::cout << info_.name << " " << splits << " " << swizzle << " " << sched.tiles_[0] << " " <<
+        // sched.tiles_[1]
+        //           << std::endl;
         // std::cout << grid.x << " " << grid.y << " " << grid.z << "\n";
 
-        gemm_kernel<Gemm><<<grid, block, smem_size_, stream>>>(param, epilogue, sched);
+        gemm_kernel<Gemm><<<grid, block, info_.dynamic_smem_size, stream>>>(param, epilogue, sched);
 
         return 0;
     }
 
-    std::array<size_t, 2> GetWorkspaceSizesV2(const int4& shape, int tiles, int splits) const
+    std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
         static constexpr bool kSerial = true;
 
-        const auto& [m, n, _, num] = shape;
-
         size_t barriers_size = sizeof(int) * tiles;
-        size_t partials_size = sizeof(float) * m * n * num;
+        size_t partials_size = sizeof(float) * CTA_M * CTA_N * tiles;
 
         if constexpr (!kSerial) {
             barriers_size *= splits;
@@ -247,15 +230,17 @@ public:
         return {barriers_size, partials_size};
     }
 
-    int GetMaxSplits(const int4& shape, int64_t tiles, size_t bsize, size_t psize) const override
+    int GetMaxSplits(const int4& shape, int swizzle, size_t bsize, size_t psize) const override
     {
         if (!Gemm::kSplitK) {
             return 1;
         }
 
-        const auto& [m, n, k, _] = shape;
+        const auto& [m, n, k, l] = shape;
 
-        const auto& [a, b] = GetWorkspaceSizesV2(shape, tiles, 1);
+        Sched sched{{m, n, k, l}, swizzle};  // for getting padded tiles
+
+        const auto& [a, b] = GetWorkspaceSize(sched.tiles_[0] * sched.tiles_[1], 1);
 
         if (bsize >= a && psize >= b) {
             // Serial split-k requires workspace for 1 split only
@@ -267,37 +252,13 @@ public:
         }
     }
 
-    int GetSwizzle(int m, int n, int k, int splits, int swizzle) const override
+    int GetMaxSwizzle(const int4& shape) const override
     {
-        using Map        = typename Gemm::CtaMap;
-        const auto tiles = get_tiled_shape(m, n, CTA_M, CTA_N);
-        return Map::get_log_tile(tiles, 1 << swizzle);
-    }
+        const auto& [m, n, k, l] = shape;
 
-    int FixSplits(const int4& shape, int2 tiled_mn, int splits, Workspace& ws) const
-    {
-        const int tiles            = tiled_mn.x * tiled_mn.y;
-        const auto& [bsize, psize] = GetWorkspaceSizesV2(shape, tiles, splits);
-
-        if (ws.barriers_size < bsize || ws.partials_size < psize) {
-            const int max_splits       = GetMaxSplits(shape, tiles, ws.barriers_size, ws.partials_size);
-            const auto& [m, n, k, num] = shape;
-            fprintf(
-                stderr,
-                "Problem size (%d, %d, %d), workspace size too small (%d, %d) vs required (%d, %d) for %d splits. Force `splits` = %d\n",
-                m,
-                n,
-                k,
-                (int)ws.barriers_size,
-                (int)ws.partials_size,
-                (int)bsize,
-                (int)psize,
-                splits,
-                max_splits);
-            splits = max_splits;
-        }
-
-        return splits;
+        auto swizzle = Sched{{m, n, k, l}}.get_max_swizzle();
+        // std::cout << m << " " << n << " " << k << " " << l << " " << swizzle << "\n";
+        return swizzle;
     }
 };
 

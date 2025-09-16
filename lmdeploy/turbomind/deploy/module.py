@@ -260,7 +260,7 @@ class Attn(Module):
             self.model.save_split(k, self._attn.format(i, 'k_norm', '')[:-1])
         if self.attn_sink:
             sinks = r.attn_sinks(i)
-            self.model.save_split(sinks, self._attn.format(i, 'sinks', '')[:-1], split_dim=0, split_num=self.tp)
+            self.model.save_split(sinks, self._attn.format(i, 'sinks', '')[:-1], split_dim=-1, split_num=self.tp)
 
 
 class MLA(Module):

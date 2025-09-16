@@ -34,7 +34,9 @@ struct ModelParam {
     bool     attn_bias;
     bool     attn_sink;
     bool     mlp_bias;
+    DataType data_type;
     DataType weight_type;
+    DataType expert_weight_type;
     int      group_size;
     MLAParam mla;
     bool     qk_norm;
