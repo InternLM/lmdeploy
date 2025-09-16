@@ -432,7 +432,6 @@ class Engine(EngineBase):
             backend = engine_config.mp_engine_backend
             return build_mp_engine(backend=backend,
                                    model_path=pretrained_model_name_or_path,
-                                   tokenizer=tokenizer,
                                    engine_config=engine_config,
                                    trust_remote_code=trust_remote_code)
         if len(kwargs) > 0:

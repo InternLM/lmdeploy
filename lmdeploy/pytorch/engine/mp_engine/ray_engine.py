@@ -20,7 +20,6 @@ class RayEngineWorker(EngineWorkerBase):
 
     def __init__(self,
                  model_path: str,
-                 tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  log_level: int = 30,
                  **kwargs) -> None:
@@ -31,8 +30,7 @@ class RayEngineWorker(EngineWorkerBase):
         # create engine
         if engine_config is not None:
             engine_config.enable_mp_engine = False
-        if tokenizer is None:
-            tokenizer = Tokenizer(model_path)
+        tokenizer = Tokenizer(model_path)
         engine = Engine.from_pretrained(model_path, tokenizer=tokenizer, engine_config=engine_config, **kwargs)
         super().__init__(engine)
 
@@ -88,13 +86,13 @@ def _update_runtime_envs(runtime_env: Dict):
 
 class RayMPEngine(MPEngine):
 
-    def __init__(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None, **kwargs) -> None:
+    def __init__(self, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs) -> None:
         """Initialize mp engine."""
         self.ray_ctx = self._init_ray(engine_config)
         placement_group = self.ray_ctx.get_placement_group()
         self.placement_group = placement_group
 
-        self.worker = self._create_worker(model_path, tokenizer, engine_config, log_level=logger.level, **kwargs)
+        self.worker = self._create_worker(model_path, engine_config, log_level=logger.level, **kwargs)
         super().__init__()
 
     def _init_ray(self, engine_config: PytorchEngineConfig = None):
@@ -109,12 +107,8 @@ class RayMPEngine(MPEngine):
         ray_ctx = RayContext(world_size, dp=dp, device_type=device_type)
         return ray_ctx
 
-    def _create_worker(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None, **kwargs):
+    def _create_worker(self, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs):
         """Create a Ray worker."""
-        if tokenizer is not None:
-            logger.warning('Failed to pickle tokenizer. It would be created in subprocess.')
-            tokenizer = None
-
         bundle_id = 0
         scheduling_strategy = PlacementGroupSchedulingStrategy(
             placement_group=self.placement_group,
@@ -131,7 +125,7 @@ class RayMPEngine(MPEngine):
             **resource_kwargs,
             scheduling_strategy=scheduling_strategy,
             runtime_env=runtime_env,
-        )(RayEngineWorker).remote(model_path, tokenizer, engine_config, **kwargs)
+        )(RayEngineWorker).remote(model_path, engine_config, **kwargs)
 
         return worker
 
