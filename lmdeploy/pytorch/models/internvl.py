@@ -24,19 +24,19 @@ from .utils.model import DeployModelMixin, vlm_model
 
 class Gating(nn.Module):
 
-    def __init__(self, hidden_size=2048, expansion_factor=4):
+    def __init__(self, hidden_size=2048, expansion_factor=4, dtype=None, device=None):
         super().__init__()
 
         mid_dim = hidden_size * expansion_factor
 
         def mlp_block(in_dim, out_dim):
             return nn.Sequential(
-                nn.Linear(in_dim, out_dim, bias=True),
+                nn.Linear(in_dim, out_dim, bias=True, dtype=dtype, device=device),
                 nn.GELU(),
                 nn.Identity(),
-                nn.Linear(out_dim, in_dim, bias=True),
+                nn.Linear(out_dim, in_dim, bias=True, dtype=dtype, device=device),
                 nn.Identity(),
-                nn.LayerNorm(in_dim),
+                nn.LayerNorm(in_dim, dtype=dtype, device=device),
             )
 
         self.block1 = mlp_block(hidden_size, mid_dim)
@@ -45,8 +45,8 @@ class Gating(nn.Module):
         self.block4 = mlp_block(hidden_size, mid_dim)
 
         self.gate = nn.Sequential(
-            nn.LayerNorm(hidden_size),
-            nn.Linear(hidden_size, 2, bias=True)  # 2 experts
+            nn.LayerNorm(hidden_size, dtype=dtype, device=device),
+            nn.Linear(hidden_size, 2, bias=True, dtype=dtype, device=device)  # 2 experts
         )
 
     def forward(self, x):
@@ -62,21 +62,37 @@ class Gating(nn.Module):
 
 class CrossAttentionPooling(nn.Module):
 
-    def __init__(self, dim, num_heads=16):
+    def __init__(self, dim, num_heads=16, dtype=None, device=None):
         super().__init__()
-        self.query_token = nn.Parameter(torch.randn(1, dim))  # [1, D]
+        self.query_token = nn.Parameter(torch.randn(1, dim, dtype=dtype, device=device))  # [1, D]
 
-        self.attn1 = nn.MultiheadAttention(embed_dim=dim, num_heads=num_heads, batch_first=True)
-        self.norm1 = nn.LayerNorm(dim)
+        self.attn1 = nn.MultiheadAttention(embed_dim=dim,
+                                           num_heads=num_heads,
+                                           batch_first=True,
+                                           dtype=dtype,
+                                           device=device)
+        self.norm1 = nn.LayerNorm(dim, dtype=dtype, device=device)
 
-        self.attn2 = nn.MultiheadAttention(embed_dim=dim, num_heads=num_heads, batch_first=True)
-        self.norm2 = nn.LayerNorm(dim)
+        self.attn2 = nn.MultiheadAttention(embed_dim=dim,
+                                           num_heads=num_heads,
+                                           batch_first=True,
+                                           dtype=dtype,
+                                           device=device)
+        self.norm2 = nn.LayerNorm(dim, dtype=dtype, device=device)
 
-        self.attn3 = nn.MultiheadAttention(embed_dim=dim, num_heads=num_heads, batch_first=True)
-        self.norm3 = nn.LayerNorm(dim)
+        self.attn3 = nn.MultiheadAttention(embed_dim=dim,
+                                           num_heads=num_heads,
+                                           batch_first=True,
+                                           dtype=dtype,
+                                           device=device)
+        self.norm3 = nn.LayerNorm(dim, dtype=dtype, device=device)
 
-        self.attn4 = nn.MultiheadAttention(embed_dim=dim, num_heads=num_heads, batch_first=True)
-        self.norm4 = nn.LayerNorm(dim)
+        self.attn4 = nn.MultiheadAttention(embed_dim=dim,
+                                           num_heads=num_heads,
+                                           batch_first=True,
+                                           dtype=dtype,
+                                           device=device)
+        self.norm4 = nn.LayerNorm(dim, dtype=dtype, device=device)
 
     def forward(self, batched_tokens: list[torch.Tensor]):
         """
@@ -493,8 +509,10 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 nn.Linear(llm_hidden_size * 2, llm_hidden_size * 2, bias=True, dtype=dtype, device=device), nn.GELU(),
                 nn.Identity(), nn.Linear(llm_hidden_size * 2, llm_hidden_size, bias=True, dtype=dtype, device=device))
 
-            self.pooling_before_gating = CrossAttentionPooling(dim=vit_hidden_size)
-            self.gating = Gating(hidden_size=vit_hidden_size)
+            self.pooling_before_gating = CrossAttentionPooling(dim=vit_hidden_size, dtype=dtype, device=device)
+            self.gating = Gating(hidden_size=vit_hidden_size, dtype=dtype, device=device)
+
+        self.model_metas = None
 
     def compile_model(self):
         torch_version = version.parse(torch.__version__)
@@ -688,46 +706,44 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         vit_embeds = torch.cat(selected_embeds, dim=0)
 
         # compress visual tokens in sentence
-        lang_embeds, input_ids, image_mask, seq_lens = self.compress_visual_tokens_in_sentence(
+        new_lang_embeds, new_input_ids, new_image_mask, new_seq_lengths = self.compress_visual_tokens_in_sentence(
             input_embeds=lang_embeds,
             input_ids=input_ids,
             img_context_token_id=img_context_token_id,
             gate_result=gate_result,
         )
 
-        return vit_embeds, lang_embeds, input_ids, image_mask, seq_lens
+        return vit_embeds, new_lang_embeds, new_input_ids, new_image_mask, new_seq_lengths
 
-    def update_context(self, new_input_ids: torch.Tensor, new_seqlens: List[int]) -> StepContext:
+    def update_forward_inputs(self, input_ids: torch.Tensor, new_seqlens: List[int]) -> StepContext:
         """Update the current context with new input_ids."""
         from lmdeploy.pytorch.model_inputs import ModelInputs
 
         crt_ctx = self.ctx_mgr.current_context()
-        if crt_ctx is None:
-            raise RuntimeError('Cannot update a non-existent context.')
+        assert crt_ctx is not None, 'Current context cannot be None.'
 
-        device = new_input_ids.device
-        new_seqlens = torch.tensor(new_seqlens, device=device, dtype=torch.long)
+        # fill model metas
+        self.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_seqlens]
 
         # create new model inputs
-        new_model_inputs = ModelInputs(input_ids=new_input_ids,
+        device = input_ids.device
+        total_msgs = len(new_seqlens)
+        new_seqlens = torch.tensor(new_seqlens, device=device, dtype=torch.long)
+        new_model_inputs = ModelInputs(input_ids=input_ids,
                                        seq_length=new_seqlens,
-                                       history_lengths=torch.tensor([0], device=device, dtype=torch.long),
+                                       history_lengths=torch.zeros(total_msgs, device=device, dtype=torch.long),
                                        block_offsets=crt_ctx.block_offsets,
                                        is_decoding=False,
-                                       num_ignored_history=torch.tensor([0], device=device, dtype=torch.long),
+                                       num_ignored_history=torch.zeros(total_msgs, device=device, dtype=torch.long),
                                        max_q_seqlen=new_seqlens.max().item(),
                                        max_kv_seqlen=new_seqlens.max().item(),
                                        sum_kv_seqlen=new_seqlens.sum().item(),
-                                       model_metas=[None])
+                                       model_metas=[None for _ in range(total_msgs)])
 
-        # build and set new context
-        # NOTE: we keep original block_offsets, vision_inputs and kv_caches
+        # build new context, to get new position_ids and attn_metadata
         new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config)
-        new_ctx.vision_inputs = crt_ctx.vision_inputs
-        new_ctx.kv_caches = crt_ctx.kv_caches
-        self.ctx_mgr.set_context(new_ctx)
 
-        return new_ctx
+        return new_ctx.position_ids, new_ctx.attn_metadata
 
     def forward(
         self,
@@ -751,15 +767,11 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 lang_embeds = self.language_model.get_input_embeddings()(input_ids)
             else:
                 # extract feature and compress visual tokens
-                vit_embeds, lang_embeds, new_input_ids, new_image_mask, new_seqlens = self.extract_and_compress(
+                vit_embeds, lang_embeds, input_ids, image_mask, new_seqlens = self.extract_and_compress(
                     pixel_values, input_ids, image_token_id)
-                input_ids = new_input_ids
-                image_mask = new_image_mask
 
-                # update context and relevant attributes
-                ctx = self.update_context(new_input_ids, new_seqlens)
-                position_ids = ctx.position_ids
-                attn_metadata = ctx.attn_metadata
+                # update forward inputs
+                position_ids, attn_metadata = self.update_forward_inputs(input_ids, new_seqlens)
 
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
 
@@ -800,6 +812,20 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         attn_metadata = context.attn_metadata
         vision_embeddings = context.input_embeddings
         vision_embedding_indexing = None
+
+        if context.is_decoding and context.model_metas is not None and context.model_metas[0] is not None:
+            # model meta from the previous step, therefore +1 for the current decoding step
+            new_kv_seqlens = [(meta['new_seqlen'] + 1) for meta in context.model_metas]
+
+            # update model metas for the next step
+            self.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_kv_seqlens]
+
+            # update position ids, attn_metadata
+            new_kv_seqlens = torch.tensor(new_kv_seqlens, device=input_ids.device, dtype=torch.long)
+            position_ids = new_kv_seqlens
+            attn_metadata.kv_seqlens = new_kv_seqlens
+            attn_metadata.cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(new_kv_seqlens, dim=0, dtype=torch.int32),
+                                                                 (1, 0))
 
         # vision inputs
         pixel_values = None
@@ -889,6 +915,11 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 load_weight(param, loaded_weight)
 
         self.language_model.load_weights(new_weights.items())
+
+    def post_update_model_metas(self, model_metas):
+        """Post update model meta."""
+        new_model_metas = self.model_metas if self.model_metas is not None else model_metas
+        return new_model_metas
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""

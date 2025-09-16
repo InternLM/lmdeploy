@@ -82,6 +82,13 @@ class GraphRunner:
 
         return None
 
+    def post_update_model_metas(self, model_metas):
+        """Post update model meta."""
+        if hasattr(self.model, 'post_update_model_metas'):
+            return self.model.post_update_model_metas(model_metas)
+
+        return None
+
     def get_input_processor(self):
         """Get input processor."""
         if hasattr(self.model, 'get_input_processor'):
