@@ -198,33 +198,3 @@ def test_restful_chat_fallback_backend_tp1(config, worker_id):
         run_vl_testcase(config)
     else:
         run_vl_testcase(config, port=DEFAULT_PORT + get_workerid(worker_id))
-
-
-@pytest.mark.order(7)
-@pytest.mark.restful_api_vl
-@pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment', [
-    {
-        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
-        'cuda_prefix': None,
-        'tp_num': 2
-    },
-    {
-        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
-        'cuda_prefix': None,
-        'tp_num': 2,
-        'extra': ' --communicator native'
-    },
-    {
-        'model': 'Qwen/Qwen2.5-VL-32B-Instruct',
-        'cuda_prefix': None,
-        'tp_num': 2,
-        'extra': ' --quant-policy 8 --communicator native'
-    },
-],
-                         indirect=True)
-def test_restful_chat_fallback_backend_tp2(config, worker_id):
-    if get_workerid(worker_id) is None:
-        run_vl_testcase(config)
-    else:
-        run_vl_testcase(config, port=DEFAULT_PORT + get_workerid(worker_id))

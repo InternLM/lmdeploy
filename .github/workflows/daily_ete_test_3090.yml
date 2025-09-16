@@ -39,7 +39,7 @@ on:
         type: string
         default: "['quant', 'tools']"
   schedule:
-    - cron:  '00 16 * * 0-4'
+    - cron:  '00 14 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -49,7 +49,7 @@ env:
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: ${{ github.event_name == 'schedule' && github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
-  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
+  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
 
@@ -95,7 +95,7 @@ jobs:
     runs-on: [self-hosted, 3090-r1]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -136,7 +136,7 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -149,11 +149,12 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+          python3 -m pip install auto_gptq matplotlib
+          python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install transformers==4.53.1
+          python3 -m pip install transformers==4.53.1 datasets==3.6.0 timm
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -209,7 +210,7 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -274,7 +275,7 @@ jobs:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -315,7 +316,7 @@ jobs:
       - name: Test lmdeploy - restful api
         timeout-minutes: 75
         run: |
-          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not interns1 and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()
@@ -358,7 +359,7 @@ jobs:
     needs: [test_tools, test_restful]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip

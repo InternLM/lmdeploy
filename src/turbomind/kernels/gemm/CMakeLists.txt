@@ -6,7 +6,7 @@ add_library(gemm2
         registry.cu
         dispatch_cache.cu
         gpu_metric.cu
-        convert_v2.cu
+        convert_v3.cu
         cast.cu
         unpack.cu
         context.cu
@@ -16,17 +16,19 @@ add_library(gemm2
         tuner/sampler.cu
         tuner/stopping_criterion.cc
         tuner/params.cc
-        kernel/f16_u4g128_f16_tnt_sm90_s16816.cu
-        kernel/f16_u4g128_f16_tnt_sm80_s16816.cu
-        kernel/f16_u4g128_f16_tnt_sm75_s16816.cu
-        kernel/f16_u4g128_f16_tnt_sm70_s884.cu
-        kernel/sm90_mxfp4.cu
-        kernel/sm80_mxfp4.cu
-        kernel/sm70_s884_dynamic.cu
-        kernel/sm75_s16816_dynamic.cu
-        kernel/sm80_s16816_dynamic.cu
-        kernel/sm90_s16816_dynamic.cu
-        kernel/sm90_q64n32.cu
+        kernel/sm90_16816_4.cu
+        kernel/sm90_16816_8.cu
+        kernel/sm90_16816_16.cu
+        kernel/sm80_16816_4.cu
+        kernel/sm80_16816_8.cu
+        kernel/sm80_16816_16.cu
+        kernel/sm75_16816_4.cu
+        kernel/sm75_16816_8.cu
+        kernel/sm75_16816_16.cu
+        kernel/sm70_884_4.cu
+        kernel/sm70_884_8.cu
+        kernel/sm70_884_16.cu
+        kernel/sm90_64n32_8.cu
         cublas.cu
         moe_utils_v2.cu
         test/test_utils.cu
@@ -49,7 +51,6 @@ set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 
 if (BUILD_TEST)
-
         add_executable(test_gemm_v2
                 test/test_gemm_v2.cc
                 ../../models/llama/LlamaLinear.cu

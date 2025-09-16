@@ -507,31 +507,7 @@ PYBIND11_MODULE(_turbomind, m)
                     delete ptr;
                 };
 
-                turbomind::DataType data_type{};
-
-                if (weight_type == "half" || weight_type == "fp16" || weight_type == "float16"
-                    || weight_type == "int4") {
-                    data_type = turbomind::kFloat16;
-                }
-                else if (weight_type == "bf16" || weight_type == "bfloat16") {
-#ifdef ENABLE_BF16
-                    data_type = turbomind::kBfloat16;
-#else
-                    throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
-#endif
-                }
-                else if (weight_type == "fp8") {
-                    data_type = turbomind::kBfloat16;
-                }
-                else {
-#ifdef ENABLE_FP32
-                    data_type = turbomind::kF32;
-#else
-                    throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
-#endif
-                }
-
-                std::shared_ptr<LlamaTritonModel> model(new LlamaTritonModel(data_type, model_dir, config, gil_factory),
+                std::shared_ptr<LlamaTritonModel> model(new LlamaTritonModel(model_dir, config, gil_factory),
                                                         no_gil_deleter);
                 return model;
             },
@@ -580,12 +556,13 @@ PYBIND11_MODULE(_turbomind, m)
             "level"_a)
         .def(
             "wakeup",
-            [](LlamaTritonModel* model, int deviceId, const std::vector<std::string>& tags) {
-                model->wakeup(deviceId, tags);
+            [](LlamaTritonModel* model, int deviceId, const std::vector<std::string>& tags, int rank) {
+                model->wakeup(deviceId, tags, rank);
             },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
-            "tags"_a)
+            "tags"_a,
+            "rank"_a)
         .def("__str__", &LlamaTritonModel::toString)
         .def("__repr__", &LlamaTritonModel::toString)
         .def("get_tensor_para_size", &LlamaTritonModel::getTensorParaSize)

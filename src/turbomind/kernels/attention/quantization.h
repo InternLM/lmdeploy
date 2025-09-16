@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
+#include <cuda_fp8.h>
 
 namespace turbomind {
 
@@ -784,57 +785,90 @@ struct ConvertKvCache<fp4_e2m1_t, T> {
     }
 };
 
-#if 0
-inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_e4m3(const Array<fp8_e4m3, 4>& v)
+__device__ inline Array<bfloat16_t, 4> cvt_bf16x4_e4m3(const Array<fp8_e4m3_t, 4>& vi)
 {
-#if TURBOMIND_ARCH_SM80
-    static constexpr uint32_t EM_MASK = 0x7f007f00;
-    static constexpr uint32_t S_MASK  = 0x80008000;
+    const uint32_t& x = (const uint32_t&)vi;
 
-    Array<nv_bfloat16, 4> result;
-    uint32_t*             h = reinterpret_cast<uint32_t*>(&result);
+    //    0   7   C   0
+    // SEEEEEEEEMMMMMMMSEEEEEEEEMMMMMMM
+    // SEEEEMMM        SEEEEMMM
+    //         SEEEEMMM        SEEEEMMM
 
-    const uint32_t& i2s_0 = reinterpret_cast<const uint32_t&>(v);
-    const uint32_t  i2s_1 = i2s_0 << 8;
+    constexpr uint32_t S  = 0x80008000U;
+    constexpr uint32_t EM = 0x07F007F0U;
 
-    /// TODO: Check LOP3 is generated for (a | (b & c))
-    h[0] = ((i2s_0 & EM_MASK) >> 4) | (i2s_0 & S_MASK);
-    h[1] = ((i2s_1 & EM_MASK) >> 4) | (i2s_1 & S_MASK);
+    Array<uint32_t, 2> vo;
 
-    // SEEEEEEE EMMMMMMM
-    //  1111011 1         // 2^(127-7)  0x7b80
+    vo[0] = (x << 8 & S) | (x << 4 & EM);
+    vo[1] = (x << 0 & S) | (x >> 4 & EM);
 
-    /// TODO: fuse this with per channel scaling
-    const nv_bfloat16 exp_shfit = __ushort_as_bfloat16(0x7b80);  // 2^120
+    constexpr uint32_t e  = (127U - 7U + 127U) << 7U;
+    constexpr uint32_t ee = e << 16U | e;
+
     PRAGMA_UNROLL
-    for (int i = 0; i < 4; ++i) {
-        result[i] *= exp_shfit;
-    }
-    return result;
+    for (int i = 0; i < 2; ++i) {
+#if TURBOMIND_ARCH_SM90
+        asm("mul.rn.bf16x2 %0, %1, %2;" : "=r"(vo[i]) : "r"(vo[i]), "r"(ee));
 #else
-    return {};
+        asm("fma.rn.bf16x2 %0, %1, %2, %3;" : "=r"(vo[i]) : "r"(vo[i]), "r"(ee), "r"(0));
 #endif
-};
+    }
+
+    return (Array<bfloat16_t, 4>&)vo;
+}
+
+__device__ inline Array<half, 4> cvt_f16x4_e4m3(const Array<fp8_e4m3_t, 4>& vi)
+{
+    const uint32_t& x = (const uint32_t&)vi;
+
+    //    3   F   8   0
+    // SEEEEEMMMMMMMMMMSEEEEEMMMMMMMMMM
+    // SEEEEMMM        SEEEEMMM
+    //         SEEEEMMM        SEEEEMMM
+
+    constexpr uint32_t S  = 0x80008000U;
+    constexpr uint32_t EM = 0x3F803F80U;
+
+    Array<uint32_t, 2> vo;
+
+    vo[0] = (x << 8 & S) | (x << 7 & EM);
+    vo[1] = (x << 0 & S) | (x >> 1 & EM);
+
+    constexpr uint32_t e  = (15U - 7U + 15U) << 10U;
+    constexpr uint32_t ee = e << 16U | e;
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < 2; ++i) {
+        asm("mul.rn.f16x2 %0, %1, %2;" : "=r"(vo[i]) : "r"(vo[i]), "r"(ee));
+    }
+
+    return (Array<half, 4>&)vo;
+}
 
 template<class T>
-struct ConvertKvCache<fp8_e4m3, T> {
+struct ConvertKvCache<fp8_e4m3_t, T> {
+
     template<int N>
-    __device__ static auto convert(const Array<fp8_e4m3, N>& vi)
+    __device__ static auto convert(const Array<fp8_e4m3_t, N>& vi)
     {
+        static_assert(N % 4 == 0);
         Array<T, N> vo;
         PRAGMA_UNROLL
-        for (int n = 0; n < N; n += 4) {
-            auto& ui = (const Array<fp8_e4m3, 4>&)vi[n];
-            if constexpr (std::is_same_v<T, nv_bfloat16>) {
-                return cvt_bf16x4_e4m3(ui);
+        for (int i = 0; i < N; i += 4) {
+            auto& v = (Array<T, 4>&)vo[i];
+            if constexpr (std::is_same_v<T, bfloat16_t>) {
+                v = cvt_bf16x4_e4m3((Array<fp8_e4m3_t, 4>&)vi[i]);
+            }
+            else if constexpr (std::is_same_v<T, half_t>) {
+                v = cvt_f16x4_e4m3((Array<fp8_e4m3_t, 4>&)vi[i]);
             }
             else {
-                static_assert(!std::is_same_v<T, T>, "not implemented");
+                static_assert(N != N, "not implemented");
             }
         }
+        return vo;
     }
 };
-#endif
 
 template<class Q, class T>
 inline __device__ void StoreQuantParam(T* dst, Array<T, 2> src)
