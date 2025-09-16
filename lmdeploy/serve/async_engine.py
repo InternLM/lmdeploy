@@ -628,7 +628,8 @@ class AsyncEngine(LogitsMixin):
                                                sequence_start,
                                                tools=tools,
                                                enable_thinking=enable_thinking,
-                                               reasoning_effort=reasoning_effort)
+                                               reasoning_effort=reasoning_effort,
+                                               **kwargs)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -736,7 +737,8 @@ class AsyncEngine(LogitsMixin):
                                                         adapter_name,
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
-                                                        enable_thinking=enable_thinking)
+                                                        enable_thinking=enable_thinking,
+                                                        **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,
