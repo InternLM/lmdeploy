@@ -1,9 +1,9 @@
-model_path: /nvme1/qa_test_models
-resource_path: /nvme1/qa_test_models/resource
-dst_path: /nvme1/qa_test_models/autotest_model
-log_path: /nvme1/qa_test_models/autotest_model/log
-benchmark_path: /nvme1/qa_test_models/benchmark-reports
-dataset_path: /nvme1/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+model_path: /nvme/qa_test_models
+resource_path: /nvme/qa_test_models/resource
+dst_path: /nvme/qa_test_models/autotest_model
+log_path: /nvme/qa_test_models/autotest_model/log
+benchmark_path: /nvme/qa_test_models/benchmark-reports
+dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 env_tag: h800
 
 tp_config:
