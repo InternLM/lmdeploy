@@ -146,6 +146,7 @@ def test_restful_chat_kvint8_tp4(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment', [
     {
         'model': 'OpenGVLab/InternVL2-4B',
