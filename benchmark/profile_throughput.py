@@ -138,11 +138,11 @@ class Engine:
         self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config)
             self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            tm_model = PytorchEngine.from_pretrained(model_path, engine_config=engine_config)
             self.backend = 'pytorch'
 
         self.tm_model = tm_model

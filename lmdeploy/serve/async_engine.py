@@ -329,10 +329,7 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path,
-                                            tokenizer=self.tokenizer,
-                                            engine_config=backend_config,
-                                            **kwargs)
+        return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
@@ -340,7 +337,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        return Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
+        return Engine.from_pretrained(model_path, engine_config=backend_config)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []

@@ -160,8 +160,6 @@ class RayWorkerWrapper(WorkerWrapperBase):
         init_backend(device_type)
         try_import_deeplink(device_type)
 
-        from lmdeploy.tokenizer import Tokenizer
-        tokenizer = Tokenizer(model_path).model.model
         model_config = ModelConfig.from_pretrained(model_path,
                                                    dtype=dtype,
                                                    hf_overrides=misc_config.hf_overrides,
@@ -176,7 +174,6 @@ class RayWorkerWrapper(WorkerWrapperBase):
             misc_config=misc_config,
             adapters=adapters,
             device_type=device_type,
-            tokenizer=tokenizer,
             log_level=log_level,
         )
         self.node_ip = ray.util.get_node_ip_address()
@@ -232,7 +229,6 @@ class RayExecutor(ExecutorBase):
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
                  misc_config: MiscConfig,
-                 tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda',
                  dtype: str = 'auto'):
@@ -243,7 +239,6 @@ class RayExecutor(ExecutorBase):
                          backend_config=backend_config,
                          dist_config=dist_config,
                          misc_config=misc_config,
-                         tokenizer=tokenizer,
                          adapters=adapters,
                          device_type=device_type)
 

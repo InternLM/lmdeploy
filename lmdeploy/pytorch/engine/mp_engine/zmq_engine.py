@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import atexit
-import pickle
 import signal
 from typing import TYPE_CHECKING
 
@@ -30,27 +29,22 @@ def cancel_async_tasks(loop: asyncio.AbstractEventLoop):
 
 class ZMQMPEngine(MPEngine):
 
-    def __init__(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None, **kwargs) -> None:
+    def __init__(self, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs) -> None:
         """Initialize mp engine."""
         from .zmq_rpc import AsyncRPCClient
         self.shared_dict = None
         self.port = None
         self.proc = None
-        self._start_mp_proc(model_path, tokenizer, engine_config)
+        self._start_mp_proc(model_path, engine_config)
 
         self.rpc_client = AsyncRPCClient(port=self.port)
 
         super().__init__()
         atexit.register(self.close)
 
-    def _start_mp_proc(self, model_path: str, tokenizer: object, engine_config: PytorchEngineConfig = None):
+    def _start_mp_proc(self, model_path: str, engine_config: PytorchEngineConfig = None):
         """Start mp proc."""
         logger.debug('Starting engine multi-process.')
-        try:
-            pickle.dumps(tokenizer)
-        except Exception:
-            logger.warning('Failed to pickle tokenizer. It would be created in subprocess.')
-            tokenizer = None
         with mp.Manager() as manager:
             self.shared_dict = manager.dict()
             condition = manager.Condition()
@@ -61,7 +55,6 @@ class ZMQMPEngine(MPEngine):
                 args=(self.shared_dict, condition),
                 kwargs=(dict(
                     model_path=model_path,
-                    tokenizer=tokenizer,
                     engine_config=engine_config,
                     log_level=log_level,
                 )),
@@ -78,12 +71,10 @@ class ZMQMPEngine(MPEngine):
     def _mp_proc(shared_dict: dict,
                  condition: mp.Condition,
                  model_path: str,
-                 tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  log_level: str = 'WARNING'):
         """Mp process function."""
         from lmdeploy.pytorch.engine import Engine
-        from lmdeploy.tokenizer import Tokenizer
 
         from .zmq_rpc import AsyncRPCServer
 
@@ -98,11 +89,8 @@ class ZMQMPEngine(MPEngine):
         # create engine
         if engine_config is not None:
             engine_config.enable_mp_engine = False
-        if tokenizer is None:
-            tokenizer = Tokenizer(model_path)
         engine = Engine.from_pretrained(
             model_path,
-            tokenizer=tokenizer,
             engine_config=engine_config,
         )
 
