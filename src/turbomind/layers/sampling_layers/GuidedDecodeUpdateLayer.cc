@@ -48,7 +48,9 @@ void GuidedDecodeUpdateLayer<T>::Forward(TensorMap& args)
 
     for (size_t i = 0; i < bsz; ++i) {
         const auto& matcher = matchers_[i];
-        matcher->AcceptToken(output_ids_buf.data()[i]);
+        if (matcher) {
+            matcher->AcceptToken(output_ids_buf.data()[i]);
+        }
     }
 }
 

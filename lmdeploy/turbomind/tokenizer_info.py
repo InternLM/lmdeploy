@@ -188,7 +188,7 @@ class TokenizerInfo(_xgr.TokenizerInfo):
         try:
             vocab_dict = tokenizer.get_vocab()
         except AttributeError as e:
-            msg = (f"Cannot get the vocabulary of the tokenizer {type(tokenizer)}. The tokenizer "
+            msg = (f'Cannot get the vocabulary of the tokenizer {type(tokenizer)}. The tokenizer '
                    'should have a get_vocab method.')
             raise ValueError(msg) from e
 
@@ -284,7 +284,7 @@ class TokenizerInfo(_xgr.TokenizerInfo):
 
         else:
             # TODO(yixin): unsupported tokenizer
-            raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
+            raise ValueError(f'Unsupported tokenizer type: {type(tokenizer)}')
 
     @property
     def vocab_type(self) -> VocabType:
