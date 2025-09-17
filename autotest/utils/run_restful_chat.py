@@ -144,7 +144,7 @@ def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PO
 
         case_info = cases_info.get(case)
 
-        with allure.step(case + ' step2 - restful_test - openai chat'):
+        with allure.step(case + ' restful_test - openai chat'):
             restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, worker_id)
             allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:

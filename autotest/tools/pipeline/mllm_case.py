@@ -10,7 +10,7 @@ from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64
 
-gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=2)
+gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
 PIC1 = 'tiger.jpeg'
 PIC2 = 'human-pose.jpg'

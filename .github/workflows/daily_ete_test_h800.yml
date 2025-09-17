@@ -289,7 +289,7 @@ jobs:
         if: always()
         run: |
           chmod -R 777 $REPORT_DIR
-          chmod -R 777 /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
+          chmod -R 777 ${{env.REPORT_DIR}}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
