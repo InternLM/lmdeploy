@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/layers/sampling_layers/GuidedDecodeMaskLayer.h"
+#include "src/turbomind/kernels/apply_token_bitmask_inplace_cuda.h"
 
 namespace turbomind {
 
@@ -38,39 +39,37 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    Tensor_<float> logits = args.at("logits");
-    const size_t   bsz    = logits.shape(0);
-    Tensor_<float> logits_buf{logits.shape(), kCPU};
-    std::vector<int64_t> logits_shape = {bsz, logits.shape(1)};
+    Tensor_<float>       logits = args.at("logits");
+    const ssize_t        bsz    = logits.shape(0);
 
     FT_CHECK(bsz == matchers_.size());
 
     const auto           bitmask_size = xgrammar::GetBitmaskSize(vocab_size_padded_);
     Tensor_<int32_t>     bitmask{{bsz, bitmask_size}, kCPU};
+    Tensor_<int32_t>     bitmask_device{{bsz, bitmask_size}, kDEVICE};
     std::vector<int64_t> bitmap_shape = {bsz, bitmask_size};
 
-    DLTensor bitmask_dltensor{bitmask.data(), DLDevice{kDLCPU, 0}, static_cast<int32_t>(bitmap_shape.size()), xgrammar::GetBitmaskDLType(), bitmap_shape.data(), nullptr, 0};
-    DLTensor logits_dltensor{logits_buf.data(), DLDevice{kDLCPU, 0}, static_cast<int32_t>(logits_shape.size()), DLDataType{kDLFloat, 32, 1}, logits_shape.data(), nullptr, 0};
-
-    std::cerr << ">> logits shape: "<< logits.shape() << std::endl << ">> vocab_size_padded_: " << vocab_size_padded_ << std::endl;
-    std::cerr << ">> logits device: "<< to_string(logits.device().type) << std::endl;
-
-    // TODO: Speedup
+    DLTensor bitmask_dltensor{bitmask.data(),
+                              DLDevice{kDLCPU, 0},
+                              static_cast<int32_t>(bitmap_shape.size()),
+                              xgrammar::GetBitmaskDLType(),
+                              bitmap_shape.data(),
+                              nullptr,
+                              0};
 
     for (size_t i = 0; i < bsz; ++i) {
         const auto& matcher = matchers_[i];
         if (matcher) {
-            matcher->FillNextTokenBitmask(&bitmask_dltensor, i, true);
+            matcher->FillNextTokenBitmask(&bitmask_dltensor, i);
         }
     }
 
-    Copy(logits, logits_buf);
+    Copy(bitmask, bitmask_device);
+    ApplyTokenBitmaskInplace(logits, bitmask_device);
 
-    xgrammar::ApplyTokenBitmaskInplaceCPU(&logits_dltensor, bitmask_dltensor, vocab_size_, std::nullopt);
+    //xgrammar::ApplyTokenBitmaskInplaceCPU(&logits_dltensor, bitmask_dltensor, vocab_size_, std::nullopt);
 
-    Copy(logits_buf, logits);
 }
-
 
 template class GuidedDecodeMaskLayer<float>;
 
