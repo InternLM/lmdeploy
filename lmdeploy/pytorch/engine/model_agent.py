@@ -16,6 +16,7 @@ from torch.profiler import ProfilerActivity, profile, record_function
 
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
@@ -300,16 +301,16 @@ class BaseModelAgent:
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  misc_config: MiscConfig,
-                 tokenizer: Any,
                  dist_ctx: DistContext,
                  device_ctx: DeviceContext,
                  adapters: Dict[str, str] = None):
 
         self.model_config = model_config
         self.cache_config = cache_config
-        self.tokenizer = tokenizer
+        # use raw tokenizer
+        self.tokenizer = Tokenizer(model_path).model.model
         try:
-            self.sampling_vocab_size = len(tokenizer)
+            self.sampling_vocab_size = len(self.tokenizer)
         except BaseException:
             self.sampling_vocab_size = None
 
@@ -1153,7 +1154,6 @@ def build_model_agent(model_path: str,
                       cache_config: CacheConfig,
                       backend_config: BackendConfig,
                       misc_config: MiscConfig,
-                      tokenizer: Any,
                       dist_ctx: DistContext = None,
                       device_ctx: DeviceContext = None,
                       adapters: Dict[str, str] = None):
@@ -1182,7 +1182,6 @@ def build_model_agent(model_path: str,
         cache_config=cache_config,
         backend_config=backend_config,
         misc_config=misc_config,
-        tokenizer=tokenizer,
         adapters=adapters,
         dist_ctx=dist_ctx,
         device_ctx=device_ctx,

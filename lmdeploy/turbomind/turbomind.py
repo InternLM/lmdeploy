@@ -23,6 +23,7 @@ from torch.nn.utils.rnn import pad_sequence
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
@@ -121,7 +122,6 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
-                 tokenizer: object,
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
@@ -143,12 +143,10 @@ class TurboMind:
         self.devices = _engine_config.devices
         self._engine_created = False
 
-        self.tokenizer = tokenizer
-
         if not osp.exists(model_path):
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
         self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config)
-
+        self.tokenizer = Tokenizer(model_path)
         if not _engine_config.empty_init:
             self._load_weights()
             self._process_weights()
@@ -165,6 +163,7 @@ class TurboMind:
 
     def _load_weights(self):
         """Load weights."""
+        self._get_model_params()
 
         with torch.cuda.device(self.devices[0]):
             self._tm_model.export()
@@ -206,8 +205,11 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _get_model_params(self, model_comm, tm_params: dict):
+    def _get_model_params(self):
         """Get turbomind model params when loading from hf."""
+
+        model_comm = self.model_comm
+        tm_params = self._tm_model.tm_params
 
         def _get_params(device_id, que):
             rank = self.node_id * self.gpu_count + device_id
@@ -229,6 +231,7 @@ class TurboMind:
                     tm_params[k] = [v]
                 else:
                     tm_params[k].append(v)
+        logger.warning(f'get {len(tm_params)} model params')
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """Postprocess turbomind config by."""
@@ -274,10 +277,6 @@ class TurboMind:
         self._create_weight(model_comm)
         # output model
         self._tm_model = tm_model
-        # get tm params
-        tm_params = tm_model.tm_params
-        self._get_model_params(model_comm, tm_params)
-        logger.warning(f'get {len(tm_params)} model params')
         return model_comm
 
     def sleep(self, level: int = 1):
@@ -291,7 +290,8 @@ class TurboMind:
         if tags is None:
             tags = ['weights', 'kv_cache']
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count):
+            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
+            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count, ranks):
                 pass
 
     def update_params(self, request: UpdateParamsRequest):
@@ -314,6 +314,7 @@ class TurboMind:
             return func(*args).clone()
 
         if not hasattr(self, '_export_iter'):
+            self._get_model_params()
             que = Queue()
             tm_model = self._tm_model
             tm_model.input_model.model_path = que
@@ -338,7 +339,6 @@ class TurboMind:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
-                        tokenizer: object,
                         model_name: str = None,
                         chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
@@ -363,7 +363,6 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         return cls(model_path=pretrained_model_name_or_path,
-                   tokenizer=tokenizer,
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,

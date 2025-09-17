@@ -25,6 +25,7 @@
 
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -45,7 +46,7 @@ static bool is_fuse_silu_act()
             catch (...) {
             }
         }
-        TM_LOG_INFO("TM_FUSE_SILU_ACT=1");
+        // TM_LOG_INFO("TM_FUSE_SILU_ACT=1");
         return true;
     }();
     return value;
@@ -88,6 +89,7 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
     register_module("attention", *self_attn_weights);
 
     if (inter_size_) {
+        const bool is_cublas_gemm = byte_size(weight_type_, 8) == 16;
         ffn_weights.reset(new LlamaFfnWeight{
             hidden_units_,
             inter_size_,
@@ -98,7 +100,7 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
             weight_type_,
             model.group_size,
             model.act_type,
-            weight_type_ == data_type_v<uint4_t> && is_fuse_silu_act(),
+            is_fuse_silu_act() && !is_cublas_gemm,
         });
         register_module("feed_forward", *ffn_weights);
     }
@@ -128,16 +130,14 @@ LlamaDecoderLayerWeight::~LlamaDecoderLayerWeight() = default;
 
 void LlamaDecoderLayerWeight::prepare(const cudaDeviceProp& prop, cudaStream_t st)
 {
-    const bool use_simt = is_16xx_series(prop.name);
-
-    self_attn_weights->prepare(use_simt);
+    self_attn_weights->prepare();
 
     if (ffn_weights) {
-        ffn_weights->prepare(false, use_simt);
+        ffn_weights->prepare(false);
     }
 
     if (moe_weights) {
-        moe_weights->prepare(use_simt);
+        moe_weights->prepare();
     }
 }
 

@@ -62,6 +62,7 @@ pytorch_qwen2_5_1_5b_model = deepcopy(lmdeploy_qwen2_5_1_5b_model)
 pytorch_qwen2_5_72b_model = deepcopy(lmdeploy_qwen2_5_72b_model)
 pytorch_qwen2_7b_model = deepcopy(lmdeploy_qwen2_7b_model)
 pytorch_yi_1_5_9b_model = deepcopy(lmdeploy_yi_1_5_9b_model)
+pytorch_deepseek_v2_model['engine_config']['cache_max_entry_count'] = 0.6
 
 lmdeploy_glm4_9b_model_native = deepcopy(lmdeploy_glm4_9b_model)
 lmdeploy_deepseek_7b_base_model_native = deepcopy(lmdeploy_deepseek_7b_base_model)

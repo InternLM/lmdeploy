@@ -23,12 +23,17 @@ int main()
     auto stream = core::Stream::create();
 
     core::ContextGuard ctx{stream, core::Allocator{kCPU}, core::Allocator{stream, false}};
-    // TestParameter p{kBfloat16, kBfloat16, kBfloat16};
-    // TestParameter p{kHalf, kHalf, kHalf};
+    // clang-format off
+    // TestParameter p{kHalf, kUint4      , kHalf, 128};
+    // TestParameter p{kHalf, kFloat4_e2m1, kHalf,  32};
+    // TestParameter p{kHalf, kFloat8_e4m3, kHalf, 128};
+    // TestParameter p{kHalf, kHalf       , kHalf};
+
+    // TestParameter p{kBfloat16, kBfloat16   , kBfloat16};
     // TestParameter p{kBfloat16, kFloat8_e4m3, kFloat8_e4m3, 128};
-    // TestParameter p{kHalf, kUint4, kHalf, 128};
-    // TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16, 32};
-    TestParameter p{kHalf, kFloat4_e2m1, kHalf, 32};
+    TestParameter p{kBfloat16, kFloat8_e4m3, kBfloat16   , 128};
+    // TestParameter p{kBfloat16, kFloat4_e2m1, kBfloat16   ,  32};
+    // clang-format on
 
     // p.input_dim      = 512;
     // p.output_dim     = 1024;
@@ -51,23 +56,36 @@ int main()
 
     // p.input_dim         = 7168;
     // p.output_dim        = 4096;
-    // p.max_batch_size    = 8192;
+    // p.max_batch_size    = 16384;
     // p.expert_num        = 256;
     // p.experts_per_token = 8;
 
-    // p.input_dim         = 2048;
-    // p.output_dim        = 1536;
-    // p.max_batch_size    = 64;
-    // p.expert_num        = 128;
-    // p.experts_per_token = 8;
+    // Qwen3-MoE
+    p.expert_num        = 128;
+    p.experts_per_token = 8;
+    // 30B
+    // p.input_dim  = 2048;
+    // p.output_dim = 768 * 2;
+    // 235B
+    // p.input_dim  = 4096;
+    // p.output_dim = 1536 * 2;
+    // 480B
+    p.input_dim  = 6144;
+    p.output_dim = 2560 * 2;
 
-    p.input_dim         = 4096;
-    p.output_dim        = 6144;
-    p.max_batch_size    = 512;
-    p.expert_num        = 32;
-    p.experts_per_token = 4;
+    p.max_batch_size = 256;
 
-    // p.input_dim      = 32;
+    // p.input_dim         = 16384;
+    // p.output_dim        = 16384;
+    // p.max_batch_size    = 16384;
+
+    // p.input_dim         = 2880;
+    // p.output_dim        = 5760;
+    // p.max_batch_size    = 16384;
+    // p.expert_num        = 32;
+    // p.experts_per_token = 4;
+
+    // p.input_dim      = 128;
     // p.output_dim     = 32;
     // p.max_batch_size = 1;
 

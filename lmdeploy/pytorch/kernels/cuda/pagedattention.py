@@ -173,7 +173,7 @@ def _fwd_grouped_split_kernel(
         if start_n + BLOCK_N > history_len or window_size > 0:
             qk_mask = history_len >= (start_n + offs_n)
             if window_size > 0:
-                qk_mask = qk_mask and ((start_n + offs_n) >= kv_min_loc)
+                qk_mask = qk_mask & ((start_n + offs_n) >= kv_min_loc)
             qk = tl.where(
                 qk_mask[None, :],
                 qk,
@@ -391,7 +391,7 @@ def _fwd_grouped_split_quant_kernel(
         if start_n + BLOCK_N > history_len or window_size > 0:
             qk_mask = history_len >= (start_n + offs_n)
             if window_size > 0:
-                qk_mask = qk_mask and ((start_n + offs_n) >= kv_min_loc)
+                qk_mask = qk_mask & ((start_n + offs_n) >= kv_min_loc)
             qk = tl.where(
                 qk_mask[None, :],
                 qk,
