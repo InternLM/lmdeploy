@@ -39,8 +39,8 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    Tensor_<float>       logits = args.at("logits");
-    const ssize_t        bsz    = logits.shape(0);
+    Tensor_<float> logits = args.at("logits");
+    const ssize_t  bsz    = logits.shape(0);
 
     FT_CHECK(bsz == matchers_.size());
 
@@ -67,8 +67,7 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
     Copy(bitmask, bitmask_device);
     ApplyTokenBitmaskInplace(logits, bitmask_device);
 
-    //xgrammar::ApplyTokenBitmaskInplaceCPU(&logits_dltensor, bitmask_dltensor, vocab_size_, std::nullopt);
-
+    // xgrammar::ApplyTokenBitmaskInplaceCPU(&logits_dltensor, bitmask_dltensor, vocab_size_, std::nullopt);
 }
 
 template class GuidedDecodeMaskLayer<float>;
