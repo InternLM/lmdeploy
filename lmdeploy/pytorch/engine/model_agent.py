@@ -239,7 +239,12 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-    return dict(hidden_states=output, model_metas=model_metas)
+
+            # InternVL-3.5-Flash will change the seqlen, model_metas during forward
+            model_metas = context.model_metas
+            seq_length = context.q_seqlens
+
+    return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
 
 
 @record_function('stopping_criteria')
@@ -503,7 +508,11 @@ class BaseModelAgent:
         if not is_long_context:
             ret = await __forward(inputs)
             if not return_logits and not inputs.is_decoding:
-                last_token_loc = inputs.seq_length.cumsum(0) - 1
+                # fetch seq_length from the context, since models may change it (e.g. InternVL-3.5-Flash)
+                seq_length = ret.get('seq_length', None)
+                assert seq_length is not None, 'seq_length cannot be None.'
+                last_token_loc = seq_length.cumsum(0) - 1
+
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
         else:
             ret = await __long_context_single_forward(inputs, max_seqlen)
