@@ -1,5 +1,6 @@
 allure-pytest
 coverage
+jsonschema
 nvidia-ml-py
 pytest
 pytest-assume

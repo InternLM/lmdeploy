@@ -39,8 +39,8 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    Tensor_<float>       logits = args.at("logits");
-    const ssize_t        bsz    = logits.shape(0);
+    Tensor_<float> logits = args.at("logits");
+    const ssize_t  bsz    = logits.shape(0);
 
     FT_CHECK(bsz == matchers_.size());
 
@@ -56,19 +56,19 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
                               bitmap_shape.data(),
                               nullptr,
                               0};
-
+    bool     need_apply = false;
     for (size_t i = 0; i < bsz; ++i) {
         const auto& matcher = matchers_[i];
         if (matcher) {
             matcher->FillNextTokenBitmask(&bitmask_dltensor, i);
+            need_apply = true;
         }
     }
 
-    Copy(bitmask, bitmask_device);
-    ApplyTokenBitmaskInplace(logits, bitmask_device);
-
-    //xgrammar::ApplyTokenBitmaskInplaceCPU(&logits_dltensor, bitmask_dltensor, vocab_size_, std::nullopt);
-
+    if (need_apply) {
+        Copy(bitmask, bitmask_device);
+        ApplyTokenBitmaskInplace(logits, bitmask_device);
+    }
 }
 
 template class GuidedDecodeMaskLayer<float>;

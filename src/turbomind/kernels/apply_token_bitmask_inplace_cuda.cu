@@ -31,8 +31,10 @@ using namespace std;
 #define CUDART_INF_FP16 __ushort_as_half((unsigned short)0x7C00U)
 #endif
 
+#if __CUDA_ARCH__ >= 800
 #ifndef CUDART_INF_BF16
 #define CUDART_INF_BF16 __ushort_as_bfloat16((unsigned short)0x7F80U)
+#endif
 #endif
 
 constexpr int32_t BITS_PER_BLOCK           = 32;
@@ -50,11 +52,13 @@ __device__ __half NegativeInfinity<__half>()
     return -CUDART_INF_FP16;
 }
 
+#if __CUDA_ARCH__ >= 800
 template<>
 __device__ __nv_bfloat16 NegativeInfinity<__nv_bfloat16>()
 {
     return -CUDART_INF_BF16;
 }
+#endif
 
 template<typename T, typename PackedT>
 __device__ PackedT PackedNegativeInfinity()
@@ -217,13 +221,15 @@ void ApplyTokenBitmaskInplace(Tensor logits, Tensor bitmask, std::optional<Tenso
                 logits.data<half_t>(), bitmask.data<int32_t>(), indices_ptr, vocab_size, 0, 0, num_rows);
             break;
         }
+#if __CUDA_ARCH__ >= 800
         case kBfloat16: {
             ApplyTokenBitmaskInplaceDispatchToPackedT(
                 logits.data<bfloat16_t>(), bitmask.data<int32_t>(), indices_ptr, vocab_size, 0, 0, num_rows);
             break;
         }
+#endif
         default:
-            TM_CHECK(false) << "logits dtype must be float, half or bfloat16.";
+            TM_CHECK(false) << "logits dtype must be float, float16 or bfloat16.";
             break;
     }
 }

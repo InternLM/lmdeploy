@@ -1,4 +1,7 @@
+import json
+
 import pytest
+from jsonschema import validate
 
 from lmdeploy import pipeline
 from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
@@ -6,7 +9,7 @@ from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 
 @pytest.fixture(scope='module')
 def tiny_model_id():
-    return 'Qwen/Qwen2.5-0.5B'
+    return 'internlm/internlm2_5-1_8b'
 
 
 @pytest.fixture(scope='module')
@@ -54,4 +57,4 @@ def test_tm_guided_pipeline(tiny_model_id):
                     log_level='INFO')
     gen_config = GenerationConfig(response_format=dict(type='json_schema', json_schema=dict(name='test', schema=guide)))
     response = pipe(['Make a self introduction please.'], gen_config=gen_config)
-    assert False, response
+    validate(instance=json.loads(response[0].text), schema=guide)
