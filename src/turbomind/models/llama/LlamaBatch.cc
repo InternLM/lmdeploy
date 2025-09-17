@@ -1365,13 +1365,15 @@ void LlamaBatch::InternalThreadEntry()
             FindCanceledIndices(req->cancel);
         }
 
+        if (state_->size == g.finished_count) {
+            // Batch is empty, use blocking sync to avoid spinning
+            comm_.h_tp_group->Sync(true);
+        }
+
         NvtxScope scope("mainloop");
 
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
-        // shared_state_->barrier->wait();
-        // comm_.h_comm->Sync(comm_.h_comm_tp_group);
-
         Broadcast(comm_.h_tp_group, req, 0);
 
         if (req->abort) {
