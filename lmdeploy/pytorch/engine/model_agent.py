@@ -238,8 +238,10 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-            model_metas = model.post_update_model_metas(model_metas)
-    return dict(hidden_states=output, model_metas=model_metas)
+            model_metas = model.post_update_model_metas(context)
+            seq_length = ctx_mgr.current_context().q_seqlens
+
+    return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
 
 
 @record_function('stopping_criteria')
@@ -503,13 +505,9 @@ class BaseModelAgent:
         if not is_long_context:
             ret = await __forward(inputs)
             if not return_logits and not inputs.is_decoding:
-                seq_length = inputs.seq_length
-
-                # for InternVL-3.5-Flash, update seq_length if model_metas contain 'new_seqlen'
-                model_metas = ret.get('model_metas', None)
-                if model_metas is not None and 'new_seqlen' in model_metas[0]:
-                    seq_length = torch.tensor([meta['new_seqlen'] for meta in model_metas], device='cuda')
-
+                # fetch seq_length from the context, since models may change it (e.g. InternVL-3.5-Flash)
+                seq_length = ret.get('seq_length', None)
+                assert seq_length is not None, 'seq_length cannot be None.'
                 last_token_loc = seq_length.cumsum(0) - 1
 
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]

@@ -716,7 +716,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         return vit_embeds, new_lang_embeds, new_input_ids, new_image_mask, new_seq_lengths
 
     def update_forward_inputs(self, input_ids: torch.Tensor, new_seqlens: List[int]) -> StepContext:
-        """Update the current context with new input_ids."""
+        """Update the forward inputs, position_ids and attention metadata."""
         from lmdeploy.pytorch.model_inputs import ModelInputs
 
         crt_ctx = self.ctx_mgr.current_context()
@@ -742,7 +742,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         # build new context, to get new position_ids and attn_metadata
         new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config)
-
+        self.ctx_mgr.set_context(new_ctx)
         return new_ctx.position_ids, new_ctx.attn_metadata
 
     def forward(
@@ -916,9 +916,11 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         self.language_model.load_weights(new_weights.items())
 
-    def post_update_model_metas(self, model_metas):
+    def post_update_model_metas(self, context: StepContext):
         """Post update model meta."""
-        new_model_metas = self.model_metas if self.model_metas is not None else model_metas
+        new_model_metas = context.model_metas
+        if self.model_metas is not None:
+            new_model_metas = self.model_metas
         return new_model_metas
 
     def get_input_processor(self) -> BaseModelInputProcessor:
