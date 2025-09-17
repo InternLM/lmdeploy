@@ -149,6 +149,7 @@ class ChatCompletionRequest(BaseModel):
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
     min_p: float = 0.0
     enable_thinking: Optional[bool] = None
+    return_token_ids: Optional[bool] = False
 
 
 class FunctionCall(BaseModel):
@@ -179,6 +180,7 @@ class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
     content: Optional[str] = None
+    gen_tokens: Optional[List[int]] = None
     reasoning_content: Optional[str] = Field(default=None, examples=[None])
     tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
 
@@ -243,6 +245,7 @@ class DeltaMessage(BaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
     reasoning_content: Optional[str] = None
+    gen_tokens: Optional[List[int]] = None
     tool_calls: List[DeltaToolCall] = Field(default_factory=list)
 
 
@@ -300,6 +303,7 @@ class CompletionRequest(BaseModel):
     top_k: Optional[int] = 40  # for opencompass
     seed: Optional[int] = None
     min_p: float = 0.0
+    return_token_ids: Optional[bool] = False
 
 
 class CompletionResponseChoice(BaseModel):
@@ -307,6 +311,7 @@ class CompletionResponseChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[LogProbs] = None
+    gen_tokens: Optional[List[int]] = None
     finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
@@ -325,6 +330,7 @@ class CompletionResponseStreamChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[LogProbs] = None
+    gen_tokens: Optional[List[int]] = None
     finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
