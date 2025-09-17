@@ -275,10 +275,10 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
 namespace {
 
 struct ScopedGIL {
-    ScopedGIL(const ScopedGIL&)            = delete;
+    ScopedGIL(const ScopedGIL&) = delete;
     ScopedGIL& operator=(const ScopedGIL&) = delete;
     ScopedGIL(ScopedGIL&&)                 = delete;
-    ScopedGIL& operator=(ScopedGIL&&)      = delete;
+    ScopedGIL& operator=(ScopedGIL&&) = delete;
     ScopedGIL()
     {
         state = PyGILState_Ensure();
