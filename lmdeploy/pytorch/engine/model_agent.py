@@ -238,8 +238,10 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-            model_metas = model.post_update_model_metas(context)
-            seq_length = ctx_mgr.current_context().q_seqlens
+
+            # InternVL-3.5-Flash will change the seqlen, model_metas during forward
+            model_metas = context.model_metas
+            seq_length = context.q_seqlens
 
     return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
 

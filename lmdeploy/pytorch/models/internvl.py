@@ -512,8 +512,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             self.pooling_before_gating = CrossAttentionPooling(dim=vit_hidden_size, dtype=dtype, device=device)
             self.gating = Gating(hidden_size=vit_hidden_size, dtype=dtype, device=device)
 
-        self.model_metas = None
-
     def compile_model(self):
         torch_version = version.parse(torch.__version__)
         if torch_version < version.parse('2.5.0'):
@@ -715,17 +713,18 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         return vit_embeds, new_lang_embeds, new_input_ids, new_image_mask, new_seq_lengths
 
-    def update_forward_inputs(self, input_ids: torch.Tensor, new_seqlens: List[int]) -> StepContext:
+    def update_forward_inputs(self, input_ids: torch.Tensor, new_seqlens: List[int],
+                              context: StepContext) -> StepContext:
         """Update the forward inputs, position_ids and attention metadata."""
         from lmdeploy.pytorch.model_inputs import ModelInputs
 
         crt_ctx = self.ctx_mgr.current_context()
         assert crt_ctx is not None, 'Current context cannot be None.'
 
-        # fill model metas
-        self.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_seqlens]
+        # create model metas with new seqlens
+        model_metas = [dict(new_seqlen=seqlen) for seqlen in new_seqlens]
 
-        # create new model inputs
+        # create new model inputs and context, to get updated position_ids and attn_metadata
         device = input_ids.device
         total_msgs = len(new_seqlens)
         new_seqlens = torch.tensor(new_seqlens, device=device, dtype=torch.long)
@@ -738,11 +737,13 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                                        max_q_seqlen=new_seqlens.max().item(),
                                        max_kv_seqlen=new_seqlens.max().item(),
                                        sum_kv_seqlen=new_seqlens.sum().item(),
-                                       model_metas=[None for _ in range(total_msgs)])
-
-        # build new context, to get new position_ids and attn_metadata
+                                       model_metas=model_metas)
         new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config)
-        self.ctx_mgr.set_context(new_ctx)
+
+        # update attributes of current context, in order to return values inside model agent
+        context.model_metas = model_metas
+        context.q_seqlens = new_seqlens
+
         return new_ctx.position_ids, new_ctx.attn_metadata
 
     def forward(
@@ -757,6 +758,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         vision_embedding_indexing: torch.Tensor = None,
         text_embedding_indexing: torch.Tensor = None,
         image_token_id: int = None,
+        context: StepContext = None,
         **kwargs,
     ):
         if inputs_embeds is None and pixel_values is not None:
@@ -771,7 +773,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                     pixel_values, input_ids, image_token_id)
 
                 # update forward inputs
-                position_ids, attn_metadata = self.update_forward_inputs(input_ids, new_seqlens)
+                position_ids, attn_metadata = self.update_forward_inputs(input_ids, new_seqlens, context)
 
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
 
@@ -814,11 +816,14 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         vision_embedding_indexing = None
 
         if context.is_decoding and context.model_metas is not None and context.model_metas[0] is not None:
+            # NOTE, zhouxinyu, we need to consider the increasing batch in the decoding stage
+            # currently implementation will keep the batch size same as the prefill stage
+
             # model meta from the previous step, therefore +1 for the current decoding step
             new_kv_seqlens = [(meta['new_seqlen'] + 1) for meta in context.model_metas]
 
             # update model metas for the next step
-            self.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_kv_seqlens]
+            context.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_kv_seqlens]
 
             # update position ids, attn_metadata
             new_kv_seqlens = torch.tensor(new_kv_seqlens, device=input_ids.device, dtype=torch.long)
@@ -870,7 +875,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                         inputs_embeds=inputs_embeds,
                         vision_embedding_indexing=vision_embedding_indexing,
                         text_embedding_indexing=text_embedding_indexing,
-                        image_token_id=image_token_id)
+                        image_token_id=image_token_id,
+                        context=context)
         else:
             return dict(input_ids=input_ids,
                         position_ids=position_ids,
@@ -879,7 +885,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                         pixel_values=pixel_values,
                         image_mask=image_mask,
                         inputs_embeds=inputs_embeds,
-                        image_token_id=image_token_id)
+                        image_token_id=image_token_id,
+                        context=context)
 
     def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
         """Load lora weights."""
@@ -915,13 +922,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 load_weight(param, loaded_weight)
 
         self.language_model.load_weights(new_weights.items())
-
-    def post_update_model_metas(self, context: StepContext):
-        """Post update model meta."""
-        new_model_metas = context.model_metas
-        if self.model_metas is not None:
-            new_model_metas = self.model_metas
-        return new_model_metas
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
