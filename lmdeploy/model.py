@@ -748,7 +748,8 @@ class HFChatTemplate(BaseChatTemplate):
             if hasattr(self.tokenizer, 'eot_token') and self.tokenizer.eot_token is not None:
                 self.stop_words.append(self.tokenizer.eot_token)
             cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
-            if cfg.architectures[0] == 'GptOssForCausalLM':
+            self.is_gpt_oss = getattr(cfg, 'architectures', [''])[0] == 'GptOssForCausalLM'
+            if self.is_gpt_oss:
                 self.stop_words.append('<|call|>')
         except Exception as e:
             raise ValueError(f'Try apply_chat_template failed: {e}')
@@ -790,6 +791,9 @@ class HFChatTemplate(BaseChatTemplate):
 
         if messages[-1]['role'] == 'assistant' and len(self.assistant_end) > 0:
             prompt = prompt[:-len(self.assistant_end)]  # prefix of response to let the model complete the response
+        if self.is_gpt_oss and not kwargs.get('tools'):
+            # for gpt-oss model, remove this seems more conducive to instruction following.
+            prompt = prompt.replace('commentary, ', '', 1)
         return prompt
 
     def _role_instruction(self, role):
