@@ -406,6 +406,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         repetition_penalty=request.repetition_penalty,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
+        include_stop_str_in_output=request.include_stop_str_in_output,
         skip_special_tokens=request.skip_special_tokens,
         response_format=response_format,
         logits_processors=logits_processors,
