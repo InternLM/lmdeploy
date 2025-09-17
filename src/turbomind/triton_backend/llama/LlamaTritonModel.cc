@@ -267,13 +267,16 @@ LlamaTritonModel::~LlamaTritonModel()
 {
     FT_CHECK(weights_.size() == engines_.size());
 
-    gateway_->shutdown();
+    if (gateway_) {
+        gateway_->shutdown();
+    }
 
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
         CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
         engines_[device_id].reset();
         weights_[device_id].reset();
+        contexts_[device_id].reset();
         trim_default_mempool(engine_param_.devices[device_id]);
     }
 }
@@ -417,9 +420,11 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     handleMissingParams();
 
     gateway_ = std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory);
+    ffi_ctx_factory_ = ffi_ctx_factory;
 
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
+    contexts_.resize(engine_param_.devices.size());
 
     model_param_.weight_type        = data_type_from_string(model_reader["weight_type"].as<std::string>());
     model_param_.expert_weight_type = data_type_from_string(model_reader["expert_weight_type"].as<std::string>());
@@ -517,11 +522,14 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 {
     CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
 
-    auto ctx = std::make_unique<Context>(engine_param_.devices[device_id]);
+    auto&      ctx          = contexts_[device_id];
+    const bool first_create = (ctx == nullptr);
+    if (first_create) {
+        ctx       = std::make_shared<Context>(engine_param_.devices[device_id]);
+        ctx->comm = createCommSplits(rank);
+    }
 
     core::ContextGuard guard{ctx->core_stream, ctx->allocator, Allocator{kCPUpinned}};
-
-    ctx->comm = createCommSplits(rank);
 
     const auto& engine_param = engine_params_.at(rank);
 
@@ -545,9 +553,9 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
     try {
         const int dp_rank   = engine_param.outer_dp_rank * engine_param.attn_dp_size + engine_param.attn_dp_rank;
         engines_[device_id] = std::make_unique<Engine>(dtype_,
-                                                       engine_param_,  //
+                                                       engine_param,  //
                                                        std::move(model),
-                                                       std::move(ctx),
+                                                       ctx,
                                                        gateway_,
                                                        engine_param_.devices[device_id],
                                                        dp_rank);
@@ -564,12 +572,14 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
     auto& engine = *engines_[device_id];
 
-    try {
-        engine.Warmup();
-    }
-    catch (const std::exception& e) {
-        TM_LOG_ERROR("[Engine][Warmup] %s", e.what());
-        throw;
+    if (first_create) {
+        try {
+            engine.Warmup();
+        }
+        catch (const std::exception& e) {
+            TM_LOG_ERROR("[Engine][Warmup] %s", e.what());
+            throw;
+        }
     }
 
     h_comm->Sync();
@@ -596,14 +606,21 @@ void LlamaTritonModel::sleep(int device_id, int level)
     }
     else {
         // offload weights to CPU
+        TM_CHECK(moe_param_.experts_per_token == 0) << "level 1 sleep not supported for MoE model";
         weights_[device_id]->to_device(kCPU);
     }
 
-    // free kv cache
-    engines_[device_id]->FreeBufferAndKVCache();
+    // free model (kv cache and buffer)
+    if (device_id == 0) {
+        gateway_->shutdown();
+        gateway_.reset();
+    }
+    engines_[device_id].reset();
+    contexts_[device_id]->allocator->trim(0);
+    trim_default_mempool(engine_param_.devices[device_id]);
 }
 
-void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tags)
+void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tags, int rank)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -622,7 +639,13 @@ void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tag
     }
 
     if (keys.find("kv_cache") != keys.end()) {
-        engines_[device_id]->InitializeBufferAndKVCache();
+        if (device_id == 0) {
+            gateway_ =
+                std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory_);
+        }
+        TM_CHECK(contexts_[device_id] != nullptr);
+        contexts_[device_id]->comm.h_comm->Sync();
+        createEngine(device_id, rank);
     }
 }
 

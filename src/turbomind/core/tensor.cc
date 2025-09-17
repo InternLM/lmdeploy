@@ -69,16 +69,6 @@ void Clear(Ref<Tensor> a_)
     Clear(a_, Context::stream());
 }
 
-Tensor to_device(const Tensor& src, const Device& device)
-{
-    Tensor dst;
-    if (src) {
-        dst = {src.layout(), src.dtype(), device};
-        Copy(src, dst, Context::stream());
-    }
-    return dst;
-}
-
 #if 0
 
 void Copy(const Tensor& src, Tensor& dst, Stream& stream)

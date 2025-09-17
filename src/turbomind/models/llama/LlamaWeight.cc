@@ -129,9 +129,20 @@ void LlamaWeight::to_device(const core::Device& device)
 {
     core::ContextGuard guard = context();
 
+    auto to_device = [&](Tensor& x) -> Tensor {
+        auto tmp = std::exchange(x, empty_like(x, device));
+        Copy(tmp, x);
+        return tmp;
+    };
+
+    std::vector<Tensor> tmp_cpu_tensors;
+
     auto tensor_ptr_map = get_parameters();
     for (auto& [name, tensor_ptr] : tensor_ptr_map) {
-        *tensor_ptr = core::to_device(*tensor_ptr, device);
+        auto tmp_tensor = to_device(*tensor_ptr);
+        if (tmp_tensor.device().type != kDEVICE) {
+            tmp_cpu_tensors.push_back(tmp_tensor);
+        }
     }
     core::Context::stream().Sync();
     if (device.type == kCPU) {
