@@ -132,6 +132,13 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
 
     from lmdeploy.messages import Response
 
+    try:
+        from termcolor import colored
+    except ImportError:
+
+        def colored(text, color=None, on_color=None, attrs=None):
+            return text
+
     if isinstance(outputs, Response):
         outputs = [outputs]
     try:
@@ -139,24 +146,49 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
     except Exception:
         term_size = 100
 
-    def _lined_print(msg: str, line_format: str = '-', full_line: bool = False):
-        print(msg)
-        if full_line:
-            columns = term_size
-        else:
-            columns = max(len(m) for m in msg.split('\n'))
-        print(line_format * columns)
+    border_color = 'cyan'
+    meta_color = 'light_grey'
+    number_color = 'green'
+
+    def _print_title(title: str, color: str = border_color):
+        title_text = f' {title} '
+        print(colored(f'【{title_text}】', color, attrs=['bold']))
+
+    def _print_section(title: str, content: str, color: str = border_color):
+        """Simple title and content printing."""
+        _print_title(title, color)
+        print(content)
+
+    def _print_meta(out: Response):
+        """Enhanced meta information display."""
+        # Create a clean table-like format
+        finish_color = 'yellow' if out.finish_reason == 'stop' else 'red'
+        meta_content = [
+            f"{colored('• Input Tokens:', meta_color)}     {colored(out.input_token_len, number_color)}",
+            f"{colored('• Generated Tokens:', meta_color)} {colored(out.generate_token_len, number_color)}",
+            f"{colored('• Finish Reason:', meta_color)}    {colored(out.finish_reason, finish_color)}"
+        ]
+
+        lines = '\n'.join(meta_content)
+        lines += '\n'
+        _print_section('METADATA', lines, border_color)
+
+    # Main loop
+    print(colored('━' * term_size, border_color))
 
     outputs: List[Response] = outputs
-    term_line = '—' * term_size
-    print(term_line)
     for idx, out in enumerate(outputs):
-        _lined_print(f'output[{idx}]', '=')
+        header = f'OUTPUT [{idx + 1}/{len(outputs)}]'
+        header_formatted = colored(f'✦ {header}', 'light_magenta', attrs=['bold'])
+        print(header_formatted)
+        print()
+
         if enable_meta:
-            _lined_print('meta', '-')
-            _lined_print(
-                f'input_token_len={out.input_token_len}\n'
-                f'generate_token_len={out.generate_token_len}\n'
-                f'finish_reason="{out.finish_reason}"', '—')
-        _lined_print('text', '-')
-        _lined_print(f'{out.text}', '—', full_line=True)
+            _print_meta(out)
+
+        _print_section('TEXT', out.text, border_color)
+
+        if idx < len(outputs) - 1:  # Add separator when it's not the last output
+            print(colored('─' * (term_size), border_color, attrs=['dark']))
+        else:
+            print(colored('━' * term_size, border_color))
