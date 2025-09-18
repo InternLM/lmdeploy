@@ -76,7 +76,7 @@ def get_torch_model_list(tp_num: int = None,
 def get_all_model_list(tp_num: int = None, quant_policy: int = None, model_type: str = 'chat_model'):
 
     case_list = get_turbomind_model_list(tp_num=tp_num, model_type=model_type, quant_policy=quant_policy)
-    if is_bf16_supported():
+    if _is_bf16_supported_by_device():
         for case in get_torch_model_list(tp_num=tp_num, quant_policy=quant_policy, model_type=model_type):
             if case not in case_list:
                 case_list.append(case)
@@ -84,7 +84,7 @@ def get_all_model_list(tp_num: int = None, quant_policy: int = None, model_type:
 
 
 def get_communicator_list():
-    if is_bf16_supported():
+    if _is_bf16_supported_by_device():
         return ['native', 'nccl']
     return ['nccl']
 
@@ -142,7 +142,11 @@ def get_cuda_prefix_by_workerid(worker_id, tp_num: int = 1):
     if cuda_id is None or 'gw' not in worker_id:
         return None
     else:
-        return 'CUDA_VISIBLE_DEVICES=' + cuda_id
+        device_type = os.environ.get('DEVICE', 'cuda')
+        if device_type == 'ascend':
+            return 'ASCEND_RT_VISIBLE_DEVICES=' + cuda_id
+        else:
+            return 'CUDA_VISIBLE_DEVICES=' + cuda_id
 
 
 def get_cuda_id_by_workerid(worker_id, tp_num: int = 1):
@@ -160,7 +164,16 @@ def get_cuda_id_by_workerid(worker_id, tp_num: int = 1):
 
 
 def get_config():
-    config_path = os.path.join('autotest/config.yaml')
+    # Determine config file based on DEVICE environment variable
+    device = os.environ.get('DEVICE', '')
+    if device:
+        config_path = f'autotest/config-{device}.yaml'
+        # Fallback to default config if device-specific config doesn't exist
+        if not os.path.exists(config_path):
+            config_path = 'autotest/config.yaml'
+    else:
+        config_path = 'autotest/config.yaml'
+
     with open(config_path) as f:
         config = yaml.load(f.read(), Loader=yaml.SafeLoader)
     return config
@@ -223,3 +236,39 @@ def get_workerid(worker_id):
 
 def is_quantization_model(name):
     return 'awq' in name.lower() or '4bits' in name.lower() or 'w4' in name.lower() or 'int4' in name.lower()
+
+
+def _is_bf16_supported_by_device():
+    """Check if bf16 is supported based on the current device."""
+    device = os.environ.get('DEVICE', 'cuda')
+    if device == 'ascend':
+        # For Ascend, bf16 support check would be different
+        # Placeholder implementation
+        return True
+    else:
+        # For CUDA and default, use the existing check
+        return is_bf16_supported()
+
+
+def set_device_env_variable(worker_id, tp_num: int = 1):
+    """Set device environment variable based on the device type."""
+    device = os.environ.get('DEVICE', 'cuda')  # Default to cuda
+
+    if device == 'ascend':
+        device_id = get_cuda_id_by_workerid(worker_id, tp_num)
+        if device_id is not None:
+            os.environ['ASCEND_RT_VISIBLE_DEVICES'] = device_id
+    else:  # Default to cuda
+        cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
+        if cuda_id is not None:
+            os.environ['CUDA_VISIBLE_DEVICES'] = cuda_id
+
+
+def unset_device_env_variable():
+    device_type = os.environ.get('DEVICE', 'cuda')
+    if device_type == 'ascend':
+        if 'ASCEND_RT_VISIBLE_DEVICES' in os.environ:
+            del os.environ['ASCEND_RT_VISIBLE_DEVICES']
+    else:
+        if 'CUDA_VISIBLE_DEVICES' in os.environ:
+            del os.environ['CUDA_VISIBLE_DEVICES']

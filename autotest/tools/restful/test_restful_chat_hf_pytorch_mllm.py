@@ -29,6 +29,7 @@ def getModelList(tp_num):
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('prepare_environment', getModelList(tp_num=1), indirect=True)
 def test_restful_chat_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
@@ -40,6 +41,7 @@ def test_restful_chat_tp1(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_2
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('prepare_environment', getModelList(tp_num=2), indirect=True)
 def test_restful_chat_tp2(config, worker_id):
     if get_workerid(worker_id) is None:
@@ -51,6 +53,7 @@ def test_restful_chat_tp2(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('prepare_environment', getModelList(tp_num=4), indirect=True)
 def test_restful_chat_tp4(config, worker_id):
     if get_workerid(worker_id) is None:
