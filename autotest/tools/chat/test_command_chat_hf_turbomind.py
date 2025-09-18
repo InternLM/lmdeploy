@@ -358,7 +358,7 @@ def test_hf_turbomind_chat_fallback_backend_kvint8_tp2(config, model, communicat
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, model_type='base_model'))
-def test_hf_turbomind_base_tp1(config, model, communicator, cli_case_config, worker_id):
+def test_hf_turbomind_base_tp1(config, model, cli_case_config, worker_id):
     usercase = 'base_testcase'
     result, chat_log, msg = hf_command_line_test(config,
                                                  usercase,
@@ -438,7 +438,7 @@ def test_hf_turbomind_chat_pr_gpu1(config, model, cli_case_config):
                                                  cli_case_config.get(usercase),
                                                  model,
                                                  'turbomind',
-                                                 cuda_prefix='CUDA_VISIBLE_DEVICES=5,6')
+                                                 cuda_prefix=env_var + '5,6')
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 

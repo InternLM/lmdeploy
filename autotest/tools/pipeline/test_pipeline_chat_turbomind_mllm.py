@@ -161,14 +161,7 @@ def test_pipeline_chat_fallback_backend_kvint8_tp1(config, model, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, tp_num=1)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_vl_chat_test(config,
-                              model,
-                              BACKEND_KVINT,
-                              worker_id, {
-                                  'quant_policy': 8,
-                                  'communicator': communicator
-                              },
-                              is_smoke=True)
+    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {'quant_policy': 8}, is_smoke=True)
 
 
 @pytest.mark.order(6)
@@ -181,7 +174,14 @@ def test_pipeline_chat_fallback_backend_kvint8_tp2(config, model, communicator, 
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {'quant_policy': 8}, is_smoke=True)
+    run_pipeline_vl_chat_test(config,
+                              model,
+                              BACKEND_KVINT,
+                              worker_id, {
+                                  'quant_policy': 8,
+                                  'communicator': communicator
+                              },
+                              is_smoke=True)
 
 
 @pytest.mark.pipeline_chat

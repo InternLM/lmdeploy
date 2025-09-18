@@ -80,7 +80,7 @@ def test_restful_chat_tp8(config, common_case_config, worker_id):
 
 def getKvintModelList(tp_num, quant_policy):
     model_list = []
-    for communicator in get_communicator_list():
+    for communicator in get_communicator_list(tp_num):
         model_list += [{
             'model': item,
             'cuda_prefix': None,
