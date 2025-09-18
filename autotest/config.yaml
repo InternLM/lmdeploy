@@ -139,7 +139,6 @@ pytorch_chat_model:
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
     - Qwen/Qwen2-7B-Instruct
-    - Qwen/Qwen1.5-7B-Chat
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
     - Qwen/Qwen2.5-VL-7B-Instruct
     - Qwen/Qwen2.5-VL-32B-Instruct
@@ -379,7 +378,6 @@ benchmark_model:
 
 
 evaluate_model:
-  - Qwen/Qwen1.5-7B-Chat
   - google/gemma-2-9b-it
   - google/gemma-2-27b-it
   - internlm/internlm2_5-7b-chat

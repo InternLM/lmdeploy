@@ -11,7 +11,6 @@ def prepare_environment(request, config, worker_id):
     param = request.param
     model = param['model']
     backend = param['backend']
-    print(param['model'], param['backend'], param['extra'])
     model_path = config.get('model_path') + '/' + model
     pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
     yield param
