@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from dataclasses import dataclass
-from typing import Any, Dict, List, Literal
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Tuple
 
 import torch
 
@@ -82,6 +82,8 @@ class CacheConfig:
     enable_prefix_caching: bool = False
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
+    num_state_caches: int = None
+    states_shapes: List[Tuple] = field(default_factory=list)
 
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
@@ -200,6 +202,7 @@ class ModelConfig:
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
     use_flash_mla: bool = False
+    states_shapes: List[Tuple] = field(default_factory=list)
 
     def get_head_size(self):
         """Get head size."""

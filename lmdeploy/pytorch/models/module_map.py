@@ -220,4 +220,9 @@ MODULE_MAP.update({
     'GptOssForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gpt_oss.GptOssForCausalLM',
 })
 
+# qwen3 next model
+MODULE_MAP.update({
+    'Qwen3NextForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_next.Qwen3NextForCausalLM',
+})
+
 CUSTOM_MODULE_MAP = dict()

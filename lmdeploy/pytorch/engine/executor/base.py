@@ -155,16 +155,48 @@ class ExecutorBase:
                 f'Update `block_size={self.cache_config.block_size}` for large `head_dim={self.model_config.k_head_dim}`.'  # noqa
             )
 
+    def _get_state_cache_mem(self):
+        """Get state cache mem usage."""
+        cache_config = self.cache_config
+        if len(cache_config.states_shapes) == 0:
+            return 0
+
+        import math
+
+        num_state_caches = cache_config.num_state_caches
+        if num_state_caches is None:
+            num_state_caches = int(cache_config.max_batches * 2.5)
+            cache_config.num_state_caches = num_state_caches
+
+        mems = 0
+        dtype_size = 2
+        for shape in cache_config.states_shapes:
+            mems += math.prod(shape) * num_state_caches * dtype_size
+
+        if cache_config.enable_prefix_caching:
+            cache_config.enable_prefix_caching = False
+            logger.warning('Prefix caching has not been support for state space model.')
+
+        return mems
+
     def update_configs(self):
         """Update cache config."""
         self._adjust_block_size()
         cache_config = self.cache_config
         model_config = self.model_config
+        cache_config.states_shapes = model_config.states_shapes
+
+        # get free mems
         free_mems = self.gather_free_mem()
         free_mem = min(free_mems)
         logger.debug(f'minimal free gpu memory: {free_mem >> 20} mb')
-        vocal_size = self.model_config.vocab_size
 
+        # get state cache size
+        state_cache_mem = self._get_state_cache_mem()
+        free_mem = free_mem - state_cache_mem
+        assert free_mem > 0, 'No enough gpu memory for state cache. Please reduce max_batch_size.'
+
+        vocal_size = self.model_config.vocab_size
         tp = self.dist_config.attn_config.tp
         cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, tp,
                                                             cache_config.quant_policy)

@@ -141,6 +141,7 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    state_offsets: torch.LongTensor = None
 
     def update(self, input_ids: torch.LongTensor):
         """Update input ids."""
@@ -251,6 +252,7 @@ class ModelInputs:
                 model_metas=self.model_metas,
                 cross_length=cross_length,
                 history_cross_length=history_cross_length,
+                state_offsets=self.state_offsets,
             )
             ret.append(inp)
             history_cross_length = cross_length
@@ -348,6 +350,7 @@ class StepContext:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
     enable_microbatch: bool = False
+    state_caches: List = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -449,6 +452,13 @@ class StepContext:
         position_ids_1d = position_ids.new_empty(num_tokens)
         position_ids_1d[indices.flatten()] = position_ids.flatten()
         return attention_mask, position_ids_1d
+
+    def get_state_caches(self):
+        """Get state caches."""
+        if self.state_caches is not None:
+            return self.state_caches
+
+        # TODO: return state object
 
 
 class StepContextManager:
