@@ -1,2 +1,3 @@
+aiohttp
 prometheus_client
 protobuf
