@@ -110,6 +110,7 @@ class GenerationConfig:
     logits_processors: Optional[List[LogitsProcessor]] = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
+    include_stop_str_in_output: bool = False
 
     # for disaggregation
     with_cache: bool = False
