@@ -21,7 +21,7 @@ def make_dummy_inputs(batch_size: int,
         1,
         num_tokens,
     ), dtype=torch.long, device=device)
-    seq_length = torch.ones((batch_size, ), dtype=torch.long, device=device)
+    seq_length = torch.full((batch_size, ), max_q_seqlen, dtype=torch.long, device=device)
     history_lengths = torch.zeros((batch_size, ), dtype=torch.long, device=device)
     block_offsets = torch.full((batch_size, 1), dummy_block_id, dtype=torch.long, device=device)
     num_ignored_history = torch.zeros((batch_size, ), dtype=torch.long, device=device)
