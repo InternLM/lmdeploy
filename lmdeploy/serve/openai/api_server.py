@@ -30,6 +30,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, Di
                                                    DistServeDropConnectionRequest, DistServeInitRequest,
                                                    MigrationRequest)
 from lmdeploy.serve.async_engine import AsyncEngine
+from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
                                             ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
@@ -372,6 +373,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         adapter_name = model_name  # got a adapter name
     request_id = str(request.session_id)
     created_time = int(time.time())
+    gpt_oss_parser = None
+    if VariableInterface.async_engine.arch == 'GptOssForCausalLM':
+        gpt_oss_parser = GptOssChatParser()
 
     if isinstance(request.stop, str):
         request.stop = [request.stop]
@@ -423,12 +427,21 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         gen_config.skip_special_tokens = False
         # internlm2 only uses contents inside function regardless of 'type'
         if not isinstance(request.tool_choice, str):
-            tools = [
-                item.function.model_dump() for item in request.tools
-                if item.function.name == request.tool_choice.function.name
-            ]
+            if gpt_oss_parser:
+                tools = [
+                    item.model_dump() for item in request.tools
+                    if item.function.name == request.tool_choice.function.name
+                ]
+            else:
+                tools = [
+                    item.function.model_dump() for item in request.tools
+                    if item.function.name == request.tool_choice.function.name
+                ]
         else:
-            tools = [item.function.model_dump() for item in request.tools]
+            if gpt_oss_parser:
+                tools = [item.model_dump() for item in request.tools]
+            else:
+                tools = [item.function.model_dump() for item in request.tools]
     # text completion for string input
     do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
     result_generator = VariableInterface.async_engine.generate(
@@ -486,46 +499,53 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
                 )
+
             delta_token_ids = res.token_ids if res.token_ids is not None else []
-            delta_message = DeltaMessage(role='assistant', content=res.response)
+            if gpt_oss_parser:
+                delta_message = gpt_oss_parser.parse_streaming(res.token_ids)
+                if res.finish_reason == 'stop' and len(delta_message.tool_calls) > 0:
+                    res.finish_reason = 'tool_calls'
+            else:
+                delta_message = DeltaMessage(role='assistant', content=res.response)
+                if has_parser:
+                    current_text = current_text + res.response
+                    current_token_ids = current_token_ids + delta_token_ids
+                if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+                    if res.finish_reason == 'stop' and streaming_tools is True:
+                        res.finish_reason = 'tool_calls'
+                    tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
+                        previous_text=previous_text,
+                        current_text=current_text,
+                        delta_text=delta_message.content,
+                        previous_token_ids=previous_token_ids,
+                        current_token_ids=current_token_ids,
+                        delta_token_ids=delta_token_ids,
+                        request=request)
+                    if tool_delta is not None:
+                        delta_message.tool_calls = tool_delta.tool_calls
+                        delta_message.content = tool_delta.content
+                        if isinstance(tool_delta.tool_calls, List) and len(tool_delta.tool_calls):
+                            streaming_tools = True
+                elif (request.tool_choice != 'none' and request.tools is not None
+                      and VariableInterface.tool_parser is None):
+                    logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
+
+                if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
+                    reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
+                        previous_text=previous_text,
+                        current_text=current_text,
+                        delta_text=delta_message.content or '',
+                        previous_token_ids=previous_token_ids,
+                        current_token_ids=current_token_ids,
+                        delta_token_ids=delta_token_ids)
+                    if reasoning_delta is not None:
+                        delta_message.reasoning_content = reasoning_delta.reasoning_content
+                        delta_message.content = reasoning_delta.content
+                if has_parser:
+                    previous_text = current_text
+                    previous_token_ids = current_token_ids
             if request.return_token_ids:
                 delta_message.gen_tokens = delta_token_ids
-            if has_parser:
-                current_text = current_text + res.response
-                current_token_ids = current_token_ids + delta_token_ids
-            if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
-                if res.finish_reason == 'stop' and streaming_tools is True:
-                    res.finish_reason = 'tool_calls'
-                tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
-                    previous_text=previous_text,
-                    current_text=current_text,
-                    delta_text=delta_message.content,
-                    previous_token_ids=previous_token_ids,
-                    current_token_ids=current_token_ids,
-                    delta_token_ids=delta_token_ids,
-                    request=request)
-                if tool_delta is not None:
-                    delta_message.tool_calls = tool_delta.tool_calls
-                    delta_message.content = tool_delta.content
-                    if isinstance(tool_delta.tool_calls, List) and len(tool_delta.tool_calls):
-                        streaming_tools = True
-            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
-
-            if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
-                reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
-                    previous_text=previous_text,
-                    current_text=current_text,
-                    delta_text=delta_message.content or '',
-                    previous_token_ids=previous_token_ids,
-                    current_token_ids=current_token_ids,
-                    delta_token_ids=delta_token_ids)
-                if reasoning_delta is not None:
-                    delta_message.reasoning_content = reasoning_delta.reasoning_content
-                    delta_message.content = reasoning_delta.content
-            if has_parser:
-                previous_text = current_text
-                previous_token_ids = current_token_ids
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
@@ -562,24 +582,34 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         cache_block_ids.append(res.cache_block_ids)
         remote_token_ids.append(res.token_ids)
 
-    tool_calls = None
-    reasoning_content = None
-    if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
-        try:  # TODO add json_schema guidance to turbomind
-            tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
-            text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
-            if isinstance(tool_calls, List) and len(tool_calls):
-                if final_res.finish_reason == 'stop':
-                    final_res.finish_reason = 'tool_calls'
+    if gpt_oss_parser:
+        message = gpt_oss_parser.parse_full(final_token_ids)
+        if final_res.finish_reason == 'stop' and len(message.tool_calls) > 0:
+            final_res.finish_reason = 'tool_calls'
+    else:
+        tool_calls = None
+        reasoning_content = None
+        if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+            try:  # TODO add json_schema guidance to turbomind
+                tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
+                text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
+                if isinstance(tool_calls, List) and len(tool_calls):
+                    if final_res.finish_reason == 'stop':
+                        final_res.finish_reason = 'tool_calls'
 
-        except Exception as e:
-            logger.error(f'Failed to parse {text}. Exception: {e}.')
-            return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
-    elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-        logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
+            except Exception as e:
+                logger.error(f'Failed to parse {text}. Exception: {e}.')
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
+        elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+            logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-    if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
-        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
+        if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
+            reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
+
+        message = ChatMessage(role='assistant',
+                              content=text,
+                              tool_calls=tool_calls,
+                              reasoning_content=reasoning_content)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -588,15 +618,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     assert final_res is not None
     choices = []
-    chat_message = ChatMessage(role='assistant',
-                               content=text,
-                               tool_calls=tool_calls,
-                               reasoning_content=reasoning_content)
     if request.return_token_ids:
-        chat_message.gen_tokens = final_token_ids
+        message.gen_tokens = final_token_ids
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=chat_message,
+        message=message,
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
     )

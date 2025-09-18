@@ -400,9 +400,6 @@ class GptOssTokenizer(HuggingFaceTokenizer):
                                  spaces_between_special_tokens: bool = True):
         if not hasattr(state, 'stream'):
             state.stream = self.parser()
-            ids_offset = state.ids_offset
-            for token_id in all_input_ids[:ids_offset]:
-                state.stream.process(token_id)
 
         response = ''
         stream = state.stream
@@ -423,8 +420,11 @@ class Tokenizer:
     """
 
     def __init__(self, model_path: str):
-        from transformers import PretrainedConfig
-        model_cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
+        from transformers import AutoConfig, PretrainedConfig
+        try:
+            model_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        except Exception as e:  # noqa
+            model_cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
         is_gpt_oss = getattr(model_cfg, 'model_type', '') == 'gpt_oss'
         from transformers.models.auto.tokenization_auto import get_tokenizer_config
         tokenizer_config = get_tokenizer_config(model_path, trust_remote_code=True)
