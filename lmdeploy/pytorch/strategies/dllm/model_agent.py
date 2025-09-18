@@ -108,7 +108,7 @@ class DLLMStoppingCriteria(StoppingCriteria):
 class DLLMModelAgentStrategy(ModelAgentStrategy):
 
     def __init__(self, dllm_config: DLLMConfig, dllm_mask_token: int):
-        block_size = dllm_config.dllm_block_length
+        block_size = dllm_config.block_length
         self.block_size = block_size
         self.dllm_mask_token = dllm_mask_token
 

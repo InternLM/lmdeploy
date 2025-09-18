@@ -291,8 +291,12 @@ class ModelConfig:
 
 class UnmaskingStrategy(enum.Enum):
     """Unmasking Strategy."""
+
+    # unmasking from left to right
     SEQUENTIAL = enum.auto()
+    # unmasking with confidence threshold
     LOW_CONFIDENCE_DYNAMIC = enum.auto()
+    # unmasking with topk in a block
     LOW_CONFIDENCE_STATIC = enum.auto()
 
     @classmethod
@@ -311,7 +315,7 @@ class UnmaskingStrategy(enum.Enum):
 
 @dataclass
 class DLLMConfig:
-    dllm_block_length: int = 1
+    block_length: int = 1
     unmasking_strategy: UnmaskingStrategy = UnmaskingStrategy.LOW_CONFIDENCE_DYNAMIC
     denoising_steps: int = None
     confidence_threshold: float = 0.85
@@ -332,7 +336,7 @@ class MiscConfig:
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
         """From engine config."""
         dllm_unmasking_strategy = UnmaskingStrategy.from_str(engine_config.dllm_unmasking_strategy)
-        dllm_config = DLLMConfig(dllm_block_length=engine_config.dllm_block_length,
+        dllm_config = DLLMConfig(block_length=engine_config.dllm_block_length,
                                  unmasking_strategy=dllm_unmasking_strategy,
                                  denoising_steps=engine_config.dllm_denoising_steps,
                                  confidence_threshold=engine_config.dllm_confidence_threshold)

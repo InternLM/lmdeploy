@@ -370,7 +370,7 @@ class SDARMoeForCausalLM(nn.Module, CudaGraphMixin):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
-        config.dllm_block_length = ctx_mgr.build_ctx.dllm_config.dllm_block_length
+        config.dllm_block_length = ctx_mgr.build_ctx.dllm_config.block_length
         # build model
         self.model = SDARMoeModel(config, dtype=dtype, device=device)
         # build lm_head

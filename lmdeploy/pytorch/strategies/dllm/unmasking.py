@@ -23,7 +23,7 @@ class UnmaskingProcessor:
 
     def _get_denoise_num(self):
         """Get denoise num."""
-        block_size = self.dllm_config.dllm_block_length
+        block_size = self.dllm_config.block_length
         denoising_steps = self.dllm_config.denoising_steps
         if denoising_steps is None:
             denoising_steps = block_size
@@ -33,7 +33,7 @@ class UnmaskingProcessor:
 
     def low_confidence_static(self, logits: torch.Tensor, token_ids: torch.Tensor, dllm_mask: torch.Tensor):
         """static."""
-        block_size = self.dllm_config.dllm_block_length
+        block_size = self.dllm_config.block_length
         topk = self._get_denoise_num()
         scores = self._get_scores(logits, token_ids)
         is_masked = dllm_mask == DLLM_MASKED
@@ -50,7 +50,7 @@ class UnmaskingProcessor:
 
     def low_confidence_dynamic(self, logits: torch.Tensor, token_ids: torch.Tensor, dllm_mask: torch.Tensor):
         """dynamic."""
-        block_size = self.dllm_config.dllm_block_length
+        block_size = self.dllm_config.block_length
         threshold = self.dllm_config.confidence_threshold
         scores = self._get_scores(logits, token_ids)
         is_masked = dllm_mask == DLLM_MASKED
@@ -68,7 +68,7 @@ class UnmaskingProcessor:
 
     def sequential(self, dllm_mask: torch.Tensor):
         """sequential."""
-        block_size = self.dllm_config.dllm_block_length
+        block_size = self.dllm_config.block_length
         denoise_num = self._get_denoise_num()
         dllm_mask = dllm_mask.view(-1, block_size)
         is_masked = dllm_mask == DLLM_MASKED
@@ -93,7 +93,7 @@ class UnmaskingProcessor:
             return dllm_mask
 
         # reshape to [num_blocks, block_size]
-        block_size = self.dllm_config.dllm_block_length
+        block_size = self.dllm_config.block_length
         dllm_mask = dllm_mask.unflatten(0, (-1, block_size))
 
         is_same = (dllm_mask == dllm_mask[:, :1]).all(dim=1)

@@ -30,18 +30,18 @@ class DLLMStrategyFactory(StrategyFactoryBase):
 
     def _update_dllm_block_length(self):
         """Update dllm_block_length."""
-        if self.dllm_config.dllm_block_length is None:
+        if self.dllm_config.block_length is None:
             dllm_block_length = self.model_config.dllm_block_length
             if dllm_block_length is None:
                 dllm_block_length = 4
                 logger.warning('Model does not provide dllm_block_length. '
                                f'Set dllm_block_length={dllm_block_length} as default.')
         else:
-            dllm_block_length = self.dllm_config.dllm_block_length
+            dllm_block_length = self.dllm_config.block_length
 
         assert dllm_block_length is not None, 'dllm_block_length should be set in model_config or dllm_config'
 
-        self.dllm_config.dllm_block_length = dllm_block_length
+        self.dllm_config.block_length = dllm_block_length
         self.model_config.dllm_block_length = dllm_block_length
 
         if self.dllm_config.denoising_steps is None:
