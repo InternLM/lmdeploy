@@ -27,6 +27,7 @@ turbomind_chat_model:
     - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen3-235B-A22B-FP8
     - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-30B-A3B-FP8
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-32B-FP8
     - openai/gpt-oss-120b
@@ -43,6 +44,7 @@ pytorch_chat_model:
     - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen3-235B-A22B-FP8
     - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-30B-A3B-FP8
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-32B-FP8
     - unsloth/gpt-oss-120b-BF16
@@ -64,7 +66,7 @@ turbomind_base_model:
 pytorch_base_model:
     - internlm/Intern-S1-mini
     - Qwen/Qwen3-4B-FP8
-    - openai/gpt-oss-20b
+    - unsloth/gpt-oss-20b-BF16
 
 turbomind_quatization:
     no_awq:
@@ -78,6 +80,7 @@ turbomind_quatization:
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-235B-A22B-FP8
         - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
         - openai/gpt-oss-120b
@@ -93,6 +96,7 @@ turbomind_quatization:
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-235B-A22B-FP8
         - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
     no_kvint8:
@@ -112,6 +116,7 @@ pytorch_quatization:
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-235B-A22B-FP8
         - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
     no_kvint8:

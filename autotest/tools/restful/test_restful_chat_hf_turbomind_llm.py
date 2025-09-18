@@ -201,37 +201,19 @@ def test_restful_chat_kvint8_tp8(config, common_case_config, worker_id):
         'model': 'microsoft/Phi-3-mini-4k-instruct',
         'cuda_prefix': None,
         'tp_num': 1,
-        'extra': ' --communicator native'
+        'extra': ' --quant-policy 8'
     },
     {
         'model': 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
         'cuda_prefix': None,
         'tp_num': 1,
-        'extra': ' --communicator native'
+        'extra': ' --quant-policy 8'
     },
     {
         'model': 'microsoft/Phi-3-mini-4k-instruct-inner-w8a8',
         'cuda_prefix': None,
         'tp_num': 1,
-        'extra': ' --communicator native'
-    },
-    {
-        'model': 'microsoft/Phi-3-mini-4k-instruct',
-        'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --quant-policy 8 --communicator native'
-    },
-    {
-        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
-        'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --quant-policy 8 --communicator native'
-    },
-    {
-        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-w8a8',
-        'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8'
     },
 ],
                          indirect=True)

@@ -83,8 +83,8 @@ def get_all_model_list(tp_num: int = None, quant_policy: int = None, model_type:
     return case_list
 
 
-def get_communicator_list():
-    if is_bf16_supported():
+def get_communicator_list(tp_num: int = None):
+    if tp_num != 1 and is_bf16_supported():
         return ['native', 'nccl']
     return ['nccl']
 

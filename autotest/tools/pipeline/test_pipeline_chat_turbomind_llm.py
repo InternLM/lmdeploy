@@ -12,11 +12,10 @@ from utils.pipeline_chat import run_pipeline_chat_test
 @pytest.mark.test_3090
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
-@pytest.mark.parametrize('communicator', get_communicator_list())
-def test_pipeline_chat_tp1(config, common_case_config, model, communicator, worker_id):
+def test_pipeline_chat_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {'communicator': communicator})
+    run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {})
 
 
 @pytest.mark.order(6)
@@ -65,14 +64,10 @@ def test_pipeline_chat_tp8(config, common_case_config, model, communicator, work
 @pytest.mark.test_3090
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, quant_policy=4))
-@pytest.mark.parametrize('communicator', get_communicator_list())
-def test_pipeline_chat_kvint4_tp1(config, common_case_config, model, communicator, worker_id):
+def test_pipeline_chat_kvint4_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
-        'quant_policy': 4,
-        'communicator': communicator
-    })
+    run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {'quant_policy': 4})
 
 
 @pytest.mark.order(6)
@@ -116,14 +111,10 @@ def test_pipeline_chat_kvint4_tp4(config, common_case_config, model, communicato
 @pytest.mark.test_3090
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, quant_policy=8))
-@pytest.mark.parametrize('communicator', get_communicator_list())
-def test_pipeline_chat_kvint8_tp1(config, common_case_config, model, communicator, worker_id):
+def test_pipeline_chat_kvint8_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
-        'quant_policy': 8,
-        'communicator': communicator
-    })
+    run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {'quant_policy': 8})
 
 
 @pytest.mark.order(6)
@@ -184,17 +175,11 @@ def test_pipeline_chat_kvint8_tp8(config, common_case_config, model, communicato
     'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
     'microsoft/Phi-3-mini-4k-instruct-inner-w8a8'
 ])
-@pytest.mark.parametrize('communicator', get_communicator_list())
-def test_pipeline_chat_fallback_backend_tp1(config, common_case_config, model, communicator, worker_id):
+def test_pipeline_chat_fallback_backend_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config,
-                           common_case_config,
-                           model,
-                           'turbomind',
-                           worker_id, {'communicator': communicator},
-                           is_smoke=True)
+    run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {}, is_smoke=True)
 
 
 @pytest.mark.order(6)
@@ -207,8 +192,7 @@ def test_pipeline_chat_fallback_backend_tp1(config, common_case_config, model, c
     'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
     'microsoft/Phi-3-mini-4k-instruct-inner-w8a8'
 ])
-@pytest.mark.parametrize('communicator', get_communicator_list())
-def test_pipeline_chat_fallback_backend_kvint8_tp1(config, common_case_config, model, communicator, worker_id):
+def test_pipeline_chat_fallback_backend_kvint8_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
@@ -216,10 +200,7 @@ def test_pipeline_chat_fallback_backend_kvint8_tp1(config, common_case_config, m
                            common_case_config,
                            model,
                            'turbomind-kvint',
-                           worker_id, {
-                               'quant_policy': 8,
-                               'communicator': communicator
-                           },
+                           worker_id, {'quant_policy': 8},
                            is_smoke=True)
 
 

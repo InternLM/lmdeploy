@@ -19,7 +19,7 @@ def prepare_environment(request, config, worker_id):
 
 def getModelList(tp_num):
     model_list = []
-    for communicator in get_communicator_list():
+    for communicator in get_communicator_list(tp_num):
         model_list += [{
             'model': item,
             'cuda_prefix': None,
@@ -65,7 +65,7 @@ def test_restful_chat_tp4(config, worker_id):
 
 def getKvintModelList(tp_num, quant_policy: int = None):
     model_list = []
-    for communicator in get_communicator_list():
+    for communicator in get_communicator_list(tp_num):
         model_list += [{
             'model': item,
             'cuda_prefix': None,
@@ -172,25 +172,25 @@ def test_restful_chat_kvint8_tp4(config, worker_id):
         'model': 'OpenGVLab/InternVL2-4B',
         'cuda_prefix': None,
         'tp_num': 1,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8'
     },
     {
         'model': 'Qwen/Qwen2.5-VL-7B-Instruct',
         'cuda_prefix': None,
         'tp_num': 1,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8'
     },
     {
         'model': 'THUDM/glm-4v-9b',
         'cuda_prefix': None,
         'tp_num': 1,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8'
     },
     {
         'model': 'THUDM/glm-4v-9b-inner-4bits',
         'cuda_prefix': None,
         'tp_num': 1,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8'
     },
 ],
                          indirect=True)
