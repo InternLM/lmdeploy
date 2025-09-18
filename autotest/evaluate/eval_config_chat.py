@@ -8,9 +8,9 @@ with read_base():
 
 datasets = sum([v for k, v in locals().items() if k.endswith('_datasets')], [])
 
-MODEL_NAME = 'Qwen2-7B-Instruct'
-MODEL_PATH = '/nvme/qa_test_models/Qwen/Qwen2-7B-Instruct'
-API_BASE = 'http://127.0.0.1:65525/v1'
+MODEL_NAME = ''
+MODEL_PATH = ''
+API_BASE = ''
 
 api_meta_template = dict(round=[
     dict(role='HUMAN', api_role='HUMAN'),

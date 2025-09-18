@@ -21,12 +21,6 @@ def getModelList(tp_num):
     model_list = get_evaluate_pytorch_model_list(tp_num, kvint_list=[4, 8])
     new_model_list = []
     for model in model_list:
-        if model['backend'] == 'pytorch':
-            model['extra'] += '--cache-max-entry-count 0.8'
-        elif 'Llama-2' in model['model']:
-            model['extra'] += '--cache-max-entry-count 0.95'
-        elif 'internlm2' in model['model']:
-            model['extra'] += '--cache-max-entry-count 0.9'
         model['cuda_prefix'] = None
         new_model_list.append(model)
     return new_model_list

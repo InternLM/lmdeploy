@@ -254,7 +254,10 @@ def get_evaluate_turbomind_model_list(tp_num, is_longtext: bool = False, kvint_l
     result = []
     if len(model_list) > 0:
 
-        communicators = ['native', 'nccl']
+        if tp_num > 1:
+            communicators = ['native', 'nccl']
+        else:
+            communicators = ['native']
         for communicator in communicators:
             for item in model_list:
                 if item.replace('-inner-4bits', '') in config.get('turbomind_chat_model') or item.replace(

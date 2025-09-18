@@ -75,7 +75,6 @@ turbomind_chat_model:
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
-    - Qwen/Qwen2-7B-Instruct
     - Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
     - Qwen/Qwen2.5-VL-7B-Instruct
     - Qwen/Qwen2.5-VL-32B-Instruct
@@ -138,7 +137,6 @@ pytorch_chat_model:
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
-    - Qwen/Qwen2-7B-Instruct
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
     - Qwen/Qwen2.5-VL-7B-Instruct
     - Qwen/Qwen2.5-VL-32B-Instruct
@@ -384,7 +382,6 @@ evaluate_model:
   - internlm/internlm3-8b-instruct
   - meta-llama/Meta-Llama-3-8B-Instruct
   - meta-llama/Meta-Llama-3-1-8B-Instruct
-  - Qwen/Qwen2-7B-Instruct
   - Qwen/Qwen2.5-7B-Instruct
   - Qwen/Qwen2.5-32B-Instruct
   - meta-llama/Llama-2-7b-chat-hf

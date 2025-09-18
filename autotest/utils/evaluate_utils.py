@@ -1,3 +1,5 @@
+import csv
+import glob
 import os
 import subprocess
 
@@ -6,24 +8,62 @@ from mmengine.config import Config
 DEFAULT_PORT = 23333
 
 
-def get_model_type(model_name):
-    model_name_lower = model_name.lower()
+def write_to_summary(model_name, tp_num, result, msg, worker_id, work_dir=None):
+    status = '✅ PASS' if result else '❌ FAIL'
 
-    chat_patterns = [
-        'chat',
-        'instruct',
-        'gemma',
-        'llama3',
-        'llama2',
-        'llama',
-    ]
-    if any(pattern in model_name_lower for pattern in chat_patterns):
-        return 'chat'
+    metrics = {}
+
+    if work_dir and os.path.exists(work_dir):
+        try:
+            summary_dirs = glob.glob(os.path.join(work_dir, '*', 'summary'))
+            if summary_dirs:
+                summary_dir = summary_dirs[0]
+                csv_files = glob.glob(os.path.join(summary_dir, 'summary_*.csv'))
+                if csv_files:
+                    csv_file = sorted(csv_files)[-1]
+                    if os.path.exists(csv_file):
+                        with open(csv_file, 'r') as f:
+                            reader = csv.reader(f)
+                            next(reader)
+                            for row in reader:
+                                if len(row) >= 5 and row[4]:
+                                    dataset = row[0]
+                                    metric_value = row[4]
+                                    try:
+                                        metrics[dataset] = f'{float(metric_value):.2f}'
+                                    except ValueError:
+                                        metrics[dataset] = metric_value
+        except Exception as e:
+            print(f'Error reading metrics: {str(e)}')
+
+    mmlu_value = metrics.get('mmlu', '')
+    gsm8k_value = metrics.get('gsm8k', '')
+
+    summary_line = f'| {model_name} | TP{tp_num} | {status} | {mmlu_value} | {gsm8k_value} |\n'
+
+    summary_file = os.environ.get('GITHUB_STEP_SUMMARY', None)
+    if summary_file:
+        write_header = False
+        if not os.path.exists(summary_file) or os.path.getsize(summary_file) == 0:
+            write_header = True
+        else:
+            with open(summary_file, 'r') as f:
+                first_lines = f.read(200)
+                if '| Model | TP | Status | mmlu | gsm8k |' not in first_lines:
+                    write_header = True
+
+        with open(summary_file, 'a') as f:
+            if write_header:
+                f.write('## Model Evaluation Results\n')
+                f.write('| Model | TP | Status | mmlu | gsm8k |\n')
+                f.write('|-------|----|--------|------|-------|\n')
+            f.write(summary_line)
     else:
-        return 'base'
+        print(f'Summary: {model_name} | TP{tp_num} | {status} | {mmlu_value} | {gsm8k_value}')
 
 
 def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFAULT_PORT):
+    work_dir = None
     try:
         model_name = prepare_environment['model']
         backend_type = prepare_environment['backend']
@@ -31,16 +71,10 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         communicator = prepare_environment.get('communicator', 'native')
         quant_policy = prepare_environment.get('quant_policy', 0)
 
-        model_type = get_model_type(model_name)
-        print(f'Model {model_name} identified as {model_type} model')
-
         current_dir = os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(current_dir)
 
-        if model_type == 'base':
-            config_file = os.path.join(parent_dir, 'evaluate/eval_config_base.py')
-        else:
-            config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat.py')
+        config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat.py')
 
         model_base_path = config.get('model_path', '/nvme/qa_test_models')
         model_path = os.path.join(model_base_path, model_name)
@@ -48,7 +82,6 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         print(f'Starting OpenCompass evaluation for model: {model_name}')
         print(f'Model path: {model_path}')
         print(f'Backend: {backend_type}')
-        print(f'Model type: {model_type}')
         print(f'Config file: {config_file}')
 
         log_path = config.get('log_path', '/nvme/qa_test_models/autotest_model/log')
@@ -56,8 +89,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
 
         original_cwd = os.getcwd()
         work_dir = os.path.join(
-            log_path,
-            f"wk_{backend_type}_{model_name.replace('/', '_')}_{model_type}_{communicator}_{worker_id}_{quant_policy}")
+            log_path, f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{worker_id}_{quant_policy}")
         os.makedirs(work_dir, exist_ok=True)
 
         try:
@@ -99,7 +131,6 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
 
             log_filename = (f'eval_{backend_type}_'
                             f"{model_name.replace('/', '_')}_"
-                            f'{model_type}_'
                             f'{communicator}_'
                             f'{worker_id}_'
                             f'{quant_policy}.log')
@@ -107,7 +138,6 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
 
             with open(log_file, 'w', encoding='utf-8') as f:
                 f.write(f'Model: {model_name}\n')
-                f.write(f'Model type: {model_type}\n')
                 f.write(f'Config file: {temp_config_file}\n')
                 f.write(f'Backend: {backend_type}\n')
                 f.write(f'TP Num: {tp_num}\n')
@@ -131,25 +161,29 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                     break
 
             if result.returncode == 0 and not evaluation_failed:
-                return True, f'Evaluation completed successfully for {model_name} ({model_type})'
+                final_result = True
+                final_msg = f'Evaluation completed successfully for {model_name}'
             else:
-                error_msg = f'Evaluation failed for {model_name} ({model_type}) '
+                final_result = False
+                final_msg = f'Evaluation failed for {model_name}'
                 if result.returncode != 0:
-                    error_msg += f'with return code {result.returncode}'
+                    final_msg += f'with return code {result.returncode}'
                 elif evaluation_failed:
-                    error_msg += 'with internal errors detected in logs'
+                    final_msg += 'with internal errors detected in logs'
 
                 if stderr_output:
-                    error_msg += f'\nSTDERR: {stderr_output}'
+                    final_msg += f'\nSTDERR: {stderr_output}'
                 else:
                     error_lines = []
                     for line in stdout_output.split('\n'):
                         if any(keyword in line for keyword in error_keywords):
                             error_lines.append(line)
                     if error_lines:
-                        error_msg += f'\nLog errors: {" | ".join(error_lines[:3])}'
+                        final_msg += f'\nLog errors: {" | ".join(error_lines[:3])}'
 
-                return False, error_msg
+            write_to_summary(model_name, tp_num, final_result, final_msg, worker_id, work_dir)
+
+            return final_result, final_msg
 
         finally:
             os.chdir(original_cwd)
@@ -158,6 +192,11 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
     except subprocess.TimeoutExpired:
         timeout_msg = (f'Evaluation timed out for {model_name} '
                        f'after 7200 seconds')
+        if work_dir:
+            write_to_summary(model_name, tp_num, False, timeout_msg, worker_id, work_dir)
         return False, timeout_msg
     except Exception as e:
-        return False, f'Error during evaluation for {model_name}: {str(e)}'
+        error_msg = f'Error during evaluation for {model_name}: {str(e)}'
+        if work_dir:
+            write_to_summary(model_name, tp_num, False, error_msg, worker_id, work_dir)
+        return False, error_msg
