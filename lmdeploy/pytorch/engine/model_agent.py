@@ -245,7 +245,12 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-    return dict(hidden_states=output, model_metas=model_metas)
+
+            # InternVL-3.5-Flash will change the seqlen, model_metas during forward
+            model_metas = context.model_metas
+            seq_length = context.q_seqlens[:len(inputs.seq_length)]
+
+    return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
 
 
 def _try_to_cuda(val, non_blocking: bool = False):
@@ -415,7 +420,7 @@ class BaseModelAgent:
     def _postprocess_forward_output(self, output: dict, inputs: ModelInputs):
         """Post process forward output."""
         hidden_states = output['hidden_states']
-        seq_length = inputs.seq_length
+        seq_length = output.get('seq_length', inputs.seq_length)
         hidden_states = self._slice_outs(hidden_states[0], seq_length)[None]
         output['hidden_states'] = hidden_states
         return output
@@ -684,8 +689,10 @@ class BaseModelAgent:
             )
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-            last_logits = self._slice_outs(logits, inputs.seq_length)
-            extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs.seq_length)
+            seq_length = inputs.seq_length
+            seq_length = output.get('seq_length', inputs.seq_length)
+            last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
+            extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, seq_length)
 
             # output empty for dummy inputs
             if is_dummy:
