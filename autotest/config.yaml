@@ -6,6 +6,7 @@ benchmark_path: /nvme/qa_test_models/benchmark-reports
 dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 env_tag: a100
 
+
 tp_config:
     Llama-4-Scout-17B-16E-Instruct: 4
     Meta-Llama-3-1-70B-Instruct: 4
@@ -22,6 +23,7 @@ tp_config:
     Qwen3-32B: 2
     Qwen3-30B-A3B: 2
     Qwen3-30B-A3B-Base: 2
+    Qwen2.5-32B-Instruct : 2
     Qwen2.5-72B-Instruct: 4
     Qwen2.5-VL-32B-Instruct: 2
     DeepSeek-V2-Lite-Chat: 2
@@ -35,6 +37,7 @@ tp_config:
     InternVL2-Llama3-76B-AWQ: 4
     gpt-oss-20b: 2
     gpt-oss-120b: 4
+
 
 
 turbomind_chat_model:
@@ -72,6 +75,7 @@ turbomind_chat_model:
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
+    - Qwen/Qwen2-7B-Instruct
     - Qwen/Qwen2-57B-A14B-Instruct-GPTQ-Int4
     - Qwen/Qwen2.5-VL-7B-Instruct
     - Qwen/Qwen2.5-VL-32B-Instruct
@@ -134,6 +138,8 @@ pytorch_chat_model:
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
+    - Qwen/Qwen2-7B-Instruct
+    - Qwen/Qwen1.5-7B-Chat
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
     - Qwen/Qwen2.5-VL-7B-Instruct
     - Qwen/Qwen2.5-VL-32B-Instruct
@@ -370,3 +376,19 @@ benchmark_model:
     - deepseek-ai/DeepSeek-V2-Lite-Chat
     - openai/gpt-oss-20b
     - openai/gpt-oss-120b
+
+
+evaluate_model:
+  - Qwen/Qwen1.5-7B-Chat
+  - google/gemma-2-9b-it
+  - google/gemma-2-27b-it
+  - internlm/internlm2_5-7b-chat
+  - internlm/internlm3-8b-instruct
+  - meta-llama/Meta-Llama-3-8B-Instruct
+  - meta-llama/Meta-Llama-3-1-8B-Instruct
+  - Qwen/Qwen2-7B-Instruct
+  - Qwen/Qwen2.5-7B-Instruct
+  - Qwen/Qwen2.5-32B-Instruct
+  - meta-llama/Llama-2-7b-chat-hf
+  - Qwen/Qwen1.5-MoE-A2.7B-Chat
+  - internlm/internlm2_5-20b-chat
