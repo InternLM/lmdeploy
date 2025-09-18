@@ -23,6 +23,7 @@ from torch.nn.utils.rnn import pad_sequence
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
@@ -121,7 +122,6 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
-                 tokenizer: object,
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
@@ -143,12 +143,10 @@ class TurboMind:
         self.devices = _engine_config.devices
         self._engine_created = False
 
-        self.tokenizer = tokenizer
-
         if not osp.exists(model_path):
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
         self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config)
-
+        self.tokenizer = Tokenizer(model_path)
         if not _engine_config.empty_init:
             self._load_weights()
             self._process_weights()
@@ -341,7 +339,6 @@ class TurboMind:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
-                        tokenizer: object,
                         model_name: str = None,
                         chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
@@ -366,7 +363,6 @@ class TurboMind:
                 Can be used to update configuration when initialize the engine.
         """
         return cls(model_path=pretrained_model_name_or_path,
-                   tokenizer=tokenizer,
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,

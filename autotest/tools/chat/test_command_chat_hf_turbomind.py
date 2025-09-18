@@ -406,7 +406,6 @@ def test_hf_turbomind_base_tp2(config, model, communicator, cli_case_config, wor
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_pr(config, model, communicator, cli_case_config):
     usercase = 'chat_testcase'
-
     result, chat_log, msg = hf_command_line_test(config,
                                                  usercase,
                                                  cli_case_config.get(usercase),
@@ -429,14 +428,17 @@ def test_hf_turbomind_chat_pr(config, model, communicator, cli_case_config):
 @pytest.mark.parametrize('model', ['OpenGVLab/InternVL3-8B'])
 def test_hf_turbomind_chat_pr_gpu1(config, model, cli_case_config):
     usercase = 'chat_testcase'
-
+    device_type = os.environ.get('DEVICE', 'cuda')
+    if device_type == 'ascend':
+        env_var = 'ASCEND_RT_VISIBLE_DEVICES='
+    else:
+        env_var = 'CUDA_VISIBLE_DEVICES='
     result, chat_log, msg = hf_command_line_test(config,
                                                  usercase,
                                                  cli_case_config.get(usercase),
                                                  model,
                                                  'turbomind',
                                                  cuda_prefix='CUDA_VISIBLE_DEVICES=5,6')
-
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 

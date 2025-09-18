@@ -329,10 +329,7 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path,
-                                            tokenizer=self.tokenizer,
-                                            engine_config=backend_config,
-                                            **kwargs)
+        return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
@@ -340,7 +337,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        return Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
+        return Engine.from_pretrained(model_path, engine_config=backend_config)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []
@@ -628,7 +625,8 @@ class AsyncEngine(LogitsMixin):
                                                sequence_start,
                                                tools=tools,
                                                enable_thinking=enable_thinking,
-                                               reasoning_effort=reasoning_effort)
+                                               reasoning_effort=reasoning_effort,
+                                               **kwargs)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -736,7 +734,8 @@ class AsyncEngine(LogitsMixin):
                                                         adapter_name,
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
-                                                        enable_thinking=enable_thinking)
+                                                        enable_thinking=enable_thinking,
+                                                        **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,

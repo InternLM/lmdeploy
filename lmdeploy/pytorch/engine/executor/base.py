@@ -23,7 +23,6 @@ class ExecutorBase:
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
                  misc_config: MiscConfig,
-                 tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
         """Initialize Executor."""
@@ -37,7 +36,6 @@ class ExecutorBase:
         self.backend_config = backend_config
         self.dist_config = dist_config
         self.misc_config = misc_config,
-        self.tokenizer = tokenizer
         self.dp = dist_config.dp
         self.tp = dist_config.tp
         self.world_size = dist_config.world_size

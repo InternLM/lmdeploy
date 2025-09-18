@@ -1,7 +1,7 @@
 import os
 
 import pytest
-from utils.config_utils import get_communicator_list, get_cuda_id_by_workerid, get_turbomind_model_list
+from utils.config_utils import get_communicator_list, get_turbomind_model_list, set_device_env_variable
 from utils.pipeline_chat import run_pipeline_chat_test
 
 
@@ -14,7 +14,7 @@ from utils.pipeline_chat import run_pipeline_chat_test
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
 def test_pipeline_chat_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {})
 
 
@@ -27,7 +27,7 @@ def test_pipeline_chat_tp1(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_tp2(config, common_case_config, model, communicator, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {'communicator': communicator})
 
@@ -41,7 +41,7 @@ def test_pipeline_chat_tp2(config, common_case_config, model, communicator, work
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_tp4(config, common_case_config, model, communicator, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {'communicator': communicator})
 
@@ -66,7 +66,7 @@ def test_pipeline_chat_tp8(config, common_case_config, model, communicator, work
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, quant_policy=4))
 def test_pipeline_chat_kvint4_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {'quant_policy': 4})
 
 
@@ -79,7 +79,7 @@ def test_pipeline_chat_kvint4_tp1(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_kvint4_tp2(config, common_case_config, model, communicator, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
         'quant_policy': 4,
@@ -96,7 +96,7 @@ def test_pipeline_chat_kvint4_tp2(config, common_case_config, model, communicato
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_kvint4_tp4(config, common_case_config, model, communicator, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
         'quant_policy': 4,
@@ -113,7 +113,7 @@ def test_pipeline_chat_kvint4_tp4(config, common_case_config, model, communicato
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, quant_policy=8))
 def test_pipeline_chat_kvint8_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {'quant_policy': 8})
 
 
@@ -126,7 +126,7 @@ def test_pipeline_chat_kvint8_tp1(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_kvint8_tp2(config, common_case_config, model, communicator, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
         'quant_policy': 8,
@@ -143,7 +143,7 @@ def test_pipeline_chat_kvint8_tp2(config, common_case_config, model, communicato
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_kvint8_tp4(config, common_case_config, model, communicator, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
         'quant_policy': 8,
@@ -177,7 +177,7 @@ def test_pipeline_chat_kvint8_tp8(config, common_case_config, model, communicato
 ])
 def test_pipeline_chat_fallback_backend_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
+        set_device_env_variable(worker_id, tp_num=1)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {}, is_smoke=True)
 
@@ -194,7 +194,7 @@ def test_pipeline_chat_fallback_backend_tp1(config, common_case_config, model, w
 ])
 def test_pipeline_chat_fallback_backend_kvint8_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
+        set_device_env_variable(worker_id, tp_num=1)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config,
                            common_case_config,
@@ -214,7 +214,7 @@ def test_pipeline_chat_fallback_backend_kvint8_tp1(config, common_case_config, m
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_tp2(config, common_case_config, model, communicator, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config,
                            common_case_config,
@@ -234,7 +234,7 @@ def test_pipeline_chat_fallback_backend_tp2(config, common_case_config, model, c
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_kvint8_tp2(config, common_case_config, model, communicator, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config,
                            common_case_config,
@@ -276,7 +276,7 @@ def test_pipeline_chat_pr(config, common_case_config, model, communicator, worke
 @pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
 def test_modelscope_pipeline_chat_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, use_local_model=True)
     del os.environ['LMDEPLOY_USE_MODELSCOPE']

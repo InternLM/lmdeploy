@@ -224,7 +224,6 @@ class MPExecutor(ExecutorBase):
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
                  misc_config: MiscConfig,
-                 tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
         """Initialize Executor."""
@@ -232,7 +231,6 @@ class MPExecutor(ExecutorBase):
                          model_config=model_config,
                          cache_config=cache_config,
                          backend_config=backend_config,
-                         tokenizer=tokenizer,
                          dist_config=dist_config,
                          misc_config=misc_config,
                          adapters=adapters,
@@ -266,7 +264,6 @@ class MPExecutor(ExecutorBase):
                        backend_config=backend_config,
                        dist_config=dist_config,
                        misc_config=misc_config,
-                       tokenizer=tokenizer,
                        adapters=adapters,
                        device_type=device_type,
                        log_level=logger.level)
@@ -430,7 +427,6 @@ class MPWorkerWrapper(WorkerWrapperBase):
         misc_config: MiscConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
-        tokenizer: Any = None,
         log_level: int = 30,
     ):
         super().__init__(
@@ -442,7 +438,6 @@ class MPWorkerWrapper(WorkerWrapperBase):
             misc_config=misc_config,
             adapters=adapters,
             device_type=device_type,
-            tokenizer=tokenizer,
             log_level=log_level,
         )
 
@@ -491,7 +486,6 @@ class ExecutorProc:
         backend_config: BackendConfig,
         dist_config: DistConfig,
         misc_config: MiscConfig,
-        tokenizer: Any,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
@@ -515,7 +509,6 @@ class ExecutorProc:
                                  misc_config=misc_config,
                                  adapters=adapters,
                                  device_type=device_type,
-                                 tokenizer=tokenizer,
                                  log_level=log_level)
         try_import_deeplink(device_type)
         worker.init_process_group(proc_id)
