@@ -7,7 +7,7 @@ try:
     logger.debug('Registering DLSlime Backend')
     from .dlslime import DLSlimeBackend
 except ImportError:
-    logger.warning('Disable DLSlime Backend')
+    logger.debug('Disable DLSlime Backend')
 
 try:
     logger.debug('Registering Mooncake Backend')

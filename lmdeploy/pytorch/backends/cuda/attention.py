@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import functools
 from dataclasses import dataclass
 from typing import Literal
 
@@ -20,8 +21,8 @@ try:
         assert torch.ops.flash_attn_3 is not None
         use_fa3 = True
 except Exception:
-    logger.warning('For higher performance, please install FlashAttention-3 '
-                   'https://github.com/Dao-AILab/flash-attention')
+    logger.debug('For higher performance, please install FlashAttention-3 '
+                 'https://github.com/Dao-AILab/flash-attention')
 
 
 @dataclass
@@ -221,6 +222,15 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         return attn_output
 
 
+@functools.lru_cache
+def use_fa3_warning():
+    if use_fa3:
+        return True
+    logger.warning('For higher performance, please install FlashAttention-3 '
+                   'https://github.com/Dao-AILab/flash-attention')
+    return False
+
+
 class FlashMLAImpl(TritonAttentionImpl):
 
     def __init__(
@@ -255,6 +265,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         from lmdeploy.pytorch.kernels.cuda import flash_mla_fwd
         self.flash_mla_fwd = flash_mla_fwd
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
+        use_fa3_warning()
 
     def forward(
         self,
@@ -515,6 +526,14 @@ class FA3Impl(TritonAttentionImpl):
         return attn_output
 
 
+@functools.lru_cache
+def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int):
+    enable = not alibi and not learnable_sink and block_sparse_size == 1
+    if enable and not use_fa3_warning():
+        enable = False
+    return enable
+
+
 class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
     """Triton attention builder."""
 
@@ -535,8 +554,9 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
-        enable_fa3 = use_fa3 and not alibi and not learnable_sink and block_sparse_size == 1
+        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size)
         if use_flash_mla is True:
+            logger.debug('Build FlashMLAImpl Attention')
             return FlashMLAImpl(num_heads,
                                 head_size,
                                 scale=scale,
@@ -548,6 +568,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                 causal=causal,
                                 **kwargs)
         elif enable_fa3:
+            logger.debug('Build FA3Impl Attention')
             return FA3Impl(num_heads,
                            head_size,
                            scale=scale,
@@ -559,6 +580,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                            causal=causal,
                            **kwargs)
         else:
+            logger.debug('Build TritonAttentionImpl Attention')
             return TritonAttentionImpl(num_heads,
                                        head_size,
                                        scale=scale,
