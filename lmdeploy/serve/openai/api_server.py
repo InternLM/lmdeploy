@@ -1283,11 +1283,7 @@ def serve(model_path: str,
         http_or_https = 'https'
 
     handle_torchrun()
-    task, pipeline_class = get_task(model_path)
-    if task == 'vlm':
-        if backend_config and backend_config.enable_prefix_caching:
-            backend_config.enable_prefix_caching = False
-            logger.warning('VLM does not support prefix caching.')
+    _, pipeline_class = get_task(model_path)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
     VariableInterface.async_engine = pipeline_class(model_path=model_path,
