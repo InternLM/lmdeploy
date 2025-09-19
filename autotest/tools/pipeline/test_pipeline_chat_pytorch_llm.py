@@ -161,6 +161,7 @@ def test_pipeline_chat_pytorch_pr(config, common_case_config, model, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
 def test_modelscope_pipeline_chat_pytorch_tp1(config, common_case_config, model, worker_id):
@@ -175,6 +176,7 @@ def test_modelscope_pipeline_chat_pytorch_tp1(config, common_case_config, model,
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', ['meta-llama/Llama-2-7b-chat-hf'])
 def test_pipeline_chat_pytorch_with_lora_tp1(config, common_case_config, model, worker_id):
@@ -190,6 +192,7 @@ def test_pipeline_chat_pytorch_with_lora_tp1(config, common_case_config, model, 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_2
+@pytest.mark.other
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', ['baichuan-inc/Baichuan2-13B-Chat'])
 def test_pipeline_chat_pytorch_with_lora_tp2(config, common_case_config, model, worker_id):

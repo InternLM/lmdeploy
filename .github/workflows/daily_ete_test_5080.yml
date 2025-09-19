@@ -92,7 +92,7 @@ jobs:
   download_pkgs:
     needs: linux-build
     if: ${{!cancelled()}}
-    runs-on: [self-hosted, 5090-r1]
+    runs-on: [self-hosted, 5080-r1]
     timeout-minutes: 50
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
@@ -129,7 +129,7 @@ jobs:
   test_quantization:
     needs: download_pkgs
     if: ${{!cancelled() && contains(needs.download_pkgs.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
-    runs-on: [self-hosted, 5090-r1]
+    runs-on: [self-hosted, 5080-r1]
     timeout-minutes: 150
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
@@ -153,7 +153,7 @@ jobs:
           python3 -m pip install -r requirements/lite.txt
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install transformers==4.53.1 datasets==3.6.0 timm
           python3 -m pip install -r requirements/test.txt
       - name: Check env
@@ -163,7 +163,7 @@ jobs:
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
         continue-on-error: true
@@ -188,7 +188,7 @@ jobs:
           chmod -R 777 $workdir
   test_tools:
     if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
-    runs-on: [self-hosted, 5090-r1]
+    runs-on: [self-hosted, 5080-r1]
     needs: test_quantization
     timeout-minutes: 300
     strategy:
@@ -225,7 +225,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -234,7 +234,7 @@ jobs:
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat
         continue-on-error: true
@@ -265,7 +265,7 @@ jobs:
           chmod -R 777 $workdir
   test_restful:
     if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
-    runs-on: [self-hosted, 5090-r1]
+    runs-on: [self-hosted, 5080-r1]
     needs: test_quantization
     strategy:
       fail-fast: false
@@ -289,7 +289,7 @@ jobs:
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
@@ -298,7 +298,7 @@ jobs:
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
+          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Start restful api turbomind
         if: matrix.backend == 'turbomind'
@@ -353,7 +353,7 @@ jobs:
           chmod -R 777 $workdir
   get_coverage_report:
     if: ${{!cancelled() && success()}}
-    runs-on: [self-hosted, 5090-r1]
+    runs-on: [self-hosted, 5080-r1]
     needs: [test_tools, test_restful]
     timeout-minutes: 5
     container:
@@ -368,7 +368,7 @@ jobs:
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
         run: |

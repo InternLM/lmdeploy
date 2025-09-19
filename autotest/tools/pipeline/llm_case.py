@@ -7,7 +7,7 @@ import yaml
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.utils import is_bf16_supported
 
-gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=2)
+gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
 
 def _is_bf16_supported_by_device():

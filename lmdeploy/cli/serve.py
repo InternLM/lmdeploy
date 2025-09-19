@@ -92,6 +92,10 @@ class SubCliServe:
         ArgumentHelper.eager_mode(pt_group)
         ArgumentHelper.disable_vision_encoder(pt_group)
         ArgumentHelper.logprobs_mode(pt_group)
+        ArgumentHelper.dllm_block_length(pt_group)
+        ArgumentHelper.dllm_unmasking_strategy(pt_group)
+        ArgumentHelper.dllm_denoising_steps(pt_group)
+        ArgumentHelper.dllm_confidence_threshold(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -219,6 +223,10 @@ class SubCliServe:
                 hf_overrides=args.hf_overrides,
                 disable_vision_encoder=args.disable_vision_encoder,
                 logprobs_mode=args.logprobs_mode,
+                dllm_block_length=args.dllm_block_length,
+                dllm_unmasking_strategy=args.dllm_unmasking_strategy,
+                dllm_denoising_steps=args.dllm_denoising_steps,
+                dllm_confidence_threshold=args.dllm_confidence_threshold,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig
