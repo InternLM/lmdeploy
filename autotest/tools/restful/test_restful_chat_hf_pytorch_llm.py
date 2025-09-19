@@ -176,6 +176,7 @@ def test_restful_chat_kvint8_tp8(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment', [{
     'model': 'Qwen/Qwen2.5-7B-Instruct',
     'cuda_prefix': None,
@@ -194,6 +195,7 @@ def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api_pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment', [{
     'model': 'meta-llama/Llama-2-7b-chat-hf',
     'cuda_prefix': None,
@@ -212,6 +214,7 @@ def test_restful_chat_with_lora_tp1(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api_pytorch
 @pytest.mark.gpu_num_2
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment',
                          [{
                              'model': 'baichuan-inc/Baichuan2-13B-Chat',
@@ -232,6 +235,7 @@ def test_restful_chat_with_lora_tp2(config, common_case_config, worker_id):
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment', [
     {
         'model': 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
@@ -253,6 +257,7 @@ def test_restful_chat_reasoning_tp1(config, worker_id):
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment', [
     {
         'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
@@ -274,6 +279,7 @@ def test_restful_chat_reasoning_tp2(config, worker_id):
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment', [
     {
         'model': 'internlm/internlm2_5-7b-chat',
@@ -301,6 +307,7 @@ def test_restful_chat_tools_tp1(config, worker_id):
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment', [
     {
         'model': 'internlm/internlm2_5-20b-chat',
@@ -322,6 +329,7 @@ def test_restful_chat_tools_tp2(config, worker_id):
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
+@pytest.mark.other
 @pytest.mark.parametrize('prepare_environment', [
     {
         'model': 'meta-llama/Meta-Llama-3-1-70B-Instruct',

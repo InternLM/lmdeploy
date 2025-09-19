@@ -35,8 +35,8 @@ tp_config:
     MiniCPM-V-2_6: 2
     gemma-2-27b-it: 2
     InternVL2-Llama3-76B-AWQ: 4
-    gpt-oss-20b: 2
-    gpt-oss-120b: 4
+    gpt-oss-20b-bf16: 2
+    gpt-oss-120b-bf16: 4
 
 
 
@@ -142,8 +142,8 @@ pytorch_chat_model:
     - Qwen/Qwen2.5-VL-32B-Instruct
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
-    - openai/gpt-oss-20b
-    - openai/gpt-oss-120b
+    - lmsys/gpt-oss-20b-bf16
+    - lmsys/gpt-oss-120b-bf16
     - mistralai/Mistral-7B-Instruct-v0.3
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-3-12b-it
@@ -371,8 +371,8 @@ benchmark_model:
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
     - deepseek-ai/DeepSeek-V2-Lite-Chat
-    - openai/gpt-oss-20b
-    - openai/gpt-oss-120b
+    - lmsys/gpt-oss-20b-bf16
+    - lmsys/gpt-oss-120b-bf16
 
 
 evaluate_model:
