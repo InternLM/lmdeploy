@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import enum
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal
 
@@ -27,7 +28,10 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         config.dtype = torch.float16
         return config
 
-    torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+    torch_dtype = getattr(config.hf_config, 'dtype', None)
+    if torch_dtype is None:
+        torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+
     # deal with case when torch_dtype is not string but torch.dtype
     if isinstance(torch_dtype, torch.dtype):
         torch_dtype = str(torch_dtype).split('.')[1]
@@ -200,6 +204,9 @@ class ModelConfig:
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
     use_flash_mla: bool = False
+    model_paradigm: str = 'ar'
+    dllm_mask_token: int = 0
+    dllm_block_length: int = None
 
     def get_head_size(self):
         """Get head size."""
@@ -285,6 +292,38 @@ class ModelConfig:
         return model_config
 
 
+class UnmaskingStrategy(enum.Enum):
+    """Unmasking Strategy."""
+
+    # unmasking from left to right
+    SEQUENTIAL = enum.auto()
+    # unmasking with confidence threshold
+    LOW_CONFIDENCE_DYNAMIC = enum.auto()
+    # unmasking with topk in a block
+    LOW_CONFIDENCE_STATIC = enum.auto()
+
+    @classmethod
+    def from_str(cls, strategy: str):
+        """From string."""
+        strategy = strategy.lower()
+        if strategy == 'sequential':
+            return cls.SEQUENTIAL
+        elif strategy == 'low_confidence_dynamic':
+            return cls.LOW_CONFIDENCE_DYNAMIC
+        elif strategy == 'low_confidence_static':
+            return cls.LOW_CONFIDENCE_STATIC
+        else:
+            raise ValueError(f'Unknown unmasking strategy: {strategy}')
+
+
+@dataclass
+class DLLMConfig:
+    block_length: int = 1
+    unmasking_strategy: UnmaskingStrategy = UnmaskingStrategy.LOW_CONFIDENCE_DYNAMIC
+    denoising_steps: int = None
+    confidence_threshold: float = 0.85
+
+
 @dataclass
 class MiscConfig:
     prefill_interval: int = 16
@@ -294,15 +333,22 @@ class MiscConfig:
     hf_overrides: Dict[str, Any] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
+    dllm_config: DLLMConfig = None
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
         """From engine config."""
+        dllm_unmasking_strategy = UnmaskingStrategy.from_str(engine_config.dllm_unmasking_strategy)
+        dllm_config = DLLMConfig(block_length=engine_config.dllm_block_length,
+                                 unmasking_strategy=dllm_unmasking_strategy,
+                                 denoising_steps=engine_config.dllm_denoising_steps,
+                                 confidence_threshold=engine_config.dllm_confidence_threshold)
         misc_config = cls(custom_module_map=engine_config.custom_module_map,
                           empty_init=engine_config.empty_init,
                           prefill_interval=engine_config.prefill_interval,
                           model_format=engine_config.model_format,
                           hf_overrides=engine_config.hf_overrides,
                           disable_vision_encoder=engine_config.disable_vision_encoder,
-                          logprobs_mode=engine_config.logprobs_mode)
+                          logprobs_mode=engine_config.logprobs_mode,
+                          dllm_config=dllm_config)
         return misc_config

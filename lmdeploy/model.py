@@ -737,7 +737,7 @@ class HFChatTemplate(BaseChatTemplate):
 
     def __init__(self, model_path: str = '', **kwargs):
         try:
-            from transformers import AutoTokenizer, PretrainedConfig
+            from transformers import AutoConfig, AutoTokenizer, PretrainedConfig
             self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
             self.system_start, self.system_end = self._role_instruction('system')
             self.user_start, self.user_end = self._role_instruction('user')
@@ -747,7 +747,10 @@ class HFChatTemplate(BaseChatTemplate):
                 self.stop_words.append(self.tokenizer.eos_token)
             if hasattr(self.tokenizer, 'eot_token') and self.tokenizer.eot_token is not None:
                 self.stop_words.append(self.tokenizer.eot_token)
-            cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
+            try:
+                cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+            except Exception as e:  # noqa
+                cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
             self.is_gpt_oss = getattr(cfg, 'architectures', [''])[0] == 'GptOssForCausalLM'
             if self.is_gpt_oss:
                 self.stop_words.append('<|call|>')

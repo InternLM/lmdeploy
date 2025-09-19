@@ -624,6 +624,36 @@ class ArgumentHelper:
                                    choices=[None, 'raw_logits', 'raw_logprobs'],
                                    help='The mode of logprobs.')
 
+    @staticmethod
+    def dllm_block_length(parser):
+        """dllm_block_length for dllm."""
+        return parser.add_argument('--dllm-block-length', type=int, default=None, help='Block length for dllm')
+
+    @staticmethod
+    def dllm_unmasking_strategy(parser):
+        """Dllm unmasking strategy."""
+        return parser.add_argument('--dllm-unmasking-strategy',
+                                   type=str,
+                                   default='low_confidence_dynamic',
+                                   choices=['low_confidence_dynamic', 'low_confidence_static', 'sequential'],
+                                   help='The unmasking strategy for dllm.')
+
+    @staticmethod
+    def dllm_denoising_steps(parser):
+        """Dllm denoising steps."""
+        return parser.add_argument('--dllm-denoising-steps',
+                                   type=int,
+                                   default=None,
+                                   help='The number of denoising steps for dllm.')
+
+    @staticmethod
+    def dllm_confidence_threshold(parser):
+        """Dllm confidence threshold."""
+        return parser.add_argument('--dllm-confidence-threshold',
+                                   type=float,
+                                   default=0.85,
+                                   help='The confidence threshold for dllm.')
+
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
 class FlexibleArgumentParser(argparse.ArgumentParser):

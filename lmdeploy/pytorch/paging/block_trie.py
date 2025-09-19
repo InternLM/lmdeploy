@@ -81,7 +81,7 @@ class BlockTrie:
             curr = node
             num_matched += block_size
 
-        while num_matched + block_size < seq.num_all_ids:
+        while num_matched + block_size < seq.num_valid_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
             key = hash(('random', tuple(curr_tokens)))
@@ -116,9 +116,9 @@ class BlockTrie:
             logical_blocks.last_shared_node = node
 
         num_matched = node.num_matched
-        num_all_ids = seq.num_all_ids
+        num_valid_ids = seq.num_valid_ids
 
-        if num_matched + block_size > num_all_ids:
+        if num_matched + block_size > num_valid_ids:
             return
 
         if len(node.children) == 0 and node.parent is not None:
@@ -127,7 +127,7 @@ class BlockTrie:
         block_id = num_matched // block_size
         blocks = []
         free_blocks = []
-        while num_matched + block_size <= num_all_ids:
+        while num_matched + block_size <= num_valid_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
             block = logical_blocks[block_id]

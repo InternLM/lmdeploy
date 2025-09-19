@@ -3,7 +3,7 @@ einops
 fastapi
 fire
 mmengine-lite
-numpy<2.0.0
+numpy
 openai
 outlines
 partial_json_parser
