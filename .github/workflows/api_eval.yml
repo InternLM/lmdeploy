@@ -79,7 +79,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
