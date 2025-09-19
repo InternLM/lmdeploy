@@ -1,4 +1,4 @@
-name: evaluate
+name: evaluate_h800
 
 on:
   workflow_dispatch:
@@ -97,9 +97,12 @@ jobs:
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/root/models
-        - /mnt/187:/mnt/187
-        - /mnt/bigdisk:/mnt/bigdisk
-        - /mnt/shared:/mnt/shared
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme1/qa_test_models:/nvme1/qa_test_models
+        - /nvme2/share:/nvme2/share
+        - /mnt/137_nvme2:/mnt/137_nvme2
+        - /mnt/137_nvme3:/mnt/137_nvme3
+        - /mnt/137_nvme4:/mnt/137_nvme4
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems

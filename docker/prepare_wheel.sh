@@ -26,7 +26,7 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
         DEEP_GEMM_VERSION=03d0be3
         FLASH_MLA_VERSION=9edee0c
     else
-        DEEP_GEMM_VERSION=1876566
+        DEEP_GEMM_VERSION=79f48ee
         FLASH_MLA_VERSION=c759027
     fi
 
