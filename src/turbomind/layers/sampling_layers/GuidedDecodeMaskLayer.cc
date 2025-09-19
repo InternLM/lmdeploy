@@ -47,13 +47,13 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
     const auto           bitmask_size = xgrammar::GetBitmaskSize(vocab_size_padded_);
     Tensor_<int32_t>     bitmask{{bsz, bitmask_size}, kCPU};
     Tensor_<int32_t>     bitmask_device{{bsz, bitmask_size}, kDEVICE};
-    std::vector<int64_t> bitmap_shape = {bsz, bitmask_size};
+    std::vector<int64_t> bitmask_shape = {bsz, bitmask_size};
 
     DLTensor bitmask_dltensor{bitmask.data(),
                               DLDevice{kDLCPU, 0},
-                              static_cast<int32_t>(bitmap_shape.size()),
+                              bitmask.ndim(),
                               xgrammar::GetBitmaskDLType(),
-                              bitmap_shape.data(),
+                              bitmask_shape.data(),
                               nullptr,
                               0};
     bool     need_apply = false;
