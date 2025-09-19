@@ -853,7 +853,7 @@ LlamaBatch::~LlamaBatch()
 LlamaBatch::LlamaBatch(DataType                 data_type,
                        const EngineParam&       param,
                        std::unique_ptr<LlamaV2> model,  // ! This is moved
-                       std::unique_ptr<Context> ctx,    // ! This is moved
+                       std::shared_ptr<Context> ctx,
                        std::shared_ptr<Gateway> gateway,
                        int                      device_id,
                        int                      dp_rank):
@@ -1365,13 +1365,15 @@ void LlamaBatch::InternalThreadEntry()
             FindCanceledIndices(req->cancel);
         }
 
+        if (state_->size == g.finished_count) {
+            // Batch is empty, use blocking sync to avoid spinning
+            comm_.h_tp_group->Sync(true);
+        }
+
         NvtxScope scope("mainloop");
 
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
-        // shared_state_->barrier->wait();
-        // comm_.h_comm->Sync(comm_.h_comm_tp_group);
-
         Broadcast(comm_.h_tp_group, req, 0);
 
         if (req->abort) {
@@ -1906,9 +1908,6 @@ void LlamaBatch::DestroyCommunicators()
 
     FreeSymmBuffers();
     comm_.h_comm->Sync();
-
-    // Destroy device communicator
-    comm_.d_comm = {};
 
     cudaStreamSynchronize(stream_);
     comm_.h_comm->Sync();

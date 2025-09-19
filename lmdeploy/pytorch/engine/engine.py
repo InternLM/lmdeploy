@@ -20,13 +20,13 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_ti
 
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
-from ..messages import MessageStatus, SchedulerSequence
+from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
+from ..strategies import build_strategy_factory
 from .base import EngineBase
 from .engine_checker import EngineChecker
 from .executor import build_executor
-from .logits_process import SamplingInputs
 from .model_agent import BatchedOutputs
 from .request import Request, RequestManager, RequestType, Response
 
@@ -80,6 +80,15 @@ def _update_engine_config(engine_config: PytorchEngineConfig):
 
     if engine_config.max_batch_size is None:
         engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+
+    if engine_config.dllm_block_length is not None:
+        max_prefill_token_num = engine_config.max_prefill_token_num
+        max_batch_size = engine_config.max_batch_size
+        if max_batch_size * engine_config.dllm_block_length > max_prefill_token_num:
+            engine_config.max_batch_size = max_prefill_token_num // engine_config.dllm_block_length
+            logger.warning(f'Update max_batch_size to {engine_config.max_batch_size} '
+                           f'since dllm_block_length({engine_config.dllm_block_length}) * max_batch_size '
+                           f'({max_batch_size}) > max_prefill_token_num ({max_prefill_token_num}).')
 
     if engine_config.dp != 1:
         if engine_config.tp == 1 and engine_config.ep == 1:
@@ -137,6 +146,13 @@ def _build_misc_config(engine_config: PytorchEngineConfig):
     """Build misc config."""
     misc_config = MiscConfig.from_engine_config(engine_config)
     return misc_config
+
+
+def _build_seq_meta(cache_config: CacheConfig, strategy: Any):
+    from lmdeploy.pytorch.messages import SequenceMeta
+
+    seq_meta = SequenceMeta(cache_config.block_size, strategy=strategy)
+    return seq_meta
 
 
 class CounterEvent:
@@ -316,21 +332,18 @@ class Engine(EngineBase):
 
     Args:
         model_path (str): The hugging face model path.
-        tokenizer (lmdeploy.Tokenizer): an instance of lmdeploy.Tokenizer
         engine_config (PytorchEngineConfig): The config of the Engine.
         trust_remote_code (bool): Trust remote code.
     """
 
     def __init__(self,
                  model_path: str,
-                 tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
         # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
 
         # dist args
-        self.tokenizer = tokenizer
         self.tp = engine_config.tp
         self.dp = engine_config.dp
         self.dp_rank = engine_config.dp_rank
@@ -358,25 +371,30 @@ class Engine(EngineBase):
         misc_config = _build_misc_config(engine_config)
 
         # build model agent
-        raw_tokenizer = None
-        if tokenizer is not None:
-            raw_tokenizer = tokenizer.model.model
         self.executor = build_executor(model_path,
                                        cache_config=cache_config,
                                        backend_config=backend_config,
                                        dist_config=dist_config,
                                        misc_config=misc_config,
-                                       tokenizer=raw_tokenizer,
                                        adapters=adapters,
                                        device_type=engine_config.device_type,
                                        distributed_executor_backend=engine_config.distributed_executor_backend,
                                        dtype=engine_config.dtype)
         self.executor.init()
 
+        # strategies
+        self.strategy_factory = build_strategy_factory(self.model_config, self.executor.misc_config)
+        self.sampling_strategy = self.strategy_factory.build_sampling_strategy()
+        self.model_agent_strategy = self.strategy_factory.build_model_agent_strategy()
+        self.engine_strategy = self.strategy_factory.build_engine_strategy(cache_config=cache_config,
+                                                                           scheduler_config=scheduler_config)
+        self.seq_strategy = self.strategy_factory.build_sequence_strategy()
+
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.scheduler = Scheduler(scheduler_config, cache_config)
+        self.seq_meta = _build_seq_meta(cache_config, strategy=self.seq_strategy)
+        self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
 
         # engine args
         self.model_path = model_path
@@ -385,6 +403,7 @@ class Engine(EngineBase):
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.dist_config = dist_config
+        self.misc_config = self.executor.misc_config
         self.max_session_len = self._get_max_session_len()
         self.engine_config.num_cpu_blocks = self.cache_config.num_cpu_blocks
         self.engine_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
@@ -406,7 +425,6 @@ class Engine(EngineBase):
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
-                        tokenizer: object,
                         engine_config: PytorchEngineConfig = None,
                         trust_remote_code: bool = True,
                         **kwargs):
@@ -423,7 +441,6 @@ class Engine(EngineBase):
                       on huggingface.co, such as "InternLM/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
-            tokenizer (lmdeploy.Tokenizer): an instance of lmdeploy.Tokenizer
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
         """
@@ -432,13 +449,11 @@ class Engine(EngineBase):
             backend = engine_config.mp_engine_backend
             return build_mp_engine(backend=backend,
                                    model_path=pretrained_model_name_or_path,
-                                   tokenizer=tokenizer,
                                    engine_config=engine_config,
                                    trust_remote_code=trust_remote_code)
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
-                   tokenizer=tokenizer,
                    engine_config=engine_config,
                    trust_remote_code=trust_remote_code)
 
@@ -586,7 +601,7 @@ class Engine(EngineBase):
             max_session_len = self.max_session_len
             sampling_param = msg.sampling_param
             max_new_tokens = sampling_param.max_new_tokens
-            num_all_tokens = msg.num_all_tokens()
+            num_all_tokens = msg.num_valid_ids
             if max_new_tokens + num_all_tokens > max_session_len:
                 logger.warning(
                     f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
@@ -603,14 +618,12 @@ class Engine(EngineBase):
             sess = scheduler.sessions[session_id]
             # TODO: support 1 session n sequence
             sampling_param = req.data['sampling_param']
-            return_logits = sampling_param.out_logits
             if len(sess.sequences) == 0:
                 migration_request = req.data.get('migration_request')
                 assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
                 sess.add_sequence(req.data['token_ids'],
                                   sampling_param=sampling_param,
                                   adapter_name=req.data['adapter_name'],
-                                  return_logits=return_logits,
                                   multimodals=req.data.get('input_multimodals'),
                                   input_embeddings=req.data.get('input_embeddings', ),
                                   migration_request=migration_request,
@@ -628,11 +641,9 @@ class Engine(EngineBase):
                     req.data['token_ids'],
                     multimodals=req.data.get('input_multimodals'),
                     embeddings=req.data.get('input_embeddings'),
-                    append_tokens=True,
+                    mode=UpdateTokenMode.INPUTS,
                 )
-                msg.num_new_tokens = 0
                 msg.sampling_param = sampling_param
-                msg.return_logits = return_logits
                 msg.status = MessageStatus.WAITING
                 __update_max_new_tokens(msg)
 
@@ -670,10 +681,11 @@ class Engine(EngineBase):
             ]
             input_embedding_indexing = torch.zeros((batch_size, max_q_seq_length), dtype=torch.bool)
             for msg_id, msg in enumerate(messages):
+                num_history_ids = msg.num_history_ids
                 for emb in msg.input_embeddings:
                     # make slice index relative to embeddings
-                    emb_start = emb.start - msg.history_len
-                    emb_end = emb.end - msg.history_len
+                    emb_start = emb.start - num_history_ids
+                    emb_end = emb.end - num_history_ids
                     input_embedding_indexing[msg_id][emb_start:emb_end] = True
             return (input_embeddings, input_embedding_indexing, input_embedding_ranges)
 
@@ -727,7 +739,7 @@ class Engine(EngineBase):
         """
         batch_size = len(messages)
         # history lengths
-        history_lengths = torch.tensor([msg.history_len for msg in messages])
+        history_lengths = torch.tensor([msg.num_history_ids for msg in messages])
 
         # input ids
         token_ids = [msg.token_ids for msg in messages]
@@ -740,8 +752,8 @@ class Engine(EngineBase):
             seq_length = torch.tensor(seq_length, dtype=torch.long)
             max_q_seqlen = seq_length.max().item()
         else:
-            seq_length = torch.ones(batch_size, dtype=torch.long)
-            max_q_seqlen = 1
+            max_q_seqlen = len(token_ids[0])
+            seq_length = torch.full((batch_size, ), max_q_seqlen, dtype=torch.long)
         kv_seqlens = seq_length + history_lengths
         max_kv_seqlen = kv_seqlens.max().item()
         sum_kv_seqlen = kv_seqlens.sum().item()
@@ -796,23 +808,6 @@ class Engine(EngineBase):
 
         return model_inputs
 
-    def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
-                       model_metas: List[Dict[str, Any]]):
-        """Update scheduler."""
-        if model_metas is None:
-            model_metas = [None] * len(running)
-        next_token_ids = next_token_ids.numpy()
-        for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
-            if msg.status != MessageStatus.LOCKED:
-                continue
-            update_token = token
-
-            # fill token
-            msg.update_token_ids(update_token, model_meta=model_meta)
-            msg.num_new_tokens += 1
-            if stop:
-                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
-
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
                                  model_metas: List[Dict[str, Any]]):
         """Update scheduler."""
@@ -824,39 +819,39 @@ class Engine(EngineBase):
             update_token = token
 
             # fill token
-            msg.update_token_ids(update_token, model_meta=model_meta)
-            msg.num_new_tokens += 1
+            msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
             if stop:
                 update_token = _EMPTY_TOKEN
-                msg.update_token_ids(update_token, model_meta=model_meta)
+                msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
                 msg.status = MessageStatus.STOPPED
 
     def _make_infer_outputs(
         self,
         batched_outputs: BatchedOutputs,
         running: SeqList,
+        is_decoding: bool,
     ):
         """Make infer output."""
         new_token_timestamp = batched_outputs.new_token_timestamp
-        next_token_ids = batched_outputs.next_token_ids
         logits = batched_outputs.logits
-        stopped = batched_outputs.stopped
-        model_metas = batched_outputs.model_metas
         logprobs = batched_outputs.logprobs
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
-        stopped = stopped.tolist()
-        self.update_running(running, next_token_ids, stopped, model_metas)
+        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
                 continue
-            token_ids = msg.all_ids[-msg.num_new_tokens:]
+            token_ids = msg.generated_ids
             finish = msg.status == MessageStatus.STOPPED or msg.status == MessageStatus.TO_BE_MIGRATED
             if not finish and len(token_ids) == 0:
+                continue
+            resp_data = msg.resp.data
+            if resp_data is not None and len(resp_data.get('token_ids', [])) == len(token_ids):
+                # no new tokens
                 continue
             session_id = msg.session_id
             if msg.resp_cache:
@@ -886,51 +881,6 @@ class Engine(EngineBase):
 
     def _make_forward_inputs(self, prefill: bool, enable_empty: bool = False):
         """Make forward inputs."""
-        prefill_interval = self.scheduler_config.prefill_interval
-
-        def __gather_all_ids(seqs: SeqList, sampling_inputs: SamplingInputs):
-            """Gather history."""
-            if sampling_inputs.repetition_penalty is None and not any(sampling_inputs.logits_processors):
-                return None
-            batch = len(seqs)
-            max_len = max(seq.num_all_ids for seq in seqs)
-            pad_id = self.model_config.bos_token_id
-            pad_id = 0 if pad_id is None else pad_id
-            output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
-            for idx, seq in enumerate(seqs):
-                h_len = seq.num_all_ids
-                if h_len == 0:
-                    continue
-                h_ids = torch.from_numpy(seq.all_ids)
-                output[idx, -h_len:] = h_ids
-            return output
-
-        def __gather_guided_input_ids(seqs: SeqList, sampling_inputs: SamplingInputs):
-            """Gather input ids for guided decode."""
-            if not any(sampling_inputs.response_formats or ()):
-                return None
-            batch = len(seqs)
-            max_len = max(seq.num_new_tokens for seq in seqs)
-            pad_id = self.model_config.bos_token_id
-            pad_id = 0 if pad_id is None else pad_id
-            output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
-            for idx, seq in enumerate(seqs):
-                h_len = seq.num_new_tokens
-                if h_len == 0:
-                    continue
-                h_ids = torch.from_numpy(seq.all_ids[-seq.num_new_tokens:])
-                output[idx, -h_len:] = h_ids
-            return output
-
-        def __get_num_appendable_ids(seqs: SeqList):
-            """Get num appendable ids."""
-            ret = [seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
-            return torch.tensor(ret)
-
-        def __get_num_ignore_eos(seqs: SeqList):
-            """Get num ignore eos."""
-            ret = [seq.sampling_param.min_new_tokens - seq.num_new_tokens for seq in seqs]
-            return torch.tensor(ret)
 
         def __need_logits(seqs: SeqList):
             """Need logits."""
@@ -939,7 +889,8 @@ class Engine(EngineBase):
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
-        scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+        prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
+        scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
 
         if enable_empty and len(scheduler_output.running) == 0:
             return None
@@ -947,9 +898,10 @@ class Engine(EngineBase):
         # schedule decoding if no valid prefill reqs.
         if prefill and len(scheduler_output.running) == 0 and self.engine_config.role != EngineRole.Prefill:
             prefill = False
-            scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+            prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
+            scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
 
-        num_loops = 1 if prefill else prefill_interval
+        num_loops = self.engine_strategy.get_num_loops(not prefill)
         running = scheduler_output.running
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
@@ -959,12 +911,10 @@ class Engine(EngineBase):
 
         # create inputs
         inputs = self.create_model_inputs(running, prefill)
-        sampling_inputs = SamplingInputs.from_sampling_params(running)
-        all_ids = __gather_all_ids(running, sampling_inputs)
-        guided_input_ids = __gather_guided_input_ids(running, sampling_inputs)
-        num_appendable_ids = __get_num_appendable_ids(running)
-        num_ignore_eos = __get_num_ignore_eos(running)
+        sampling_inputs = self.sampling_strategy.make_sampling_inputs(running)
         return_logits = __need_logits(running)
+        extra_inputs = self.model_agent_strategy.make_extra_inputs(running)
+        stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
 
         sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
         return dict(
@@ -973,14 +923,12 @@ class Engine(EngineBase):
             swap_in_map=swap_in_map,
             swap_out_map=swap_out_map,
             loop_count=num_loops,
-            all_ids=all_ids,
-            guided_input_ids=guided_input_ids,
             sampling_inputs=sampling_inputs,
-            num_appendable_ids=num_appendable_ids,
-            num_ignore_eos=num_ignore_eos,
+            stopping_criteria=stopping_criteria,
             return_logits=return_logits,
             is_dummy=False,
             sync_long_context=sync_long_context,
+            extra_inputs=extra_inputs,
         )
 
     async def _await_forward_event(self, forward_event: asyncio.Event):
@@ -1148,6 +1096,7 @@ class Engine(EngineBase):
 
             forward_event.set()
             num_loops = forward_inputs['loop_count']
+            is_decoding = forward_inputs['inputs'].is_decoding
             running = next_running
             next_running = None
             scheduler.lock_running(running)
@@ -1161,7 +1110,7 @@ class Engine(EngineBase):
                 # send output
                 out = await self.executor.get_output_async()
                 if out is not None:
-                    step_outputs = self._make_infer_outputs(out, running=running)
+                    step_outputs = self._make_infer_outputs(out, running=running, is_decoding=is_decoding)
                     resp_que.put_nowait(step_outputs)
 
                 # lock forward event

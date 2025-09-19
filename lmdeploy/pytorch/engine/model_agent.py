@@ -16,6 +16,7 @@ from torch.profiler import ProfilerActivity, profile, record_function
 
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
@@ -24,6 +25,8 @@ from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
 from ..model_inputs import ModelInputs, step_ctx_manager
 from ..models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
+from ..strategies import build_strategy_factory
+from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
@@ -62,10 +65,12 @@ class BatchedLogProbs:
 class BatchedOutputs:
     next_token_ids: torch.Tensor
     stopped: torch.Tensor
+    stop_pos: Optional[torch.Tensor] = None
     logits: Optional[torch.Tensor] = None
     model_metas: List[Dict[str, Any]] = None
     logprobs: Optional[BatchedLogProbs] = None
     new_token_timestamp: int = 0
+    extra_outputs: Optional[ExtraOutputs] = None
 
     def to_cpu(self):
         """To cpu."""
@@ -198,6 +203,8 @@ def msg_with_rank(rank: int, msg: str):
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
     """Perform cache swapping."""
     issued_cache_op = False
+    swap_in_map = swap_in_map or dict()
+    swap_out_map = swap_out_map or dict()
     if len(swap_in_map) > 0:
         cache_engine.swap_in(swap_in_map)
         issued_cache_op = True
@@ -238,20 +245,12 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-    return dict(hidden_states=output, model_metas=model_metas)
 
+            # InternVL-3.5-Flash will change the seqlen, model_metas during forward
+            model_metas = context.model_metas
+            seq_length = context.q_seqlens[:len(inputs.seq_length)]
 
-@record_function('stopping_criteria')
-def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
-    """Batched stopping criteria."""
-    num_appendable_ids = num_appendable_ids - 1
-    stopped = num_appendable_ids <= 0
-    if stop_words is not None:
-        sw_stopped = (token_ids[:, None] == stop_words).any(1)
-        stopped = stopped | sw_stopped
-        one_ids = torch.clamp_max(num_appendable_ids, 0)
-        num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
-    return stopped, num_appendable_ids
+    return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
 
 
 def _try_to_cuda(val, non_blocking: bool = False):
@@ -307,16 +306,16 @@ class BaseModelAgent:
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  misc_config: MiscConfig,
-                 tokenizer: Any,
                  dist_ctx: DistContext,
                  device_ctx: DeviceContext,
                  adapters: Dict[str, str] = None):
 
         self.model_config = model_config
         self.cache_config = cache_config
-        self.tokenizer = tokenizer
+        # use raw tokenizer
+        self.tokenizer = Tokenizer(model_path).model.model
         try:
-            self.sampling_vocab_size = len(tokenizer)
+            self.sampling_vocab_size = len(self.tokenizer)
         except BaseException:
             self.sampling_vocab_size = None
 
@@ -363,6 +362,11 @@ class BaseModelAgent:
         self.enable_microbatch_decode_batchsize_threshold = \
             int(getenv('ENABLE_MICROBATCH_DECODE_BATCHSIZE_THRESHOLD', 2))
 
+        # strategy
+        self.strategy_factory = build_strategy_factory(model_config, misc_config)
+        self.inputs_strategy = self.strategy_factory.build_model_inputs_strategy()
+        self.agent_strategy = self.strategy_factory.build_model_agent_strategy()
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -393,33 +397,42 @@ class BaseModelAgent:
             num_tokens = max_batches
 
             # warmup prefill
-            inputs = ModelInputs.make_dummy(max_batches,
-                                            is_decoding=False,
-                                            device='cuda',
-                                            vocab_size=self.model_config.vocab_size)
-            self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+            inputs = self.inputs_strategy.make_dummy(max_batches,
+                                                     is_decoding=False,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size)
+            self._forward_impl(inputs)
 
             # warmup decoding(with cuda graph)
             capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
             capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
             for num_tokens in capture_batch_sizes:
-                inputs = ModelInputs.make_dummy(num_tokens,
-                                                is_decoding=True,
-                                                device='cuda',
-                                                vocab_size=self.model_config.vocab_size)
-                self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+                inputs = self.inputs_strategy.make_dummy(num_tokens,
+                                                         is_decoding=True,
+                                                         device='cuda',
+                                                         vocab_size=self.model_config.vocab_size)
+                self._forward_impl(inputs)
+
+    def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
+        """Slice outputs."""
+        return self.agent_strategy.slice_outputs(inputs, seq_length)
+
+    def _postprocess_forward_output(self, output: dict, inputs: ModelInputs):
+        """Post process forward output."""
+        hidden_states = output['hidden_states']
+        seq_length = output.get('seq_length', inputs.seq_length)
+        hidden_states = self._slice_outs(hidden_states[0], seq_length)[None]
+        output['hidden_states'] = hidden_states
+        return output
 
     async def _async_model_forward(
         self,
         inputs: ModelInputs,
-        swap_in_map: Dict,
-        swap_out_map: Dict,
         return_logits: bool,
         sync_long_context: bool,
     ):
         """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
-        swap_done = False
 
         class _OutputGather:
             """Output gather."""
@@ -427,7 +440,8 @@ class BaseModelAgent:
             def __init__(self, max_seq_len):
                 self._max_seq_len = max_seq_len
                 self._start = 0
-                self._output = None
+                self._output: torch.Tensor = None
+                self._device: torch.device = None
 
             def gather(self, output):
                 """gather."""
@@ -442,6 +456,7 @@ class BaseModelAgent:
                 seq_len = tmp_output.size(-2)
                 if out_logits is None:
                     out_logits = tmp_output.new_empty(1, self._max_seq_len, tmp_output.size(-1), device='cpu')
+                    self._device = tmp_output.device
                 out_logits[:, start:start + seq_len].copy_(tmp_output, non_blocking=True)
                 self._start = start + seq_len
                 self._output = out_logits
@@ -451,16 +466,9 @@ class BaseModelAgent:
                 if not return_logits:
                     return self._output[:, -1:]
                 torch.cuda.synchronize()
-                return self._output
+                return self._output.to(self._device)
 
-        async def __forward(inputs):
-            """forward."""
-            nonlocal swap_done, swap_in_map, swap_out_map
-            if swap_done:
-                return await self.async_forward(inputs, swap_in_map=dict(), swap_out_map=dict())
-            else:
-                swap_done = True
-                return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        __forward = self.async_forward
 
         async def __long_context_single_forward(new_inputs, max_seqlen: int):
             """One large sequence."""
@@ -478,6 +486,8 @@ class BaseModelAgent:
                 tmp_out.pop('hidden_states', None)
             tmp_out['hidden_states'] = output_gather.get_output()
             return tmp_out
+
+        origin_inputs = inputs
 
         # make long context inputs
         is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
@@ -501,20 +511,15 @@ class BaseModelAgent:
 
         if not is_long_context:
             ret = await __forward(inputs)
-            if not return_logits and not inputs.is_decoding:
-                last_token_loc = inputs.seq_length.cumsum(0) - 1
-                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
         else:
             ret = await __long_context_single_forward(inputs, max_seqlen)
-            if not return_logits:
-                last_token_loc = [-1]
-                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
-            else:
-                ret['hidden_states'] = ret['hidden_states'].to('cuda')
+
+        if not return_logits:
+            ret = self._postprocess_forward_output(ret, origin_inputs)
 
         # compute dummy loop
         if dummy_loop > 0:
-            dummy_inputs = ModelInputs.make_dummy(1, False, 'cuda', vocab_size=self.model_config.vocab_size)
+            dummy_inputs = self.inputs_strategy.make_dummy(1, False, 'cuda', vocab_size=self.model_config.vocab_size)
         for _ in range(dummy_loop):
             await __forward(dummy_inputs)
 
@@ -523,29 +528,18 @@ class BaseModelAgent:
         ret['logits'] = logits
         return ret
 
-    async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
-                                    sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
+    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs, inputs: ModelInputs):
         """Sampling logits."""
-
-        def __get_last_logits():
-            """Get last logits."""
-            seq_length = inputs.seq_length
-            if len(seq_length) == logits.size(0):
-                return logits
-
-            last_idx = seq_length.cumsum(-1) - 1
-            return logits[last_idx, :]
 
         # record function does not support async function
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
-            split_logits = __get_last_logits()
             logits_processor = FusedLogitsProcessor(sampling_inputs,
-                                                    ignore_eos,
                                                     self.tokenizer,
                                                     sampling_vocab_size=self.sampling_vocab_size,
                                                     logprobs_mode=self.misc_config.logprobs_mode)
-            logits, raw_logprobs = await logits_processor(all_ids, guided_input_ids, split_logits)
+            origin_logits = logits
+            logits, raw_logprobs = await logits_processor(origin_logits)
             next_token_ids = logits_processor.sampling(logits)
             logprobs = logits_processor.compute_logprobs(raw_logprobs, next_token_ids)
             if logprobs is not None:
@@ -562,17 +556,18 @@ class BaseModelAgent:
         event.record()
         self._out_que.put_nowait((output, event))
 
-    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None):
+    @contextmanager
+    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None, enable: bool = True):
+        if not enable:
+            yield
+            return
+
         if dist_ctx is None:
             dist_ctx = get_dist_manager().current_context()
-        if self.cache_config.role == EngineRole.Decode:
-            next_token_ids = next_token_ids.cpu()
-            tp_cpu_group = dist_ctx.tp_cpu_group
-            dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group)
-        else:
-            tp_gpu_group = dist_ctx.tp_gpu_group
-            dist.broadcast(next_token_ids, src=0, group=tp_gpu_group)
-        return next_token_ids
+        tp_gpu_group = dist_ctx.tp_gpu_group
+        handle = dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
+        yield
+        handle.wait()
 
     async def _async_step_background(
         self,
@@ -580,38 +575,26 @@ class BaseModelAgent:
         loop_count: int,
         swap_in_map: Dict = None,
         swap_out_map: Dict = None,
-        all_ids: torch.Tensor = None,
-        guided_input_ids: torch.Tensor = None,
         sampling_inputs: SamplingInputs = None,
-        num_appendable_ids: torch.LongTensor = None,
-        num_ignore_eos: torch.LongTensor = None,
+        stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
         is_dummy: bool = False,
         sync_long_context: bool = False,
+        extra_inputs: ExtraInputs = None,
     ):
         """Asyc forward task."""
-        if swap_in_map is None:
-            swap_in_map = dict()
-
-        if swap_out_map is None:
-            swap_out_map = dict()
-
         dist_ctx = get_dist_manager().current_context()
 
         @record_function('update_inputs_for_next_step')
-        def __update_inputs(next_token_ids, model_metas):
+        def __update_inputs(next_token_ids, model_metas, extra_inputs):
             """Update inputs."""
-            nonlocal all_ids, guided_input_ids, swap_in_map, swap_out_map
-            swap_in_map = dict()
-            swap_out_map = dict()
-            inputs.model_metas = model_metas
-            inputs.update(next_token_ids)
-            if all_ids is not None:
-                all_ids = torch.cat([all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
-            if guided_input_ids is not None:
-                guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None].to(guided_input_ids.device)], 1)
-            if sampling_inputs.random_offsets is not None:
-                sampling_inputs.random_offsets += 1
+            return self.agent_strategy.update_inputs_for_next_step(
+                inputs,
+                sampling_inputs,
+                next_token_ids=next_token_ids,
+                model_metas=model_metas,
+                extra_inputs=extra_inputs,
+            )
 
         @asynccontextmanager
         async def __prepare_dp():
@@ -695,61 +678,78 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
             return
 
+        cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         for idx in range(loop_count):
             # inference
             logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
             output = await self._async_model_forward(
                 inputs,
-                swap_in_map=swap_in_map,
-                swap_out_map=swap_out_map,
                 return_logits=return_logits,
                 sync_long_context=sync_long_context,
             )
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+            seq_length = inputs.seq_length
+            seq_length = output.get('seq_length', inputs.seq_length)
+            last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
+            extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, seq_length)
 
             # output empty for dummy inputs
             if is_dummy:
                 continue
 
+            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
+
             # sampling and stopping
             if need_output:
                 logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
                 # sampling
-                next_token_ids, logprobs = await self.async_sampling_logits(logits, all_ids, guided_input_ids,
-                                                                            sampling_inputs, inputs, num_ignore_eos > 0)
-                num_ignore_eos = num_ignore_eos - 1
+                next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
 
-                # stopping criteria
-                stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
-                                                                       num_appendable_ids)
+                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
+                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
+
+                    # post sampling
+                    next_token_ids, extra_inputs = self.agent_strategy.post_sampling(
+                        inputs, last_logits, next_token_ids, extra_inputs)
+
+                    # stopping criteria
+                    stopped, stop_pos, stopping_criteria = stopping_criteria.step(next_token_ids,
+                                                                                  sampling_inputs.stop_words,
+                                                                                  inputs=inputs,
+                                                                                  extra_inputs=extra_inputs)
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
                 with torch.inference_mode():
-                    next_token_ids = torch.zeros_like(num_ignore_eos)
+                    next_token_ids = inputs.input_ids.new_zeros(last_logits.size(0))
                 logprobs = None
 
-            # broadcast next token for TP > 1
-            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
-            if need_broadcast_next:
-                logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                next_token_ids = self._broadcast_next_token(next_token_ids, dist_ctx)
+                # broadcast next token for TP > 1
+                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
+                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
+
+                # post sampling
+                next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
+                                                                                 extra_inputs)
 
             # send output
             model_metas = output.get('model_metas')
             if need_output:
                 logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
+                extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
                 self._push_output(
                     BatchedOutputs(next_token_ids=next_token_ids,
                                    logits=logits if return_logits else None,
                                    stopped=stopped,
+                                   stop_pos=stop_pos,
                                    model_metas=model_metas,
-                                   logprobs=logprobs))
+                                   logprobs=logprobs,
+                                   extra_outputs=extra_outputs))
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
-                __update_inputs(next_token_ids, model_metas)
+                inputs, extra_inputs = __update_inputs(next_token_ids, model_metas, extra_inputs)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
@@ -777,7 +777,7 @@ class BaseModelAgent:
     async def _async_loop_inputs_preprocess(self):
         """Async loop inputs preprocess."""
         non_blocking = True
-        keys = ['inputs', 'all_ids', 'guided_input_ids', 'sampling_inputs', 'num_appendable_ids', 'num_ignore_eos']
+        keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
 
@@ -913,7 +913,9 @@ class BaseModelAgent:
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
-        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder)
+        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
+                                            dllm_config=self.misc_config.dllm_config,
+                                            strategy_factory=self.strategy_factory)
         patched_model = build_patched_model(self.model_config,
                                             device=device,
                                             model_format=self.misc_config.model_format,
@@ -925,6 +927,7 @@ class BaseModelAgent:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
         self.patched_model = patched_model
+        self.build_model_ctx = build_model_ctx
 
     def build_model(self):
         """Build model api."""
@@ -955,8 +958,7 @@ class BaseModelAgent:
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
 
-    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+    def _forward_impl(self, inputs: ModelInputs):
         output = model_forward(
             self.patched_model,
             inputs,
@@ -965,7 +967,7 @@ class BaseModelAgent:
         )
         return output
 
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
+    async def async_forward(self, inputs: ModelInputs):
         """Model forward.
 
         Args:
@@ -973,7 +975,7 @@ class BaseModelAgent:
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """
-        output = self._forward_impl(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        output = self._forward_impl(inputs)
         await asyncio.sleep(0)
         return output
 
@@ -1081,6 +1083,7 @@ class DPForwardInputsMaker:
         self.model_config = model_agent.model_config
         self.cache_config = model_agent.cache_config
         self.misc_config = model_agent.misc_config
+        self.inputs_strategy = model_agent.inputs_strategy
         self.device = model_agent.device
         self._in_que = model_agent._in_que
 
@@ -1096,10 +1099,10 @@ class DPForwardInputsMaker:
         dist_config = self.dist_ctx.dist_config
         batch_size = 2 if dist_config.enable_microbatch else 1
         batch_size = min(self.cache_config.max_batches, batch_size)
-        model_inputs = ModelInputs.make_dummy(batch_size,
-                                              is_decoding,
-                                              device=self.device,
-                                              vocab_size=self.model_config.vocab_size)
+        model_inputs = self.inputs_strategy.make_dummy(batch_size,
+                                                       is_decoding,
+                                                       device=self.device,
+                                                       vocab_size=self.model_config.vocab_size)
         forward_inputs = dict(
             inputs=model_inputs,
             loop_count=loop_count,
@@ -1158,7 +1161,6 @@ def build_model_agent(model_path: str,
                       cache_config: CacheConfig,
                       backend_config: BackendConfig,
                       misc_config: MiscConfig,
-                      tokenizer: Any,
                       dist_ctx: DistContext = None,
                       device_ctx: DeviceContext = None,
                       adapters: Dict[str, str] = None):
@@ -1187,7 +1189,6 @@ def build_model_agent(model_path: str,
         cache_config=cache_config,
         backend_config=backend_config,
         misc_config=misc_config,
-        tokenizer=tokenizer,
         adapters=adapters,
         dist_ctx=dist_ctx,
         device_ctx=device_ctx,

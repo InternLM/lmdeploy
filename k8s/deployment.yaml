@@ -24,8 +24,6 @@ spec:
         args:
         - "lmdeploy serve api_server internlm/internlm2-chat-7b --server-port 23333"
         env:
-        - name: NCCL_LAUNCH_MODE
-          value: GROUP
         - name: HUGGING_FACE_HUB_TOKEN
           value: "{{HUGGING_FACE_HUB_TOKEN}}"
         ports:

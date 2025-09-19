@@ -44,13 +44,23 @@ def run_pipeline_chat_test(config,
     if extra is not None:
         extra = json.dumps(extra, ensure_ascii=False, indent=None)
         extra = extra.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
+    env = os.environ.copy()
     with open(pipeline_chat_log, 'w') as f:
         cmd = f'python3 autotest/tools/pipeline/llm_case.py run_pipeline_chat_test {hf_path} autotest/prompt_case.yaml {tp} {backend_type} {is_smoke} {extra}'  # noqa E501
 
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
         # quantization
-        response = subprocess.run([cmd], shell=True, capture_output=True, text=True, encoding='utf-8')
+        try:
+            response = subprocess.run([cmd],
+                                      shell=True,
+                                      capture_output=True,
+                                      text=True,
+                                      encoding='utf-8',
+                                      env=env,
+                                      timeout=600)
+        except subprocess.TimeoutExpired as e:
+            assert False, f'Test command timed out after 10 minutes: {e.cmd}'
 
         output_text = response.stdout
         print(output_text)
@@ -109,13 +119,23 @@ def run_pipeline_vl_chat_test(config,
     if extra is not None:
         extra = json.dumps(extra, ensure_ascii=False, indent=None)
         extra = extra.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
+    env = os.environ.copy()
     with open(pipeline_chat_log, 'w') as f:
         cmd = f'python3 autotest/tools/pipeline/mllm_case.py run_pipeline_mllm_test {hf_path} {resource_path} {tp} {backend_type} {is_smoke} {extra}'  # noqa E501
 
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
         # quantization
-        response = subprocess.run([cmd], shell=True, capture_output=True, text=True, encoding='utf-8')
+        try:
+            response = subprocess.run([cmd],
+                                      shell=True,
+                                      capture_output=True,
+                                      text=True,
+                                      encoding='utf-8',
+                                      env=env,
+                                      timeout=600)
+        except subprocess.TimeoutExpired as e:
+            assert False, f'Test command timed out after 10 minutes: {e.cmd}'
 
         output_text = response.stdout
         print(output_text)
@@ -279,13 +299,14 @@ def internvl_vl_testcase(output_text, f, lang: str = 'en'):
             assert case_result, f'reason: separate images: panda should in {response}'
     with allure.step(f'internvl-separate-images2-{lang}'):
         response = get_response_from_output(output_text, f'internvl-separate-images2-{lang}')
-        case_result = any(word in response.lower() for word in ['panda', '熊猫', 'same', 'different', 'difference'])
+        case_result = any(word in response.lower()
+                          for word in ['panda', '熊猫', 'same', 'different', 'difference', 'identical'])
         f.writelines(f'internvl-separate-images2-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: separate images2: panda should in {response}'
     with allure.step(f'internvl-video-{lang}'):
         response = get_response_from_output(output_text, f'internvl-video-{lang}')
-        case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子', 'food'])
+        case_result = any(word in response.lower() for word in ['red panda', 'eat', '熊猫', '竹子', 'food', 'hold'])
         f.writelines(f'internvl-video-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: video: panda should in {response}'

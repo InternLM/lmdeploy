@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 import pytest
-from utils.config_utils import get_cuda_id_by_workerid
+from utils.config_utils import set_device_env_variable
 from utils.get_run_config import close_pipeline, get_tp_num
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
@@ -19,7 +19,7 @@ SESSION_LEN_PASSKEY_1M = 1048576
 def test_history_issue_tp1(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     stream_infer_basic(config, model, log_name)
 
 
@@ -28,7 +28,7 @@ def test_history_issue_tp1(config, model, worker_id):
 def test_history_issue_tp2(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     stream_infer_basic(config, model, log_name)
 
@@ -63,7 +63,7 @@ def stream_infer_basic(config, model, log_name):
 def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     passkey_retrival(config, model, backend, log_name, 1)
 
 
@@ -74,7 +74,7 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
 def test_long_test_passkey_tp2(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     passkey_retrival(config, model, backend, log_name, 2)
 
@@ -85,7 +85,7 @@ def test_long_test_passkey_tp2(config, model, backend, worker_id):
 def test_long_test_passkey_tp4(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     passkey_retrival(config, model, backend, log_name, 4, SESSION_LEN_PASSKEY_1M)
 

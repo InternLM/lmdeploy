@@ -29,7 +29,6 @@ class WorkerWrapperBase:
         misc_config: MiscConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
-        tokenizer: Any = None,
         log_level: int = 30,
     ):
         self.model_path = model_path
@@ -38,7 +37,6 @@ class WorkerWrapperBase:
         self.backend_config = backend_config
         self.dist_config = dist_config
         self.misc_config = misc_config
-        self.tokenizer = tokenizer
         self.adapters = adapters
         self.device_type = device_type
         self.log_level = log_level
@@ -96,7 +94,6 @@ class WorkerWrapperBase:
                                              cache_config=self.cache_config,
                                              backend_config=self.backend_config,
                                              misc_config=self.misc_config,
-                                             tokenizer=self.tokenizer,
                                              device_ctx=self.device_ctx,
                                              dist_ctx=self.dist_ctx,
                                              adapters=self.adapters)

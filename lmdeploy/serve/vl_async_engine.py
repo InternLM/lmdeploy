@@ -28,6 +28,9 @@ class VLAsyncEngine(AsyncEngine):
                  **kwargs) -> None:
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)
+        if backend_config and backend_config.enable_prefix_caching:
+            backend_config.enable_prefix_caching = False
+            logger.warning('Prefix caching is disabled since LMDeploy hasn\'t support in on VL models yet')
         self.vl_encoder = ImageEncoder(model_path, backend, vision_config, backend_config=backend_config)
         super().__init__(model_path, backend=backend, backend_config=backend_config, **kwargs)
         if self.model_name == 'base':

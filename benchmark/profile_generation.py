@@ -16,7 +16,6 @@ from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
-from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 get_logger('lmdeploy').setLevel('WARNING')
@@ -121,13 +120,12 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
           f'n_prompt_token: {input_seqlen}, '
           f'n_completion_token: {output_seqlen}, '
           f'test_round: {test_round}, warmup_round: {warmup_round}')
-    tokenizer = Tokenizer(model_path)
     if isinstance(engine_config, TurbomindEngineConfig):
         from lmdeploy.turbomind import TurboMind
-        tm_model = TurboMind.from_pretrained(model_path, tokenizer=tokenizer, engine_config=engine_config)
+        tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config)
     elif isinstance(engine_config, PytorchEngineConfig):
         from lmdeploy.pytorch.engine import Engine
-        tm_model = Engine(model_path, tokenizer=tokenizer, engine_config=engine_config)
+        tm_model = Engine(model_path, engine_config=engine_config)
 
     event_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(event_loop)

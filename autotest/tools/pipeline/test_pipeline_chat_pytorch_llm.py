@@ -1,7 +1,7 @@
 import os
 
 import pytest
-from utils.config_utils import get_cuda_id_by_workerid, get_torch_model_list
+from utils.config_utils import get_torch_model_list, set_device_env_variable
 from utils.pipeline_chat import run_pipeline_chat_test
 
 
@@ -10,11 +10,12 @@ from utils.pipeline_chat import run_pipeline_chat_test
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, exclude_dup=True))
 def test_pipeline_chat_pytorch_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
 
 
@@ -23,10 +24,11 @@ def test_pipeline_chat_pytorch_tp1(config, common_case_config, model, worker_id)
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, exclude_dup=True))
 def test_pipeline_chat_pytorch_tp2(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
 
@@ -35,11 +37,12 @@ def test_pipeline_chat_pytorch_tp2(config, common_case_config, model, worker_id)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, exclude_dup=True))
 def test_pipeline_chat_pytorch_tp4(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
 
@@ -48,6 +51,7 @@ def test_pipeline_chat_pytorch_tp4(config, common_case_config, model, worker_id)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_8
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=8, exclude_dup=True))
 def test_pipeline_chat_pytorch_tp8(config, common_case_config, model, worker_id):
@@ -63,7 +67,7 @@ def test_pipeline_chat_pytorch_tp8(config, common_case_config, model, worker_id)
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, quant_policy=4, exclude_dup=True))
 def test_pipeline_chat_kvint4_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 4})
 
 
@@ -75,7 +79,7 @@ def test_pipeline_chat_kvint4_tp1(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, quant_policy=4, exclude_dup=True))
 def test_pipeline_chat_kvint4_tp2(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 4})
 
@@ -88,7 +92,7 @@ def test_pipeline_chat_kvint4_tp2(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, quant_policy=4, exclude_dup=True))
 def test_pipeline_chat_kvint4_tp4(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 4})
 
@@ -102,7 +106,7 @@ def test_pipeline_chat_kvint4_tp4(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, quant_policy=8, exclude_dup=True))
 def test_pipeline_chat_kvint8_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 8})
 
 
@@ -114,7 +118,7 @@ def test_pipeline_chat_kvint8_tp1(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, quant_policy=8, exclude_dup=True))
 def test_pipeline_chat_kvint8_tp2(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 8})
 
@@ -127,7 +131,7 @@ def test_pipeline_chat_kvint8_tp2(config, common_case_config, model, worker_id):
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, quant_policy=8, exclude_dup=True))
 def test_pipeline_chat_kvint8_tp4(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 8})
 
@@ -157,11 +161,12 @@ def test_pipeline_chat_pytorch_pr(config, common_case_config, model, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
 def test_modelscope_pipeline_chat_pytorch_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id, use_local_model=True)
     del os.environ['LMDEPLOY_USE_MODELSCOPE']
@@ -171,11 +176,12 @@ def test_modelscope_pipeline_chat_pytorch_tp1(config, common_case_config, model,
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.other
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', ['meta-llama/Llama-2-7b-chat-hf'])
 def test_pipeline_chat_pytorch_with_lora_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
+        set_device_env_variable(worker_id)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch_lora', worker_id,
                            {'adapters': {
                                'adapter0': 'lora/Llama2-Chinese-7b-Chat-LoRA'
@@ -186,11 +192,12 @@ def test_pipeline_chat_pytorch_with_lora_tp1(config, common_case_config, model, 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_2
+@pytest.mark.other
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', ['baichuan-inc/Baichuan2-13B-Chat'])
 def test_pipeline_chat_pytorch_with_lora_tp2(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
-        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch_lora', worker_id,
                            {'adapters': {

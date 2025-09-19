@@ -110,6 +110,7 @@ class GenerationConfig:
     logits_processors: Optional[List[LogitsProcessor]] = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
+    include_stop_str_in_output: bool = False
 
     # for disaggregation
     with_cache: bool = False
@@ -335,6 +336,12 @@ class PytorchEngineConfig:
         disable_vision_encoder (bool): Whether to disable loading vision
             encoder. Default to False.
         logprobs_mode (str): The mode of logprob, options: ['raw_logits', 'raw_logprobs']
+        dllm_block_length (int): Block size of block diffusion model.
+        dllm_unmasking_strategy (str): Dllm unmasking strategy, options:
+            ['low_confidence_dynamic', 'low_confidence_static', 'sequential'].
+        dllm_denoising_steps (int): Dllm denoising steps.
+        dllm_confidence_threshold (float): dllm unmasking threshold for
+            dynamic unmasking.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -369,6 +376,12 @@ class PytorchEngineConfig:
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
+
+    # dllm
+    dllm_block_length: int = None
+    dllm_unmasking_strategy: str = 'low_confidence_dynamic'
+    dllm_denoising_steps: int = None
+    dllm_confidence_threshold: float = 0.85
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime

@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from logging import Logger
-from typing import Any, Dict
+from typing import Dict
 
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
@@ -58,7 +58,6 @@ def build_executor(model_path: str,
                    backend_config: BackendConfig,
                    dist_config: DistConfig,
                    misc_config: MiscConfig,
-                   tokenizer: Any,
                    adapters: Dict[str, str] = None,
                    device_type: str = 'cuda',
                    distributed_executor_backend: str = None,
@@ -98,7 +97,6 @@ def build_executor(model_path: str,
             cache_config=cache_config,
             backend_config=backend_config,
             misc_config=misc_config,
-            tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,
         )
@@ -111,7 +109,6 @@ def build_executor(model_path: str,
             backend_config=backend_config,
             dist_config=dist_config,
             misc_config=misc_config,
-            tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,
         )
@@ -124,7 +121,6 @@ def build_executor(model_path: str,
             backend_config=backend_config,
             dist_config=dist_config,
             misc_config=misc_config,
-            tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,
             dtype=dtype,

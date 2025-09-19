@@ -4,10 +4,8 @@ from subprocess import PIPE, Popen
 
 import allure
 import psutil
-from utils.config_utils import get_workerid
+from utils.config_utils import _is_bf16_supported_by_device, get_workerid
 from utils.run_restful_chat import health_check
-
-from lmdeploy.utils import is_bf16_supported
 
 DEFAULT_PORT = 23333
 GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
@@ -38,7 +36,7 @@ def generation_test(config,
     run_config = ''
     if backend == 'pytorch':
         command += ' --backend pytorch'
-        if not is_bf16_supported():
+        if not _is_bf16_supported_by_device():
             command += ' --dtype float16'
     else:
         if '4bit' in model:
@@ -89,7 +87,7 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
         run_config = '--num-prompts 5000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
-        if not is_bf16_supported():
+        if not _is_bf16_supported_by_device():
             command += ' --dtype float16'
     else:
         if '4bit' in model:

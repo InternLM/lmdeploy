@@ -43,6 +43,11 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4_1v.Glm4vForConditionalGeneration',
 })
 
+# glm4.5
+MODULE_MAP.update({
+    'Glm4MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm4_moe.Glm4MoeForCausalLM',
+})
+
 # internlm
 MODULE_MAP.update({
     'InternLMForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm.InternLMForCausalLM',
@@ -223,6 +228,12 @@ MODULE_MAP.update({
 # qwen3 next model
 MODULE_MAP.update({
     'Qwen3NextForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_next.Qwen3NextForCausalLM',
+})
+
+# SDAR
+MODULE_MAP.update({
+    'SDARForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.sdar.SDARForCausalLM',
+    'SDARMoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.sdar_moe.SDARMoeForCausalLM',
 })
 
 CUSTOM_MODULE_MAP = dict()

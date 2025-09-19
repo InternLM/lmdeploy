@@ -113,7 +113,7 @@ public:
     explicit LlamaBatch(DataType                 data_type,
                         const EngineParam&       param,
                         std::unique_ptr<LlamaV2> model,
-                        std::unique_ptr<Context> ctx,
+                        std::shared_ptr<Context> ctx,
                         std::shared_ptr<Gateway> gateway,
                         int                      device_id,
                         int                      dp_rank);
@@ -226,7 +226,7 @@ private:
 
     int session_len_;  // May be truncated in ctor
 
-    std::unique_ptr<Context>         context_;
+    std::shared_ptr<Context>         context_;
     std::unique_ptr<LlamaV2>         model_;
     std::unique_ptr<SequenceManager> sequence_manager_;
 

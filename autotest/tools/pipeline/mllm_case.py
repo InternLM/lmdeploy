@@ -1,4 +1,5 @@
 import json
+import os
 
 import fire
 import numpy as np
@@ -10,7 +11,7 @@ from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64
 
-gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=2)
+gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
 PIC1 = 'tiger.jpeg'
 PIC2 = 'human-pose.jpg'
@@ -20,6 +21,32 @@ PIC_REDPANDA = 'redpanda.jpg'
 PIC_PANDA = 'panda.jpg'
 DESC = 'What are the similarities and differences between these two images.'
 DESC_ZH = '两张图有什么相同和不同的地方.'
+
+
+def _is_bf16_supported_by_device():
+    """Check if bf16 is supported based on the current device."""
+    device = os.environ.get('DEVICE', 'cuda')
+    if device == 'ascend':
+        # For Ascend, bf16 support check would be different
+        # Placeholder implementation
+        return True
+    else:
+        # For CUDA and default, use the existing check
+        return is_bf16_supported()
+
+
+def _clear_device_cache():
+    """Clear cache based on the current device type."""
+    device = os.environ.get('DEVICE', 'cuda')
+    if device == 'ascend':
+        try:
+            import torch_npu
+            torch_npu.npu.empty_cache()
+        except ImportError:
+            pass  # torch_npu not available
+    else:
+        import torch
+        torch.cuda.empty_cache()
 
 
 def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_test, extra: object = None):
@@ -33,12 +60,19 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
     if 'turbomind' in backend_type and extra is not None and 'communicator' in extra:
         backend_config.communicator = extra.get('communicator')
 
+    # Add device_type based on DEVICE environment variable
+    device = os.environ.get('DEVICE', '')
+    if device:
+        backend_config.device_type = device
+        if device == 'ascend':
+            backend_config.eager_mode = True
+
     if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
         backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
 
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'
-    if not is_bf16_supported():
+    if not _is_bf16_supported_by_device():
         backend_config.dtype = 'float16'
 
     print('backend_config config: ' + str(backend_config))
@@ -101,12 +135,14 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
         if 'qwen' in model_path.lower():
             Qwen_vl_testcase(pipe, resource_path)
 
-    pipe.close()
+    if device == 'ascend':
+        pass
+    else:
+        pipe.close()
     import gc
 
-    import torch
     gc.collect()
-    torch.cuda.empty_cache()
+    _clear_device_cache()
 
 
 def internvl_vl_testcase(pipe, resource_path, lang='en'):

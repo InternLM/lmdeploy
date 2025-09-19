@@ -964,46 +964,6 @@ struct TestComm {
 
 int main(int argc, char* argv[])
 {
-#if 0
-    const int                N     = 8;
-    auto                     state = std::make_shared<HostComm::State>(N);
-    std::vector<std::thread> threads;
-    for (int r = 0; r < N; ++r) {
-        threads.emplace_back([&, r] {
-            HostComm comm(N, r, state);
-            int      group    = 0;
-            // group             = comm.Split(r / (N / 2), 0);
-            group             = comm.Split(r % 4, 0);
-            auto         tick = std::chrono::steady_clock::now();
-            volatile int a;
-            volatile int b;
-            for (int i = 0; i < 1; ++i) {
-                a      = Allreduce<RedOp::kSum>(comm, r, group);
-                auto v = Allgather(comm, r, group);
-                b      = std::accumulate(v.begin(), v.end(), 0);
-                for (int j = 0; j < N; ++j) {
-                    comm.Sync();
-                    if (j == r) {
-                        std::cout << a << " " << b << std::endl;
-                    }
-                }
-            }
-            auto tock = std::chrono::steady_clock::now();
-
-            for (int i = 0; i < N; ++i) {
-                comm.Sync();
-                if (i == r) {
-                    std::cout << std::chrono::duration<float, std::milli>(tock - tick).count() << std::endl;
-                }
-            }
-        });
-    }
-    std::cout << "main thread waiting.\n";
-    for (auto& t : threads) {
-        t.join();
-    }
-    return 0;
-#endif
 
     TestComm test;
 
