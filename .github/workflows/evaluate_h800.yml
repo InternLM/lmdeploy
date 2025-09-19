@@ -88,7 +88,7 @@ jobs:
       matrix:
         evaluate_type: ['base']
     container:
-      image: openmmlab/lmdeploy:latest-cu12.8
+      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
