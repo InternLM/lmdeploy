@@ -35,6 +35,8 @@ private:
 
     const int attn_tp_group_;
 
+    const EngineParam engine_param_;
+
     const float        rmsnorm_eps_;
     cudaStream_t const stream_;
 

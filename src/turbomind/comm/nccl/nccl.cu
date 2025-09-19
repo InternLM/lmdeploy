@@ -222,10 +222,11 @@ public:
 
     int Split(int color, int key, int group) override
     {
-        auto split_fn = TM_CHECK_NOTNULL(nccl_apis().ncclCommSplit);
+        // auto split_fn = TM_CHECK_NOTNULL(nccl_apis().ncclCommSplit);
 
         ncclComm_t comm{};
-        NCCLCHECK(split_fn(groups_.at(group), color, key, &comm, nullptr));
+        // NCCLCHECK(split_fn(groups_.at(group), color, key, &comm, nullptr));
+        NCCLCHECK(ncclCommSplit(groups_.at(group), color, key, &comm, nullptr));
 
         int index = groups_.size();
         groups_.push_back(comm);
@@ -257,6 +258,21 @@ public:
     {
         NCCLCHECK(ncclGroupStart());
         NCCLCHECK(ncclAllGather(sendbuff, recvbuff, sendcount, to_nccl_dtype(type), groups_.at(group), stream));
+        NCCLCHECK(ncclGroupEnd());
+    }
+
+    void AllGatherCP(const void*  send_M,
+                     void*        recv_M,
+                     const void*  send_L,
+                     void*        recv_L,
+                     size_t       sendcount,
+                     DataType     type,
+                     int          group,
+                     cudaStream_t stream)
+    {
+        NCCLCHECK(ncclGroupStart());
+        NCCLCHECK(ncclAllGather(send_M, recv_M, sendcount, to_nccl_dtype(type), groups_.at(group), stream));
+        NCCLCHECK(ncclAllGather(send_L, recv_L, sendcount, to_nccl_dtype(type), groups_.at(group), stream));
         NCCLCHECK(ncclGroupEnd());
     }
 

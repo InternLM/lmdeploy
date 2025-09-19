@@ -23,6 +23,9 @@
 #include <math.h>
 #include <numeric>
 
+#include "src/turbomind/models/llama/cp_utils.h"
+#include <thread>
+
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
@@ -72,6 +75,9 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     local_kv_head_num_(model.kv_head_num / tp_size),
     param_(attn),
     model_param_(model),
+    engine_param_(engine),
+    attn_cp_group_(ctx.comm.d_cp_group),
+    d_comm_(ctx.comm.d_comm),
     lora_param_(lora),
     context_(ctx),
     stream_(ctx.stream),
@@ -135,6 +141,10 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
 
     cu_block_nums_ = args.at("cu_block_nums").buffer();
     kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
+
+    cp_M_ = args.at("cp_M").borrow();
+    cp_L_ = args.at("cp_L").borrow();
+    cp_O_ = args.at("cp_O").borrow();
 
     // rotary embedding, add offest when forward
     if (rope_param_.type == RopeType::kDynamic) {
@@ -227,6 +237,53 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 }
 
 template<class T>
+void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
+{
+
+    const int token_num = attn.shape(0);
+    const int count     = token_num * local_head_num_;
+    d_comm_->AllGatherCP(cp_M_.data() + count * engine_param_.attn_cp_rank,
+                         cp_M_.data(),
+                         cp_L_.data() + count * engine_param_.attn_cp_rank,
+                         cp_L_.data(),
+                         count,
+                         kFloat32,
+                         attn_cp_group_,
+                         stream_);
+    sync_check_cuda_error();
+
+    // auto allgather = [&](float* src, float* dst, int count) {
+    //     d_comm_->AllGather(src + count * engine_param_.attn_cp_rank, dst, count, kFloat32, attn_cp_group_, stream_);
+    //     sync_check_cuda_error();
+    // };
+    // allgather(cp_O_.data(), cp_O_.data(),
+    //           token_num * local_head_num_ * size_per_head_);             // (cp, q, h, d)
+    // allgather(cp_M_.data(), cp_M_.data(), token_num * local_head_num_);  // (cp, q, h)
+    // allgather(cp_L_.data(), cp_L_.data(), token_num * local_head_num_);  // (cp, q, h)
+
+    float inv_sqrt_dh = (float)std::log2(expf(1.));
+    if (param_.softmax_scale) {
+        inv_sqrt_dh *= param_.softmax_scale;
+    }
+    else {
+        inv_sqrt_dh /= std::sqrt((float)size_per_head_);
+    }
+
+    invokeCpReduce(attn.data<T>(),
+                   cp_O_.data(),
+                   cp_M_.data(),
+                   cp_L_.data(),
+                   token_num,
+                   local_head_num_,
+                   size_per_head_,
+                   engine_param_.attn_cp_size,
+                   engine_param_.attn_cp_rank,
+                   inv_sqrt_dh,
+                   stream_);
+    sync_check_cuda_error();
+}
+
+template<class T>
 Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights)
 {
     const auto device = qkv.device();
@@ -240,7 +297,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     Tensor attn{{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
-    Tensor tmp_kv{{2, (int)local_kv_head_num_, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
+    Tensor tmp_kv{{(int)local_kv_head_num_, 2, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
     auto stream_ptr = streams_.data();
 
@@ -327,6 +384,17 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.locks       = barriers_.data();
         params.max_split_k = std::min(std::max(1, kMaxWorkspaceTokens / params.token_num), max_kv_splits);
 
+        // context parallel
+        params.cp_rank = engine_param_.attn_cp_rank;
+        params.cp_size = engine_param_.attn_cp_size;
+        if (params.cp_size > 1) {
+            const int off_ML = q_count * local_head_num_ * engine_param_.attn_cp_rank;
+            const int off_O  = q_count * local_head_num_ * size_per_head_ * engine_param_.attn_cp_rank;
+            params.cp_M      = cp_M_.data() + off_ML;
+            params.cp_L      = cp_L_.data() + off_ML;
+            params.cp_O      = cp_O_.data() + off_O;
+        }
+
         params.arch   = arch_;
         params.stream = stream;
 
@@ -373,6 +441,55 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     if (decode_num_ && prefil_num_) {
         check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
         check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
+    }
+
+    if ((decode_num_ || prefil_num_) && !isTuning() && engine_param_.attn_cp_size > 1) {
+        cp_postprocess<T>(attn);
+
+        if (0) {
+            auto save_tensor = [&](const std::string& name, const Tensor& ten) {
+                std::stringstream ss;
+                for (auto& s : ten.shape()) {
+                    ss << s << "_";
+                }
+                TM_LOG_ERROR("name=%s, shape=%s", name.c_str(), ss.str().c_str());
+                std::ofstream ofs(name + ".bin", std::ios::binary);
+                ofs.write((const char*)ten.raw_data(), ten.byte_size());
+            };
+            // out
+            Tensor_<T> dattn = {attn.data<T>(), {(int)q_count, local_head_num_, size_per_head_}, kDEVICE};
+            Tensor_<T> hattn = empty_like(dattn, kCPU);
+            Copy(dattn, hattn);
+
+            // // k, v
+            // Tensor_<T> dkv = {tmp_kv.data<T>(), {local_kv_head_num_, 2, k_count, size_per_head_}, kDEVICE};
+            // Tensor_<T> hkv = empty_like(dkv, kCPU);
+            // Copy(dkv, hkv);
+
+            const int off_ML = q_count * local_head_num_ * engine_param_.attn_cp_rank;
+
+            // q, h,
+            Tensor_<float> dl = {cp_M_.data() + off_ML, {q_count, local_head_num_}, kDEVICE};
+            Tensor_<float> dm = {cp_L_.data() + off_ML, {q_count, local_head_num_}, kDEVICE};
+            Tensor_<float> hl = empty_like(dl, kCPU);
+            Tensor_<float> hm = empty_like(dm, kCPU);
+            Copy(dl, hl);
+            Copy(dm, hm);
+            cudaDeviceSynchronize();
+
+            save_tensor("attn_" + std::to_string(engine_param_.attn_tp_rank)
+                            + std::to_string(engine_param_.attn_cp_rank),
+                        hattn);
+            // save_tensor("hkv_" + std::to_string(engine_param_.attn_tp_rank)
+            //                 + std::to_string(engine_param_.attn_cp_rank),
+            //             hkv);
+            save_tensor("hl_" + std::to_string(engine_param_.attn_tp_rank) + std::to_string(engine_param_.attn_cp_rank),
+                        hl);
+            save_tensor("hm_" + std::to_string(engine_param_.attn_tp_rank) + std::to_string(engine_param_.attn_cp_rank),
+                        hm);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            exit(0);
+        }
     }
 
     if (isTuning()) {

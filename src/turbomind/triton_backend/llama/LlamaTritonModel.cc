@@ -379,6 +379,8 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     engine_param_.attn_dp_rank  = 0;
     engine_param_.attn_tp_size  = engine_reader["attn_tp_size"].as<int>();
     engine_param_.attn_tp_rank  = 0;
+    engine_param_.attn_cp_size  = engine_reader["attn_cp_size"].as<int>();
+    engine_param_.attn_cp_rank  = 0;
     engine_param_.mlp_tp_size   = engine_reader["mlp_tp_size"].as<int>();
     engine_param_.mlp_tp_rank   = 0;
 
@@ -389,7 +391,7 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + tp - 1) / tp * tp;
     }
 
-    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size;
+    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
     FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
 
     communicator_ = engine_reader["communicator"].as<std::string>();
@@ -444,14 +446,21 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     }
 
     const int device_num = engine_param_.outer_dp_size * comm_size_;
+    const int tp_cp_size = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
 
+    // comm layout: outer_dp x inner(dp, tp, cp)
     engine_params_.resize(device_num, engine_param_);
     for (int i = 0; i < device_num; ++i) {
         auto& e         = engine_params_[i];
         e.outer_dp_rank = i / comm_size_;
-        e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
-        e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
-        e.mlp_tp_rank   = i % comm_size_;
+        // e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
+        // e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
+        // e.mlp_tp_rank   = i % comm_size_;
+
+        e.attn_cp_rank = i % comm_size_ % e.attn_cp_size;
+        e.attn_tp_rank = i % tp_cp_size / e.attn_cp_size;
+        e.attn_dp_rank = i % comm_size_ / tp_cp_size;
+        e.mlp_tp_rank  = i % comm_size_;
     }
 
     TM_LOG_INFO("%s", toString().c_str());
@@ -501,17 +510,45 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
     const int outer_rank = rank / comm_size_;
     const int inner_rank = rank % comm_size_;
 
+    const int tp_cp_size  = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
+    const int color_tp_cp = inner_rank / tp_cp_size;
+    const int color_cp =
+        inner_rank / engine_param_.attn_cp_size + (inner_rank / tp_cp_size) * engine_param_.attn_tp_size;
+    const int color_tp =
+        inner_rank % engine_param_.attn_cp_size + (inner_rank / tp_cp_size) * engine_param_.attn_cp_size;
+    TM_LOG_ERROR("[split] rank=%d, tp_cp_size=%d, color_cp=%d, color_tp=%d, comm_size=%d, inner_rank=%d",
+                 rank,
+                 tp_cp_size,
+                 color_cp,
+                 color_tp,
+                 comm_size_,
+                 inner_rank);
+
     comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
 
-    comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
-    comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
+    // comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
+    // comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
+
+    comm.h_tp_cp_group = comm.h_comm->Split(color_tp_cp, 0);
+    comm.h_tp_group    = comm.h_comm->Split(color_tp, 0);
+    comm.h_dp_group    = comm.h_comm->Split(inner_rank % tp_cp_size, 0);
 
     if (comm_size_ > 1) {
         comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
         //
         comm.d_tp_group = 0;
         if (engine_param_.attn_tp_size != comm_size_) {
-            comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+            // comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+
+            comm.d_cp_group = comm.d_comm->Split(color_cp, 0, 0);
+            comm.d_tp_group = comm.d_comm->Split(color_tp, 0, 0);
+
+            //  d2t2c3 example
+            //  d0t0c0, d0t0c1, d0t0c2, d0t1c0, d0t1c1, d0t1c2
+            // c 0       0       0       1       1       1
+            // t 0       1       2       0       1       2
+            // c inner_rank / attn_cp_size + (inner_rank / tp_cp_size) * attn_tp_size
+            // t inner_rank % attn_cp_size + (inner_rank / tp_cp_size) * attn_cp_size
         }
     }
 
@@ -574,7 +611,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
     if (first_create) {
         try {
-            engine.Warmup();
+            // engine.Warmup();
         }
         catch (const std::exception& e) {
             TM_LOG_ERROR("[Engine][Warmup] %s", e.what());

@@ -76,6 +76,9 @@ private:
     template<class T>
     Tensor core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights);
 
+    template<class T>
+    void cp_postprocess(Tensor& attn);
+
     void qk_norm(Tensor& qkv, const WeightType& weights);
 
 private:
@@ -87,6 +90,7 @@ private:
     const int local_kv_head_num_;
 
     const AttentionParam param_;
+    const EngineParam    engine_param_;
     const ModelParam     model_param_;
     const LoraParam      lora_param_;
     const Context&       context_;
@@ -98,6 +102,9 @@ private:
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
     cudaEvent_t  aux_event_;
+
+    const int                   attn_cp_group_;
+    comm::DeviceCommImpl* const d_comm_;
 
     std::array<cudaStream_t, 2> streams_;
 
@@ -115,6 +122,11 @@ private:
     Tensor_<float> partial_O_;
     Tensor_<int>   split_cnt_;
     Tensor_<int>   barriers_;  // always zero
+
+    // context parallel
+    Tensor_<float> cp_M_;
+    Tensor_<float> cp_L_;
+    Tensor_<float> cp_O_;
 
     Event event_;
 

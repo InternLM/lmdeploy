@@ -54,6 +54,18 @@ public:
                            int          group,
                            cudaStream_t stream) = 0;
 
+    virtual void AllGatherCP(const void*  send_M,
+                             void*        recv_M,
+                             const void*  send_L,
+                             void*        recv_L,
+                             size_t       sendcount,
+                             DataType     type,
+                             int          group,
+                             cudaStream_t stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
     virtual void ReduceScatter(const void*  sendbuff,  //
                                void*        recvbuff,
                                size_t       recvcount,

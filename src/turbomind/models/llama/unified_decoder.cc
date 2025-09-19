@@ -33,6 +33,7 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
     d_comm_(ctx.comm.d_comm),
+    engine_param_(engine),
     tune_layer_num_(model.tune_layer_num)
 {
     attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, engine, lora, attn_tp_size_, ctx);
@@ -57,7 +58,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
 {
     const auto dtype = hidden_states.dtype();
     if (0) {}
-    else if (group0 || group1) {
+    else if (engine_param_.attn_dp_size > 1 && engine_param_.attn_cp_size == 1) {
         d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states.raw_data(),
                                                 residual.data_or((void*)nullptr),
                                                 bias.data_or((void*)nullptr),
