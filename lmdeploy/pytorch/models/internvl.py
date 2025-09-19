@@ -494,8 +494,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         self.compile_vit = False
 
-        self.flash_mode = getattr(config, 'flash_mode', False)
-        if self.flash_mode:
+        self.flash_mode = getattr(config, 'flash_mode', None)
+        if self.flash_mode is not None:
             self.flash_relative_threshold = config.flash_relative_threshold
             self.flash_absolute_threshold = config.flash_absolute_threshold
 
@@ -694,8 +694,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         vit_embeds_64, vit_embeds_256, gate_result = self.extract_feature_flash(pixel_values, lengths)
 
         relative_threshold_value = torch.quantile(gate_result[:, 0].to(torch.float32), self.flash_relative_threshold)
-        gate_result = (gate_result[:, 0] >= relative_threshold_value) & (gate_result[:, 0]
-                                                                         > self.flash_absolute_threshold)
+        gate_result = (gate_result[:, 0] > relative_threshold_value) & (gate_result[:, 0]
+                                                                        >= self.flash_absolute_threshold)
 
         selected_embeds = [
             vit_embeds_64[i] if gate_result[i] else vit_embeds_256[i] for i in range(gate_result.size(0))
@@ -762,18 +762,18 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         **kwargs,
     ):
         if inputs_embeds is None and pixel_values is not None:
-            if not self.flash_mode:
-                # extract feature
-                self._mark_dynamic_once(pixel_values, [0])
-                vit_embeds = self.extract_feature(pixel_values)
-                lang_embeds = self.language_model.get_input_embeddings()(input_ids)
-            else:
+            if self.flash_mode:
                 # extract feature and compress visual tokens
                 vit_embeds, lang_embeds, input_ids, image_mask, new_seqlens = self.extract_and_compress(
                     pixel_values, input_ids, image_token_id)
 
                 # update forward inputs
                 position_ids, attn_metadata = self.update_forward_inputs(input_ids, new_seqlens, context)
+            else:
+                # extract feature
+                self._mark_dynamic_once(pixel_values, [0])
+                vit_embeds = self.extract_feature(pixel_values)
+                lang_embeds = self.language_model.get_input_embeddings()(input_ids)
 
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
 
