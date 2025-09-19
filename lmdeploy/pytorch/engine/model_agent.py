@@ -401,6 +401,7 @@ class BaseModelAgent:
                                                      is_decoding=False,
                                                      device='cuda',
                                                      vocab_size=self.model_config.vocab_size)
+            inputs.build_dp_meta()
             self._forward_impl(inputs)
 
             # warmup decoding(with cuda graph)
@@ -411,6 +412,7 @@ class BaseModelAgent:
                                                          is_decoding=True,
                                                          device='cuda',
                                                          vocab_size=self.model_config.vocab_size)
+                inputs.build_dp_meta()
                 self._forward_impl(inputs)
 
     def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
