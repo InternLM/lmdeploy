@@ -22,6 +22,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/kernels/apply_token_bitmask_inplace_cuda.h"
 // clang-format on
 
@@ -140,27 +141,28 @@ void ApplyTokenBitmaskInplaceDispatchToBitsPerThread(T* __restrict__ logits,
     const int32_t num_blocks_per_row  = CeilDiv(2048 / THREADS_PER_THREAD_BLOCK * 128, num_rows);
     const int32_t num_bits_per_thread = CeilDiv(vocab_size, THREADS_PER_THREAD_BLOCK * num_blocks_per_row);
 
-    const dim3 block(THREADS_PER_THREAD_BLOCK);
+    const dim3  block(THREADS_PER_THREAD_BLOCK);
+    const auto& stream = turbomind::core::Context::stream();
 
     if (num_bits_per_thread <= 4 && kAlignment <= 4) {
         const dim3 grid(CeilDiv(vocab_size, THREADS_PER_THREAD_BLOCK * 4), num_rows);
         LogitsBitmaskKernel<T, PackedT, 4>
-            <<<grid, block, 0>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
+            <<<grid, block, 0, stream.handle()>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
     }
     else if (num_bits_per_thread <= 8 && kAlignment <= 8) {
         const dim3 grid(CeilDiv(vocab_size, THREADS_PER_THREAD_BLOCK * 8), num_rows);
         LogitsBitmaskKernel<T, PackedT, 8>
-            <<<grid, block, 0>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
+            <<<grid, block, 0, stream.handle()>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
     }
     else if (num_bits_per_thread <= 16 && kAlignment <= 16) {
         const dim3 grid(CeilDiv(vocab_size, THREADS_PER_THREAD_BLOCK * 16), num_rows);
         LogitsBitmaskKernel<T, PackedT, 16>
-            <<<grid, block, 0>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
+            <<<grid, block, 0, stream.handle()>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
     }
     else {
         const dim3 grid(CeilDiv(vocab_size, THREADS_PER_THREAD_BLOCK * 32), num_rows);
         LogitsBitmaskKernel<T, PackedT, 32>
-            <<<grid, block, 0>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
+            <<<grid, block, 0, stream.handle()>>>(logits, bitmask, indices, vocab_size, logits_stride, bitmask_stride);
     }
 }
 
