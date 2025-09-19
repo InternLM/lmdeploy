@@ -81,7 +81,7 @@ jobs:
   evaluate:
     needs: linux-build
     if: ${{github.event_name == 'schedule' || !cancelled()}}
-    runs-on: [self-hosted, linux-eval]
+    runs-on: [self-hosted, test-140]
     timeout-minutes: 4320 # 72hours
     strategy:
       fail-fast: false
