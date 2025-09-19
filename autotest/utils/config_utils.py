@@ -85,7 +85,7 @@ def get_all_model_list(tp_num: int = None, quant_policy: int = None, model_type:
 
 def get_communicator_list(tp_num: int = None):
     if tp_num != 1 and _is_bf16_supported_by_device():
-        return ['native', 'nccl']
+        return ['cuda-ipc', 'nccl']
     return ['nccl']
 
 

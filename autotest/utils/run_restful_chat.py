@@ -31,7 +31,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     # temp remove testcase because of issue 3434
     if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
-        if 'turbomind' in backend_type and extra is not None and 'communicator native' in extra and tp_num > 1:
+        if 'turbomind' in backend_type and extra is not None and 'cuda-ipc' in extra and tp_num > 1:
             return
 
     if 'modelscope' in param.keys():
