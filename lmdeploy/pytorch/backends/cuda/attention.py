@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import functools
 from dataclasses import dataclass
 from typing import Literal
 
@@ -20,8 +21,8 @@ try:
         assert torch.ops.flash_attn_3 is not None
         use_fa3 = True
 except Exception:
-    logger.warning('For higher performance, please install FlashAttention-3 '
-                   'https://github.com/Dao-AILab/flash-attention')
+    logger.debug('For higher performance, please install FlashAttention-3 '
+                 'https://github.com/Dao-AILab/flash-attention')
 
 
 @dataclass
@@ -62,6 +63,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         sliding_window: int = None,
         logit_softcapping: float = None,
         causal: bool = True,
+        block_sparse_size: int = 1,
         **kwargs,
     ):
         super().__init__(
@@ -91,6 +93,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         world_size, rank = get_tp_world_rank()
         self.alibi_head_offset = self.num_heads * rank
         self.alibi_num_heads = self.num_heads * world_size
+        self.block_sparse_size = block_sparse_size
 
     def forward(
         self,
@@ -116,7 +119,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
         if attn_metadata.is_decoding:
-            max_q_seqlen = 1
+            max_q_seqlen = self.block_sparse_size
         else:
             max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         fill_max_q_seqlen = max_q_seqlen
@@ -213,9 +216,19 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 logit_softcapping=self.logit_softcapping,
                 sinks=learnable_sink,
                 causal=self.causal,
+                block_sparse_size=self.block_sparse_size,
             )
 
         return attn_output
+
+
+@functools.lru_cache
+def use_fa3_warning():
+    if use_fa3:
+        return True
+    logger.warning('For higher performance, please install FlashAttention-3 '
+                   'https://github.com/Dao-AILab/flash-attention')
+    return False
 
 
 class FlashMLAImpl(TritonAttentionImpl):
@@ -252,6 +265,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         from lmdeploy.pytorch.kernels.cuda import flash_mla_fwd
         self.flash_mla_fwd = flash_mla_fwd
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
+        use_fa3_warning()
 
     def forward(
         self,
@@ -512,6 +526,14 @@ class FA3Impl(TritonAttentionImpl):
         return attn_output
 
 
+@functools.lru_cache
+def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int):
+    enable = not alibi and not learnable_sink and block_sparse_size == 1
+    if enable and not use_fa3_warning():
+        enable = False
+    return enable
+
+
 class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
     """Triton attention builder."""
 
@@ -528,10 +550,13 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
+        block_sparse_size: int = 1,
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
+        enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size)
         if use_flash_mla is True:
+            logger.debug('Build FlashMLAImpl Attention')
             return FlashMLAImpl(num_heads,
                                 head_size,
                                 scale=scale,
@@ -542,7 +567,8 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                 logical_softcapping=logical_softcapping,
                                 causal=causal,
                                 **kwargs)
-        elif use_fa3 and not alibi and not learnable_sink:
+        elif enable_fa3:
+            logger.debug('Build FA3Impl Attention')
             return FA3Impl(num_heads,
                            head_size,
                            scale=scale,
@@ -554,6 +580,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                            causal=causal,
                            **kwargs)
         else:
+            logger.debug('Build TritonAttentionImpl Attention')
             return TritonAttentionImpl(num_heads,
                                        head_size,
                                        scale=scale,
@@ -563,4 +590,5 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                        sliding_window=sliding_window,
                                        logical_softcapping=logical_softcapping,
                                        causal=causal,
+                                       block_sparse_size=block_sparse_size,
                                        **kwargs)
