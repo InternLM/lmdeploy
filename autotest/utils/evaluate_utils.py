@@ -16,23 +16,33 @@ def write_to_summary(model_name, tp_num, result, msg, worker_id, backend_type, w
     if work_dir and os.path.exists(work_dir):
         try:
             summary_dirs = glob.glob(os.path.join(work_dir, '*', 'summary'))
-            if summary_dirs:
-                summary_dir = summary_dirs[0]
-                csv_files = glob.glob(os.path.join(summary_dir, 'summary_*.csv'))
-                if csv_files:
-                    csv_file = sorted(csv_files)[-1]
-                    if os.path.exists(csv_file):
-                        with open(csv_file, 'r') as f:
-                            reader = csv.reader(f)
-                            next(reader)
-                            for row in reader:
-                                if len(row) >= 5 and row[4]:
-                                    dataset = row[0]
-                                    metric_value = row[4]
-                                    try:
-                                        metrics[dataset] = f'{float(metric_value):.2f}'
-                                    except ValueError:
-                                        metrics[dataset] = metric_value
+            if not summary_dirs:
+                raise FileNotFoundError('No summary directory found')
+
+            summary_dir = summary_dirs[0]
+
+            csv_files = glob.glob(os.path.join(summary_dir, 'summary_*.csv'))
+            if not csv_files:
+                raise FileNotFoundError('No CSV files found')
+
+            csv_file = sorted(csv_files)[-1]
+            if not os.path.exists(csv_file):
+                raise FileNotFoundError('CSV file does not exist')
+
+            with open(csv_file, 'r') as f:
+                reader = csv.reader(f)
+                next(reader)
+                for row in reader:
+                    if len(row) < 5 or not row[4]:
+                        continue
+
+                    dataset = row[0]
+                    metric_value = row[4]
+                    try:
+                        metrics[dataset] = f'{float(metric_value):.2f}'
+                    except ValueError:
+                        metrics[dataset] = metric_value
+
         except Exception as e:
             print(f'Error reading metrics: {str(e)}')
 
@@ -43,15 +53,7 @@ def write_to_summary(model_name, tp_num, result, msg, worker_id, backend_type, w
 
     summary_file = os.environ.get('GITHUB_STEP_SUMMARY', None)
     if summary_file:
-        write_header = False
-        if not os.path.exists(summary_file) or os.path.getsize(summary_file) == 0:
-            write_header = True
-        else:
-            with open(summary_file, 'r') as f:
-                first_lines = f.read(200)
-                if '| Model | Backend | TP | Status | mmlu | gsm8k |' not in first_lines:
-                    write_header = True
-
+        write_header = not os.path.exists(summary_file) or os.path.getsize(summary_file) == 0
         with open(summary_file, 'a') as f:
             if write_header:
                 f.write('## Model Evaluation Results\n')
@@ -68,8 +70,12 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         model_name = prepare_environment['model']
         backend_type = prepare_environment['backend']
         tp_num = prepare_environment.get('tp_num', 1)
-        communicator = prepare_environment.get('communicator', 'native')
+        communicator = prepare_environment.get('communicator', 'cuda-ipc')
         quant_policy = prepare_environment.get('quant_policy', 0)
+
+        summary_model_name = model_name
+        if quant_policy in [4, 8]:
+            summary_model_name = f'{model_name}-kvint{quant_policy}'
 
         current_dir = os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(current_dir)
@@ -99,13 +105,13 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
 
             cfg = Config.fromfile(config_file)
 
-            cfg.MODEL_NAME = model_name
+            cfg.MODEL_NAME = summary_model_name
             cfg.MODEL_PATH = model_path
             cfg.API_BASE = f'http://127.0.0.1:{port}/v1'
 
             if cfg.models and len(cfg.models) > 0:
                 model_cfg = cfg.models[0]
-                model_cfg['abbr'] = f'{model_name}-lmdeploy-api'
+                model_cfg['abbr'] = f'{summary_model_name}-lmdeploy-api'
                 model_cfg['openai_api_base'] = f'http://127.0.0.1:{port}/v1'
                 model_cfg['path'] = model_path
                 if 'backend' in model_cfg:
@@ -181,7 +187,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                     if error_lines:
                         final_msg += f'\nLog errors: {" | ".join(error_lines[:3])}'
 
-            write_to_summary(model_name, tp_num, final_result, final_msg, worker_id, backend_type, work_dir)
+            write_to_summary(summary_model_name, tp_num, final_result, final_msg, worker_id, backend_type, work_dir)
 
             return final_result, final_msg
 
@@ -193,10 +199,10 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         timeout_msg = (f'Evaluation timed out for {model_name} '
                        f'after 7200 seconds')
         if work_dir:
-            write_to_summary(model_name, tp_num, False, timeout_msg, worker_id, backend_type, work_dir)
+            write_to_summary(summary_model_name, tp_num, False, timeout_msg, worker_id, backend_type, work_dir)
         return False, timeout_msg
     except Exception as e:
         error_msg = f'Error during evaluation for {model_name}: {str(e)}'
         if work_dir:
-            write_to_summary(model_name, tp_num, False, error_msg, worker_id, backend_type, work_dir)
+            write_to_summary(summary_model_name, tp_num, False, error_msg, worker_id, backend_type, work_dir)
         return False, error_msg
