@@ -57,4 +57,6 @@ def test_tm_guided_pipeline(tiny_model_id):
                     log_level='INFO')
     gen_config = GenerationConfig(response_format=dict(type='json_schema', json_schema=dict(name='test', schema=guide)))
     response = pipe(['Make a self introduction please.'], gen_config=gen_config)
-    validate(instance=json.loads(response[0].text), schema=guide)
+    result = json.loads(response[0].text)
+    print(result)
+    validate(instance=result, schema=guide)
