@@ -32,7 +32,6 @@ env:
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
-  DEVICE: h800
 
 jobs:
   linux-build:
@@ -115,6 +114,7 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
+          mv autotest/config-h800.yaml autotest/config.yaml
       - name: Install opencompass
         run: |
           python3 -m pip install opencompass
