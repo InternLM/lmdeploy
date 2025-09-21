@@ -1,5 +1,8 @@
-# Copyright (c) OpenMMLab. All rights reserved.
-# modified from https://github.com/vllm-project/vllm/tree/v0.7.3/vllm/entrypoints/openai/reasoning_parsers
+# Reasoning parser for GPT-OSS style channels.
+# Recognizes:
+#   <|channel|>analysis<|message|> ... <|end|>
+#   <|start|>assistant<|channel|>final<|message|> ...
+#   <|channel|>final<|message|> ...
 import re
 from typing import Optional, Sequence, Tuple, Union
 
@@ -8,30 +11,55 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 from .reasoning_parser import ReasoningParser, ReasoningParserManager
 
 
-@ReasoningParserManager.register_module(name='deepseek-r1')
-class DeepSeekR1ReasoningParser(ReasoningParser):
-    """Reasoning parser for DeepSeek R1 model.
+@ReasoningParserManager.register_module(name='gpt-oss')
+class GPTOssReasoningParser(ReasoningParser):
+    ANALYSIS="<|channel|>analysis<|message|>"
+    FINAL1="<|start|>assistant<|channel|>final<|message|>"
+    FINAL2="<|channel|>final<|message|>"
+    END="<|end|>"
+    """Parser that splits LMDeploy-style channel tags into reasoning and final.
 
-    The DeepSeek R1 model uses <think>...</think> tokens to denote reasoning text. This parser extracts the reasoning
-    content from the model output.
+    Streaming behavior:
+      - Tokens between analysis-start and <|end|> -> reasoning_content
+      - Tokens after final-start markers -> content
+    Non-streaming behavior:
+      - Extract both channels from the full string with regex.
     """
 
     def __init__(self, tokenizer: object):
         super().__init__(tokenizer)
-        self.think_start_token = '<think>'
-        self.think_end_token = '</think>'
-
-        self.reasoning_regex = re.compile(rf'{self.think_start_token}(.*?){self.think_end_token}', re.DOTALL)
-
         if not self.model_tokenizer:
-            raise ValueError('The model tokenizer must be passed to the ReasoningParser '
-                             'constructor during construction.')
+            raise ValueError('The model tokenizer must be passed to the ReasoningParser constructor.')
 
-        self.think_start_token_id = self.vocab.get(self.think_start_token)
-        self.think_end_token_id = self.vocab.get(self.think_end_token)
-        if (self.think_start_token_id is None or self.think_end_token_id is None):
-            raise RuntimeError('DeepSeek R1 reasoning parser could not locate think start/end '
-                               'tokens in the tokenizer!')
+        # Raw tag strings
+        self.analysis_start = '<|channel|>analysis<|message|>'
+        self.final_start_with_assistant = '<|start|>assistant<|channel|>final<|message|>'
+        self.final_start_plain = '<|channel|>final<|message|>'
+        self.end_tag = '<|end|>'
+
+        # For non-streaming extraction
+        self._re_analysis = re.compile(r'<\|channel\|>analysis<\|message\|>(.*?)(?=(?:<\|end\|>|$))', re.S)
+        # Allow both final markers
+        self._re_final_with_assistant = re.compile(r'<\|start\|>assistant<\|channel\|>final<\|message\|>(.*?)(?=(?:<\|end\|>|$))', re.S)
+        self._re_final_plain = re.compile(r'(?:<\|start\|>assistant)?<\|channel\|>final<\|message\|>(.*?)(?=(?:<\|end\|>|$))', re.S)
+
+        # Token ids for streaming checks
+        self.analysis_start_id = self.vocab.get(self.analysis_start)
+        self.final_start_with_assistant_id = self.vocab.get(self.final_start_with_assistant)
+        self.final_start_plain_id = self.vocab.get(self.final_start_plain)
+        self.end_id = self.vocab.get(self.end_tag)
+
+    def _strip_tags(self, text: Optional[str]) -> Optional[str]:
+        if text is None:
+            return None
+        # Remove any tag-like tokens and common fragments produced by split
+        text = re.sub(r'<\|[^>]*?\|>', '', text)
+
+        # Also drop standalone fragments likely from tag splits
+        text = re.sub(r'(?i)(analysis|final|assistant)', '', text)
+
+        return text
+
 
     def extract_reasoning_content_streaming(
         self,
@@ -43,98 +71,96 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
         delta_token_ids: Sequence[int],
         **kwargs,
     ) -> Union[DeltaMessage, None]:
-        """Instance method that should be implemented for extracting reasoning
-        from an incomplete response; for use when handling reasoning calls and
-        streaming.
+        # String-based parsing aligned with vLLM style: use tags in text context
+        prev = previous_text or ''
+        delta = delta_text or ''
+        text = prev + delta
 
-        Has to be an instance method because  it requires state - the current tokens/diffs, but also the information
-        about what has previously been parsed and extracted (see constructor)
-        """
-        # Skip single special tokens
-        if len(delta_token_ids) == 1:
-            if delta_token_ids[0] == self.think_end_token_id:
-                return DeltaMessage(content='')
-            elif delta_token_ids[0] == self.think_start_token_id:
-                return None
+        def analysis_open(t: str) -> bool:
+            i = t.rfind(self.ANALYSIS)
+            if i == -1:
+                return False
+            j = t.find(self.END, i + len(self.ANALYSIS))
+            return j == -1  # no END after last ANALYSIS
 
-        # Check if <think> is present in previous or delta.
-        # Keep compatibility with models that don't generate <think> tokens.
-        if self.think_start_token_id in previous_token_ids:
-            if self.think_end_token_id in delta_token_ids:
-                # <think> in previous, </think> in delta,
-                # extract reasoning content
-                end_index = delta_text.find(self.think_end_token)
-                reasoning_content = delta_text[:end_index]
-                content = delta_text[end_index + len(self.think_end_token):]
-                return DeltaMessage(reasoning_content=reasoning_content, content=content if content else None)
-            elif self.think_end_token_id in previous_token_ids:
-                # <think> in previous, </think> in previous,
-                return DeltaMessage(content=delta_text)
+        def final_open(t: str) -> bool:
+            i1 = t.rfind(self.FINAL1)
+            i2 = t.rfind(self.FINAL2)
+            i = max(i1, i2)
+            return i != -1
+
+        # Case A: analysis is already open from previous_text
+        if analysis_open(prev):
+            if self.END in delta:
+                cut = delta.find(self.END)
+                reasoning_part = delta[:cut]
+                remainder = delta[cut + len(self.END):]
+                # If final marker appears in remainder, only keep content after marker
+                if self.FINAL1 in remainder:
+                    content_part = remainder.split(self.FINAL1, 1)[1]
+                elif self.FINAL2 in remainder:
+                    content_part = remainder.split(self.FINAL2, 1)[1]
+                else:
+                    content_part = remainder or None
+                # Drop a trailing END if any
+                if content_part and self.END in content_part:
+                    content_part = content_part.split(self.END, 1)[0]
+                return DeltaMessage(reasoning_content=self._strip_tags(reasoning_part) or None, content=self._strip_tags(content_part) or None)
             else:
-                # <think> in previous, no </think> in previous or delta,
-                # reasoning content continues
-                return DeltaMessage(reasoning_content=delta_text)
-        elif self.think_start_token_id in delta_token_ids:
-            if self.think_end_token_id in delta_token_ids:
-                # <think> in delta, </think> in delta, extract reasoning content
-                start_index = delta_text.find(self.think_start_token)
-                end_index = delta_text.find(self.think_end_token)
-                reasoning_content = delta_text[start_index + len(self.think_start_token):end_index]
-                content = delta_text[end_index + len(self.think_end_token):]
-                return DeltaMessage(reasoning_content=reasoning_content, content=content if content else None)
+                return DeltaMessage(reasoning_content=self._strip_tags(delta) or None)
+
+        # Case B: analysis starts within this delta
+        if self.ANALYSIS in delta:
+            aft = delta.split(self.ANALYSIS, 1)[1]
+            if self.END in aft:
+                cut = aft.find(self.END)
+                reasoning_part = aft[:cut]
+                remainder = aft[cut + len(self.END):]
+                if self.FINAL1 in remainder:
+                    content_part = remainder.split(self.FINAL1, 1)[1]
+                elif self.FINAL2 in remainder:
+                    content_part = remainder.split(self.FINAL2, 1)[1]
+                else:
+                    content_part = remainder or None
+                if content_part and self.END in content_part:
+                    content_part = content_part.split(self.END, 1)[0]
+                return DeltaMessage(reasoning_content=self._strip_tags(reasoning_part) or None, content=self._strip_tags(content_part) or None)
             else:
-                # <think> in delta, no </think> in delta,
-                # reasoning content continues
-                return DeltaMessage(reasoning_content=delta_text)
-        else:
-            # No <think> in previous or delta, also need to check for </think>.
-            # Because the model may have generated </think> without <think>
-            # Ref https://huggingface.co/deepseek-ai/DeepSeek-R1/commit/8a58a132790c9935686eb97f042afa8013451c9f
-            if self.think_end_token_id in delta_token_ids:
-                # </think> in delta with more tokens,
-                # extract reasoning content and content
-                end_index = delta_text.find(self.think_end_token)
-                reasoning_content = delta_text[:end_index]
-                content = delta_text[end_index + len(self.think_end_token):]
-                return DeltaMessage(reasoning_content=reasoning_content, content=content if content else None)
-            elif self.think_end_token_id in previous_token_ids:
-                # </think> in previous, thinking content ends
-                return DeltaMessage(content=delta_text)
+                return DeltaMessage(reasoning_content=self._strip_tags(aft) or None)
+
+        # Case C: final has started (previously or within delta)
+        if final_open(prev) or self.FINAL1 in delta or self.FINAL2 in delta:
+            if self.FINAL1 in delta:
+                content_part = delta.split(self.FINAL1, 1)[1]
+            elif self.FINAL2 in delta:
+                content_part = delta.split(self.FINAL2, 1)[1]
             else:
-                # no </think> in previous or delta, reasoning content continues
-                return DeltaMessage(reasoning_content=delta_text)
+                content_part = delta
+            if content_part and self.END in content_part:
+                content_part = content_part.split(self.END, 1)[0]
+            return DeltaMessage(content=self._strip_tags(content_part) or None)
 
-    def extract_reasoning_content(self, model_output: str, request: ChatCompletionRequest,
-                                  **kwargs) -> Tuple[Optional[str], Optional[str]]:
-        """Extract reasoning content from a complete model-generated string.
+        # Default: treat as reasoning until markers appear
+        return DeltaMessage(reasoning_content=self._strip_tags(delta) or None)
 
-        Used for non-streaming responses where we have the entire model response
-        available before sending to the client.
-
-        Args:
-            model_output (str): The model-generated string to extract reasoning content from.
-            request (ChatCompletionRequest): he request object that was used to generate the model_output.
-
-        Returns:
-            reasoning_content (str | None): The reasoning content.
-            final_output (str | None): The content.
-        """
-        # DeepSeek R1 doesn't generate <think> now.
-        # Thus we assume the reasoning content is always at the start.
-        # Ref https://huggingface.co/deepseek-ai/DeepSeek-R1/commit/8a58a132790c9935686eb97f042afa8013451c9f
-        if self.think_end_token not in model_output:
-            return model_output, None
-        else:
-            # Add a start token if it's missing to keep compatibility.
-            if self.think_start_token not in model_output:
-                model_output = f'{self.think_start_token}{model_output}'
-            # Use a regex to find the reasoning content
-            reasoning_content = self.reasoning_regex.findall(model_output)[0]
-
-            end_index = len(f'{self.think_start_token}{reasoning_content}{self.think_end_token}')
-            final_output = model_output[end_index:]
-
-            if len(final_output) == 0:
-                return reasoning_content, None
-
-            return reasoning_content, final_output
+    def extract_reasoning_content(self, model_output: str, request: ChatCompletionRequest, **kwargs):
+        text = model_output or ''
+        # Extract analysis between ANALYSIS and END
+        reasoning = None
+        final = None
+        if self.ANALYSIS in text and self.END in text:
+            a = text.split(self.ANALYSIS, 1)[1]
+            reasoning = a.split(self.END, 1)[0]
+        # Extract final after FINAL1/FINAL2
+        if self.FINAL1 in text:
+            final = text.split(self.FINAL1, 1)[1]
+        elif self.FINAL2 in text:
+            final = text.split(self.FINAL2, 1)[1]
+        # Cleanup trailing END if present in final
+        if final is not None:
+            final = final.split(self.END, 1)[0]
+            final = final or None
+        # If no tags at all, treat whole as final
+        if reasoning is None and final is None and text:
+            final = text
+        return self._strip_tags(reasoning), self._strip_tags(final)
