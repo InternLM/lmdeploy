@@ -441,9 +441,19 @@ struct AttentionUniversal {
         // -> x * CTA_S >= offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - w
         int mask_iter_front = cdiv(max(0, offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - params.window_size), CTA_S);
 
-        // TODO: mask all iter for simplicity, use accurate mask_iter
-        mask_iter_back  = 999999;
-        mask_iter_front = 999999;
+        if (params.cp_size > 1) {
+            // mask all iter for simplicity
+            // mask_iter_back  = 1 << 30;
+            // mask_iter_front = 1 << 30;
+            // TODO: use accurate mask_iter
+            mask_iter_back =
+                cdiv(max(0, params.cp_size * (offset_K + CTA_S) - offset_Q + params.cp_rank), params.cp_size * CTA_S);
+            mask_iter_front = cdiv(max(0,
+                                       offset_Q + CTA_Q - params.window_size - params.cp_rank
+                                           - params.cp_size * (offset_K - tile_iter * CTA_S)),
+                                   params.cp_size * CTA_S);
+        }
+
 #if 0
         if (threadIdx.x == 0) {
             printf(
