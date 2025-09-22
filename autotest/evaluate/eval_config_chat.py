@@ -6,6 +6,14 @@ with read_base():
     from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import mmlu_datasets  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.mmlu import mmlu_summary_groups  # noqa: F401, E501
 
+mmlu_datasets = [
+    x for x in mmlu_datasets if x['abbr'].replace('lukaemon_mmlu_', '') in [
+        'business_ethics', 'clinical_knowledge', 'college_medicine', 'global_facts', 'human_aging', 'management',
+        'marketing', 'medical_genetics', 'miscellaneous', 'nutrition', 'professional_accounting',
+        'professional_medicine', 'virology'
+    ]
+]
+
 datasets = sum([v for k, v in locals().items() if k.endswith('_datasets')], [])
 
 MODEL_NAME = ''
@@ -35,6 +43,7 @@ summarizer = dict(
     dataset_abbrs=[
         ['mmlu', 'naive_average'],
         ['gsm8k', 'accuracy'],
+        'mmlu-other',
     ],
     summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )
