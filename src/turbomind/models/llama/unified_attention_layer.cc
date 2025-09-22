@@ -23,9 +23,6 @@
 #include <math.h>
 #include <numeric>
 
-#include "src/turbomind/models/llama/cp_utils.h"
-#include <thread>
-
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
@@ -37,6 +34,7 @@
 
 #include "src/turbomind/macro.h"
 
+#include "src/turbomind/models/llama/cp_utils.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
@@ -433,51 +431,6 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
     if ((decode_num_ || prefil_num_) && !isTuning() && engine_param_.attn_cp_size > 1) {
         cp_postprocess<T>(attn);
-
-        if (0) {
-            auto save_tensor = [&](const std::string& name, const Tensor& ten) {
-                std::stringstream ss;
-                for (auto& s : ten.shape()) {
-                    ss << s << "_";
-                }
-                TM_LOG_ERROR("name=%s, shape=%s", name.c_str(), ss.str().c_str());
-                std::ofstream ofs(name + ".bin", std::ios::binary);
-                ofs.write((const char*)ten.raw_data(), ten.byte_size());
-            };
-            // out
-            Tensor_<T> dattn = {attn.data<T>(), {(int)q_count, local_head_num_, size_per_head_}, kDEVICE};
-            Tensor_<T> hattn = empty_like(dattn, kCPU);
-            Copy(dattn, hattn);
-
-            // // k, v
-            // Tensor_<T> dkv = {tmp_kv.data<T>(), {local_kv_head_num_, 2, k_count, size_per_head_}, kDEVICE};
-            // Tensor_<T> hkv = empty_like(dkv, kCPU);
-            // Copy(dkv, hkv);
-
-            const int off_ML = q_count * local_head_num_ * engine_param_.attn_cp_rank;
-
-            // q, h,
-            Tensor_<float> dl = {cp_M_.data() + off_ML, {q_count, local_head_num_}, kDEVICE};
-            Tensor_<float> dm = {cp_L_.data() + off_ML, {q_count, local_head_num_}, kDEVICE};
-            Tensor_<float> hl = empty_like(dl, kCPU);
-            Tensor_<float> hm = empty_like(dm, kCPU);
-            Copy(dl, hl);
-            Copy(dm, hm);
-            cudaDeviceSynchronize();
-
-            save_tensor("attn_" + std::to_string(engine_param_.attn_tp_rank)
-                            + std::to_string(engine_param_.attn_cp_rank),
-                        hattn);
-            // save_tensor("hkv_" + std::to_string(engine_param_.attn_tp_rank)
-            //                 + std::to_string(engine_param_.attn_cp_rank),
-            //             hkv);
-            save_tensor("hl_" + std::to_string(engine_param_.attn_tp_rank) + std::to_string(engine_param_.attn_cp_rank),
-                        hl);
-            save_tensor("hm_" + std::to_string(engine_param_.attn_tp_rank) + std::to_string(engine_param_.attn_cp_rank),
-                        hm);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            exit(0);
-        }
     }
 
     if (isTuning()) {
