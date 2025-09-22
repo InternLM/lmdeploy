@@ -46,23 +46,26 @@ def write_to_summary(model_name, tp_num, result, msg, worker_id, backend_type, w
         except Exception as e:
             print(f'Error reading metrics: {str(e)}')
 
-    mmlu_value = metrics.get('mmlu', '')
-    mmlu_value = metrics.get('mmlu-other', '')
-    gsm8k_value = metrics.get('gsm8k', '')
+    dataset_name = []
+    dataset_metrics = []
+    for key in metrics.keys():
+        dataset_name.append(key)
+        dataset_metrics.append(metrics.get(key, ''))
 
-    summary_line = f'| {model_name} | {backend_type} | TP{tp_num} | {status} | {mmlu_value} | {gsm8k_value} |\n'
+    summary_dataset_name = ' | '.join(dataset_name)
+    summary_dataset_metrics = ' | '.join(dataset_metrics)
 
     summary_file = os.environ.get('GITHUB_STEP_SUMMARY', None)
+    summary_line = f'| {model_name} | {backend_type} | TP{tp_num} | {status} | {summary_dataset_metrics} |\n'
     if summary_file:
         write_header = not os.path.exists(summary_file) or os.path.getsize(summary_file) == 0
         with open(summary_file, 'a') as f:
             if write_header:
                 f.write('## Model Evaluation Results\n')
-                f.write('| Model | Backend | TP | Status | mmlu | mmlu-other | gsm8k |\n')
-                f.write('|-------|---------|----|--------|------|------------|-------|\n')
+                f.write(f'| Model | Backend | TP | Status | {summary_dataset_name} |\n')
             f.write(summary_line)
     else:
-        print(f'Summary: {model_name} | {backend_type} | TP{tp_num} | {status} | {mmlu_value} | {gsm8k_value}')
+        print(f'Summary: {model_name} | {backend_type} | TP{tp_num} | {status} | {summary_dataset_metrics}')
 
 
 def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFAULT_PORT):
@@ -91,7 +94,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         print(f'Backend: {backend_type}')
         print(f'Config file: {config_file}')
 
-        log_path = config.get('log_path', '/nvme/qa_test_models/autotest_model/log')
+        log_path = config.get('eval_log_path', '/nvme/qa_test_models/autotest_model/log')
         os.makedirs(log_path, exist_ok=True)
 
         original_cwd = os.getcwd()

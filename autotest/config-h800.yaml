@@ -10,7 +10,7 @@ env_tag: h800
 tp_config:
     Intern-S1: 8
     Qwen3-235B-A22B: 8
-    Qwen3-235B-A22B-FP8: 8
+    Qwen3-235B-A22B-FP8: 4
     Qwen3-30B-A3B: 2
     Qwen3-32B: 2
     gpt-oss-120b: 2
@@ -131,8 +131,12 @@ evaluate_model:
     - Qwen/Qwen3-4B-FP8
     - Qwen/Qwen3-8B-FP8
     - Qwen/Qwen3-14B-FP8
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-32B-FP8
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-30B-A3B-FP8
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-235B-A22B-FP8
     - openai/gpt-oss-120b
     - openai/gpt-oss-20b
     - unsloth/gpt-oss-120b-BF16
