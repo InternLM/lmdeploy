@@ -71,7 +71,6 @@ private:
                  MropeRope*       mrope,
                  Tensor           cp_M,
                  Tensor           cp_L,
-                 Tensor           cp_O,
                  Buffer           finished,
                  Buffer           local_token_nums,
                  Buffer           lora_mask,

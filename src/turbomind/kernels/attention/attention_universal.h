@@ -562,7 +562,6 @@ struct AttentionUniversal {
                       params.partial_O,
                       params.cp_M,
                       params.cp_L,
-                      params.cp_O,
                       qi_begin,
                       head_idx,
                       params.num_heads,
@@ -639,7 +638,7 @@ struct AttentionUniversal {
                 }
                 if (params.cp_size > 1 && split_idx == 0) {
                     const int index = ((qi_begin + qi) * params.num_heads + (head_idx + hi)) * kHeadDim + di;
-                    Store(&params.cp_O[index], vec);
+                    Store(&params.out[index], cast<T>(vec));
                 }
             }
         });

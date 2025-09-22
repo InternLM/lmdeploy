@@ -14,7 +14,6 @@ void invokeReduce(T*           out,
                   float*       partial_O,
                   float*       cp_M,
                   float*       cp_L,
-                  float*       cp_O,
                   const int*   split_cnt,
                   int          partial_len,
                   int          max_split_cnt,
@@ -39,7 +38,6 @@ void invokeReduce(T*           out,
                                                                             partial_O,
                                                                             cp_M,
                                                                             cp_L,
-                                                                            cp_O,
                                                                             nullptr,
                                                                             split_cnt,
                                                                             partial_len,
@@ -66,7 +64,6 @@ void invokeReduce(T*           out,
                                     float*       partial_O,                                                            \
                                     float*       cp_M,                                                                 \
                                     float*       cp_L,                                                                 \
-                                    float*       cp_O,                                                                 \
                                     const int*   split_cnt,                                                            \
                                     int          partial_len,                                                          \
                                     int          max_split_cnt,                                                        \

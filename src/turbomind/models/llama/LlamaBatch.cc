@@ -831,9 +831,6 @@ void LlamaBatch::AllocSymmBuffers()
     if (param_.attn_cp_size > 1) {
         symm_cp_M_ = {{param_.attn_cp_size, max_forward_token_num_, (int)model_->local_head_num_}, symm_alloc_};
         symm_cp_L_ = {{param_.attn_cp_size, max_forward_token_num_, (int)model_->local_head_num_}, symm_alloc_};
-        symm_cp_O_ = {
-            {param_.attn_cp_size, max_forward_token_num_, (int)model_->local_head_num_, (int)model_->size_per_head_},
-            symm_alloc_};
     }
 }
 
@@ -844,7 +841,6 @@ void LlamaBatch::FreeSymmBuffers()
 
     symm_cp_M_ = {};
     symm_cp_L_ = {};
-    symm_cp_O_ = {};
 }
 
 LlamaBatch::~LlamaBatch()
@@ -1587,7 +1583,6 @@ bool LlamaBatch::Forward(GenerationState& g)
                         &mrope,
                         symm_cp_M_,
                         symm_cp_L_,
-                        symm_cp_O_,
                         finished_buf_.slice(first, mini_batch_size),
                         Buffer(local_token_nums.data(), local_token_nums.size(), kCPU),
                         lora_mask_buf_,
@@ -1782,7 +1777,6 @@ void LlamaBatch::Warmup()
                             nullptr,  // mrope
                             symm_cp_M_,
                             symm_cp_L_,
-                            symm_cp_O_,
                             finished_buf_.slice(0, bsz),
                             Buffer{local_token_nums.data(), (int)local_token_nums.size(), kCPU},
                             Buffer{},

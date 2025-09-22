@@ -246,7 +246,6 @@ private:
     Tensor symm_logits_buf_;
 
     // context parallel
-    Tensor_<float> symm_cp_O_;
     Tensor_<float> symm_cp_M_;
     Tensor_<float> symm_cp_L_;
 

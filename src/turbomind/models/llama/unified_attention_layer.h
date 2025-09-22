@@ -126,7 +126,6 @@ private:
     // context parallel
     Tensor_<float> cp_M_;
     Tensor_<float> cp_L_;
-    Tensor_<float> cp_O_;
 
     Event event_;
 

@@ -6,7 +6,6 @@ namespace turbomind {
 
 template<typename T>
 void invokeCpReduce(T*           out,
-                    float*       O,
                     float*       M,
                     float*       L,
                     int          token_num,

@@ -6,7 +6,6 @@ namespace turbomind {
 
 template<typename T>
 __global__ void CpReduce(T*     out,
-                         float* O,
                          float* M,
                          float* L,
                          int    token_num,
@@ -51,29 +50,14 @@ __global__ void CpReduce(T*     out,
 
     __syncthreads();
 
-    // for (int i = threadIdx.x; i < size_per_head; i += blockDim.x) {
-    //     float flag_O = 0;
-    //     for (int j = 0; j < cp_size; ++j) {
-    //         int index = j * token_num * head_num * size_per_head + token_idx * head_num * size_per_head
-    //                     + head_idx * size_per_head + i;
-    //         flag_O += O[index] * scale[j];
-    //     }
-    //     int out_index = token_idx * head_num * size_per_head + head_idx * size_per_head + i;  // q, h, d
-    //     // out[out_index] = (T)flag_O;
-    //     out[out_index] = (T)(flag_O / cp_size);
-    // }
-
     for (int i = threadIdx.x; i < size_per_head; i += blockDim.x) {
-        int src_index = cp_rank * token_num * head_num * size_per_head + token_idx * head_num * size_per_head
-                        + head_idx * size_per_head + i;
-        int dst_index  = token_idx * head_num * size_per_head + head_idx * size_per_head + i;  // q, h, d
-        out[dst_index] = (T)(O[src_index] * scale[cp_rank]);
+        int index  = token_idx * head_num * size_per_head + head_idx * size_per_head + i;
+        out[index] = (T)((float)out[index] * scale[cp_rank]);
     }
 }
 
 template<typename T>
 void invokeCpReduce(T*           out,
-                    float*       O,
                     float*       M,
                     float*       L,
                     int          token_num,
@@ -87,14 +71,13 @@ void invokeCpReduce(T*           out,
     TM_CHECK(cp_size <= WARP_SIZE);
     const dim3 block = 4 * WARP_SIZE;
     const dim3 grid(token_num, head_num);
-    size_t     smem_size = sizeof(float) * WARP_SIZE * 2;
+    size_t     smem_size = sizeof(float) * WARP_SIZE;
     CpReduce<<<grid, block, smem_size, stream>>>(
-        out, O, M, L, token_num, head_num, size_per_head, cp_size, cp_rank, exp_scale);
+        out, M, L, token_num, head_num, size_per_head, cp_size, cp_rank, exp_scale);
     sync_check_cuda_error();
 }
 
 template void invokeCpReduce(half*        out,
-                             float*       O,
                              float*       M,
                              float*       L,
                              int          token_num,
@@ -106,7 +89,6 @@ template void invokeCpReduce(half*        out,
                              cudaStream_t stream);
 #ifdef ENABLE_BF16
 template void invokeCpReduce(__nv_bfloat16* out,
-                             float*         O,
                              float*         M,
                              float*         L,
                              int            token_num,

@@ -144,7 +144,6 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
 
     cp_M_ = args.at("cp_M").borrow();
     cp_L_ = args.at("cp_L").borrow();
-    cp_O_ = args.at("cp_O").borrow();
 
     // rotary embedding, add offest when forward
     if (rope_param_.type == RopeType::kDynamic) {
@@ -252,15 +251,6 @@ void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
                          stream_);
     sync_check_cuda_error();
 
-    // auto allgather = [&](float* src, float* dst, int count) {
-    //     d_comm_->AllGather(src + count * engine_param_.attn_cp_rank, dst, count, kFloat32, attn_cp_group_, stream_);
-    //     sync_check_cuda_error();
-    // };
-    // allgather(cp_O_.data(), cp_O_.data(),
-    //           token_num * local_head_num_ * size_per_head_);             // (cp, q, h, d)
-    // allgather(cp_M_.data(), cp_M_.data(), token_num * local_head_num_);  // (cp, q, h)
-    // allgather(cp_L_.data(), cp_L_.data(), token_num * local_head_num_);  // (cp, q, h)
-
     float inv_sqrt_dh = (float)std::log2(expf(1.));
     if (param_.softmax_scale) {
         inv_sqrt_dh *= param_.softmax_scale;
@@ -270,7 +260,6 @@ void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
     }
 
     invokeCpReduce(attn.data<T>(),
-                   cp_O_.data(),
                    cp_M_.data(),
                    cp_L_.data(),
                    token_num,
@@ -392,7 +381,6 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             const int off_O  = q_count * local_head_num_ * size_per_head_ * engine_param_.attn_cp_rank;
             params.cp_M      = cp_M_.data() + off_ML;
             params.cp_L      = cp_L_.data() + off_ML;
-            params.cp_O      = cp_O_.data() + off_O;
         }
 
         params.arch   = arch_;
