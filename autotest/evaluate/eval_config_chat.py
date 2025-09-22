@@ -1,5 +1,6 @@
 from mmengine.config import read_base
 from opencompass.models import OpenAISDK
+from opencompass.utils.text_postprocessors import extract_non_reasoning_content
 
 with read_base():
     from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import gsm8k_datasets  # noqa: F401, E501
@@ -26,17 +27,16 @@ api_meta_template = dict(round=[
 ])
 
 models = [
-    dict(
-        type=OpenAISDK,
-        abbr=f'{MODEL_NAME}-lmdeploy-api',
-        openai_api_base=API_BASE,
-        key='EMPTY',
-        path=MODEL_PATH,
-        meta_template=api_meta_template,
-        max_out_len=2048,
-        batch_size=500,
-        temperature=0.1,
-    )
+    dict(type=OpenAISDK,
+         abbr=f'{MODEL_NAME}-lmdeploy-api',
+         openai_api_base=API_BASE,
+         key='EMPTY',
+         path=MODEL_PATH,
+         meta_template=api_meta_template,
+         max_out_len=32768,
+         batch_size=500,
+         temperature=0.1,
+         pred_postprocessor=dict(type=extract_non_reasoning_content))
 ]
 
 summarizer = dict(
