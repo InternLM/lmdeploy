@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "cutlass/fast_math.h"
+
 #include "quantization.h"
 #include "src/turbomind/kernels/attention/reduce_kernel.h"
 #include "src/turbomind/kernels/attention/rotary_embedding.h"
@@ -256,6 +258,10 @@ struct AttentionUniversal {
             const int qi = offset.y / CTA_H;
             const int ti = history_len;
 
+            cutlass::FastDivmod cp_divmod{params.cp_size};
+            int                 cp_quo, cp_rem;
+            cp_divmod(cp_quo, cp_rem, ti);
+
             Array<T, 2> param_K[1];
             Array<T, 2> param_V[1];
 
@@ -276,8 +282,8 @@ struct AttentionUniversal {
             }
 
             iterator.block_head_.with(
-                iterator.block_ptrs_, ti / params.cp_size, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
-                    if (ti % params.cp_size != params.cp_rank) {
+                iterator.block_ptrs_, cp_quo, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+                    if (cp_rem != params.cp_rank) {
                         return;
                     }
                     PRAGMA_UNROLL
@@ -374,18 +380,20 @@ struct AttentionUniversal {
         const int context_len = params.cu_k_len[batch_idx + 1] - params.cu_k_len[batch_idx];
         const int history_len = context_len - input_len;
 
+        cutlass::FastDivmod cp_divmod{params.cp_size};
+
         auto get_cp_len = [&](int length) -> int {
-            return (length / params.cp_size + (length % params.cp_size > params.cp_rank ? 1 : 0));
+            int cp_quo, cp_rem;
+            cp_divmod(cp_quo, cp_rem, length);
+            return (cp_quo + (cp_rem > params.cp_rank ? 1 : 0));
         };
 
-        const int last_K      = history_len + min(query_idx + CTA_Q, input_len);
-        const int last_K_tile = (get_cp_len(last_K) - 1) / CTA_S + 1;
-        // const int last_K_tile = (last_K - 1) / CTA_S + 1;  // past-the-end index to past-the-end tile index
-        // conversion
+        const int last_K = history_len + min(query_idx + CTA_Q, input_len);
+        const int last_K_tile =
+            (get_cp_len(last_K) - 1) / CTA_S + 1;  // past-the-end index to past-the-end tile index conversion
 
         const int first_K      = max(history_len + query_idx - (params.window_size - 1), 0);
         const int first_K_tile = get_cp_len(first_K) / CTA_S;
-        // const int first_K_tile = first_K / CTA_S;
 
         const int tile_count = last_K_tile - first_K_tile;
 
