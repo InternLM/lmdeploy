@@ -121,7 +121,8 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                 if 'engine_config' in model_cfg and 'communicator' in model_cfg['engine_config']:
                     model_cfg['engine_config']['communicator'] = communicator
 
-            temp_config_file = f'temp_{model_name.replace('/', '_')}_{os.getpid()}.py'
+            simple_model_name = model_name.replace('/', '_')
+            temp_config_file = f'temp_{simple_model_name}_{os.getpid()}.py'
             temp_config_path = os.path.join(log_path, temp_config_file)
 
             cfg.dump(temp_config_path)
@@ -142,13 +143,14 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                             f'{worker_id}_'
                             f'{quant_policy}.log')
             log_file = os.path.join(log_path, log_filename)
+            cmd_command = ' '.join(cmd)
 
             with open(log_file, 'w', encoding='utf-8') as f:
                 f.write(f'Model: {model_name}\n')
                 f.write(f'Config file: {temp_config_file}\n')
                 f.write(f'Backend: {backend_type}\n')
                 f.write(f'TP Num: {tp_num}\n')
-                f.write(f'Command: {' '.join(cmd)}\n')
+                f.write(f'Command: {cmd_command}\n')
                 f.write(f'Work directory: {work_dir}\n')
                 f.write(f'STDOUT: \n{stdout_output}\n')
                 if stderr_output:
