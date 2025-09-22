@@ -61,8 +61,10 @@ def write_to_summary(model_name, tp_num, result, msg, worker_id, backend_type, w
         write_header = not os.path.exists(summary_file) or os.path.getsize(summary_file) == 0
         with open(summary_file, 'a') as f:
             if write_header:
+                dash_line = '-----|' * (len(metrics.keys()))
                 f.write('## Model Evaluation Results\n')
                 f.write(f'| Model | Backend | TP | Status | {summary_dataset_name} |\n')
+                f.write(f'|-------|---------|----|--------|{dash_line}\n')
             f.write(summary_line)
     else:
         print(f'Summary: {model_name} | {backend_type} | TP{tp_num} | {status} | {summary_dataset_metrics}')
@@ -94,7 +96,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         print(f'Backend: {backend_type}')
         print(f'Config file: {config_file}')
 
-        log_path = config.get('eval_log_path', '/nvme/qa_test_models/autotest_model/log')
+        log_path = config.get('eval_log_path', '/nvme/qa_test_models/evaluation_report') + f'/{run_id}'
         os.makedirs(log_path, exist_ok=True)
 
         original_cwd = os.getcwd()
