@@ -47,3 +47,7 @@ summarizer = dict(
     ],
     summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )
+
+for item in datasets:
+    if 'max_out_len' in item['infer_cfg']['inferencer']:
+        del item['infer_cfg']['inferencer']['max_out_len']
