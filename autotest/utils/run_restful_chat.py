@@ -98,8 +98,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     start_timeout = 300
-    if not _is_bf16_supported_by_device():
-        start_timeout = 600
+    if not _is_bf16_supported_by_device() or tp_num >= 4:
+        start_timeout = 720
 
     sleep(5)
     for i in range(start_timeout):
