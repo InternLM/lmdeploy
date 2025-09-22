@@ -100,35 +100,70 @@ class CacheConfig:
             self.enable_prefix_caching = False
 
 
+class TPMode(enum.Enum):
+    """TP Mode."""
+    DEFAULT = enum.auto()
+    DP_TP = enum.auto()
+
+
 @dataclass
 class DistConfig:
     dp: int = 1
-    tp: int = 1
     ep: int = 1
     dp_rank: int = 0
     enable_microbatch: bool = False
     enable_eplb: bool = False
-    world_size: int = None
-    attn_config: 'DistConfig' = None
+    world_size: int = 1
+
+    # tp
+    tp: int = 1  # default tp, equal to attn_tp
+    attn_tp: int = 1  # tp for attention
+    mlp_tp: int = 1  # tp for mlp
+    moe_tp: int = 1  # tp for moe
+
+    # tp mode
+    mlp_tp_mode: TPMode = TPMode.DEFAULT
+    moe_tp_mode: TPMode = TPMode.DEFAULT
 
     def __post_init__(self):
         """Post init."""
         assert self.dp_rank < self.dp
         assert self.dp >= 1
-        if self.dp == 1:
-            world_size = max(self.tp, self.ep)
-            attn_config = self
-        else:
-            world_size = self.dp
-            attn_config = DistConfig(dp=1, tp=1, ep=1, dp_rank=0)
-        self.world_size = world_size
-        self.attn_config = attn_config
 
-    def need_dummy_batch(self):
-        """Need dummy batch."""
-        if self.dp == 1:
-            return False
-        return self.tp > 1 or self.ep > 1
+        dp = self.dp
+        tp = self.tp
+        ep = self.ep
+
+        # world_size
+        world_size = ep if ep > 1 else tp
+        assert world_size >= dp and world_size % dp == 0
+        assert world_size >= tp and world_size % tp == 0
+        assert world_size >= ep and world_size % ep == 0
+        self.world_size = world_size
+
+        # tp
+        self.attn_tp = self.world_size // dp
+        self.mlp_tp = tp
+        self.moe_tp = 1 if ep > 1 else tp
+        self.tp = self.attn_tp
+
+        # tp mode
+        self.mlp_tp_mode = TPMode.DEFAULT if self.attn_tp == self.mlp_tp else TPMode.DP_TP
+        self.moe_tp_mode = TPMode.DEFAULT if self.attn_tp == self.moe_tp else TPMode.DP_TP
+
+    def get_tp_by_layer(self, layer_type: str):
+        """Get tp by layer type."""
+        if layer_type == 'attn':
+            return self.attn_tp, TPMode.DEFAULT
+        elif layer_type == 'mlp':
+            return self.mlp_tp, self.mlp_tp_mode
+        elif layer_type == 'moe':
+            return self.moe_tp, self.moe_tp_mode
+        elif layer_type is None:
+            # for some layer that we don't need tp
+            return 1, TPMode.DEFAULT
+        else:
+            raise ValueError(f'Unknown layer type: {layer_type}')
 
 
 def _override_hf_config_dict(hf_config: dict, key: str, hf_overrides):
@@ -261,10 +296,7 @@ class ModelConfig:
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
         if dist_config is None:
             dist_config = DistConfig()
-        if dist_config.dp == 1:
-            tp = dist_config.tp
-        else:
-            tp = 1
+        tp = dist_config.attn_tp
 
         model_config = AutoModelConfigBuilder.build(hf_config, model_path, tp=tp)
 

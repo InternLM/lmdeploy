@@ -5,32 +5,30 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.config import TPMode
+from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_group, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from .utils import update_tp_args
 
 
-def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
+def _gather_input(x: torch.Tensor, tp_sizes: List[int], group: dist.ProcessGroup):
     """Gather input."""
     shape0 = x.shape[:-2]
     shape1 = x.shape[-1:]
     shapes = [shape0 + (size, ) + shape1 for size in tp_sizes]
     new_x = [x.new_empty(shape) for shape in shapes]
-    dist.all_gather(new_x, x)
+    dist.all_gather(new_x, x, group=group)
     x = torch.cat(new_x, dim=-2)
     return x
 
 
-def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
+def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int], group: dist.ProcessGroup):
     """Reduce scatter."""
-    _, rank = get_tp_world_rank()
-    out = out.transpose(0, -2)
-    if not out.is_contiguous():
-        out = out.contiguous()
+    out = out.transpose(0, -2).contiguous()
     outs = out.split(tp_sizes, 0)
     out = outs[rank]
-    dist.reduce_scatter(out, outs)
+    dist.reduce_scatter(out, outs, group=group)
     out = out.transpose(0, -2)
     return out
 
@@ -47,24 +45,49 @@ class LinearBase(nn.Module):
         all_reduce: bool = True,
         tp_align_size: int = 1,
         dp_gather: bool = False,
-        dp_scatter: bool = False,
+        layer_type: str = 'attn',
     ):
         super().__init__()
-        is_tp, all_reduce = update_tp_args(is_tp, all_reduce, colwise)
+        self.init_tp_args(is_tp, all_reduce, colwise, layer_type)
         self.colwise = colwise
-        self.is_tp = is_tp
-        self.all_reduce = all_reduce
         self.tp_align_size = tp_align_size
         self.dp_gather = dp_gather
-        self.dp_scatter = dp_scatter
         if device is None:
             device = torch.device('cpu')
         if dtype is None:
             dtype = torch.float16
         self.device = device
         self.dtype = dtype
+        self.layer_type = layer_type
 
         self.lora_adapters = nn.ModuleDict()
+
+    def init_tp_args(self, is_tp: bool, all_reduce: bool, colwise: bool, layer_type: str):
+        if getattr(self, '_tp_args_initialized', False):
+            return
+        is_tp, all_reduce = update_tp_args(is_tp, all_reduce, colwise, layer_type=layer_type)
+        self.is_tp = is_tp
+        self.all_reduce = all_reduce
+        if is_tp:
+            dist_cfg = get_dist_manager().current_config()
+            _, rank = get_tp_world_rank(layer_type)
+            tp, tp_mode = dist_cfg.get_tp_by_layer(layer_type)
+            self.tp_rank = rank
+            self.tp = tp
+            self.tp_mode = tp_mode
+            self.tp_group = get_tp_group(layer_type=layer_type)
+        else:
+            self.tp_rank = 0
+            self.tp = 1
+            self.tp_mode = TPMode.DEFAULT
+            self.tp_group = None
+
+        self._tp_args_initialized = True
+
+    def get_tp_world_rank(self):
+        """Get tp world rank."""
+        assert hasattr(self, 'tp') and hasattr(self, 'tp_rank'), 'Please run init_tp_args first.'
+        return self.tp, self.tp_rank
 
     def update_weights(self):
         """Update weights."""
@@ -81,22 +104,22 @@ class LinearBase(nn.Module):
         for lora_adapter in self.lora_adapters.values():
             out = lora_adapter(x, out)
         if self.all_reduce:
-            if self.dp_scatter:
-                out = _reduce_scatter_input(out, tp_sizes)
+            if self.tp_mode == TPMode.DP_TP:
+                out = _reduce_scatter_input(out, self.tp_rank, tp_sizes, group=self.tp_group)
             else:
-                dist.all_reduce(out)
+                dist.all_reduce(out, group=self.tp_group)
         return out
 
     def forward(self, x):
         """Forward of linear layer."""
         tp_sizes = None
-        if self.dp_gather or self.dp_scatter:
+        if self.dp_gather or (self.all_reduce and self.tp_mode == TPMode.DP_TP):
             step_ctx = get_step_ctx_manager().current_context()
             dp_meta = step_ctx.dp_meta
             tp_sizes = dp_meta.tp_sizes
 
         if self.dp_gather:
-            x = _gather_input(x, tp_sizes)
+            x = _gather_input(x, tp_sizes, group=self.tp_group)
 
         if len(self.lora_adapters) == 0:
             return self._forward_default(x, self.all_reduce, tp_sizes)

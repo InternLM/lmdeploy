@@ -13,12 +13,12 @@ from .warmup_manager import WarmupMeta, get_warmup_manager
 logger = get_logger('lmdeploy')
 
 
-def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
+def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int], group: Optional[dist.ProcessGroup] = None):
     """Reduce scatter."""
     outs = out.split(tp_sizes, -2)
     out = outs[rank]
     outs = list(outs)
-    dist.reduce_scatter(out, outs)
+    dist.reduce_scatter(out, outs, group=group)
     return out
 
 
@@ -117,6 +117,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
                 scale: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False,
+                group: Optional[dist.ProcessGroup] = None,
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""
@@ -131,9 +132,9 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
 
         if all_reduce:
             if scatter_size is not None:
-                out = _reduce_scatter_input(out, rank, scatter_size)
+                out = _reduce_scatter_input(out, rank, scatter_size, group=group)
             else:
-                dist.all_reduce(out)
+                dist.all_reduce(out, group=group)
 
         out = out.unflatten(0, x_shape[:-1])
         return out

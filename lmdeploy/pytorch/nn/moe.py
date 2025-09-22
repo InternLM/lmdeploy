@@ -47,7 +47,7 @@ def create_mlp_weights(hidden_dim: int, ffn_dim: int, num_experts: int, dtype: t
 
 def _update_args(hidden_dim: int, ffn_dim: int):
     """Update args."""
-    world_size, _ = get_tp_world_rank()
+    world_size, _ = get_tp_world_rank('moe')
     assert ffn_dim % world_size == 0
     ffn_dim = ffn_dim // world_size
     return hidden_dim, ffn_dim
@@ -107,7 +107,7 @@ class LinearWeights(nn.Module):
 
     def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
         """Weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('moe')
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.half_out]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
@@ -160,7 +160,7 @@ def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
 
 def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
     """Reduce scatter."""
-    _, rank = get_tp_world_rank()
+    _, rank = get_tp_world_rank('moe')
     out = out.transpose(0, -2)
     if not out.is_contiguous():
         out = out.contiguous()
@@ -173,15 +173,15 @@ def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
 
 
 def _moe_gather_inputs(hidden_states, topk_weights, topk_ids, enable_ep):
-    dist_ctx = get_dist_manager().current_context()
-    dp = dist_ctx.dp
+    dist_config = get_dist_manager().current_config()
+    dp = dist_config.dp
     if dp <= 1:
         return hidden_states, topk_weights, topk_ids
 
     step_ctx = get_step_ctx_manager().current_context()
     dp_meta = step_ctx.dp_meta
     if not enable_ep:
-        if dist_ctx.tp == 1:
+        if dist_config.tp == 1:
             return hidden_states, topk_weights, topk_ids
         tp_sizes = dp_meta.tp_sizes
         hidden_states = _gather_input(hidden_states, tp_sizes)
@@ -193,13 +193,13 @@ def _moe_gather_inputs(hidden_states, topk_weights, topk_ids, enable_ep):
 
 
 def _moe_reduce(ret, enable_ep):
-    dist_ctx = get_dist_manager().current_context()
-    dp = dist_ctx.dp
+    dist_config = get_dist_manager().current_config()
+    dp = dist_config.dp
     if dp > 1:
         step_ctx = get_step_ctx_manager().current_context()
         dp_meta = step_ctx.dp_meta
         if not enable_ep:
-            if dist_ctx.tp == 1:
+            if dist_config.tp == 1:
                 return ret
             tp_sizes = dp_meta.tp_sizes
             ret = _reduce_scatter_input(ret, tp_sizes)
@@ -236,7 +236,7 @@ class FusedMoE(nn.Module):
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
-            world_size, rank = get_tp_world_rank()
+            world_size, rank = get_tp_world_rank('moe')
             expert_list = self.impl.ep_expert_list(world_size, rank)
             num_experts = len(expert_list)
         else:
@@ -269,7 +269,7 @@ class FusedMoE(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_tp_world_rank()
+        world_size, _ = get_tp_world_rank('moe')
         if world_size == 1:
             all_reduce = False
         self.all_reduce = all_reduce
@@ -342,7 +342,7 @@ class LinearWeightsW8A8(LinearWeights):
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """Weight loader scale tp."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('moe')
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.half_out]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
@@ -383,7 +383,7 @@ class FusedMoEW8A8(nn.Module):
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
-            world_size, rank = get_tp_world_rank()
+            world_size, rank = get_tp_world_rank('moe')
             expert_list = self.impl.ep_expert_list(world_size, rank)
             num_experts = len(expert_list)
         else:
@@ -413,7 +413,7 @@ class FusedMoEW8A8(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_tp_world_rank()
+        world_size, _ = get_tp_world_rank('moe')
         if world_size == 1:
             all_reduce = False
         self.all_reduce = all_reduce
@@ -493,7 +493,7 @@ class LinearWeightsBlockedF8(LinearWeights):
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """Weight loader scale tp."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('moe')
         block_size = self.block_size
         half_out = self.half_out // block_size
         if shard_id == 'gate':
@@ -594,7 +594,7 @@ class FusedMoEBlockedF8(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_tp_world_rank()
+        world_size, _ = get_tp_world_rank('moe')
         if world_size == 1:
             all_reduce = False
         self.all_reduce = all_reduce

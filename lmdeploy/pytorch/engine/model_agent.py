@@ -118,7 +118,7 @@ class AgentProfiler:
         from lmdeploy.pytorch import envs
         self.rank = dist_ctx.rank
         self.dp_rank = dist_ctx.dp_rank
-        self.dp = dist_ctx.dp
+        self.dp = dist_ctx.dist_config.dp
         self.stream = stream
         self.profiler = None
         if self.dp == 1:
@@ -335,6 +335,7 @@ class BaseModelAgent:
         device = 'cuda'
         self.backend_config = backend_config
         self.misc_config = misc_config
+        self.dist_config = dist_ctx.dist_config
         rank = dist_ctx.rank
 
         self.model_path = model_path
@@ -342,19 +343,17 @@ class BaseModelAgent:
         self.device = device
         self.rank = rank
 
-        tp_rank = dist_ctx.tp_rank
-        tp = dist_ctx.tp
-        world_size = dist_ctx.world_size
+        tp = self.dist_config.tp
+        world_size = self.dist_config.world_size
         self.tp = tp
         self.world_size = world_size
-        self.tp_rank = tp_rank
 
         self.patched_model = None
         self.cache_engine = None
         self.profiler: AgentProfiler = None
 
         # microbatch
-        self.enable_microbatch = self.dist_ctx.dist_config.enable_microbatch
+        self.enable_microbatch = self.dist_config.enable_microbatch
         self.enable_microbatch_prefill_batchsize_threshold = \
             int(getenv('ENABLE_MICROBATCH_PREFILL_BATCHSIZE_THRESHOLD', 2))
         self.enable_microbatch_prefill_token_threshold = \
@@ -395,12 +394,15 @@ class BaseModelAgent:
         with self.all_context():
             max_batches = self.cache_config.max_batches
             num_tokens = max_batches
+            dp = self.dist_config.dp
 
             # warmup prefill
             inputs = self.inputs_strategy.make_dummy(max_batches,
                                                      is_decoding=False,
                                                      device='cuda',
                                                      vocab_size=self.model_config.vocab_size)
+            if dp > 1:
+                inputs.build_dp_meta()
             self._forward_impl(inputs)
 
             # warmup decoding(with cuda graph)
@@ -411,6 +413,8 @@ class BaseModelAgent:
                                                          is_decoding=True,
                                                          device='cuda',
                                                          vocab_size=self.model_config.vocab_size)
+                if dp > 1:
+                    inputs.build_dp_meta()
                 self._forward_impl(inputs)
 
     def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
@@ -472,8 +476,8 @@ class BaseModelAgent:
 
         async def __long_context_single_forward(new_inputs, max_seqlen: int):
             """One large sequence."""
-            dist_ctx = get_dist_manager().current_context()
-            dp = dist_ctx.dp
+            dist_config = get_dist_manager().current_config()
+            dp = dist_config.dp
             model_metas = new_inputs[0].model_metas
             output_gather = _OutputGather(max_seqlen)
             for inp in new_inputs:
@@ -557,15 +561,15 @@ class BaseModelAgent:
         self._out_que.put_nowait((output, event))
 
     @contextmanager
-    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None, enable: bool = True):
+    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext, enable: bool = True):
         if not enable:
             yield
             return
 
-        if dist_ctx is None:
-            dist_ctx = get_dist_manager().current_context()
-        tp_gpu_group = dist_ctx.tp_gpu_group
-        handle = dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
+        dist_ctx = get_dist_manager().current_context()
+        tp_gpu_group = dist_ctx.attn_tp_group.gpu_group
+        rank = dist.get_global_rank(tp_gpu_group, 0)
+        handle = dist.broadcast(next_token_ids, src=rank, group=tp_gpu_group, async_op=True)
         yield
         handle.wait()
 
@@ -604,6 +608,7 @@ class BaseModelAgent:
                 return
 
             nonlocal inputs, sync_long_context, is_all_dummy
+            world_size = self.dist_config.world_size
 
             # gather dp forward metadata
             batch_size = inputs.seq_length.numel()
@@ -619,7 +624,7 @@ class BaseModelAgent:
                         self.enable_microbatch_prefill_batchsize_threshold and \
                         tokens_num >= self.enable_microbatch_prefill_token_threshold
                 dp_forward_meta.append(int(enable_microbatch))
-            gathered_meta = DistGatherScalar(dp_forward_meta, dp, device='cuda')
+            gathered_meta = DistGatherScalar(dp_forward_meta, world_size, device='cuda')
 
             yield
 
@@ -627,7 +632,7 @@ class BaseModelAgent:
 
             # check is_decoding
             all_is_decoding = gathered_meta[:, 0]
-            assert all_is_decoding.sum().item() in [0, dp]
+            assert all_is_decoding.sum().item() in [0, world_size]
 
             # check if all inputs are dummy inputs
             is_all_dummy = gathered_meta[:, 1].all()
@@ -655,9 +660,10 @@ class BaseModelAgent:
 
         # dist tools
         dist_ctx = get_dist_manager().current_context()
+        dist_config = dist_ctx.dist_config
         rank = dist_ctx.rank
-        tp = dist_ctx.tp
-        dp = dist_ctx.dp
+        tp = dist_config.attn_tp
+        dp = dist_config.dp
         sync_long_context = False if dp == 1 else sync_long_context
         is_decoding = inputs.is_decoding
 
@@ -698,7 +704,7 @@ class BaseModelAgent:
             if is_dummy:
                 continue
 
-            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
+            need_broadcast_next = (tp > 1 and idx < loop_count - 1)
 
             # sampling and stopping
             if need_output:
@@ -754,8 +760,8 @@ class BaseModelAgent:
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
         with self.all_context(), torch.cuda.stream(self.stream), torch.inference_mode():
-            dist_ctx = get_dist_manager().current_context()
-            dp = dist_ctx.dp
+            dist_config = get_dist_manager().current_config()
+            dp = dist_config.dp
 
             # for dp
             if dp > 1:
@@ -841,7 +847,7 @@ class BaseModelAgent:
 
     def stop(self):
         """Stop task."""
-        if self.dist_ctx.dp > 1:
+        if self.dist_config.dp > 1:
             return
 
         if self.profiler is not None:
@@ -857,7 +863,7 @@ class BaseModelAgent:
 
     async def stop_async(self):
         """Stop task."""
-        if self.dist_ctx.dp > 1:
+        if self.dist_config.dp > 1:
             return
 
         if self.profiler is not None:
@@ -947,14 +953,14 @@ class BaseModelAgent:
     def build_cache_engine(self):
         """Build cache engine."""
         with self.all_context():
-            dist_ctx = self.dist_ctx
-            attn_dist_cfg = dist_ctx.dist_config.attn_config
-            tp = attn_dist_cfg.tp
+            dist_ctx = get_dist_manager().current_context()
+            dist_cfg = self.dist_config
+            tp = dist_cfg.attn_tp
 
             self.cache_engine = CacheEngine(self.cache_config,
                                             self.model_config,
                                             rank=self.rank,
-                                            tp_rank=self.tp_rank,
+                                            tp_rank=dist_ctx.attn_tp_group.rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
 
@@ -1008,7 +1014,7 @@ class BaseModelAgent:
         with self.all_context():
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
-                serialized_data = serialized_data[self.dist_ctx.tp_rank]
+                serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
             weights = [(k, _construct(v)) for k, v in weights]
             self.patched_model.get_model().load_weights(weights)
