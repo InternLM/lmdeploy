@@ -32,6 +32,7 @@ env:
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
+  COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
 
 jobs:
   linux-build:
