@@ -188,7 +188,8 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                         if any(keyword in line for keyword in error_keywords):
                             error_lines.append(line)
                     if error_lines:
-                        final_msg += f'\nLog errors: {' | '.join(error_lines[:3])}'
+                        error_lines = ' | '.join(error_lines[:3])
+                        final_msg += f'\nLog errors: {error_lines}'
 
             write_to_summary(summary_model_name, tp_num, final_result, final_msg, worker_id, backend_type, work_dir)
 
