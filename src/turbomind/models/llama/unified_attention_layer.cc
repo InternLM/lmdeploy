@@ -140,8 +140,10 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
     cu_block_nums_ = args.at("cu_block_nums").buffer();
     kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
 
-    cp_M_ = args.at("cp_M").borrow();
-    cp_L_ = args.at("cp_L").borrow();
+    if (engine_param_.attn_cp_size > 1) {
+        cp_M_ = args.at("cp_M").borrow();
+        cp_L_ = args.at("cp_L").borrow();
+    }
 
     // rotary embedding, add offest when forward
     if (rope_param_.type == RopeType::kDynamic) {
