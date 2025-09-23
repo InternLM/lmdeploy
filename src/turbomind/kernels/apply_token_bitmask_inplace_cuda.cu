@@ -214,19 +214,34 @@ void ApplyTokenBitmaskInplace(Tensor logits, Tensor bitmask, std::optional<Tenso
 
     switch (logits.dtype()) {
         case kFloat32: {
-            ApplyTokenBitmaskInplaceDispatchToPackedT(
-                logits.data<float>(), bitmask.data<int32_t>(), indices_ptr, vocab_size, 0, 0, num_rows);
+            ApplyTokenBitmaskInplaceDispatchToPackedT(logits.data<float>(),
+                                                      bitmask.data<int32_t>(),
+                                                      indices_ptr,
+                                                      vocab_size,
+                                                      logits.stride(0),
+                                                      bitmask.stride(0),
+                                                      num_rows);
             break;
         }
         case kFloat16: {
-            ApplyTokenBitmaskInplaceDispatchToPackedT(
-                logits.data<half_t>(), bitmask.data<int32_t>(), indices_ptr, vocab_size, 0, 0, num_rows);
+            ApplyTokenBitmaskInplaceDispatchToPackedT(logits.data<half_t>(),
+                                                      bitmask.data<int32_t>(),
+                                                      indices_ptr,
+                                                      vocab_size,
+                                                      logits.stride(0),
+                                                      bitmask.stride(0),
+                                                      num_rows);
             break;
         }
 #if __CUDA_ARCH__ >= 800
         case kBfloat16: {
-            ApplyTokenBitmaskInplaceDispatchToPackedT(
-                logits.data<bfloat16_t>(), bitmask.data<int32_t>(), indices_ptr, vocab_size, 0, 0, num_rows);
+            ApplyTokenBitmaskInplaceDispatchToPackedT(logits.data<bfloat16_t>(),
+                                                      bitmask.data<int32_t>(),
+                                                      indices_ptr,
+                                                      vocab_size,
+                                                      logits.stride(0),
+                                                      bitmask.stride(0),
+                                                      num_rows);
             break;
         }
 #endif

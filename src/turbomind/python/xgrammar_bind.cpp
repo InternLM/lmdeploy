@@ -107,15 +107,7 @@ PYBIND11_MODULE(_xgrammar, m)
                         return TokenizerInfo::FromVocabAndMetadata(CommonEncodedVocabType(encoded_vocab), metadata);
                     })
 
-        .def_static("_detect_metadata_from_hf", &TokenizerInfo::DetectMetadataFromHF)
-
-        .def("serialize_json", &TokenizerInfo::SerializeJSON)
-
-        .def_static(
-            "deserialize_json",
-            [](const std::string& str, const py::typing::List<std::variant<std::string, py::bytes>>& encoded_vocab) {
-                return TokenizerInfo::DeserializeJSON(str, CommonEncodedVocabType(encoded_vocab));
-            });
+        .def_static("_detect_metadata_from_hf", &TokenizerInfo::DetectMetadataFromHF);
 
     py::class_<CompiledGrammar>(m, "CompiledGrammar");
 
@@ -130,10 +122,11 @@ PYBIND11_MODULE(_xgrammar, m)
              &GrammarCompiler::CompileJSONSchema,
              py::call_guard<py::gil_scoped_release>(),
              py::arg("schema"),
-             py::arg("any_whitespace") = false,
-             py::arg("indent")         = py::none(),
-             py::arg("separators")     = py::none(),
-             py::arg("strict_mode")    = true)
+             py::arg("any_whitespace")     = false,
+             py::arg("indent")             = py::none(),
+             py::arg("separators")         = py::none(),
+             py::arg("strict_mode")        = true,
+             py::arg("max_whitespace_cnt") = py::none())
         .def("compile_regex",
              &GrammarCompiler::CompileRegex,
              py::call_guard<py::gil_scoped_release>(),

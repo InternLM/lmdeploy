@@ -82,7 +82,7 @@ FetchContent_MakeAvailable(yaml-cpp)
 FetchContent_Declare(
   xgrammar
   GIT_REPOSITORY          https://github.com/mlc-ai/xgrammar.git
-  GIT_TAG                 v0.1.21
+  GIT_TAG                 v0.1.25
   GIT_SUBMODULES          "3rdparty/dlpack"
   GIT_PROGRESS            TRUE
   USES_TERMINAL_DOWNLOAD  TRUE
@@ -94,7 +94,10 @@ if(NOT xgrammar_POPULATED)
   # Fetch the content using previously declared details
   FetchContent_Populate(xgrammar)
 
-  file(WRITE ${xgrammar_SOURCE_DIR}/config.cmake "set(XGRAMMAR_BUILD_PYTHON_BINDINGS OFF)")
+  file(WRITE ${xgrammar_SOURCE_DIR}/config.cmake "set(XGRAMMAR_BUILD_PYTHON_BINDINGS OFF)\n")
+  if(NOT MSVC)
+    file(APPEND ${xgrammar_SOURCE_DIR}/config.cmake "set(CMAKE_CXX_FLAGS \"-Wno-error\")\n")
+  endif()
 
   # Bring the populated content into the build
   add_subdirectory(${xgrammar_SOURCE_DIR} ${xgrammar_BINARY_DIR})
