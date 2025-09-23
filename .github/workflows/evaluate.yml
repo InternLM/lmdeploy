@@ -98,6 +98,7 @@ jobs:
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/root/models
         - /mnt/187:/mnt/187
+        - /mnt/140:/mnt/140
         - /mnt/bigdisk:/mnt/bigdisk
         - /mnt/shared:/mnt/shared
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
