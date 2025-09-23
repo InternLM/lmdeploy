@@ -3,7 +3,7 @@ import asyncio
 import base64
 import functools
 import time
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
@@ -347,6 +347,7 @@ class BaseModelAgent:
         world_size = self.dist_config.world_size
         self.tp = tp
         self.world_size = world_size
+        self.need_output = rank % self.dist_config.attn_tp == 0
 
         self.patched_model = None
         self.cache_engine = None
@@ -561,17 +562,68 @@ class BaseModelAgent:
         self._out_que.put_nowait((output, event))
 
     @contextmanager
-    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext, enable: bool = True):
+    def _broadcast_next_token(self, next_token_ids: torch.Tensor, enable: bool = True):
         if not enable:
             yield
             return
 
-        dist_ctx = get_dist_manager().current_context()
-        tp_gpu_group = dist_ctx.attn_tp_group.gpu_group
+        tp_gpu_group = self.dist_ctx.attn_tp_group.gpu_group
         rank = dist.get_global_rank(tp_gpu_group, 0)
         handle = dist.broadcast(next_token_ids, src=rank, group=tp_gpu_group, async_op=True)
         yield
         handle.wait()
+
+    @record_function('prepare_dp')
+    async def _prepare_dp(self, inputs: ModelInputs, sync_long_context: bool, is_dummy: bool):
+        """Prepare dp."""
+        world_size = self.dist_config.world_size
+        is_decoding = inputs.is_decoding
+
+        # gather dp forward metadata
+        batch_size = inputs.seq_length.numel()
+        dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
+        # check enable_microbatch
+        if self.enable_microbatch:
+            tokens_num = inputs.input_ids.numel()
+            if is_decoding:
+                enable_microbatch = batch_size >= \
+                    self.enable_microbatch_decode_batchsize_threshold
+            else:
+                enable_microbatch = batch_size >= \
+                    self.enable_microbatch_prefill_batchsize_threshold and \
+                    tokens_num >= self.enable_microbatch_prefill_token_threshold
+            dp_forward_meta.append(int(enable_microbatch))
+        gathered_meta = DistGatherScalar(dp_forward_meta, world_size, device='cuda')
+        gathered_meta = (await gathered_meta.async_wait()).cpu()
+
+        # check is_decoding
+        all_is_decoding = gathered_meta[:, 0]
+        assert all_is_decoding.sum().item() in [0, world_size]
+
+        # check if all inputs are dummy inputs
+        is_all_dummy = gathered_meta[:, 1].all()
+        if is_all_dummy:
+            return inputs, sync_long_context, is_all_dummy
+
+        if is_decoding:
+            all_batch_sizes = gathered_meta[:, 2]
+            padding_batch_size = all_batch_sizes.max().item()
+            meta = self.patched_model.get_meta()
+            meta.padding_batch_size = padding_batch_size
+            logger.debug(f'padding_batch_size={padding_batch_size}')
+        else:
+            all_sync_flags = gathered_meta[:, 3].bool()
+            sync_long_context = all_sync_flags.any()
+            logger.debug(f'sync_long_context={sync_long_context}')
+
+        # update if enable_microbatch
+        if self.enable_microbatch and gathered_meta[:, 4].all():
+            inputs.enable_microbatch = True
+
+        # update dp meta
+        inputs.build_dp_meta()
+        inputs = self.patched_model.update_inputs(inputs)
+        return inputs, sync_long_context, is_all_dummy
 
     async def _async_step_background(
         self,
@@ -587,7 +639,6 @@ class BaseModelAgent:
         extra_inputs: ExtraInputs = None,
     ):
         """Asyc forward task."""
-        dist_ctx = get_dist_manager().current_context()
 
         @record_function('update_inputs_for_next_step')
         def __update_inputs(next_token_ids, model_metas, extra_inputs):
@@ -600,89 +651,28 @@ class BaseModelAgent:
                 extra_inputs=extra_inputs,
             )
 
-        @asynccontextmanager
-        async def __prepare_dp():
-            """Prepare dp."""
-            if dp == 1:
-                yield
-                return
-
-            nonlocal inputs, sync_long_context, is_all_dummy
-            world_size = self.dist_config.world_size
-
-            # gather dp forward metadata
-            batch_size = inputs.seq_length.numel()
-            dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
-            # check enable_microbatch
-            if self.enable_microbatch:
-                tokens_num = inputs.input_ids.numel()
-                if is_decoding:
-                    enable_microbatch = batch_size >= \
-                        self.enable_microbatch_decode_batchsize_threshold
-                else:
-                    enable_microbatch = batch_size >= \
-                        self.enable_microbatch_prefill_batchsize_threshold and \
-                        tokens_num >= self.enable_microbatch_prefill_token_threshold
-                dp_forward_meta.append(int(enable_microbatch))
-            gathered_meta = DistGatherScalar(dp_forward_meta, world_size, device='cuda')
-
-            yield
-
-            gathered_meta = (await gathered_meta.async_wait()).cpu()
-
-            # check is_decoding
-            all_is_decoding = gathered_meta[:, 0]
-            assert all_is_decoding.sum().item() in [0, world_size]
-
-            # check if all inputs are dummy inputs
-            is_all_dummy = gathered_meta[:, 1].all()
-            if is_all_dummy:
-                return
-
-            if is_decoding:
-                all_batch_sizes = gathered_meta[:, 2]
-                padding_batch_size = all_batch_sizes.max().item()
-                meta = self.patched_model.get_meta()
-                meta.padding_batch_size = padding_batch_size
-                logger.debug(f'padding_batch_size={padding_batch_size}')
-            else:
-                all_sync_flags = gathered_meta[:, 3].bool()
-                sync_long_context = all_sync_flags.any()
-                logger.debug(f'sync_long_context={sync_long_context}')
-
-            # update if enable_microbatch
-            if self.enable_microbatch and gathered_meta[:, 4].all():
-                inputs.enable_microbatch = True
-
-            # update dp meta
-            inputs.build_dp_meta()
-            inputs = self.patched_model.update_inputs(inputs)
-
         # dist tools
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
-        rank = dist_ctx.rank
+        rank = self.rank
         tp = dist_config.attn_tp
         dp = dist_config.dp
         sync_long_context = False if dp == 1 else sync_long_context
         is_decoding = inputs.is_decoding
 
+        # is_all_dummy would be updated in __prepare_dp
+        if dp > 1:
+            inputs, sync_long_context, is_all_dummy = await self._prepare_dp(inputs, sync_long_context, is_dummy)
+
+            # skip dummy forward.
+            if is_all_dummy:
+                logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
+                return
+
         logger.debug(f'<ForwardTask> rank[{rank}]: '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)} '
                      f'is_decoding={inputs.is_decoding}')
-
-        # is_all_dummy would be updated in __prepare_dp
-        is_all_dummy = False
-        async with __prepare_dp():
-            pass
-
-        need_output = dp > 1 or rank % tp == 0
-
-        # skip dummy forward.
-        if is_all_dummy:
-            logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
-            return
 
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         for idx in range(loop_count):
@@ -693,12 +683,11 @@ class BaseModelAgent:
                 return_logits=return_logits,
                 sync_long_context=sync_long_context,
             )
-            logits = output['logits']
-            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-            seq_length = inputs.seq_length
+            logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
             seq_length = output.get('seq_length', inputs.seq_length)
             last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
             extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, seq_length)
+            model_metas = output.get('model_metas')
 
             # output empty for dummy inputs
             if is_dummy:
@@ -707,12 +696,12 @@ class BaseModelAgent:
             need_broadcast_next = (tp > 1 and idx < loop_count - 1)
 
             # sampling and stopping
-            if need_output:
+            if self.need_output:
                 logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
                 # sampling
                 next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
 
-                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
+                with self._broadcast_next_token(next_token_ids, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
 
                     # post sampling
@@ -724,34 +713,31 @@ class BaseModelAgent:
                                                                                   sampling_inputs.stop_words,
                                                                                   inputs=inputs,
                                                                                   extra_inputs=extra_inputs)
+
+                    # send output
+                    logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
+                    extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+                    self._push_output(
+                        BatchedOutputs(next_token_ids=next_token_ids,
+                                       logits=logits if return_logits else None,
+                                       stopped=stopped,
+                                       stop_pos=stop_pos,
+                                       model_metas=model_metas,
+                                       logprobs=logprobs,
+                                       extra_outputs=extra_outputs))
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
                 with torch.inference_mode():
                     next_token_ids = inputs.input_ids.new_zeros(last_logits.size(0))
-                logprobs = None
 
                 # broadcast next token for TP > 1
-                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
+                with self._broadcast_next_token(next_token_ids, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
 
                 # post sampling
                 next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
                                                                                  extra_inputs)
-
-            # send output
-            model_metas = output.get('model_metas')
-            if need_output:
-                logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
-                extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
-                self._push_output(
-                    BatchedOutputs(next_token_ids=next_token_ids,
-                                   logits=logits if return_logits else None,
-                                   stopped=stopped,
-                                   stop_pos=stop_pos,
-                                   model_metas=model_metas,
-                                   logprobs=logprobs,
-                                   extra_outputs=extra_outputs))
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:

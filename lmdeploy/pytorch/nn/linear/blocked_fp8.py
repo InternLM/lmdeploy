@@ -4,6 +4,7 @@ from typing import Any, List, Optional
 import torch
 
 from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..quant_utils import quant_blocked_fp8
@@ -141,7 +142,7 @@ class BlockedF8Linear(LinearBase):
 
     def _forward_default(self, x, all_reduce, tp_sizes):
         """Default forward implement."""
-        if self.tp_mode:
+        if self.tp_mode == TPMode.DP_TP:
             rank = self.tp_rank
             return self.impl.forward(x,
                                      self.weight,
