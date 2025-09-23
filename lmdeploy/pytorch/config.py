@@ -148,8 +148,8 @@ class DistConfig:
         self.tp = self.attn_tp
 
         # tp mode
-        self.mlp_tp_mode = TPMode.DEFAULT if self.attn_tp == self.mlp_tp else TPMode.DP_TP
-        self.moe_tp_mode = TPMode.DEFAULT if self.attn_tp == self.moe_tp else TPMode.DP_TP
+        self.mlp_tp_mode = TPMode.DEFAULT if (self.mlp_tp in [1, self.attn_tp]) else TPMode.DP_TP
+        self.moe_tp_mode = TPMode.DEFAULT if (self.moe_tp in [1, self.attn_tp]) else TPMode.DP_TP
 
     def get_tp_by_layer(self, layer_type: str):
         """Get tp by layer type."""

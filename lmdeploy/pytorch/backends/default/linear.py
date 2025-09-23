@@ -8,18 +8,6 @@ import torch.nn.functional as F
 from ..linear import LinearBuilder, LinearImpl
 
 
-def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int], group: dist.ProcessGroup = None):
-    """Reduce scatter."""
-    out = out.transpose(0, -2)
-    out = out.contiguous()
-    outs = out.split(tp_sizes, 0)
-    out = outs[rank]
-    outs = list(outs)
-    dist.reduce_scatter(out, outs, group=group)
-    out = out.transpose(0, -2)
-    return out
-
-
 class DefaultLinearImpl(LinearImpl):
     """Linear implementation api."""
 
@@ -35,7 +23,8 @@ class DefaultLinearImpl(LinearImpl):
         out = F.linear(x, weight, bias)
         if all_reduce:
             if scatter_size is not None:
-                out = _reduce_scatter_input(out, rank, scatter_size, group=group)
+                from lmdeploy.pytorch.distributed import reduce_scatter_by_tp_sizes
+                out = reduce_scatter_by_tp_sizes(out, rank, scatter_size, group=group)
             else:
                 dist.all_reduce(out, group=group)
         return out

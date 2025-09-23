@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import List, Optional
 
+import torch
 from torch import distributed as dist
 from torch.distributed import ProcessGroup, ReduceOp  # noqa: F401
 
@@ -400,3 +401,21 @@ def reduce_scatter(output, input_list, op=ReduceOp.SUM, group='tp', async_op=Fal
     if isinstance(group, str):
         group = get_group(group, 'gpu')
     return dist.reduce_scatter(output, input_list, op=op, group=group, async_op=async_op)
+
+
+def gather_by_tp_sizes(x: torch.Tensor, tp_sizes: List[int], group: Optional[dist.ProcessGroup] = None):
+    """Gather input."""
+    shape = (*x.shape[:-2], sum(tp_sizes), *x.shape[-1:])
+    new_x = x.new_empty(shape)
+    split_new_x = list(new_x.split(tp_sizes, -2))
+    dist.all_gather(split_new_x, x, group=group)
+    return new_x
+
+
+def reduce_scatter_by_tp_sizes(out: torch.Tensor, rank: int, tp_sizes: List[int], group: dist.ProcessGroup):
+    """Reduce scatter."""
+    outs = out.split(tp_sizes, -2)
+    out = outs[rank]
+    outs = list(outs)
+    dist.reduce_scatter(out, outs, group=group)
+    return out

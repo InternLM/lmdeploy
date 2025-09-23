@@ -6,31 +6,11 @@ import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.config import TPMode
-from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_group, get_tp_world_rank
+from lmdeploy.pytorch.distributed import (gather_by_tp_sizes, get_dist_manager, get_tp_group, get_tp_world_rank,
+                                          reduce_scatter_by_tp_sizes)
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from .utils import update_tp_args
-
-
-def _gather_input(x: torch.Tensor, tp_sizes: List[int], group: dist.ProcessGroup):
-    """Gather input."""
-    shape0 = x.shape[:-2]
-    shape1 = x.shape[-1:]
-    shapes = [shape0 + (size, ) + shape1 for size in tp_sizes]
-    new_x = [x.new_empty(shape) for shape in shapes]
-    dist.all_gather(new_x, x, group=group)
-    x = torch.cat(new_x, dim=-2)
-    return x
-
-
-def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int], group: dist.ProcessGroup):
-    """Reduce scatter."""
-    out = out.transpose(0, -2).contiguous()
-    outs = out.split(tp_sizes, 0)
-    out = outs[rank]
-    dist.reduce_scatter(out, outs, group=group)
-    out = out.transpose(0, -2)
-    return out
 
 
 class LinearBase(nn.Module):
@@ -105,7 +85,7 @@ class LinearBase(nn.Module):
             out = lora_adapter(x, out)
         if self.all_reduce:
             if self.tp_mode == TPMode.DP_TP:
-                out = _reduce_scatter_input(out, self.tp_rank, tp_sizes, group=self.tp_group)
+                out = reduce_scatter_by_tp_sizes(out, self.tp_rank, tp_sizes, group=self.tp_group)
             else:
                 dist.all_reduce(out, group=self.tp_group)
         return out
@@ -119,7 +99,7 @@ class LinearBase(nn.Module):
             tp_sizes = dp_meta.tp_sizes
 
         if self.dp_gather:
-            x = _gather_input(x, tp_sizes, group=self.tp_group)
+            x = gather_by_tp_sizes(x, tp_sizes, group=self.tp_group)
 
         if len(self.lora_adapters) == 0:
             return self._forward_default(x, self.all_reduce, tp_sizes)
