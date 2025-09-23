@@ -95,8 +95,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources:/root/resources
-        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
-        - /nvme/qa_test_models:/root/models
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme1/qa_test_models:/nvme1/qa_test_models
         - /nvme2/share:/nvme2/share
@@ -125,7 +123,7 @@ jobs:
           name: my-artifact-${{ github.run_id }}-py310
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r /root/models/offline_pkg/requirements.txt
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
@@ -149,8 +147,8 @@ jobs:
           lmdeploy check_env
       - name: Setup paths for evaluation
         run: |
-          ln -s /root/opencompass-data ./data
-          python3 .github/scripts/action_tools.py create_model_links /root/models .
+          ln -s /nvme/qa_test_models/opencompass-data ./data
+          python3 .github/scripts/action_tools.py create_model_links /nvme/qa_test_models .
       - name: Evaluate base models
         if: matrix.evaluate_type == 'base'
         run: |
