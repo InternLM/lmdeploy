@@ -863,7 +863,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
                 # update position ids, attn_metadata
                 new_kv_seqlens = torch.tensor(new_kv_seqlens, device=input_ids.device, dtype=torch.long)
-                position_ids = new_kv_seqlens
+                position_ids = new_kv_seqlens - 1
                 attn_metadata.kv_seqlens = new_kv_seqlens
                 attn_metadata.cu_seqlens_k = torch.nn.functional.pad(
                     torch.cumsum(new_kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
