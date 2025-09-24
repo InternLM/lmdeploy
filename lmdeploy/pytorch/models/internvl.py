@@ -735,7 +735,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         # create new model inputs and context, to get updated position_ids and attn_metadata
         device = input_ids.device
         total_msgs = len(new_seqlens)
-        kv_seqlens = torch.tensor([meta['new_seqlen'] for meta in context.model_metas], device=device, dtype=torch.long)
+        kv_seqlens = torch.tensor([meta['new_seqlen'] for meta in context.model_metas], dtype=torch.long)
         new_model_inputs = ModelInputs(input_ids=input_ids,
                                        seq_length=torch.tensor(new_seqlens, device=device, dtype=torch.long),
                                        history_lengths=torch.tensor(prev_lens, device=device, dtype=torch.long),
