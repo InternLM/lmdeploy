@@ -117,10 +117,10 @@ class CudaGraphMixin:
 
         # create inputs
         new_batch_size = input_buffers['block_offsets'].size(0)
-        attn_metadata.block_offsets = input_buffers['block_offsets'][:new_batch_size]
-        attn_metadata.q_start_loc = input_buffers['q_start_loc'][:new_batch_size]
-        attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
-        attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
+        attn_metadata.block_offsets = input_buffers['block_offsets']
+        attn_metadata.q_start_loc = input_buffers['q_start_loc']
+        attn_metadata.q_seqlens = input_buffers['q_seqlens']
+        attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
         if getattr(self.config, 'use_flash_mla', False) is True:
             import flash_mla
             tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
@@ -142,15 +142,15 @@ class CudaGraphMixin:
             new_inputs['cross_attn_metadata'] = cross_attn_metadata
 
         if is_decoding:
-            new_inputs['input_ids'] = input_buffers['input_ids'][:, :num_tokens]
-            new_inputs['position_ids'] = input_buffers['position_ids'][:, :num_tokens]
+            new_inputs['input_ids'] = input_buffers['input_ids']
+            new_inputs['position_ids'] = input_buffers['position_ids']
         else:
             new_inputs['input_ids'] = input_buffers['input_ids']
             new_inputs['position_ids'] = input_buffers['position_ids']
 
         if inputs_embeds is not None:
             if is_decoding:
-                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds'][:, :num_tokens]
+                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
             else:
                 new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
 
