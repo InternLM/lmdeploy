@@ -2,8 +2,6 @@
 
 #pragma once
 
-#include "cutlass/fast_math.h"
-
 #include "quantization.h"
 #include "src/turbomind/kernels/attention/reduce_kernel.h"
 #include "src/turbomind/kernels/attention/rotary_embedding.h"
@@ -258,9 +256,8 @@ struct AttentionUniversal {
             const int qi = offset.y / CTA_H;
             const int ti = history_len;
 
-            cutlass::FastDivmod cp_divmod{params.cp_size};
-            int                 cp_quo, cp_rem;
-            cp_divmod(cp_quo, cp_rem, ti);
+            int cp_quo, cp_rem;
+            params.cp_divmod(cp_quo, cp_rem, ti);
 
             Array<T, 2> param_K[1];
             Array<T, 2> param_V[1];
@@ -380,11 +377,9 @@ struct AttentionUniversal {
         const int context_len = params.cu_k_len[batch_idx + 1] - params.cu_k_len[batch_idx];
         const int history_len = context_len - input_len;
 
-        cutlass::FastDivmod cp_divmod{params.cp_size};
-
         auto get_cp_len = [&](int length) -> int {
             int cp_quo, cp_rem;
-            cp_divmod(cp_quo, cp_rem, length);
+            params.cp_divmod(cp_quo, cp_rem, length);
             return (cp_quo + (cp_rem > params.cp_rank ? 1 : 0));
         };
 

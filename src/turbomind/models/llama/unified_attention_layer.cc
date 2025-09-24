@@ -238,7 +238,7 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 template<class T>
 void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
 {
-
+    NvtxScope scope("cp");
     const int token_num = attn.shape(0);
     const int count     = token_num * local_head_num_;
     d_comm_->AllGatherCP(cp_M_.data() + count * engine_param_.attn_cp_rank,
@@ -377,6 +377,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.cp_rank = engine_param_.attn_cp_rank;
         params.cp_size = engine_param_.attn_cp_size;
         if (params.cp_size > 1) {
+            params.cp_divmod = cutlass::FastDivmod(params.cp_size);
             const int off_ML = q_count * local_head_num_ * engine_param_.attn_cp_rank;
             const int off_O  = q_count * local_head_num_ * size_per_head_ * engine_param_.attn_cp_rank;
             params.cp_M      = cp_M_.data() + off_ML;

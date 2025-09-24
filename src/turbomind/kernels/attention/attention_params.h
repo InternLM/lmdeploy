@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "cutlass/fast_math.h"
 #include <cstdint>
 #include <cuda_runtime.h>
 
@@ -80,10 +81,11 @@ struct AttentionParams {
     int*   locks;
 
     // context parallel
-    int    cp_rank{0};
-    int    cp_size{1};
-    float* cp_M{nullptr};
-    float* cp_L{nullptr};
+    int                 cp_rank{0};
+    int                 cp_size{1};
+    cutlass::FastDivmod cp_divmod{1};
+    float*              cp_M{nullptr};
+    float*              cp_L{nullptr};
 
     int          arch;
     cudaStream_t stream;

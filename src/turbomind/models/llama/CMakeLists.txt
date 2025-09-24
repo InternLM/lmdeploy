@@ -31,6 +31,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         core
         gemm2
         CUDA::cublas
+        nvidia::cutlass::cutlass
         rms_norm
         DynamicDecodeLayer
         activation_kernels
