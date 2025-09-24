@@ -131,6 +131,7 @@ class ModelInputs:
     input_ids: torch.LongTensor
     seq_length: torch.LongTensor
     history_lengths: torch.LongTensor
+    history_lengths_cpu: torch.LongTensor
     block_offsets: torch.LongTensor
     is_decoding: bool
     num_ignored_history: torch.LongTensor
@@ -150,7 +151,7 @@ class ModelInputs:
         assert self.is_decoding
         if step_seqlens is None:
             step_seqlens = self.seq_length
-        self.history_lengths += step_seqlens
+        self.history_lengths_cpu += step_seqlens
         self.max_kv_seqlen += self.max_q_seqlen
         self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
@@ -339,7 +340,7 @@ class StepContext:
             device (str): The device of the tensors.
         """
         q_seqlens = inputs.seq_length
-        history_seqlens = inputs.history_lengths
+        history_seqlens = inputs.history_lengths_cpu
 
         input_multimodals = None
         if inputs.vision_inputs is not None:
@@ -401,6 +402,7 @@ class StepContext:
         history_seqlens = inputs.history_lengths
         max_q_seqlen = inputs.max_q_seqlen
 
+        #import pdb; pdb.set_trace()
         # decoding
         if max_q_seqlen == 1:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
@@ -410,7 +412,7 @@ class StepContext:
 
         num_tokens = inputs.input_ids.numel()
         batch_size = inputs.seq_length.numel()
-        device = q_seqlens.device
+        device = history_seqlens.device
 
         # batch with same seqlens
         if max_q_seqlen * batch_size == num_tokens:

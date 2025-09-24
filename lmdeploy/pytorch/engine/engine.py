@@ -773,6 +773,7 @@ class Engine(EngineBase):
             input_ids=input_ids,
             seq_length=seq_length,
             history_lengths=history_lengths,
+            history_lengths_cpu=history_lengths.cpu(),
             block_offsets=block_offsets,
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,

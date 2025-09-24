@@ -777,6 +777,10 @@ class BaseModelAgent:
 
                 if forward_event is not None:
                     forward_event.clear()
+                forward_inputs['inputs'].history_lengths = forward_inputs['inputs'].history_lengths
+                forward_inputs['inputs'].history_lengths_cpu = forward_inputs['inputs'].history_lengths.cpu()
+                forward_inputs['inputs'].seq_length = forward_inputs['inputs'].seq_length.cpu()
+                forward_inputs['inputs'].num_ignored_history = forward_inputs['inputs'].num_ignored_history.cpu()
                 await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
@@ -795,6 +799,19 @@ class BaseModelAgent:
                 for k in keys:
                     if k not in forward_inputs:
                         continue
+                    '''
+                    if k == 'inputs':
+                        forward_inputs[k].input_ids = _try_to_cuda(forward_inputs[k].input_ids, non_blocking=non_blocking)
+                        forward_inputs[k].block_offsets = _try_to_cuda(forward_inputs[k].block_offsets, non_blocking=non_blocking)
+                        #forward_inputs[k].num_ignored_history = _try_to_cuda(forward_inputs[k].num_ignored_history, non_blocking=non_blocking)
+                        forward_inputs[k].local_adapter_ids = _try_to_cuda(forward_inputs[k].local_adapter_ids, non_blocking=non_blocking)
+                        forward_inputs[k].vision_inputs = _try_to_cuda(forward_inputs[k].vision_inputs, non_blocking=non_blocking)
+                        forward_inputs[k].cross_length = _try_to_cuda(forward_inputs[k].cross_length, non_blocking=non_blocking)
+                        forward_inputs[k].history_cross_length = _try_to_cuda(forward_inputs[k].history_cross_length, non_blocking=non_blocking)
+                        #forward_inputs[k].model_metas =_try_to_cuda(forward_inputs[k].model_metas, non_blocking=non_blocking)
+                    else:
+                        forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
+                    '''
                     forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
                 self.out_stream.synchronize()
             logger.debug('preprocessing forward inputs done.')
