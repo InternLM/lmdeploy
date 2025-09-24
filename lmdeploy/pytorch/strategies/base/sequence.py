@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, List, Optional
 
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import EncoderResult, MigrationRequest
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
@@ -19,6 +19,7 @@ class SequenceStrategy(ABC):
                       sampling_param: 'SamplingParam' = None,
                       adapter_name: str = None,
                       migration_request: Optional[MigrationRequest] = None,
+                      encoder_result: Optional[EncoderResult] = None,
                       resp_cache: bool = False,
                       preserve_cache: bool = False) -> 'SchedulerSequence':
         """Make sequence."""
