@@ -135,6 +135,7 @@ class SubCliServe:
         tb_group._group_actions.append(model_format)
         tb_group._group_actions.append(hf_overrides)
         tb_group._group_actions.append(enable_metrics)
+        ArgumentHelper.attn_cp_size(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
@@ -232,6 +233,7 @@ class SubCliServe:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
+                                                   attn_cp_size=args.attn_cp_size,
                                                    max_batch_size=max_batch_size,
                                                    session_len=args.session_len,
                                                    model_format=args.model_format,
