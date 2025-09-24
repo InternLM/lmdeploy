@@ -48,7 +48,7 @@ def write_to_summary(model_name, tp_num, result, msg, worker_id, backend_type, w
 
     dataset_name = []
     dataset_metrics = []
-    for key in metrics.keys():
+    for key in sorted(metrics.keys()):
         dataset_name.append(key)
         dataset_metrics.append(metrics.get(key, ''))
 
@@ -100,8 +100,8 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         os.makedirs(log_path, exist_ok=True)
 
         original_cwd = os.getcwd()
-        work_dir = os.path.join(
-            log_path, f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{worker_id}_{quant_policy}")
+        work_dir = os.path.join(log_path,
+                                f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{quant_policy}")
         os.makedirs(work_dir, exist_ok=True)
 
         try:

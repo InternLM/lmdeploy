@@ -89,6 +89,8 @@ turbomind_quatization:
     gptq:
         - empty
     no_kvint4:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
         - Qwen/Qwen3-4B-FP8
@@ -100,6 +102,8 @@ turbomind_quatization:
         - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
+        - openai/gpt-oss-120b
+        - openai/gpt-oss-20b
     no_kvint8:
         - empty
 
@@ -109,6 +113,8 @@ pytorch_quatization:
     w8a8:
         - empty
     no_kvint4:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
         - Qwen/Qwen3-4B-FP8

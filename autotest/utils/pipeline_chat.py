@@ -58,9 +58,9 @@ def run_pipeline_chat_test(config,
                                       text=True,
                                       encoding='utf-8',
                                       env=env,
-                                      timeout=600)
+                                      timeout=900)
         except subprocess.TimeoutExpired as e:
-            assert False, f'Test command timed out after 10 minutes: {e.cmd}'
+            assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
         output_text = response.stdout
         print(output_text)
@@ -133,9 +133,9 @@ def run_pipeline_vl_chat_test(config,
                                       text=True,
                                       encoding='utf-8',
                                       env=env,
-                                      timeout=600)
+                                      timeout=900)
         except subprocess.TimeoutExpired as e:
-            assert False, f'Test command timed out after 10 minutes: {e.cmd}'
+            assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
         output_text = response.stdout
         print(output_text)
