@@ -7,13 +7,12 @@ import allure
 import psutil
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
+from utils.config_utils import _is_bf16_supported_by_device, get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy.serve.openai.api_client import APIClient
-from lmdeploy.utils import is_bf16_supported
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
@@ -61,6 +60,12 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
                                  cuda_prefix=cuda_prefix,
                                  extra=extra)
 
+    device = os.environ.get('DEVICE', '')
+    if device:
+        cmd += f' --device {device} '
+        if device == 'ascend':
+            cmd += '--eager-mode '
+
     if backend_type == 'turbomind':
         if ('w4' in model or '4bits' in model or 'awq' in model.lower()):
             cmd += ' --model-format awq'
@@ -68,13 +73,13 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
             cmd += ' --model-format gptq'
     if backend_type == 'pytorch':
         cmd += ' --backend pytorch'
-        if not is_bf16_supported():
+        if not _is_bf16_supported_by_device():
             cmd += ' --dtype float16'
     if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
 
-    if not is_bf16_supported():
+    if not _is_bf16_supported_by_device():
         cmd += ' --cache-max-entry-count 0.5'
     if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         cmd += ' --cache-max-entry-count 0.5'
@@ -91,7 +96,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     start_timeout = 300
-    if not is_bf16_supported():
+    if not _is_bf16_supported_by_device():
         start_timeout = 600
 
     sleep(5)
@@ -133,7 +138,6 @@ def stop_restful_api(pid, startRes, param):
 
 def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
-
     model = get_model(http_url)
 
     if model is None:
@@ -144,7 +148,7 @@ def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PO
 
         case_info = cases_info.get(case)
 
-        with allure.step(case + ' step2 - restful_test - openai chat'):
+        with allure.step(case + ' restful_test - openai chat'):
             restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, worker_id)
             allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:

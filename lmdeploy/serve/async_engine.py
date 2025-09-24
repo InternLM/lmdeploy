@@ -329,10 +329,7 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path,
-                                            tokenizer=self.tokenizer,
-                                            engine_config=backend_config,
-                                            **kwargs)
+        return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
@@ -340,7 +337,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        return Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
+        return Engine.from_pretrained(model_path, engine_config=backend_config)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []
@@ -628,7 +625,8 @@ class AsyncEngine(LogitsMixin):
                                                sequence_start,
                                                tools=tools,
                                                enable_thinking=enable_thinking,
-                                               reasoning_effort=reasoning_effort)
+                                               reasoning_effort=reasoning_effort,
+                                               **kwargs)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -682,7 +680,6 @@ class AsyncEngine(LogitsMixin):
             step: int = 0,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
-            skip_stop_tokens: bool = True,
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
@@ -736,7 +733,8 @@ class AsyncEngine(LogitsMixin):
                                                         adapter_name,
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
-                                                        enable_thinking=enable_thinking)
+                                                        enable_thinking=enable_thinking,
+                                                        **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,
@@ -778,9 +776,8 @@ class AsyncEngine(LogitsMixin):
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
-        # used to skip / rewind stop words in interactive mode
         stop_ids = []
-        if skip_stop_tokens and not gen_config.ignore_eos:
+        if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
         metrics_processor.increment_total_requests()
@@ -849,6 +846,8 @@ class AsyncEngine(LogitsMixin):
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
                         out.logprobs = outputs.logprobs[log_offset:]
+                        if hit_stop_token:
+                            out.logprobs = out.logprobs[:-hit_stop_token]
                     if outputs.last_hidden_state is not None:
                         out.last_hidden_state = outputs.last_hidden_state
                         if hit_stop_token:
@@ -864,11 +863,19 @@ class AsyncEngine(LogitsMixin):
 
                 if not is_error(outputs.status):
                     finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
-                    # utf-8 char at the end means it's a potential unfinished
-                    # byte sequence
+                    # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
+                    token_ids, logits, last_hidden_state, logprobs = [], None, None, None
+                    if gen_config.include_stop_str_in_output and finish_reason == 'stop':
+                        # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
+                        token_ids = outputs.token_ids[-1:]
+                        response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
+                        logits = outputs.logits[-1:] if outputs.logits else None
+                        last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
+                        logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
+
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, output_tokens {gen_len}')
@@ -877,7 +884,10 @@ class AsyncEngine(LogitsMixin):
                                  len(input_ids),
                                  gen_len,
                                  finish_reason,
-                                 token_ids=[],
+                                 token_ids=token_ids,
+                                 logprobs=logprobs,
+                                 logits=logits,
+                                 last_hidden_state=last_hidden_state,
                                  cache_block_ids=outputs.cache_block_ids)
                     # Update a session's sequence only when it is in finished status
                     if outputs.status == ResponseType.FINISH:

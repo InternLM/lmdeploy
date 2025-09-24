@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from utils.benchmark_utils import throughput_test
 from utils.config_utils import get_benchmark_model_list, get_cuda_id_by_workerid, get_cuda_prefix_by_workerid
@@ -92,11 +94,15 @@ def test_throughput_func_tp2(config, run_id, run_config, worker_id):
     'tp_num': 1
 }])
 def test_throughput_prtest_tp1(config, run_id, run_config, worker_id):
+    device_type = os.environ.get('DEVICE', 'cuda')
+    if device_type == 'ascend':
+        env_var = 'ASCEND_RT_VISIBLE_DEVICES='
+    else:
+        env_var = 'CUDA_VISIBLE_DEVICES='
     result, msg = throughput_test(config,
                                   run_id,
                                   run_config,
-                                  cuda_prefix='CUDA_VISIBLE_DEVICES=' +
-                                  str(int(get_cuda_id_by_workerid(worker_id)) + 5),
+                                  cuda_prefix=f'{env_var}' + str(int(get_cuda_id_by_workerid(worker_id)) + 5),
                                   worker_id=worker_id,
                                   is_smoke=True)
 

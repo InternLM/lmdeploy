@@ -10,10 +10,10 @@ BlockTable = np.ndarray
 
 def _num_blocks_to_drop(seq: SchedulerSequence, window_size: int):
     """Num blocks to free."""
-    if seq.history_len <= window_size:
+    history_len = seq.num_history_ids
+    if seq.num_history_ids <= window_size:
         return 0
     block_size = seq.block_size
-    history_len = seq.history_len
     num_blocks = len(seq.logical_blocks)
     win_start_block_id = (history_len - window_size) // block_size
     win_end_block_id = (history_len - 1) // block_size

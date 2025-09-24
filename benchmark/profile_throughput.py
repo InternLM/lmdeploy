@@ -138,11 +138,11 @@ class Engine:
         self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config)
             self.backend = 'turbomind'
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
+            tm_model = PytorchEngine.from_pretrained(model_path, engine_config=engine_config)
             self.backend = 'pytorch'
 
         self.tm_model = tm_model
@@ -307,6 +307,10 @@ def parse_args():
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     ArgumentHelper.eager_mode(pt_group)
+    ArgumentHelper.dllm_block_length(pt_group)
+    ArgumentHelper.dllm_unmasking_strategy(pt_group)
+    ArgumentHelper.dllm_denoising_steps(pt_group)
+    ArgumentHelper.dllm_confidence_threshold(pt_group)
 
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -363,6 +367,10 @@ def main():
             quant_policy=args.quant_policy,
             dtype=args.dtype,
             distributed_executor_backend=args.distributed_executor_backend,
+            dllm_block_length=args.dllm_block_length,
+            dllm_unmasking_strategy=args.dllm_unmasking_strategy,
+            dllm_denoising_steps=args.dllm_denoising_steps,
+            dllm_confidence_threshold=args.dllm_confidence_threshold,
         )
 
     if args.use_uvloop:

@@ -109,16 +109,15 @@ class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
 
-    messages: Union[str, List[Dict[str, Any]]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])  # noqa
+    messages: Union[str, List[Dict[str, Any]]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     tools: Optional[List[Tool]] = Field(default=None, examples=[None])
-    tool_choice: Union[ToolChoice, Literal['auto', 'required', 'none']] = Field(default='auto',
-                                                                                examples=['none'])  # noqa
+    tool_choice: Union[ToolChoice, Literal['auto', 'required', 'none']] = Field(default='auto', examples=['none'])
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
-    logit_bias: Optional[Dict[str, float]] = Field(default=None, examples=[None])  # noqa
+    logit_bias: Optional[Dict[str, float]] = Field(default=None, examples=[None])
     max_completion_tokens: Optional[int] = Field(
         default=None,
         examples=[None],
@@ -130,7 +129,7 @@ class ChatCompletionRequest(BaseModel):
         examples=[None],
         deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
     )
-    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
+    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
 
     stream: Optional[bool] = False
     stream_options: Optional[StreamOptions] = Field(default=None, examples=[None])
@@ -138,7 +137,7 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
     reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None
-    response_format: Optional[ResponseFormat] = Field(default=None, examples=[None])  # noqa
+    response_format: Optional[ResponseFormat] = Field(default=None, examples=[None])
     # additional argument of lmdeploy
     do_preprocess: Optional[bool] = True
     repetition_penalty: Optional[float] = 1.0
@@ -152,6 +151,7 @@ class ChatCompletionRequest(BaseModel):
     min_p: float = 0.0
     enable_thinking: Optional[bool] = None
     return_token_ids: Optional[bool] = False
+    include_stop_str_in_output: Optional[bool] = False
     encoder_result: Optional[EncoderResult] = None
 
 
