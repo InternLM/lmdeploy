@@ -1083,6 +1083,8 @@ class DPForwardInputsMaker:
         self._next_inputs = None
         self._is_decoding = False
         self._ready_event = torch.cuda.Event()
+        self._attn_tp = self.dist_ctx.dist_config.attn_tp
+        self._attn_tp_cpu_group = self.dist_ctx.attn_tp_group.cpu_group
 
     def _make_dummy_forward_inputs(self):
         """Make dummy forward inputs."""
@@ -1110,6 +1112,34 @@ class DPForwardInputsMaker:
         if self.cache_config.role != EngineRole.Prefill:
             self._is_decoding = not self._is_decoding
 
+    async def _try_get_inputs(self):
+        # try get inputs
+        need_dummy = True
+        forward_inputs = None
+        try:
+            forward_inputs = await asyncio.wait_for(self._in_que.get(), timeout=0.02)
+            model_inputs = forward_inputs['inputs']
+            if model_inputs.is_decoding != self._is_decoding:
+                self._next_inputs = forward_inputs
+            else:
+                need_dummy = False
+        except asyncio.TimeoutError:
+            pass
+
+        # sync between attn tp
+        if self._attn_tp > 1:
+            all_need_dummy = torch.zeros((self._attn_tp, ), dtype=torch.bool)
+            dist.all_gather_into_tensor(all_need_dummy,
+                                        torch.tensor((need_dummy, )),
+                                        group=self._attn_tp_cpu_group,
+                                        async_op=False)
+            has_real = not (all_need_dummy.all().item())
+            if has_real and need_dummy:
+                need_dummy = False
+                forward_inputs = await self._in_que.get()
+
+        return forward_inputs, need_dummy
+
     async def get(self):
         """get."""
         if self._next_inputs is not None:
@@ -1123,16 +1153,7 @@ class DPForwardInputsMaker:
             await asyncio.sleep(0.001)
 
         # try get inputs
-        need_dummy = True
-        try:
-            forward_inputs = await asyncio.wait_for(self._in_que.get(), timeout=0.02)
-            model_inputs = forward_inputs['inputs']
-            if model_inputs.is_decoding != self._is_decoding:
-                self._next_inputs = forward_inputs
-            else:
-                need_dummy = False
-        except asyncio.TimeoutError:
-            pass
+        forward_inputs, need_dummy = await self._try_get_inputs()
 
         # make dummy inputs
         if need_dummy:
