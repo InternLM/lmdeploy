@@ -1020,8 +1020,6 @@ class BaseModelAgent:
                     mod.update_weights()
 
             torch.cuda.empty_cache()
-            self.reset_graph_runner()
-            self.warmup()
 
     @torch.inference_mode()
     def sleep(self, level: int = 1):
@@ -1042,7 +1040,6 @@ class BaseModelAgent:
             assert device.type in ['cpu', 'meta']
             if device.type == 'cpu':
                 self.patched_model.get_model().to(torch.cuda.current_device())
-                self.warmup()
             else:
                 # user should update weights after wakeup
                 old_empty_init = self.misc_config.empty_init
@@ -1052,6 +1049,7 @@ class BaseModelAgent:
                 self.misc_config.empty_init = old_empty_init
         if 'kv_cache' in tags:
             self.build_cache_engine()
+            self.warmup()
 
     def release(self):
         """release."""
