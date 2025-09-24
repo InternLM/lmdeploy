@@ -1020,6 +1020,7 @@ class BaseModelAgent:
                     mod.update_weights()
 
             torch.cuda.empty_cache()
+            self.reset_graph_runner()
             self.warmup()
 
     @torch.inference_mode()
