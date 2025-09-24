@@ -1049,7 +1049,6 @@ class BaseModelAgent:
                 self.misc_config.empty_init = old_empty_init
         if 'kv_cache' in tags:
             self.build_cache_engine()
-            self.warmup()
 
     def release(self):
         """release."""
