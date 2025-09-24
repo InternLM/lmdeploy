@@ -1083,7 +1083,6 @@ class DPForwardInputsMaker:
         self._next_inputs = None
         self._is_decoding = False
         self._ready_event = torch.cuda.Event()
-        self._attn_tp = self.dist_ctx.dist_config.attn_tp
         self._attn_tp_cpu_group = self.dist_ctx.attn_tp_group.cpu_group
 
     def _make_dummy_forward_inputs(self):
@@ -1112,31 +1111,67 @@ class DPForwardInputsMaker:
         if self.cache_config.role != EngineRole.Prefill:
             self._is_decoding = not self._is_decoding
 
-    async def _try_get_inputs(self):
-        # try get inputs
-        need_dummy = True
-        forward_inputs = None
+    async def _broadcast_has_inputs(self, has_inputs: bool = False):
+        """Broadcast has inputs."""
+        attn_tp_group = self.dist_ctx.attn_tp_group
+        attn_tp = self.dist_ctx.dist_config.attn_tp
+        if attn_tp == 1:
+            return has_inputs
+
+        group = attn_tp_group.cpu_group
+        rank = dist.get_global_rank(group, 0)
+        has_inputs = torch.tensor((has_inputs, ))
+        handle = dist.broadcast(has_inputs, src=rank, group=group, async_op=True)
+        future = handle.get_future()
+        while not future.done():
+            await asyncio.sleep(0)
+        return has_inputs.item()
+
+    async def _get_inputs_rank0(self):
+        """Try get inputs rank0."""
         try:
             forward_inputs = await asyncio.wait_for(self._in_que.get(), timeout=0.02)
+        except asyncio.TimeoutError:
+            forward_inputs = None
+
+        has_inputs = forward_inputs is not None
+        await self._broadcast_has_inputs(has_inputs)
+        return forward_inputs
+
+    async def _get_inputs_rankn(self):
+        """Try get inputs rankn."""
+        # broadcast
+        has_inputs = await self._broadcast_has_inputs()
+
+        # try get inputs
+        if has_inputs:
+            forward_inputs = await self._in_que.get()
+        else:
+            forward_inputs = None
+        return forward_inputs
+
+    async def _try_get_inputs(self):
+        """Try get inputs."""
+
+        attn_tp_group = self.dist_ctx.attn_tp_group
+        tp_rank = attn_tp_group.rank
+
+        # initialize output
+        forward_inputs = None
+        need_dummy = True
+
+        # get inputs from in_que. Rank 1 will not gather if rank 0 does not read inputs.
+        if tp_rank == 0:
+            forward_inputs = await self._get_inputs_rank0()
+        else:
+            forward_inputs = await self._get_inputs_rankn()
+
+        if forward_inputs is not None:
             model_inputs = forward_inputs['inputs']
             if model_inputs.is_decoding != self._is_decoding:
                 self._next_inputs = forward_inputs
             else:
                 need_dummy = False
-        except asyncio.TimeoutError:
-            pass
-
-        # sync between attn tp
-        if self._attn_tp > 1:
-            all_need_dummy = torch.zeros((self._attn_tp, ), dtype=torch.bool)
-            dist.all_gather_into_tensor(all_need_dummy,
-                                        torch.tensor((need_dummy, )),
-                                        group=self._attn_tp_cpu_group,
-                                        async_op=False)
-            has_real = not (all_need_dummy.all().item())
-            if has_real and need_dummy:
-                need_dummy = False
-                forward_inputs = await self._in_que.get()
 
         return forward_inputs, need_dummy
 
