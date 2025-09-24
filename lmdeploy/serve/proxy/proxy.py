@@ -597,6 +597,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         # Prefill
         prefill_request_dict = copy.deepcopy(request_dict)
         prefill_request_dict['max_tokens'] = 1
+        prefill_request_dict['max_completion_tokens'] = 1
         prefill_request_dict['stream'] = False
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True

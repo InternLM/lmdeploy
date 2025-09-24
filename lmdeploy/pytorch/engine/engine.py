@@ -602,7 +602,9 @@ class Engine(EngineBase):
             sampling_param = msg.sampling_param
             max_new_tokens = sampling_param.max_new_tokens
             num_all_tokens = msg.num_valid_ids
-            if max_new_tokens + num_all_tokens > max_session_len:
+            if self.engine_config.role == EngineRole.Prefill:
+                sampling_param.max_new_tokens = 1
+            elif max_new_tokens + num_all_tokens > max_session_len:
                 logger.warning(
                     f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
                     f'Update max_new_tokens={max_session_len - num_all_tokens}.')
