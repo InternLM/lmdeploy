@@ -392,7 +392,7 @@ class BaseModelAgent:
     def warmup(self):
         """warmup."""
         # TODO: disable for now, do not remove the comments.
-        with self.all_context():
+        with self.all_context(), torch.cuda.stream(self.stream):
             max_batches = self.cache_config.max_batches
             num_tokens = max_batches
             dp = self.dist_config.dp
@@ -404,7 +404,10 @@ class BaseModelAgent:
                                                      vocab_size=self.model_config.vocab_size)
             if dp > 1:
                 inputs.build_dp_meta()
+            logger.debug('Warmup prefill start.')
             self._forward_impl(inputs)
+            torch.cuda.synchronize()
+            logger.debug('Warmup prefill done.')
 
             # warmup decoding(with cuda graph)
             capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
@@ -416,7 +419,10 @@ class BaseModelAgent:
                                                          vocab_size=self.model_config.vocab_size)
                 if dp > 1:
                     inputs.build_dp_meta()
+                logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
+                torch.cuda.synchronize()
+                logger.debug(f'Warmup decoding num_tokens={num_tokens} done.')
 
     def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
         """Slice outputs."""
