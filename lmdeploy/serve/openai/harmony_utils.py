@@ -3,14 +3,10 @@
 from typing import List
 
 import shortuuid
+from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
 
 from lmdeploy.serve.openai.protocol import (ChatMessage, DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall,
                                             ToolCall)
-
-try:
-    from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
-except (ImportError, ModuleNotFoundError):
-    pass
 
 _harmony_encoding = None
 

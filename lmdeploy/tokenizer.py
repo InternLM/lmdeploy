@@ -384,14 +384,10 @@ class GptOssTokenizer(HuggingFaceTokenizer):
 
     def __init__(self, model_dir: str):
         super(GptOssTokenizer, self).__init__(model_dir)
-        try:
-            import openai_harmony  # noqa: F401
-            from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
-            encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
-            self.role = Role.ASSISTANT
-            self.parser = partial(StreamableParser, encoding, role=Role.ASSISTANT)
-        except ImportError:
-            raise ImportError('Please install openai_harmony by `pip install openai_harmony`')
+        from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        self.role = Role.ASSISTANT
+        self.parser = partial(StreamableParser, encoding, role=Role.ASSISTANT)
 
     def detokenize_incrementally(self,
                                  all_input_ids: Sequence[int],
