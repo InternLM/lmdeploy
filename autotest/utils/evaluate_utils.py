@@ -8,7 +8,7 @@ from mmengine.config import Config
 DEFAULT_PORT = 23333
 
 
-def write_to_summary(model_name, tp_num, result, msg, worker_id, backend_type, work_dir=None):
+def write_to_summary(model_name, tp_num, result, msg, worker_id, backend_type, communicator, work_dir=None):
     status = '✅ PASS' if result else '❌ FAIL'
 
     metrics = {}
@@ -56,18 +56,20 @@ def write_to_summary(model_name, tp_num, result, msg, worker_id, backend_type, w
     summary_dataset_metrics = ' | '.join(dataset_metrics)
 
     summary_file = os.environ.get('GITHUB_STEP_SUMMARY', None)
-    summary_line = f'| {model_name} | {backend_type} | TP{tp_num} | {status} | {summary_dataset_metrics} |\n'
+    summary_line = f'| {model_name} | {backend_type} | {communicator} | TP{tp_num} | {status} | {summary_dataset_metrics} |\n'  # noqa: E501
     if summary_file:
         write_header = not os.path.exists(summary_file) or os.path.getsize(summary_file) == 0
         with open(summary_file, 'a') as f:
             if write_header:
                 dash_line = '-----|' * (len(metrics.keys()))
                 f.write('## Model Evaluation Results\n')
-                f.write(f'| Model | Backend | TP | Status | {summary_dataset_name} |\n')
-                f.write(f'|-------|---------|----|--------|{dash_line}\n')
+                f.write(f'| Model | Backend | Communicator | TP | Status | {summary_dataset_name} |\n')
+                f.write(f'|-------|---------|--------------|----|--------|{dash_line}\n')
             f.write(summary_line)
     else:
-        print(f'Summary: {model_name} | {backend_type} | TP{tp_num} | {status} | {summary_dataset_metrics}')
+        print(
+            f'Summary: {model_name} | {backend_type} | {communicator} | TP{tp_num} | {status} | {summary_dataset_metrics}'  # noqa: E501
+        )
 
 
 def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFAULT_PORT):
@@ -196,7 +198,8 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                         error_lines = ' | '.join(error_lines[:3])
                         final_msg += f'\nLog errors: {error_lines}'
 
-            write_to_summary(summary_model_name, tp_num, final_result, final_msg, worker_id, backend_type, work_dir)
+            write_to_summary(summary_model_name, tp_num, final_result, final_msg, worker_id, backend_type, communicator,
+                             work_dir)
 
             return final_result, final_msg
 
@@ -208,10 +211,12 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         timeout_msg = (f'Evaluation timed out for {model_name} '
                        f'after 7200 seconds')
         if work_dir:
-            write_to_summary(summary_model_name, tp_num, False, timeout_msg, worker_id, backend_type, work_dir)
+            write_to_summary(summary_model_name, tp_num, False, timeout_msg, worker_id, backend_type, communicator,
+                             work_dir)
         return False, timeout_msg
     except Exception as e:
         error_msg = f'Error during evaluation for {model_name}: {str(e)}'
         if work_dir:
-            write_to_summary(summary_model_name, tp_num, False, error_msg, worker_id, backend_type, work_dir)
+            write_to_summary(summary_model_name, tp_num, False, error_msg, worker_id, backend_type, communicator,
+                             work_dir)
         return False, error_msg

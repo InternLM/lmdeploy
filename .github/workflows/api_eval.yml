@@ -128,10 +128,10 @@ jobs:
         run: |
           overall_exit=0
           ln -s /mnt/187/opencompass-data/data ./data
-          pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_1 and not pr_test and ${{matrix.backend}}" -n 8 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-          pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_2 and not pr_test and ${{matrix.backend}}" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-          pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_4 and not pr_test and ${{matrix.backend}}" -n 2 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-          pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_8 and not pr_test and ${{matrix.backend}}" -n 1 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+          pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_1 and not pr_test and ${{matrix.backend}}" -n 8 --run_id ${{ github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+          pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_2 and not pr_test and ${{matrix.backend}}" -n 4 --run_id ${{ github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+          pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_4 and not pr_test and ${{matrix.backend}}" -n 2 --run_id ${{ github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+          pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_8 and not pr_test and ${{matrix.backend}}" -n 1 --run_id ${{ github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           exit $overall_exit
       - name: Clear workspace
         if: always()

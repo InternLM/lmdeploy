@@ -26,10 +26,6 @@ def config():
         env_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
 
     config_copy = copy.deepcopy(env_config)
-    github_run_id = os.environ.get('GITHUB_RUN_ID', 'local_run')
-    if 'log_path' in config_copy:
-        config_copy['log_path'] = os.path.join(config_copy['log_path'], str(github_run_id))
-        os.makedirs(config_copy['log_path'], exist_ok=True)
 
     return config_copy
 
