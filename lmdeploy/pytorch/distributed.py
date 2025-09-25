@@ -9,7 +9,7 @@ import torch
 from torch import distributed as dist
 from torch.distributed import ProcessGroup, ReduceOp  # noqa: F401
 
-from .config import DistConfig
+from .config import DistConfig, TPMode
 
 
 @dataclass
@@ -20,6 +20,7 @@ class DistGroup:
     gpu_group: dist.ProcessGroup = None
     cpu_groups: List[dist.ProcessGroup] = None
     gpu_groups: List[dist.ProcessGroup] = None
+    gpu_gather_group: dist.ProcessGroup = None
 
     def close(self):
         """Close groups."""
@@ -40,29 +41,48 @@ def _build_tp_group_impl(tp: int,
                          world_size: int,
                          timeout: timedelta,
                          cpu_backend: str = 'gloo',
-                         ccl_backend: str = 'nccl'):
+                         ccl_backend: str = 'nccl',
+                         attn_tp: int = 1,
+                         tp_mode: TPMode = TPMode.DEFAULT):
     """Build tp group."""
     assert tp > 1
     tp_rank = rank % tp
     tp_group_id = rank // tp
+    gather_group_id = (rank - tp_group_id * tp) % attn_tp
     ranks = range(world_size)
     tp_gpu_groups = []
     tp_cpu_groups = []
+    gather_groups = []
     for start in range(0, world_size, tp):
         tp_ranks = ranks[start:start + tp]
         group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=ccl_backend)
         tp_gpu_groups.append(group)
         cpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=cpu_backend)
         tp_cpu_groups.append(cpu_group)
+
+        # create gather group
+        if tp_mode == TPMode.DP_TP and attn_tp != tp:
+            for g_start in range(start, start + attn_tp):
+                g_ranks = ranks[g_start:(g_start + tp):attn_tp]
+                gather_group = dist.new_group(ranks=g_ranks, timeout=timeout, backend=ccl_backend)
+                gather_groups.append(gather_group)
     tp_gpu_group = tp_gpu_groups[tp_group_id]
     tp_cpu_group = tp_cpu_groups[tp_group_id]
 
+    if tp_mode == TPMode.DP_TP:
+        if attn_tp == tp:
+            gather_group = tp_gpu_group
+        else:
+            gather_group = gather_groups[gather_group_id]
+    else:
+        gather_group = None
     return DistGroup(
         rank=tp_rank,
         cpu_group=tp_cpu_group,
         gpu_group=tp_gpu_group,
         cpu_groups=tp_cpu_groups,
         gpu_groups=tp_gpu_groups,
+        gpu_gather_group=gather_group,
     )
 
 
@@ -85,6 +105,8 @@ def _build_attn_tp_group(context: 'DistContext',
         timeout=timeout,
         cpu_backend=cpu_backend,
         ccl_backend=ccl_backend,
+        attn_tp=tp,
+        tp_mode=TPMode.DEFAULT,
     )
     context.attn_tp_group = dist_group
 
@@ -113,6 +135,8 @@ def _build_mlp_tp_group(context: 'DistContext',
         timeout=timeout,
         cpu_backend=cpu_backend,
         ccl_backend=ccl_backend,
+        attn_tp=dist_config.attn_tp,
+        tp_mode=dist_config.mlp_tp_mode,
     )
     context.mlp_tp_group = dist_group
 
@@ -146,6 +170,8 @@ def _build_moe_tp_group(context: 'DistContext',
         timeout=timeout,
         cpu_backend=cpu_backend,
         ccl_backend=ccl_backend,
+        attn_tp=dist_config.attn_tp,
+        tp_mode=dist_config.moe_tp_mode,
     )
     context.moe_tp_group = dist_group
 
@@ -330,12 +356,9 @@ def get_process_group(device: str = None):
     return dist.GroupMember.WORLD
 
 
-def get_tp_group(device: str = 'gpu', layer_type: str = 'attn'):
-    """Get tp group."""
+def get_dist_group(layer_type: str = 'attn'):
+    """Get dist group."""
     ctx = get_dist_manager().current_context()
-
-    _check_group_device(device)
-
     if layer_type == 'attn':
         tp_group = ctx.attn_tp_group
     elif layer_type == 'mlp':
@@ -344,6 +367,13 @@ def get_tp_group(device: str = 'gpu', layer_type: str = 'attn'):
         tp_group = ctx.moe_tp_group
     else:
         raise RuntimeError(f'Unknown layer type: {layer_type}')
+    return tp_group
+
+
+def get_tp_group(device: str = 'gpu', layer_type: str = 'attn'):
+    """Get tp group."""
+    _check_group_device(device)
+    tp_group = get_dist_group(layer_type)
 
     if tp_group is None:
         return None
@@ -414,8 +444,9 @@ def gather_by_tp_sizes(x: torch.Tensor, tp_sizes: List[int], group: Optional[dis
 
 def reduce_scatter_by_tp_sizes(out: torch.Tensor, rank: int, tp_sizes: List[int], group: dist.ProcessGroup):
     """Reduce scatter."""
-    outs = out.split(tp_sizes, -2)
+    attn_tp = get_dist_manager().current_config().attn_tp
+    outs = list(out.split(tp_sizes, -2))
+    outs = [item for item in outs for _ in range(attn_tp)]
     out = outs[rank]
-    outs = list(outs)
     dist.reduce_scatter(out, outs, group=group)
     return out

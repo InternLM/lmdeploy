@@ -267,6 +267,7 @@ class FusedMoE(nn.Module):
         self.tp_mode = tp_mode
         self.all_reduce = all_reduce
         self.tp_group = dist_ctx.moe_tp_group.gpu_group
+        self.gather_group = dist_ctx.moe_tp_group.gpu_gather_group
 
     def update_weights(self):
         """Update weights."""
@@ -278,7 +279,7 @@ class FusedMoE(nn.Module):
         hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states,
                                                                    topk_weights,
                                                                    topk_ids,
-                                                                   group=self.tp_group)
+                                                                   group=self.gather_group)
 
         ret = self.impl.forward(hidden_states,
                                 topk_weights,
@@ -607,6 +608,7 @@ class FusedMoEBlockedF8(nn.Module):
         self.tp_mode = tp_mode
         self.all_reduce = all_reduce
         self.tp_group = dist_ctx.moe_tp_group.gpu_group
+        self.gather_group = dist_ctx.moe_tp_group.gpu_gather_group
 
     def update_weights(self):
         """Update weights."""
@@ -693,7 +695,7 @@ class FusedMoEBlockedF8(nn.Module):
             hidden_states, topk_weights, topk_idx = _moe_gather_inputs(state['hidden_states'],
                                                                        state['topk_weights'],
                                                                        state['topk_idx'],
-                                                                       group=self.tp_group)
+                                                                       group=self.gather_group)
             recv_state = {
                 'hidden_states': hidden_states,
                 'topk_idx': topk_idx,

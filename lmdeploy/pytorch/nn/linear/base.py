@@ -6,7 +6,7 @@ import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.config import TPMode
-from lmdeploy.pytorch.distributed import (gather_by_tp_sizes, get_dist_manager, get_tp_group, get_tp_world_rank,
+from lmdeploy.pytorch.distributed import (gather_by_tp_sizes, get_dist_group, get_dist_manager, get_tp_world_rank,
                                           reduce_scatter_by_tp_sizes)
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
@@ -55,12 +55,15 @@ class LinearBase(nn.Module):
             self.tp_rank = rank
             self.tp = tp
             self.tp_mode = tp_mode
-            self.tp_group = get_tp_group(layer_type=layer_type)
+            dist_group = get_dist_group(layer_type=layer_type)
+            self.tp_group = dist_group.gpu_group
+            self.gather_group = dist_group.gpu_gather_group
         else:
             self.tp_rank = 0
             self.tp = 1
             self.tp_mode = TPMode.DEFAULT
             self.tp_group = None
+            self.gather_group = None
 
         self._tp_args_initialized = True
 
@@ -99,7 +102,7 @@ class LinearBase(nn.Module):
             tp_sizes = dp_meta.tp_sizes
 
         if self.dp_gather:
-            x = gather_by_tp_sizes(x, tp_sizes, group=self.tp_group)
+            x = gather_by_tp_sizes(x, tp_sizes, group=self.gather_group)
 
         if len(self.lora_adapters) == 0:
             return self._forward_default(x, self.all_reduce, tp_sizes)

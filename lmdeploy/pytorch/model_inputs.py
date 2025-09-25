@@ -22,12 +22,14 @@ class DPMeta:
     moe_tp_sizes: List[int] = None
 
     @staticmethod
-    def _gather_tp_sizes(tp: int, attn_tp: int, seqlen: int, layer_type: str):
+    def _gather_tp_sizes(tp: int, seqlen: int, dist_ctx: dist.DistContext, layer_type: str):
         """Gather tp size."""
+        attn_tp = dist_ctx.dist_config.attn_tp
         if tp > 1 and tp != attn_tp:
-            tp_sizes = [None for _ in range(tp)]
-            tp_group = dist.get_tp_group('gpu', layer_type=layer_type)
-            dist.all_gather_object(tp_sizes, seqlen, group=tp_group)
+            dist_group = dist.get_dist_group(layer_type=layer_type)
+            gather_group = dist_group.gpu_gather_group
+            tp_sizes = [None for _ in range(gather_group.size())]
+            dist.all_gather_object(tp_sizes, seqlen, group=gather_group)
         else:
             tp_sizes = [seqlen]
         return tp_sizes
@@ -35,17 +37,17 @@ class DPMeta:
     @classmethod
     def build(cls, seqlen: int):
         """Get dp meta."""
-        dist_config = dist.get_dist_manager().current_config()
-        attn_tp = dist_config.attn_tp
+        dist_ctx = dist.get_dist_manager().current_context()
+        dist_config = dist_ctx.dist_config
 
         mlp_tp = dist_config.mlp_tp
-        tp_sizes = cls._gather_tp_sizes(mlp_tp, attn_tp, seqlen, layer_type='mlp')
+        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, dist_ctx, layer_type='mlp')
 
         moe_tp = dist_config.moe_tp
         if moe_tp == mlp_tp:
             moe_tp_sizes = tp_sizes
         else:
-            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, attn_tp, seqlen, layer_type='moe')
+            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, dist_ctx, layer_type='moe')
 
         return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
 
