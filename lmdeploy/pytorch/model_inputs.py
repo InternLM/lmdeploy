@@ -130,11 +130,13 @@ class ModelInputs:
     """Input of the model."""
     input_ids: torch.LongTensor
     seq_length: torch.LongTensor
+    seq_length_npu: torch.LongTensor
     history_lengths: torch.LongTensor
     history_lengths_cpu: torch.LongTensor
     block_offsets: torch.LongTensor
     is_decoding: bool
     num_ignored_history: torch.LongTensor
+    num_ignored_history_npu: torch.LongTensor
     max_q_seqlen: int
     max_kv_seqlen: int
     sum_kv_seqlen: int
@@ -146,12 +148,16 @@ class ModelInputs:
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
 
-    def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
+    def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None, step_seqlens_npu: torch.Tensor = None):
         """Update input ids."""
         assert self.is_decoding
         if step_seqlens is None:
             step_seqlens = self.seq_length
+        if step_seqlens_npu is None:
+            step_seqlens_npu = self.seq_length_npu
+
         self.history_lengths_cpu += step_seqlens
+        self.history_lengths += step_seqlens_npu
         self.max_kv_seqlen += self.max_q_seqlen
         self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
@@ -305,6 +311,7 @@ class StepContext:
     attention_mask: torch.LongTensor
     q_seqlens: torch.LongTensor
     kv_seqlens: torch.IntTensor
+    kv_seqlens_npu: torch.IntTensor
     q_start_loc: torch.LongTensor
     kv_caches: List
     is_decoding: bool
@@ -340,7 +347,9 @@ class StepContext:
             device (str): The device of the tensors.
         """
         q_seqlens = inputs.seq_length
+        q_seqlens_npu = inputs.seq_length_npu
         history_seqlens = inputs.history_lengths_cpu
+        history_seqlens_npu = inputs.history_lengths
 
         input_multimodals = None
         if inputs.vision_inputs is not None:
@@ -367,6 +376,11 @@ class StepContext:
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
 
+        kv_seqlens_npu = q_seqlens_npu + history_seqlens_npu
+        kv_seqlens_npu -= inputs.num_ignored_history_npu
+        if torch.equal(kv_seqlens_npu.cpu(), kv_seqlens) is False:
+            import pdb; pdb.set_trace()
+
         ret = StepContext(
             input_ids=inputs.input_ids,
             model_config=model_config,
@@ -378,6 +392,7 @@ class StepContext:
             attention_mask=attention_mask,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
+            kv_seqlens_npu=kv_seqlens_npu,
             q_start_loc=q_start_loc,
             kv_caches=kv_caches,
             is_decoding=inputs.is_decoding,

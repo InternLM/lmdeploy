@@ -97,7 +97,8 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length
-        model_inputs.step(next_token_ids, step_seqlens)
+        step_seqlens_npu = model_inputs.seq_length_npu
+        model_inputs.step(next_token_ids, step_seqlens, step_seqlens_npu)
         self._step_sampling_inputs(sampling_inputs, next_token_ids)
         return model_inputs, extra_inputs
 

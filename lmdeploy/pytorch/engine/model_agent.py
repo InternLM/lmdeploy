@@ -779,7 +779,9 @@ class BaseModelAgent:
                     forward_event.clear()
                 forward_inputs['inputs'].history_lengths = forward_inputs['inputs'].history_lengths
                 forward_inputs['inputs'].history_lengths_cpu = forward_inputs['inputs'].history_lengths.cpu()
+                forward_inputs['inputs'].seq_length_npu = forward_inputs['inputs'].seq_length
                 forward_inputs['inputs'].seq_length = forward_inputs['inputs'].seq_length.cpu()
+                forward_inputs['inputs'].num_ignored_history_npu = forward_inputs['inputs'].num_ignored_history
                 forward_inputs['inputs'].num_ignored_history = forward_inputs['inputs'].num_ignored_history.cpu()
                 await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:

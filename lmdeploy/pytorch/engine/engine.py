@@ -772,11 +772,13 @@ class Engine(EngineBase):
         model_inputs = ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
+            seq_length_npu=seq_length.to(input_ids.device),
             history_lengths=history_lengths,
             history_lengths_cpu=history_lengths.cpu(),
             block_offsets=block_offsets,
             is_decoding=is_decoding,
             num_ignored_history=num_ignored_history,
+            num_ignored_history_npu=num_ignored_history.to(input_ids.device),
             max_q_seqlen=max_q_seqlen,
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,

@@ -160,11 +160,13 @@ class AscendOpsBackend(DlinferOpsBackend):
         if step_context.is_decoding:
             # collect kv_start_indices without using a for-loop,
             # (fill kv-cache for just ONE token during the decoding phase)
-            idx = (step_context.kv_seqlens - 1) % block_size
-            block_num = (step_context.kv_seqlens - 1) // block_size
-            #import pdb; pdb.set_trace()
-            #last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
-            #kv_start_indices = last_block * block_size + idx
+            if not torch.equal(step_context.kv_seqlens_npu.cpu(), step_context.kv_seqlens):
+                import pdb; pdb.set_trace()
+
+            idx = (step_context.kv_seqlens_npu - 1) % block_size
+            block_num = (step_context.kv_seqlens_npu - 1) // block_size
+            last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
+            kv_start_indices = last_block * block_size + idx
         else:
             q_seqlens_list = step_context.q_seqlens.tolist()
             kv_seqlens_list = step_context.kv_seqlens.tolist()
@@ -232,7 +234,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             attention_mask = [torch.cat([mask for mask in attention_mask])]
 
         if step_context.is_decoding:
-            kv_seqlens_cpu = step_context.kv_seqlens #.cpu()
+            kv_seqlens_cpu = step_context.kv_seqlens  #.cpu()
         elif is_unpaged_prefill:
             pass
         else:
@@ -266,12 +268,10 @@ class AscendOpsBackend(DlinferOpsBackend):
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
-        '''
-        from .graph_runner import AscendGraphRunner
-        ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
-        AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
-        return ascend_graph_runner
-        '''
+        """From .graph_runner import AscendGraphRunner ascend_graph_runner =
+        AscendGraphRunner(model, model_config, cache_config, backend_config,
+        device) AscendOpsBackend.enable_graph =
+        ascend_graph_runner.enable_graph return ascend_graph_runner."""
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
 
