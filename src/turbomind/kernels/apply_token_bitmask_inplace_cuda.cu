@@ -212,42 +212,14 @@ void ApplyTokenBitmaskInplace(Tensor logits, Tensor bitmask, std::optional<Tenso
         TM_CHECK(logits_shape.first == bitmask_shape.first) << "logits and bitmask must have the same batch size.";
     }
 
-    switch (logits.dtype()) {
-        case kFloat32: {
-            ApplyTokenBitmaskInplaceDispatchToPackedT(logits.data<float>(),
-                                                      bitmask.data<int32_t>(),
-                                                      indices_ptr,
-                                                      vocab_size,
-                                                      logits.stride(0),
-                                                      bitmask.stride(0),
-                                                      num_rows);
-            break;
-        }
-        case kFloat16: {
-            ApplyTokenBitmaskInplaceDispatchToPackedT(logits.data<half_t>(),
-                                                      bitmask.data<int32_t>(),
-                                                      indices_ptr,
-                                                      vocab_size,
-                                                      logits.stride(0),
-                                                      bitmask.stride(0),
-                                                      num_rows);
-            break;
-        }
-#if __CUDA_ARCH__ >= 800
-        case kBfloat16: {
-            ApplyTokenBitmaskInplaceDispatchToPackedT(logits.data<bfloat16_t>(),
-                                                      bitmask.data<int32_t>(),
-                                                      indices_ptr,
-                                                      vocab_size,
-                                                      logits.stride(0),
-                                                      bitmask.stride(0),
-                                                      num_rows);
-            break;
-        }
-#endif
-        default:
-            TM_CHECK(false) << "logits dtype must be float, float16 or bfloat16.";
-            break;
-    }
+    // Currently we use only float logits.
+    TM_CHECK(logits.dtype() == kFloat32);
+    ApplyTokenBitmaskInplaceDispatchToPackedT(logits.data<float>(),
+                                              bitmask.data<int32_t>(),
+                                              indices_ptr,
+                                              vocab_size,
+                                              logits.stride(0),
+                                              bitmask.stride(0),
+                                              num_rows);
 }
 }  // namespace turbomind
