@@ -124,8 +124,7 @@ private:
     Tensor_<int>   barriers_;  // always zero
 
     // context parallel
-    Tensor_<float> cp_M_;
-    Tensor_<float> cp_L_;
+    Tensor_<float> cp_ML_;
 
     Event event_;
 

@@ -84,8 +84,7 @@ struct AttentionParams {
     int                 cp_rank{0};
     int                 cp_size{1};
     cutlass::FastDivmod cp_divmod{1};
-    float*              cp_M{nullptr};
-    float*              cp_L{nullptr};
+    float*              cp_ML{nullptr};
 
     int          arch;
     cudaStream_t stream;

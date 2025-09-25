@@ -5,15 +5,8 @@
 namespace turbomind {
 
 template<typename T>
-__global__ void CpReduce(T*     out,
-                         float* M,
-                         float* L,
-                         int    token_num,
-                         int    head_num,
-                         int    size_per_head,
-                         int    cp_size,
-                         int    cp_rank,
-                         float  exp_scale)
+__global__ void
+CpReduce(T* out, float* ML, int token_num, int head_num, int size_per_head, int cp_size, int cp_rank, float exp_scale)
 {
     __shared__ float scale[WARP_SIZE];
     float            frag_M = -std::numeric_limits<float>::infinity();
@@ -25,9 +18,9 @@ __global__ void CpReduce(T*     out,
     const int warp_id = threadIdx.x / WARP_SIZE;
     const int lane_id = threadIdx.x % WARP_SIZE;
     if (warp_id == 0 && lane_id < cp_size) {
-        const int index = lane_id * token_num * head_num + token_idx * head_num + head_idx;
-        frag_M          = M[index];
-        frag_L          = L[index];
+        const int index = (lane_id * token_num * head_num + token_idx * head_num + head_idx) * 2;
+        frag_M          = ML[index];
+        frag_L          = ML[index + 1];
     }
 
     float block_M = frag_M;
@@ -58,8 +51,7 @@ __global__ void CpReduce(T*     out,
 
 template<typename T>
 void invokeCpReduce(T*           out,
-                    float*       M,
-                    float*       L,
+                    float*       ML,
                     int          token_num,
                     int          head_num,
                     int          size_per_head,
@@ -73,13 +65,12 @@ void invokeCpReduce(T*           out,
     const dim3 grid(token_num, head_num);
     size_t     smem_size = sizeof(float) * WARP_SIZE;
     CpReduce<<<grid, block, smem_size, stream>>>(
-        out, M, L, token_num, head_num, size_per_head, cp_size, cp_rank, exp_scale);
+        out, ML, token_num, head_num, size_per_head, cp_size, cp_rank, exp_scale);
     sync_check_cuda_error();
 }
 
 template void invokeCpReduce(half*        out,
-                             float*       M,
-                             float*       L,
+                             float*       ML,
                              int          token_num,
                              int          head_num,
                              int          size_per_head,
@@ -89,8 +80,7 @@ template void invokeCpReduce(half*        out,
                              cudaStream_t stream);
 #ifdef ENABLE_BF16
 template void invokeCpReduce(__nv_bfloat16* out,
-                             float*         M,
-                             float*         L,
+                             float*         ML,
                              int            token_num,
                              int            head_num,
                              int            size_per_head,

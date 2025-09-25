@@ -141,8 +141,7 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
     kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
 
     if (engine_param_.attn_cp_size > 1) {
-        cp_M_ = args.at("cp_M").borrow();
-        cp_L_ = args.at("cp_L").borrow();
+        cp_ML_ = args.at("cp_ML").borrow();
     }
 
     // rotary embedding, add offest when forward
@@ -240,15 +239,9 @@ void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
 {
     NvtxScope scope("cp");
     const int token_num = attn.shape(0);
-    const int count     = token_num * local_head_num_;
-    d_comm_->AllGatherCP(cp_M_.data() + count * engine_param_.attn_cp_rank,
-                         cp_M_.data(),
-                         cp_L_.data() + count * engine_param_.attn_cp_rank,
-                         cp_L_.data(),
-                         count,
-                         kFloat32,
-                         attn_cp_group_,
-                         stream_);
+    const int count     = token_num * local_head_num_ * 2;
+    d_comm_->AllGather(
+        cp_ML_.data() + count * engine_param_.attn_cp_rank, cp_ML_.data(), count, kFloat32, attn_cp_group_, stream_);
     sync_check_cuda_error();
 
     float inv_sqrt_dh = (float)std::log2(expf(1.));
@@ -260,8 +253,7 @@ void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
     }
 
     invokeCpReduce(attn.data<T>(),
-                   cp_M_.data(),
-                   cp_L_.data(),
+                   cp_ML_.data(),
                    token_num,
                    local_head_num_,
                    size_per_head_,
@@ -378,10 +370,8 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.cp_size = engine_param_.attn_cp_size;
         if (params.cp_size > 1) {
             params.cp_divmod = cutlass::FastDivmod(params.cp_size);
-            const int off_ML = q_count * local_head_num_ * engine_param_.attn_cp_rank;
-            const int off_O  = q_count * local_head_num_ * size_per_head_ * engine_param_.attn_cp_rank;
-            params.cp_M      = cp_M_.data() + off_ML;
-            params.cp_L      = cp_L_.data() + off_ML;
+            const int off_ML = engine_param_.attn_cp_rank * q_count * local_head_num_ * 2;
+            params.cp_ML     = cp_ML_.data() + off_ML;
         }
 
         params.arch   = arch_;

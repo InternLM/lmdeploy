@@ -555,8 +555,7 @@ struct AttentionUniversal {
                       params.partial_M,
                       params.partial_L,
                       params.partial_O,
-                      params.cp_M,
-                      params.cp_L,
+                      params.cp_ML,
                       qi_begin,
                       head_idx,
                       params.num_heads,
@@ -646,9 +645,9 @@ struct AttentionUniversal {
                     params.partial_L[index] = L;
                 }
                 if (params.cp_size > 1 && split_idx == 0) {
-                    const int index    = (qi_begin + qi) * params.num_heads + (head_idx + hi);
-                    params.cp_M[index] = M;
-                    params.cp_L[index] = L;
+                    const int index         = ((qi_begin + qi) * params.num_heads + (head_idx + hi)) * 2;
+                    params.cp_ML[index]     = M;
+                    params.cp_ML[index + 1] = L;
                 }
             }
         });
