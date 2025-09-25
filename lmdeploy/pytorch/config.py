@@ -117,9 +117,9 @@ class DistConfig:
 
     # tp
     tp: int = 1  # default tp, equal to attn_tp
-    attn_tp: int = 1  # tp for attention
-    mlp_tp: int = 1  # tp for mlp
-    moe_tp: int = 1  # tp for moe
+    attn_tp: int = None  # tp for attention
+    mlp_tp: int = None  # tp for mlp
+    moe_tp: int = None  # tp for moe
 
     # tp mode
     mlp_tp_mode: TPMode = TPMode.DEFAULT
@@ -134,18 +134,37 @@ class DistConfig:
         tp = self.tp
         ep = self.ep
 
-        # world_size
-        world_size = ep if ep > 1 else tp
-        assert world_size >= dp and world_size % dp == 0
-        assert world_size >= tp and world_size % tp == 0
-        assert world_size >= ep and world_size % ep == 0
-        self.world_size = world_size
+        # ignore layer to for dp==1
+        if dp == 1:
+            self.mlp_tp = None
+            self.attn_tp = None
+            self.moe_tp = None
 
-        # tp
-        self.attn_tp = self.world_size // dp
-        self.mlp_tp = tp
-        self.moe_tp = 1 if ep > 1 else tp
+        # mlp and moe tp
+        self.mlp_tp = self.mlp_tp or tp
+        self.moe_tp = self.moe_tp or (1 if ep > 1 else self.mlp_tp)
+
+        # world_size
+        world_size = ep if ep > 1 else max(self.mlp_tp, self.moe_tp)
+        self.world_size = world_size
+        assert (world_size >= dp and world_size % dp == 0), (f'world_size {world_size}, dp {dp}')
+        assert (world_size >= ep and world_size % ep == 0), (f'world_size {world_size}, ep {ep}')
+        assert (world_size >= self.mlp_tp
+                and world_size % self.mlp_tp == 0), (f'world_size {world_size}, mlp_tp {self.mlp_tp}')
+        assert (world_size >= self.moe_tp
+                and world_size % self.moe_tp == 0), (f'world_size {world_size}, moe_tp {self.moe_tp}')
+
+        # attn tp
+        self.attn_tp = self.attn_tp or self.world_size // dp
         self.tp = self.attn_tp
+        if self.mlp_tp > 1:
+            assert (self.mlp_tp >= self.attn_tp
+                    and self.mlp_tp % self.attn_tp == 0), (f'mlp_tp {self.mlp_tp}, attn_tp {self.attn_tp}')
+        if self.moe_tp > 1:
+            assert (self.moe_tp >= self.attn_tp
+                    and self.moe_tp % self.attn_tp == 0), (f'moe_tp {self.moe_tp}, attn_tp {self.attn_tp}')
+        assert (world_size >= self.attn_tp
+                and world_size % self.attn_tp == 0), (f'world_size {world_size}, attn_tp {self.attn_tp}')
 
         # tp mode
         self.mlp_tp_mode = TPMode.DEFAULT if (self.mlp_tp in [1, self.attn_tp]) else TPMode.DP_TP
@@ -164,6 +183,22 @@ class DistConfig:
             return 1, TPMode.DEFAULT
         else:
             raise ValueError(f'Unknown layer type: {layer_type}')
+
+    @classmethod
+    def from_engine_config(cls, engine_config: PytorchEngineConfig):
+        """From engine config."""
+        dist_config = cls(
+            dp=engine_config.dp,
+            ep=engine_config.ep,
+            dp_rank=engine_config.dp_rank,
+            enable_microbatch=engine_config.enable_microbatch,
+            enable_eplb=engine_config.enable_eplb,
+            tp=engine_config.tp,
+            attn_tp=engine_config.attn_tp_size,
+            mlp_tp=engine_config.mlp_tp_size,
+            moe_tp=engine_config.moe_tp_size,
+        )
+        return dist_config
 
 
 def _override_hf_config_dict(hf_config: dict, key: str, hf_overrides):

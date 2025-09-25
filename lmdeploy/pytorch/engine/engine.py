@@ -133,12 +133,7 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
 
 def _build_dist_config(engine_config: PytorchEngineConfig):
     """Build dist config."""
-    dist_config = DistConfig(dp=engine_config.dp,
-                             tp=engine_config.tp,
-                             ep=engine_config.ep,
-                             dp_rank=engine_config.dp_rank,
-                             enable_microbatch=engine_config.enable_microbatch,
-                             enable_eplb=engine_config.enable_eplb)
+    dist_config = DistConfig.from_engine_config(engine_config=engine_config)
     return dist_config
 
 
@@ -658,7 +653,7 @@ class Engine(EngineBase):
 
     @property
     def gpu_count(self):
-        return self.tp * self.dp
+        return self.dist_config.world_size
 
     @property
     def torch_int_dtype(self):
