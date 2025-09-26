@@ -22,6 +22,9 @@ namespace turbomind {
 template<typename T>
 GuidedDecodeMaskLayer<T>::GuidedDecodeMaskLayer(const BaseParam& param): BaseDynamicDecodeLayer{param}
 {
+    const auto bitmask_size = xgrammar::GetBitmaskSize(vocab_size_padded_);
+    bitmask_buf_            = {{max_batch_size_, bitmask_size}, kCPU};
+    bitmask_                = {{max_batch_size_, bitmask_size}, kDEVICE};
 }
 
 template<typename T>
@@ -42,16 +45,14 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
     Tensor_<float> logits = args.at("logits");
     const ssize_t  bsz    = logits.shape(0);
 
-    FT_CHECK(bsz == matchers_.size());
+    TM_CHECK(bsz == matchers_.size());
 
-    const auto           bitmask_size = xgrammar::GetBitmaskSize(vocab_size_padded_);
-    Tensor_<int32_t>     bitmask{{bsz, bitmask_size}, kCPU};
-    Tensor_<int32_t>     bitmask_device{{bsz, bitmask_size}, kDEVICE};
+    const auto           bitmask_size  = bitmask_buf_.shape(1);
     std::vector<int64_t> bitmask_shape = {bsz, bitmask_size};
 
-    DLTensor bitmask_dltensor{bitmask.data(),
+    DLTensor bitmask_dltensor{bitmask_buf_.data(),
                               DLDevice{kDLCPU, 0},
-                              bitmask.ndim(),
+                              bitmask_buf_.ndim(),
                               xgrammar::GetBitmaskDLType(),
                               bitmask_shape.data(),
                               nullptr,
@@ -66,8 +67,8 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
     }
 
     if (need_apply) {
-        Copy(bitmask, bitmask_device);
-        ApplyTokenBitmaskInplace(logits, bitmask_device);
+        Copy(bitmask_buf_, bitmask_);
+        ApplyTokenBitmaskInplace(logits, bitmask_.slice(0, bsz));
     }
 }
 
