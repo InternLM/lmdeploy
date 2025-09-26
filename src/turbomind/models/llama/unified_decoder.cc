@@ -29,7 +29,7 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     attn_dp_size_(engine.attn_dp_size),
     attn_dp_rank_(engine.attn_dp_rank),
     mlp_tp_size_(engine.mlp_tp_size),
-    attn_tp_group_(ctx.comm.d_tp_group),
+    attn_tp_cp_group_(ctx.comm.d_tp_cp_group),
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
     d_comm_(ctx.comm.d_comm),
@@ -58,7 +58,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
 {
     const auto dtype = hidden_states.dtype();
     if (0) {}
-    else if (engine_param_.attn_dp_size > 1 && engine_param_.attn_cp_size == 1) {
+    else if (group0 || group1) {
         d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states.raw_data(),
                                                 residual.data_or((void*)nullptr),
                                                 bias.data_or((void*)nullptr),
@@ -175,7 +175,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
                                  weights.at(layer)->self_attn_weights->output.bias,
                                  weights.at(layer)->ffn_norm,
                                  local_token_num,
-                                 attn_tp_group_,
+                                 attn_tp_cp_group_,
                                  0,
                                  local_token_nums.data());
 
@@ -217,7 +217,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
                                  scale_weight,
                                  local_token_num,
                                  0,
-                                 attn_tp_group_,
+                                 attn_tp_cp_group_,
                                  local_token_nums.data());
         sync_check_cuda_error();
 

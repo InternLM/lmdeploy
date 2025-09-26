@@ -512,25 +512,24 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
 
     const int tp_cp_size  = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
     const int color_tp_cp = inner_rank / tp_cp_size;
-    const int color_cp =
-        inner_rank / engine_param_.attn_cp_size + (inner_rank / tp_cp_size) * engine_param_.attn_tp_size;
-    const int color_tp =
-        inner_rank % engine_param_.attn_cp_size + (inner_rank / tp_cp_size) * engine_param_.attn_cp_size;
+    const int color_tp    = inner_rank % tp_cp_size % engine_param_.attn_cp_size;
+    const int color_cp    = inner_rank % tp_cp_size / engine_param_.attn_cp_size;
 
     comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
 
     comm.h_tp_cp_group = comm.h_comm->Split(color_tp_cp, 0);
-    comm.h_tp_group    = comm.h_comm->Split(color_tp, 0);
     comm.h_dp_group    = comm.h_comm->Split(inner_rank % tp_cp_size, 0);
 
     if (comm_size_ > 1) {
         comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
         //
-        comm.d_tp_group = 0;
-        comm.d_cp_group = 0;
+        comm.d_tp_cp_group = 0;
+        comm.d_tp_group    = 0;
+        comm.d_cp_group    = 0;
         if (engine_param_.attn_tp_size != comm_size_) {
-            comm.d_cp_group = comm.d_comm->Split(color_cp, 0, 0);
-            comm.d_tp_group = comm.d_comm->Split(color_tp, 0, 0);
+            comm.d_tp_cp_group = comm.d_comm->Split(color_tp_cp, 0, 0);
+            comm.d_tp_group    = comm.d_comm->Split(color_tp, 0, comm.d_tp_cp_group);
+            comm.d_cp_group    = comm.d_comm->Split(color_cp, 0, comm.d_tp_cp_group);
         }
     }
 
