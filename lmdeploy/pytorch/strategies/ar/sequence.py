@@ -90,6 +90,7 @@ class ARSequenceStrategy(SequenceStrategy):
                                         sampling_param=sampling_param,
                                         adapter_name=adapter_name,
                                         migration_request=migration_request,
+                                        encoder_result=encoder_result,
                                         resp_cache=resp_cache,
                                         preserve_cache=preserve_cache)
 
