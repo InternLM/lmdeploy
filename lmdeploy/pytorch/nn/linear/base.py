@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -11,6 +11,92 @@ from lmdeploy.pytorch.distributed import (gather_by_tp_sizes, get_dist_group, ge
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from .utils import update_tp_args
+
+
+class LinearForwardDPTP:
+
+    def __init__(self, gemm_func: Callable, max_tokens_per_round: int = 8192):
+        """Linear forward dp tp."""
+        self.gemm_func = gemm_func
+        self.dist_ctx = get_dist_manager().current_context()
+        self.dist_config = self.dist_ctx.dist_config
+        self.tp = self.dist_config.mlp_tp
+        self.attn_tp = self.dist_config.attn_tp
+
+        tp_group = self.dist_ctx.mlp_tp_group
+        self.rank = tp_group.rank
+        self.gather_rank = self.rank // self.attn_tp
+        self.gather_group = tp_group.gpu_gather_group
+        self.tp_group = tp_group.gpu_group
+        self.max_tokens_per_round = max_tokens_per_round * self.attn_tp // self.tp // 2
+
+    def all_gather(self, hidden_states: torch.Tensor, tp_sizes: List[int]):
+        """All gather."""
+        hidden_states, handle = dist.gather_by_tp_sizes(hidden_states, tp_sizes, group=self.gather_group, async_op=True)
+        return hidden_states, handle
+
+    def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: List[int]):
+        """Reduce scatter."""
+        hidden_states_list = list(hidden_states.split(tp_sizes, -2))
+        hidden_states_list[self.gather_rank] = out_states
+        hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
+        handle = dist.reduce_scatter(out_states, hidden_states_list, group=self.tp_group, async_op=True)
+        return out_states, handle
+
+    def _gemm_and_reduce_scatter(self, hidden_states: torch.Tensor, output_states: torch.Tensor, tp_sizes: List[int],
+                                 handle: dist.Work):
+        """Gemm and reduce scatter."""
+        handle.wait()
+        cur_out = self.gemm_func(hidden_states)
+        cur_out_states = cur_out.split(tp_sizes, dim=0)[self.gather_rank]
+        output_states.copy_(cur_out_states)
+        return self.reduce_scatter(cur_out, output_states, tp_sizes)
+
+    def forward(self, hidden_states: torch.Tensor):
+        """forward."""
+
+        def __slice_tensor(tensor: torch.Tensor, slice_size: int):
+            """Slice tensor."""
+            cur_tensor = tensor[:slice_size]
+            tensor = tensor[slice_size:]
+            return cur_tensor, tensor
+
+        def __slice_and_gather():
+            """Slice and gather."""
+            nonlocal hidden_states, tp_sizes, output_states
+            cur_tp_sizes = tp_sizes.minimum(max_tokens_per_round)
+            tp_sizes -= cur_tp_sizes
+            cur_tp_sizes = cur_tp_sizes.tolist()
+
+            slice_size = cur_tp_sizes[self.gather_rank]
+            cur_hidden_states, hidden_states = __slice_tensor(hidden_states, slice_size)
+            cur_output, output_states = __slice_tensor(output_states, slice_size)
+
+            # all gather
+            cur_hidden_states, handle = self.all_gather(cur_hidden_states, cur_tp_sizes)
+            return dict(hidden_states=cur_hidden_states, output_states=cur_output, handle=handle, tp_sizes=cur_tp_sizes)
+
+        step_ctx = get_step_ctx_manager().current_context()
+        tp_sizes = step_ctx.dp_meta.moe_tp_sizes
+        tp_sizes = torch.tensor(tp_sizes)
+        max_tokens_per_round = tp_sizes.new_tensor(self.max_tokens_per_round)
+
+        output_states = torch.empty_like(hidden_states)
+        return_states = output_states
+
+        # pre
+        cur_inputs = __slice_and_gather()
+
+        # main loop
+        while tp_sizes.sum() > 0:
+            next_inputs = __slice_and_gather()
+            self._gemm_and_reduce_scatter(**cur_inputs)
+            cur_inputs = next_inputs
+
+        # post
+        _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
+        handle.wait()
+        return return_states
 
 
 class LinearBase(nn.Module):
@@ -65,6 +151,17 @@ class LinearBase(nn.Module):
             self.tp_group = None
             self.gather_group = None
 
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+
+            def _gemm_func(self, x):
+                out = self._forward_default(x, False, None)
+
+                for lora_adapter in self.lora_adapters.values():
+                    out = lora_adapter(x, out)
+                return out
+
+            self.linear_dptp_forward = LinearForwardDPTP(_gemm_func)
+
         self._tp_args_initialized = True
 
     def get_tp_world_rank(self):
@@ -93,13 +190,14 @@ class LinearBase(nn.Module):
                 dist.all_reduce(out, group=self.tp_group)
         return out
 
-    def forward(self, x):
-        """Forward of linear layer."""
-        tp_sizes = None
-        if self.dp_gather or (self.all_reduce and self.tp_mode == TPMode.DP_TP):
-            step_ctx = get_step_ctx_manager().current_context()
-            dp_meta = step_ctx.dp_meta
-            tp_sizes = dp_meta.tp_sizes
+    def _forward_dp_tp(self, x):
+        """Forward dp_tp."""
+        if self.dp_gather and self.all_reduce:
+            return self.linear_dptp_forward.forward(x)
+
+        step_ctx = get_step_ctx_manager().current_context()
+        dp_meta = step_ctx.dp_meta
+        tp_sizes = dp_meta.tp_sizes
 
         if self.dp_gather:
             x = gather_by_tp_sizes(x, tp_sizes, group=self.gather_group)
@@ -108,3 +206,13 @@ class LinearBase(nn.Module):
             return self._forward_default(x, self.all_reduce, tp_sizes)
         else:
             return self._forward_lora(x, tp_sizes)
+
+    def forward(self, x):
+        """Forward of linear layer."""
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+            return self._forward_dp_tp(x)
+
+        if len(self.lora_adapters) == 0:
+            return self._forward_default(x, self.all_reduce, None)
+        else:
+            return self._forward_lora(x)
