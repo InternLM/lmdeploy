@@ -1,4 +1,3 @@
-import copy
 import os
 
 import pytest
@@ -25,9 +24,7 @@ def config():
     with open(config_path) as f:
         env_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
 
-    config_copy = copy.deepcopy(env_config)
-
-    return config_copy
+    return env_config
 
 
 @pytest.fixture(scope='session')
