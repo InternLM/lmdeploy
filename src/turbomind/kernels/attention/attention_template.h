@@ -85,6 +85,8 @@ void invokeAttention(const typename Kernel::ParamType& params)
                                                   params.partial_M,
                                                   params.partial_L,
                                                   params.partial_O,
+                                                  params.cp_M,
+                                                  params.cp_L,
                                                   params.split_cnt,
                                                   params.max_split_k,
                                                   split_cnt,

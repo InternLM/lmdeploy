@@ -34,6 +34,7 @@
 
 #include "src/turbomind/macro.h"
 
+#include "src/turbomind/models/llama/cp_utils.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
@@ -72,6 +73,9 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     local_kv_head_num_(model.kv_head_num / tp_size),
     param_(attn),
     model_param_(model),
+    engine_param_(engine),
+    attn_cp_group_(ctx.comm.d_cp_group),
+    d_comm_(ctx.comm.d_comm),
     lora_param_(lora),
     context_(ctx),
     stream_(ctx.stream),
@@ -135,6 +139,11 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
 
     cu_block_nums_ = args.at("cu_block_nums").buffer();
     kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
+
+    if (engine_param_.attn_cp_size > 1) {
+        cp_M_ = args.at("cp_M").borrow();
+        cp_L_ = args.at("cp_L").borrow();
+    }
 
     // rotary embedding, add offest when forward
     if (rope_param_.type == RopeType::kDynamic) {
@@ -227,6 +236,43 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 }
 
 template<class T>
+void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
+{
+    NvtxScope scope("cp");
+    const int token_num = attn.shape(0);
+    const int count     = token_num * local_head_num_;
+    d_comm_->AllGatherCP(cp_M_.data() + count * engine_param_.attn_cp_rank,
+                         cp_M_.data(),
+                         cp_L_.data() + count * engine_param_.attn_cp_rank,
+                         cp_L_.data(),
+                         count,
+                         kFloat32,
+                         attn_cp_group_,
+                         stream_);
+    sync_check_cuda_error();
+
+    float inv_sqrt_dh = (float)std::log2(expf(1.));
+    if (param_.softmax_scale) {
+        inv_sqrt_dh *= param_.softmax_scale;
+    }
+    else {
+        inv_sqrt_dh /= std::sqrt((float)size_per_head_);
+    }
+
+    invokeCpReduce(attn.data<T>(),
+                   cp_M_.data(),
+                   cp_L_.data(),
+                   token_num,
+                   local_head_num_,
+                   size_per_head_,
+                   engine_param_.attn_cp_size,
+                   engine_param_.attn_cp_rank,
+                   inv_sqrt_dh,
+                   stream_);
+    sync_check_cuda_error();
+}
+
+template<class T>
 Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights)
 {
     const auto device = qkv.device();
@@ -240,7 +286,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     Tensor attn{{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
-    Tensor tmp_kv{{2, (int)local_kv_head_num_, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
+    Tensor tmp_kv{{(int)local_kv_head_num_, 2, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
     auto stream_ptr = streams_.data();
 
@@ -327,6 +373,17 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.locks       = barriers_.data();
         params.max_split_k = std::min(std::max(1, kMaxWorkspaceTokens / params.token_num), max_kv_splits);
 
+        // context parallel
+        params.cp_rank = engine_param_.attn_cp_rank;
+        params.cp_size = engine_param_.attn_cp_size;
+        if (params.cp_size > 1) {
+            params.cp_divmod = cutlass::FastDivmod(params.cp_size);
+            const int off_ML = q_count * local_head_num_ * engine_param_.attn_cp_rank;
+            const int off_O  = q_count * local_head_num_ * size_per_head_ * engine_param_.attn_cp_rank;
+            params.cp_M      = cp_M_.data() + off_ML;
+            params.cp_L      = cp_L_.data() + off_ML;
+        }
+
         params.arch   = arch_;
         params.stream = stream;
 
@@ -373,6 +430,10 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     if (decode_num_ && prefil_num_) {
         check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
         check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
+    }
+
+    if ((decode_num_ || prefil_num_) && !isTuning() && engine_param_.attn_cp_size > 1) {
+        cp_postprocess<T>(attn);
     }
 
     if (isTuning()) {
