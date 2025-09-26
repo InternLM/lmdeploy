@@ -603,13 +603,14 @@ class LinearWeightsBlockedF8(LinearWeights):
                                        device=device)
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         self.register_parameter('weight_scale_inv', weight_scale_inv)
-        self.weight._base_weight_loader = self.weight_loader_tp
-        self.weight.weight_loader = self.weight_loader_with_quant
 
         if self.ep:
+            self.weight._base_weight_loader = self.weight.weight_loader
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_ep
         else:
+            self.weight._base_weight_loader = self.weight_loader_tp_blocked_fp8
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_tp
+        self.weight.weight_loader = self.weight_loader_with_quant
 
     def update_weight(self, weight: torch.Tensor, weight_scale_inv: torch.Tensor):
         """Update weight."""
@@ -633,7 +634,8 @@ class LinearWeightsBlockedF8(LinearWeights):
         split_size = _split_size(weight.size(dim), world_size, align)
         return weight.split(split_size, dim=dim)[rank]
 
-    def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
+    def weight_loader_tp_blocked_fp8(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
+                                     shard_id: str):
         """Weight loader."""
         world_size, rank = get_tp_world_rank('moe')
         if shard_id == 'gate':
