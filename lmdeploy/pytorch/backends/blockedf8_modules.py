@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 import torch
+import torch.distributed as dist
 
 
 class LinearBlockedF8Impl(ABC):
@@ -19,6 +20,7 @@ class LinearBlockedF8Impl(ABC):
                 scale: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False,
+                group: Optional[dist.ProcessGroup] = None,
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""
