@@ -54,6 +54,16 @@ def _update_args(hidden_dim: int, ffn_dim: int):
     return hidden_dim, ffn_dim
 
 
+def _split_size(size: int, world_size: int, align: int):
+    size = size // align
+    assert size >= world_size
+    base = size // world_size
+    remain = size % world_size
+    split_size = [base + 1] * remain + [base] * (world_size - remain)
+    split_size = [s * align for s in split_size]
+    return split_size
+
+
 class LinearWeights(nn.Module):
     """Fused moe linear weights."""
 
@@ -460,7 +470,7 @@ class LinearWeightsBlockedF8(LinearWeights):
                                        device=device)
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         self.register_parameter('weight_scale_inv', weight_scale_inv)
-        self.weight._base_weight_loader = self.weight.weight_loader
+        self.weight._base_weight_loader = self.weight_loader_tp
         self.weight.weight_loader = self.weight_loader_with_quant
 
         if self.ep:
@@ -485,6 +495,41 @@ class LinearWeightsBlockedF8(LinearWeights):
         for expert_id in expert_ids:
             self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
 
+    def _chunk_weight_tp(self, weight: torch.Tensor, dim: int, world_size: int, rank: int, align: int):
+        """Chunk with align."""
+        split_size = _split_size(weight.size(dim), world_size, align)
+        return weight.split(split_size, dim=dim)[rank]
+
+    def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
+        """Weight loader."""
+        world_size, rank = get_tp_world_rank('moe')
+        if shard_id == 'gate':
+            param_data = param.data[expert_id, :self.half_out]
+            weight = self._chunk_weight_tp(loaded_weight,
+                                           dim=0,
+                                           world_size=world_size,
+                                           rank=rank,
+                                           align=self.block_size)
+        elif shard_id == 'up':
+            param_data = param.data[expert_id, self.half_out:]
+            weight = self._chunk_weight_tp(loaded_weight,
+                                           dim=0,
+                                           world_size=world_size,
+                                           rank=rank,
+                                           align=self.block_size)
+        elif shard_id == 'down':
+            param_data = param.data[expert_id]
+            # weight is not contiguous, chunk and copy in cpu is slow
+            weight = loaded_weight.to(param_data.device)
+            if weight.dim() > 1:
+                weight = self._chunk_weight_tp(weight, dim=1, world_size=world_size, rank=rank, align=self.block_size)
+            elif weight.dim() == 1 and rank != 0:
+                # bias with rank>0 should be 0
+                weight = torch.zeros_like(weight)
+        else:
+            raise RuntimeError(f'Unknown shard_id: {shard_id}')
+        param_data.copy_(weight)
+
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """Weight loader scale tp."""
@@ -493,14 +538,14 @@ class LinearWeightsBlockedF8(LinearWeights):
         half_out = self.half_out // block_size
         if shard_id == 'gate':
             param_data = param.data[expert_id, :half_out]
-            weight = loaded_weight.chunk(world_size, dim=0)[rank]
+            weight = self._chunk_weight_tp(loaded_weight, dim=0, world_size=world_size, rank=rank, align=1)
         elif shard_id == 'up':
             param_data = param.data[expert_id, half_out:]
-            weight = loaded_weight.chunk(world_size, dim=0)[rank]
+            weight = self._chunk_weight_tp(loaded_weight, dim=0, world_size=world_size, rank=rank, align=1)
         elif shard_id == 'down':
             param_data = param.data[expert_id]
             loaded_weight = loaded_weight.to(param_data.device)
-            weight = loaded_weight.chunk(world_size, dim=1)[rank]
+            weight = self._chunk_weight_tp(loaded_weight, dim=1, world_size=world_size, rank=rank, align=1)
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
@@ -558,7 +603,7 @@ class FusedMoEBlockedF8(nn.Module):
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
             num_experts = len(expert_list)
         else:
-            hidden_dim, ffn_dim = _update_args(hidden_dim, ffn_dim)
+            hidden_dim, ffn_dim = self._update_args(hidden_dim, ffn_dim, align=self.block_size)
             expert_list = None
         self.expert_list = expert_list
 
@@ -591,6 +636,14 @@ class FusedMoEBlockedF8(nn.Module):
         self.dtype = dtype
         self.device = device
         self.act_func = act_func
+
+    @staticmethod
+    def _update_args(hidden_dim: int, ffn_dim: int, align: int):
+        """Update args."""
+        world_size, rank = get_tp_world_rank('moe')
+        split_size = _split_size(ffn_dim, world_size, align)
+        ffn_dim = split_size[rank]
+        return hidden_dim, ffn_dim
 
     def init_tp_args(self, all_reduce: bool, enable_ep: bool):
         """Init tp args."""
