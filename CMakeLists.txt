@@ -44,6 +44,8 @@ if (BUILD_TEST)
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG        v3.8.0
     GIT_SHALLOW ON
+    GIT_PROGRESS            TRUE
+    USES_TERMINAL_DOWNLOAD  TRUE
     EXCLUDE_FROM_ALL
   )
   FetchContent_MakeAvailable(Catch2)
@@ -53,8 +55,10 @@ endif()
 FetchContent_Declare(
   repo-cutlass
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-  GIT_TAG        v3.9.2
-  GIT_SHALLOW ON
+  GIT_TAG                 v3.9.2
+  GIT_SHALLOW             ON
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
   EXCLUDE_FROM_ALL
 )
 
@@ -66,13 +70,38 @@ FetchContent_MakeAvailable(repo-cutlass)
 FetchContent_Declare(
   yaml-cpp
   GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-  GIT_TAG 0.8.0
+  GIT_TAG                 0.8.0
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
   PATCH_COMMAND git apply ${CMAKE_CURRENT_SOURCE_DIR}/cmake/yaml-cpp_cmake_policy.patch
-  UPDATE_DISCONNECTED 1
+  UPDATE_DISCONNECTED     1
 )
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
 FetchContent_MakeAvailable(yaml-cpp)
 
+FetchContent_Declare(
+  xgrammar
+  GIT_REPOSITORY          https://github.com/mlc-ai/xgrammar.git
+  GIT_TAG                 v0.1.25
+  GIT_SUBMODULES          "3rdparty/dlpack"
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
+  UPDATE_DISCONNECTED     1
+)
+
+FetchContent_GetProperties(xgrammar)
+if(NOT xgrammar_POPULATED)
+  # Fetch the content using previously declared details
+  FetchContent_Populate(xgrammar)
+
+  file(WRITE ${xgrammar_SOURCE_DIR}/config.cmake "set(XGRAMMAR_BUILD_PYTHON_BINDINGS OFF)\n")
+  if(NOT MSVC)
+    file(APPEND ${xgrammar_SOURCE_DIR}/config.cmake "set(CMAKE_CXX_FLAGS \"-Wno-error\")\n")
+  endif()
+
+  # Bring the populated content into the build
+  add_subdirectory(${xgrammar_SOURCE_DIR} ${xgrammar_BINARY_DIR})
+endif()
 
 # the environment variable
 #   ASAN_OPTIONS=protect_shadow_gap=0,intercept_tls_get_addr=0
@@ -266,7 +295,9 @@ add_subdirectory(src)
 if (BUILD_PY_FFI)
   if (CALL_FROM_SETUP_PY)
     install(TARGETS _turbomind DESTINATION ${CMAKE_INSTALL_PREFIX})
+    install(TARGETS _xgrammar DESTINATION ${CMAKE_INSTALL_PREFIX})
   else()
     install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+    install(TARGETS _xgrammar DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
   endif()
 endif ()
