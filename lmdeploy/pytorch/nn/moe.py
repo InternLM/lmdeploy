@@ -64,6 +64,103 @@ def _split_size(size: int, world_size: int, align: int):
     return split_size
 
 
+class MoEForwardDPTP:
+
+    def __init__(self, gemm_func: Callable, max_tokens_per_round: int = 8192):
+        """MoE forward dp tp."""
+        self.gemm_func = gemm_func
+        self.dist_ctx = get_dist_manager().current_context()
+        self.dist_config = self.dist_ctx.dist_config
+        self.tp = self.dist_config.moe_tp
+        self.attn_tp = self.dist_config.attn_tp
+
+        tp_group = self.dist_ctx.moe_tp_group
+        self.rank = tp_group.rank
+        self.gather_rank = self.rank // self.attn_tp
+        self.gather_group = tp_group.gpu_gather_group
+        self.tp_group = tp_group.gpu_group
+        self.max_tokens_per_round = max_tokens_per_round * self.attn_tp // self.tp // 2
+
+    def all_gather(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
+                   tp_sizes: List[int]):
+        """All gather."""
+        hidden_states, _ = dist.gather_by_tp_sizes(hidden_states, tp_sizes, group=self.gather_group, async_op=True)
+        topk_weights, _ = dist.gather_by_tp_sizes(topk_weights, tp_sizes, group=self.gather_group, async_op=True)
+        topk_ids, handle = dist.gather_by_tp_sizes(topk_ids, tp_sizes, group=self.gather_group, async_op=True)
+        return hidden_states, topk_weights, topk_ids, handle
+
+    def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: List[int]):
+        """Reduce scatter."""
+        hidden_states_list = list(hidden_states.split(tp_sizes, -2))
+        hidden_states_list[self.gather_rank] = out_states
+        hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
+        handle = dist.reduce_scatter(out_states, hidden_states_list, group=self.tp_group, async_op=True)
+        return out_states, handle
+
+    def _gemm_and_reduce_scatter(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
+                                 output_states: torch.Tensor, tp_sizes: List[int], handle: dist.Work):
+        """Gemm and reduce scatter."""
+        handle.wait()
+        cur_out = self.gemm_func(hidden_states, topk_weights, topk_ids)
+        cur_out_states = cur_out.split(tp_sizes, dim=0)[self.gather_rank]
+        output_states.copy_(cur_out_states)
+        return self.reduce_scatter(cur_out, output_states, tp_sizes)
+
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor):
+        """forward."""
+
+        def __slice_tensor(tensor: torch.Tensor, slice_size: int):
+            """Slice tensor."""
+            cur_tensor = tensor[:slice_size]
+            tensor = tensor[slice_size:]
+            return cur_tensor, tensor
+
+        def __slice_and_gather():
+            """Slice and gather."""
+            nonlocal hidden_states, topk_weights, topk_ids, tp_sizes, output_states
+            cur_tp_sizes = tp_sizes.minimum(max_tokens_per_round)
+            tp_sizes -= cur_tp_sizes
+            cur_tp_sizes = cur_tp_sizes.tolist()
+
+            slice_size = cur_tp_sizes[self.gather_rank]
+            cur_hidden_states, hidden_states = __slice_tensor(hidden_states, slice_size)
+            cur_topk_weights, topk_weights = __slice_tensor(topk_weights, slice_size)
+            cur_topk_ids, topk_ids = __slice_tensor(topk_ids, slice_size)
+            cur_output, output_states = __slice_tensor(output_states, slice_size)
+
+            # all gather
+            cur_hidden_states, cur_topk_weights, cur_topk_ids, handle = self.all_gather(
+                cur_hidden_states, cur_topk_weights, cur_topk_ids, cur_tp_sizes)
+            return dict(hidden_states=cur_hidden_states,
+                        topk_weights=cur_topk_weights,
+                        topk_ids=cur_topk_ids,
+                        output_states=cur_output,
+                        handle=handle,
+                        tp_sizes=cur_tp_sizes)
+
+        step_ctx = get_step_ctx_manager().current_context()
+        tp_sizes = step_ctx.dp_meta.moe_tp_sizes
+        tp_sizes = torch.tensor(tp_sizes)
+        max_tokens_per_round = tp_sizes.new_tensor(self.max_tokens_per_round)
+
+        output_states = torch.empty_like(hidden_states)
+        return_states = output_states
+
+        # pre
+        cur_inputs = __slice_and_gather()
+
+        # main loop
+        while tp_sizes.sum() > 0:
+            next_inputs = __slice_and_gather()
+            self._gemm_and_reduce_scatter(**cur_inputs)
+            cur_inputs = next_inputs
+
+        # post
+        _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
+        handle.wait()
+        return return_states
+
+
 class LinearWeights(nn.Module):
     """Fused moe linear weights."""
 
@@ -279,13 +376,43 @@ class FusedMoE(nn.Module):
         self.tp_group = dist_ctx.moe_tp_group.gpu_group
         self.gather_group = dist_ctx.moe_tp_group.gpu_gather_group
 
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+
+            def __gemm_func(hidden_states, topk_weights, topk_ids):
+                return self.gemm(
+                    dict(
+                        hidden_states=hidden_states,
+                        topk_weights=topk_weights,
+                        topk_idx=topk_ids,
+                        moe_type=MoeType.Default,
+                    ))['hidden_states']
+
+            self.forward_dptp = MoEForwardDPTP(__gemm_func)
+
     def update_weights(self):
         """Update weights."""
         gate_up_weights, down_weights = self.impl.update_weights(self.gate_up.weight, self.down.weight)
         self.gate_up.update_weight(gate_up_weights)
         self.down.update_weight(down_weights)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
+    def gemm(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Gemm."""
+        hidden_states = inputs['hidden_states']
+        topk_weights = inputs['topk_weights']
+        topk_ids = inputs['topk_idx']
+
+        ret = self.impl.forward(hidden_states,
+                                topk_weights,
+                                topk_ids,
+                                self.gate_up.weight,
+                                self.down.weight,
+                                self.gate_up.bias,
+                                self.down.bias,
+                                self.expert_list,
+                                act_func=self.act_func)
+        return dict(hidden_states=ret)
+
+    def forward_default(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
         hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states,
                                                                    topk_weights,
                                                                    topk_ids,
@@ -303,6 +430,12 @@ class FusedMoE(nn.Module):
         if self.all_reduce:
             ret = _moe_reduce(ret, rank=self.tp_rank, tp_mode=self.tp_mode, group=self.tp_group)
         return ret
+
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
+        """forward."""
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+            return self.forward_dptp.forward(hidden_states, topk_weights, topk_ids)
+        return self.forward_default(hidden_states, topk_weights, topk_ids)
 
 
 class LinearWeightsW8A8(LinearWeights):
@@ -662,6 +795,18 @@ class FusedMoEBlockedF8(nn.Module):
         self.all_reduce = all_reduce
         self.tp_group = dist_ctx.moe_tp_group.gpu_group
         self.gather_group = dist_ctx.moe_tp_group.gpu_gather_group
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+
+            def __gemm_func(hidden_states, topk_weights, topk_ids):
+                return self.gemm(
+                    dict(
+                        hidden_states=hidden_states,
+                        topk_weights=topk_weights,
+                        topk_idx=topk_ids,
+                        moe_type=MoeType.Default,
+                    ))['hidden_states']
+
+            self.forward_dptp = MoEForwardDPTP(__gemm_func)
 
     def update_weights(self):
         """Update weights."""
@@ -671,7 +816,7 @@ class FusedMoEBlockedF8(nn.Module):
         self.gate_up.update_weight(gate_up_weights, gate_up_scale)
         self.down.update_weight(down_weights, down_scale)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
+    def forward_default(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
         state = {
             'hidden_states': hidden_states,
             'topk_idx': topk_idx,
@@ -682,6 +827,13 @@ class FusedMoEBlockedF8(nn.Module):
         gemm_state = self.gemm(recv_state)
         out_state = self.combine(gemm_state)
         return out_state['hidden_states']
+
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
+
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+            return self.forward_dptp.forward(hidden_states, topk_weights, topk_idx)
+        else:
+            return self.forward_default(hidden_states, topk_weights, topk_idx)
 
     def before_dispatch(self, state: Dict):
         moe_type = state['moe_type']

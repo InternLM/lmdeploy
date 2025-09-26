@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import torch
 from torch import distributed as dist
-from torch.distributed import ProcessGroup, ReduceOp  # noqa: F401
+from torch.distributed import ProcessGroup, ReduceOp, Work  # noqa: F401
 
 from .config import DistConfig, TPMode
 
@@ -433,12 +433,17 @@ def reduce_scatter(output, input_list, op=ReduceOp.SUM, group='tp', async_op=Fal
     return dist.reduce_scatter(output, input_list, op=op, group=group, async_op=async_op)
 
 
-def gather_by_tp_sizes(x: torch.Tensor, tp_sizes: List[int], group: Optional[dist.ProcessGroup] = None):
+def gather_by_tp_sizes(x: torch.Tensor,
+                       tp_sizes: List[int],
+                       group: Optional[dist.ProcessGroup] = None,
+                       async_op: bool = False):
     """Gather input."""
     shape = (*x.shape[:-2], sum(tp_sizes), *x.shape[-1:])
     new_x = x.new_empty(shape)
     split_new_x = list(new_x.split(tp_sizes, -2))
-    dist.all_gather(split_new_x, x, group=group)
+    handle = dist.all_gather(split_new_x, x, group=group, async_op=async_op)
+    if async_op:
+        return new_x, handle
     return new_x
 
 
