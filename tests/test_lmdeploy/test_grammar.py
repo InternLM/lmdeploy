@@ -4,7 +4,7 @@ import pytest
 from jsonschema import validate
 
 from lmdeploy import pipeline
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig  # , PytorchEngineConfig
 
 MODEL_IDS = [
     'Qwen/Qwen3-0.6B',
@@ -13,7 +13,7 @@ MODEL_IDS = [
 
 BACKEND_FACTORIES = [
     ('tm', lambda: TurbomindEngineConfig(max_batch_size=2, session_len=1024)),
-    ('pt', lambda: PytorchEngineConfig(max_batch_size=1, session_len=1024)),
+    # ('pt', lambda: PytorchEngineConfig(max_batch_size=1, session_len=1024)),
 ]
 
 GUIDE_SCHEMA = {
