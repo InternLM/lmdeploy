@@ -23,6 +23,7 @@ def config():
 
     with open(config_path) as f:
         env_config = yaml.load(f.read(), Loader=yaml.SafeLoader)
+
     return env_config
 
 

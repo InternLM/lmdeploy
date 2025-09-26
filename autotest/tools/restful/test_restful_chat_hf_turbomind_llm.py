@@ -245,25 +245,25 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
         'model': 'google/gemma-2-27b-it',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
     {
         'model': 'deepseek-ai/deepseek-moe-16b-chat',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
     {
         'model': 'google/gemma-2-27b-it',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8 --communicator cuda-ipc'
     },
     {
         'model': 'deepseek-ai/deepseek-moe-16b-chat',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8 --communicator cuda-ipc'
     },
 ],
                          indirect=True)
@@ -301,19 +301,19 @@ def test_restful_chat_fallback_backend_tp2(config, common_case_config, worker_id
         'model': 'internlm/internlm2_5-20b-chat',
         'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
     {
         'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
         'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
     {
         'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
         'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
 ],
                          indirect=True)

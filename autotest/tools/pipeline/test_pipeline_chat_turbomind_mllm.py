@@ -32,7 +32,7 @@ def test_pipeline_chat_tp2(config, model, communicator, worker_id):
         set_device_env_variable(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     if ('MiniCPM-V-2_6' in model or 'InternVL2_5-26B' in model or 'InternVL2-26B' in model
-            or 'InternVL3-38B' in model) and communicator == 'native':
+            or 'InternVL3-38B' in model) and communicator == 'cuda-ipc':
         return
     run_pipeline_vl_chat_test(config, model, BACKEND, worker_id, {'communicator': communicator})
 
@@ -168,6 +168,7 @@ def test_pipeline_chat_fallback_backend_kvint8_tp1(config, model, worker_id):
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
+@pytest.mark.other
 @pytest.mark.parametrize('model', ['meta-llama/Llama-3.2-11B-Vision-Instruct'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_kvint8_tp2(config, model, communicator, worker_id):
