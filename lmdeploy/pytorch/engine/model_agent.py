@@ -247,7 +247,8 @@ def model_forward(
             output = model(**input_dict)
 
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
-            model_metas = context.model_metas
+            if context.model_metas and all(meta is not None for meta in context.model_metas):
+                model_metas = context.model_metas
             seq_length = context.q_seqlens[:len(inputs.seq_length)]
 
     return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
