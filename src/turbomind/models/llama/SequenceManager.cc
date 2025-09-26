@@ -94,7 +94,7 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
     if (!block_trie_) {
         freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
     }
-    (void)sequences_.erase(it);
+    it = sequences_.erase(it);
 }
 
 bool SequenceManager::Erase(uint64_t id)
