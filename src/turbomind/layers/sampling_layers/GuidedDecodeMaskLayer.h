@@ -34,8 +34,11 @@ public:
     void Forward(TensorMap& args) override;
 
 private:
-    // host buffer
     std::vector<std::shared_ptr<xgrammar::GrammarMatcher>> matchers_;
+    // host buffer
+    Tensor_<int32_t> bitmask_buf_;
+    // device buffer
+    Tensor_<int32_t> bitmask_;
 };
 
 }  // namespace turbomind
