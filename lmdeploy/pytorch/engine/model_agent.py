@@ -433,6 +433,7 @@ class BaseModelAgent:
     ):
         """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
+        strategy = self.agent_strategy
 
         class _OutputGather:
             """Output gather."""
@@ -464,7 +465,11 @@ class BaseModelAgent:
             def get_output(self):
                 """Get tmp_output."""
                 if not return_logits:
-                    return self._output[:, -1:]
+                    seqlen = torch.full((1, ),
+                                        self._output.numel() // self._output.size(-1),
+                                        device=self._output.device,
+                                        dtype=self._output.dtype)
+                    return strategy.slice_outputs(self._output, seqlen)
                 torch.cuda.synchronize()
                 return self._output.to(self._device)
 
