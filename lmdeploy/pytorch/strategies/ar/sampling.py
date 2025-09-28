@@ -27,22 +27,6 @@ def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs)
     return output
 
 
-def _gather_guided_input_ids(pad_id: int, seqs: SeqList, sampling_inputs: 'SamplingInputs'):
-    """Gather input ids for guided decode."""
-    if not any(sampling_inputs.response_formats or ()):
-        return None
-    batch = len(seqs)
-    max_len = max(seq.num_new_tokens for seq in seqs)
-    output = torch.full((batch, max_len), pad_id, dtype=torch.int64)
-    for idx, seq in enumerate(seqs):
-        h_len = seq.num_new_tokens
-        if h_len == 0:
-            continue
-        h_ids = torch.from_numpy(seq.generated_ids)
-        output[idx, -h_len:] = h_ids
-    return output
-
-
 def _get_num_ignore_eos(seqs: SeqList):
     """Get num ignore eos."""
     ret = [seq.sampling_param.min_new_tokens - seq.num_new_tokens for seq in seqs]
@@ -186,6 +170,5 @@ class ARSamplingStrategy(SamplingStrategy):
 
         pad_token_id = self.pad_token_id
         sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
-        sampling_input.guided_input_ids = _gather_guided_input_ids(pad_token_id, seqs, sampling_input)
         sampling_input.num_ignore_eos = _get_num_ignore_eos(seqs)
         return sampling_input
