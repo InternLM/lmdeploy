@@ -4,6 +4,7 @@ from dataclasses import dataclass, fields
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+import torch_npu
 
 from lmdeploy.messages import LogitsProcessor
 
