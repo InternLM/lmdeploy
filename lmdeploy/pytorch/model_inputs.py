@@ -148,7 +148,10 @@ class ModelInputs:
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
 
-    def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None, step_seqlens_npu: torch.Tensor = None):
+    def step(self,
+             input_ids: torch.LongTensor,
+             step_seqlens: torch.Tensor = None,
+             step_seqlens_npu: torch.Tensor = None):
         """Update input ids."""
         assert self.is_decoding
         if step_seqlens is None:
@@ -378,8 +381,6 @@ class StepContext:
 
         kv_seqlens_npu = q_seqlens_npu + history_seqlens_npu
         kv_seqlens_npu -= inputs.num_ignored_history_npu
-        if torch.equal(kv_seqlens_npu.cpu(), kv_seqlens) is False:
-            import pdb; pdb.set_trace()
 
         ret = StepContext(
             input_ids=inputs.input_ids,

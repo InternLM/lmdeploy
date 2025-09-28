@@ -21,10 +21,11 @@ def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
 def _process_bad_words_(scores: torch.Tensor,
                         bad_words: torch.LongTensor,
                         mask: torch.BoolTensor,
-                        filter_value: float = -float('inf')):
+                        filter_value: float = -99999.9999):
     """Process bad words."""
     filtered_scores = scores.gather(1, bad_words)
-    filtered_scores[mask] = filter_value
+    #filtered_scores[mask] = filter_value
+    filtered_scores = mask.to(filtered_scores.dtype) * filter_value + filtered_scores
     scores.scatter_(1, bad_words, filtered_scores)
     return scores
 

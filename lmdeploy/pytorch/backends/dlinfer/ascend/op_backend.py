@@ -160,8 +160,6 @@ class AscendOpsBackend(DlinferOpsBackend):
         if step_context.is_decoding:
             # collect kv_start_indices without using a for-loop,
             # (fill kv-cache for just ONE token during the decoding phase)
-            if not torch.equal(step_context.kv_seqlens_npu.cpu(), step_context.kv_seqlens):
-                import pdb; pdb.set_trace()
 
             idx = (step_context.kv_seqlens_npu - 1) % block_size
             block_num = (step_context.kv_seqlens_npu - 1) // block_size
