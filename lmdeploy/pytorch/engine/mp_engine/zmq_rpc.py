@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import inspect
-import pickle
+import json
 from typing import Callable, Dict
 from uuid import uuid4
 
@@ -27,6 +27,14 @@ def _task_callback(task: asyncio.Task) -> None:
     finally:
         if not task.done():
             task.cancel()
+
+
+def json_dumps(data) -> bytes:
+    return json.dumps(data).encode('utf-8')
+
+
+def json_loads(buf: bytes):
+    return json.loads(buf.decode('utf-8'))
 
 
 class AsyncRPCServer:
@@ -63,7 +71,7 @@ class AsyncRPCServer:
 
     def send_multipart(self, client_id: bytes, data: bytes):
         """Send multipart message to client."""
-        self.socket.send_multipart([client_id, pickle.dumps(data)])
+        self.socket.send_multipart([client_id, json_dumps(data)])
 
     def call_method_default(self, client_id, method: Callable, request: Dict):
         request_id = request.get('request_id')
@@ -141,7 +149,7 @@ class AsyncRPCServer:
         """Call method."""
         # receive message: [client_id, empty, request_data]
         client_id, request_data = self.socket.recv_multipart()
-        request = pickle.loads(request_data)
+        request = json_loads(request_data)
 
         method_name = request.get('method')
         logger.debug(f'call method: {method_name}')
@@ -188,7 +196,7 @@ class AsyncRPCClient:
 
     def __init__(self, port: int = 5555):
         logger.info(f'Connecting to AsyncRPCServer on port {port}...')
-        address = f'tcp://localhost:{port}'
+        address = f'tcp://localhost:{port}'  # noqa: E231
 
         socket_type = zmq.DEALER
 
@@ -232,15 +240,15 @@ class AsyncRPCClient:
     def call(self, method, *args, **kwargs):
         request_id = str(uuid4())
         logger.debug(f'call method: {method}, request_id: {request_id}')
-        data = pickle.dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs))
+        data = json_dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs))
         self.sync_socket.send(data)
 
         reply = self.sync_socket.recv()
-        reply = pickle.loads(reply)
+        reply = json_loads(reply)
         while reply['request_id'] != request_id:
             self._set_reply(reply)
             reply = self.sync_socket.recv()
-            reply = pickle.loads(reply)
+            reply = json_loads(reply)
 
         logger.debug(f'recv reply request_id: {request_id}')
         if reply['success']:
@@ -255,7 +263,7 @@ class AsyncRPCClient:
         self.pending[request_id] = future
 
         logger.debug(f'call method: {method}, request_id: {request_id}')
-        data = pickle.dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs, streaming=streaming))
+        data = json_dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs, streaming=streaming))
         await self.async_socket.send(data)
 
         return await future
@@ -279,7 +287,7 @@ class AsyncRPCClient:
         try:
             while self.running:
                 reply = await self.async_socket.recv()
-                reply = pickle.loads(reply)
+                reply = json_loads(reply)
                 self._set_reply(reply)
         except zmq.ZMQError:
             logger.exception('AsyncRPCClient listen error')
