@@ -63,7 +63,7 @@ class GenerationConfig:
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
         logprobs (int): Number of log probabilities to return per output token.
-        response_format (Dict): Only pytorch backend support formatting
+        response_format (Dict): Generate responses according to given formatting.
         response. Examples:
             {
                 "type": "json_schema",
