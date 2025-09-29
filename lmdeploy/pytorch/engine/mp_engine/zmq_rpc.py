@@ -32,7 +32,7 @@ def _task_callback(task: asyncio.Task) -> None:
 class AsyncRPCServer:
 
     def __init__(self):
-        address = 'tcp://*'
+        address = 'tcp://localhost'
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.ROUTER)
         self.port = self.socket.bind_to_random_port(address)
