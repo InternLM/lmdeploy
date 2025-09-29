@@ -162,7 +162,7 @@ class TurboMind:
         if len(tm_params) > 0:
             uninitialized = list(tm_params.keys())
             logger.warning('the model may not be loaded successfully '
-                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')  # noqa: E231
+                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
 
     def _load_weights(self):
         """Load weights."""
@@ -258,7 +258,7 @@ class TurboMind:
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
         self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
-        logger.info(f'turbomind model config:\n\n'  # noqa: E231
+        logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
     def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):

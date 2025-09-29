@@ -129,17 +129,17 @@ def create_error_response(status: HTTPStatus, message: str, error_type='invalid_
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
-        return create_error_response(HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
+        return create_error_response(HTTPStatus.NOT_FOUND, f'The model {request.model!r} does not exist.')
     if hasattr(request, 'n') and request.n <= 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n `{request.n}` must be a positive int.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n {request.n!r} must be a positive int.')
     if hasattr(request, 'top_p') and not (request.top_p > 0 and request.top_p <= 1):
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p `{request.top_p}` must be in (0, 1].')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p {request.top_p!r} must be in (0, 1].')
     if hasattr(request, 'top_k') and request.top_k < 0:
         return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The top_k `{request.top_k}` cannot be a negative integer.')
+                                     f'The top_k {request.top_k!r} cannot be a negative integer.')
     if hasattr(request, 'temperature') and not (request.temperature <= 2 and request.temperature >= 0):
         return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The temperature `{request.temperature}` must be in [0, 2]')
+                                     f'The temperature {request.temperature!r} must be in [0, 2]')
     return
 
 
@@ -315,8 +315,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
-    - response_format (Dict | None): Only pytorch backend support formatting
-        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+    - response_format (Dict | None): To generate response according to given
+        schema. Examples: `{"type": "json_schema", "json_schema": {"name":
         "test","schema": {"properties": {"name": {"type": "string"}},
         "required": ["name"], "type": "object"}}}`
         or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
@@ -365,7 +365,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
 
     model_name = request.model
     adapter_name = None
@@ -385,8 +385,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         gen_logprobs = request.top_logprobs
     response_format = None
     if request.response_format and request.response_format.type != 'text':
-        if VariableInterface.async_engine.backend != 'pytorch':
-            return create_error_response(HTTPStatus.BAD_REQUEST, 'only pytorch backend can use response_format now')
         response_format = request.response_format.model_dump()
 
     if request.logit_bias is not None:
@@ -717,7 +715,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
 
     model_name = request.model
     adapter_name = None
