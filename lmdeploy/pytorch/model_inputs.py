@@ -414,7 +414,7 @@ class StepContext:
     @classmethod
     def get_mask_and_position_ids(cls, inputs: ModelInputs):
         """Get position ids."""
-        q_seqlens = inputs.seq_length
+        q_seqlens = inputs.seq_length_npu
         history_seqlens = inputs.history_lengths
         max_q_seqlen = inputs.max_q_seqlen
 
