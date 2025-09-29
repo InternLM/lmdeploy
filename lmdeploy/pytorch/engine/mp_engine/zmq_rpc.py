@@ -32,6 +32,8 @@ def _task_callback(task: asyncio.Task) -> None:
 class AsyncRPCServer:
 
     def __init__(self):
+        # Warning: DO NOT allow visit rpc server from external network
+        # unauthorized access may lead to code execution vulnerability
         address = 'tcp://localhost'
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.ROUTER)
