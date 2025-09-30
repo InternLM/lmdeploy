@@ -459,6 +459,8 @@ class GenerateReqInput(BaseModel):
 
 
 class GenerateReqMetaOutput(BaseModel):
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
     finish_reason: Optional[Dict[str, Any]] = None
     output_token_logprobs: Optional[List[tuple[float, int]]] = None  # (logprob, token_id)
 
