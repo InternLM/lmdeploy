@@ -47,7 +47,8 @@ class LinearW8A8Impl(ABC):
                 weight: torch.Tensor,
                 scale: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                all_reduce: bool = False,
+                group: Optional[torch.distributed.ProcessGroup] = None):
         """forward."""
         raise NotImplementedError
 

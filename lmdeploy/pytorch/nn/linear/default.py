@@ -4,12 +4,12 @@ from typing import Any, List, Optional
 import torch
 
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..utils import chunk_aligned, get_distribute_size
 from .base import LinearBase
-from .utils import QKVMixin, _get_tp_world_rank, check_qkv_split_layout
+from .utils import QKVMixin, check_qkv_split_layout
 
 
 class BaseLinear(LinearBase):
@@ -27,7 +27,7 @@ class BaseLinear(LinearBase):
         all_reduce: bool = True,
         tp_align_size: int = 1,
         dp_gather: bool = False,
-        dp_scatter: bool = False,
+        layer_type: str = 'attn',
     ):
         super().__init__(dtype=dtype,
                          device=device,
@@ -36,7 +36,7 @@ class BaseLinear(LinearBase):
                          all_reduce=all_reduce,
                          tp_align_size=tp_align_size,
                          dp_gather=dp_gather,
-                         dp_scatter=dp_scatter)
+                         layer_type=layer_type)
         if self.is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
         impl_builder = get_backend().get_layer_impl_builder(OpType.Linear)
@@ -64,7 +64,7 @@ class BaseLinear(LinearBase):
 
     def _get_io_features(self, in_features: int, out_features: int, colwise: bool):
         """Get io features."""
-        world_size, rank = _get_tp_world_rank(self.is_tp)
+        world_size, rank = self.get_tp_world_rank()
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank, align=self.tp_align_size)
         else:
@@ -95,7 +95,7 @@ class BaseLinear(LinearBase):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = _get_tp_world_rank(self.is_tp)
+        world_size, rank = self.get_tp_world_rank()
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -117,11 +117,17 @@ class BaseLinear(LinearBase):
 
     def _forward_default(self, x, all_reduce, tp_sizes):
         """Default forward implement."""
-        if self.dp_scatter:
-            _, rank = get_tp_world_rank()
-            return self.impl.forward(x, self.weight, self.bias, all_reduce, rank, tp_sizes)
+        if self.tp_mode == TPMode.DP_TP:
+            rank = self.tp_rank
+            return self.impl.forward(x,
+                                     self.weight,
+                                     self.bias,
+                                     all_reduce,
+                                     group=self.tp_group,
+                                     rank=rank,
+                                     scatter_size=tp_sizes)
         else:
-            return self.impl.forward(x, self.weight, self.bias, all_reduce)
+            return self.impl.forward(x, self.weight, self.bias, all_reduce, group=self.tp_group)
 
 
 class MergedBaseLinear(BaseLinear):
@@ -135,9 +141,10 @@ class MergedBaseLinear(BaseLinear):
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  out_names: Optional[List[int]] = None,
-                 dp_gather: bool = False):
+                 dp_gather: bool = False,
+                 layer_type: str = 'attn'):
+        self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type=layer_type)
         self.split_section = all_out_features
-        self.is_tp = is_tp
         all_out_features = self._update_all_out_features(all_out_features)
         self.all_out_features = all_out_features
         if out_names is None:
@@ -145,7 +152,15 @@ class MergedBaseLinear(BaseLinear):
         assert len(out_names) == len(self.all_out_features)
         self.out_names_map = dict((name, idx) for idx, name in enumerate(out_names))
         out_features = sum(all_out_features)
-        super().__init__(in_features, out_features, bias, dtype, device, colwise=True, is_tp=is_tp, dp_gather=dp_gather)
+        super().__init__(in_features,
+                         out_features,
+                         bias,
+                         dtype,
+                         device,
+                         colwise=True,
+                         is_tp=is_tp,
+                         dp_gather=dp_gather,
+                         layer_type=layer_type)
         self.setup_loaders()
 
     def setup_loaders(self):
@@ -162,7 +177,7 @@ class MergedBaseLinear(BaseLinear):
 
     def _update_all_out_features(self, all_out_features: List[int]):
         """Update all out features."""
-        world_size, rank = _get_tp_world_rank(self.is_tp)
+        world_size, rank = self.get_tp_world_rank()
         new_all_out_features = []
         for out_feat in all_out_features:
             new_out_feat = get_distribute_size(out_feat, world_size, rank)
@@ -171,7 +186,7 @@ class MergedBaseLinear(BaseLinear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """Weight loader."""
-        world_size, rank = _get_tp_world_rank(self.is_tp)
+        world_size, rank = self.get_tp_world_rank()
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
@@ -199,13 +214,16 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  num_replicate_kv_heads: int = 1):
+        self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type='attn')
         QKVMixin.__init__(self,
                           num_q_heads=num_q_heads,
                           num_kv_heads=num_kv_heads,
                           head_size=head_size,
                           head_size_v=head_size_v,
                           num_replicate_kv_heads=num_replicate_kv_heads,
-                          is_tp=is_tp)
+                          is_tp=is_tp,
+                          tp=self.tp,
+                          tp_rank=self.tp_rank)
 
         all_out_features = self.get_qkv_out_feautures()
         out_names = ('q', 'k', 'v')
@@ -215,7 +233,8 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                          dtype=dtype,
                          device=device,
                          is_tp=is_tp,
-                         out_names=out_names)
+                         out_names=out_names,
+                         layer_type='attn')
 
     def _update_all_out_features(self, all_out_features: List[int]):
         """Update all out features."""
@@ -223,7 +242,7 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """Weight loader."""
-        world_size, rank = _get_tp_world_rank(self.is_tp)
+        world_size, rank = self.get_tp_world_rank()
         chunk_size, chunk_idx = world_size, rank
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]

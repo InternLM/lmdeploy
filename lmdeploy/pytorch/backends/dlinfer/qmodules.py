@@ -36,7 +36,8 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
                 weight: torch.Tensor,
                 scale: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                all_reduce: bool = False,
+                group: Optional[torch.distributed.ProcessGroup] = None):
         """forward."""
         if isinstance(x, torch.Tensor):
             input_quant, input_scale = dynamic_quant(x, self.quant_dtype)
@@ -46,7 +47,7 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
 
         out = linear_w8a8(input_quant, weight, input_scale, scale, self.out_dtype, self.quant_dtype, bias)
         if all_reduce:
-            dist.all_reduce(out)
+            dist.all_reduce(out, group=group)
         return out
 
 

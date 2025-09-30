@@ -341,16 +341,9 @@ class DeepseekV2BMM(nn.Module):
         self.dtype = dtype
         self.device = device
 
-    def _get_tp_world_rank(self):
-        """Get tp world rank."""
-        dist_ctx = get_dist_manager().current_context()
-        if dist_ctx.dp == 1:
-            return get_tp_world_rank()
-        return 1, 0
-
     def _update_batch(self, batch: int):
         """Update out features."""
-        world_size, _ = self._get_tp_world_rank()
+        world_size, _ = get_tp_world_rank('attn')
         batch = batch // world_size
         return batch
 
@@ -360,7 +353,7 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = self._get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('attn')
         weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
@@ -521,11 +514,11 @@ class DeepseekV2Attention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        dist_ctx = get_dist_manager().current_context()
-        if dist_ctx.dp > 1:
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp > 1:
             num_heads = self.num_heads
         else:
-            world_size = dist_ctx.world_size
+            world_size = dist_config.world_size
             num_heads = self.num_heads // world_size
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
@@ -678,9 +671,10 @@ class DeepseekV2MoE(nn.Module):
         self.topk_group = config.topk_group
 
         dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dp
-        world_size = dist_ctx.world_size
-        moe_all_reduce = dp > 1 and dist_ctx.tp > 1
+        dist_config = dist_ctx.dist_config
+        dp = dist_config.dp
+        world_size = dist_config.world_size
+        moe_all_reduce = dp > 1 and dist_config.tp > 1
         if get_dist_manager().current_context().dist_config.enable_eplb:
             eplb_dispatch_info = EPLBManager.get_dispatch_info(
                 ep_rank=dist_ctx.ep_rank,
@@ -753,8 +747,8 @@ class DeepseekV2MLP(nn.Module):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if is_shared_expert:
-            dist_ctx = get_dist_manager().current_context()
-            dp = dist_ctx.dp
+            dist_config = get_dist_manager().current_config()
+            dp = dist_config.dp
             if dp == 1:
                 # split weight, do all reduce in moe
                 is_tp = True
