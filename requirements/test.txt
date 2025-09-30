@@ -1,5 +1,6 @@
 allure-pytest
 coverage
+jsonschema
 nvidia-ml-py
 pytest
 pytest-assume
@@ -9,3 +10,4 @@ pytest-rerunfailures
 pytest-sugar
 pytest-xdist
 pyyaml
+timm
