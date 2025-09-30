@@ -440,7 +440,7 @@ class UpdateParamsRequest(BaseModel):
 # /generate input
 class GenerateReqInput(BaseModel):
     session_id: Optional[int] = -1
-    text: Optional[str] = None
+    prompt: Optional[str] = None
     input_ids: Optional[List[int]] = None
     return_logprob: Optional[bool] = None
     max_tokens: int = 128
@@ -461,6 +461,6 @@ class GenerateReqInput(BaseModel):
 # /generate output
 class GenerateReqOutput(BaseModel):
     text: str
-    output_ids: List[int]
+    gen_tokens: List[int]
     logprobs: Optional[List[tuple[int, float]]] = None  # (token_id, logprob)
     finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None

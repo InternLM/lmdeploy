@@ -927,7 +927,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     )
 
     result_generator = VariableInterface.async_engine.generate(
-        messages=request.text,
+        messages=request.prompt,
         session_id=request.session_id,
         input_ids=request.input_ids,
         gen_config=gen_config,
@@ -937,10 +937,10 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         do_preprocess=False,
     )
 
-    def create_generate_response_json(text, output_ids, logprobs, finish_reason):
+    def create_generate_response_json(text, gen_tokens, logprobs, finish_reason):
         response = GenerateReqOutput(
             text=text,
-            output_ids=output_ids,
+            gen_tokens=gen_tokens,
             logprobs=logprobs or None,
             finish_reason=finish_reason,
         )
@@ -950,12 +950,12 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         text = ''  # full response
         async for res in result_generator:
             text += res.response or ''
-            output_ids = res.token_ids
+            gen_tokens = res.token_ids
             logprobs = []
             if res.logprobs:
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                     logprobs.append((tok, tok_logprobs[tok]))
-            response_json = create_generate_response_json(text, output_ids, logprobs, res.finish_reason)
+            response_json = create_generate_response_json(text, gen_tokens, logprobs, res.finish_reason)
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -963,18 +963,18 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         return StreamingResponse(generate_stream_generator(), media_type='text/event-stream')
 
     text = ''
-    output_ids = []
+    gen_tokens = []
     logprobs = []
     async for res in result_generator:
         text += res.response or ''
-        output_ids.extend(res.token_ids or [])
+        gen_tokens.extend(res.token_ids or [])
         if res.logprobs:
             for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                 logprobs.append((tok, tok_logprobs[tok]))
 
     response = GenerateReqOutput(
         text=text,
-        output_ids=output_ids,
+        gen_tokens=gen_tokens,
         logprobs=logprobs or None,
         finish_reason=res.finish_reason,
     )
