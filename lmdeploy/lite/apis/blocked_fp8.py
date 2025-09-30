@@ -47,6 +47,7 @@ def blocked_fp8(model: str,
         'mlp.gate',  # sparse MOE router gate
         'vision_model',  # non-HF InternVL, vision part
         'mlp1',  # non-HF InternVL, projector
+        'mlp2',  # non-HF InternVL-Flash, projector
         'vision_tower',  # HF InternVL, vision part
         'multi_modal_projector',  # HF InternVL, projector
     ]
