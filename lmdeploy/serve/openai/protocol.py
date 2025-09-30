@@ -458,9 +458,13 @@ class GenerateReqInput(BaseModel):
     include_stop_str_in_output: Optional[bool] = False
 
 
+class GenerateReqMetaOutput(BaseModel):
+    finish_reason: Optional[Dict[str, Any]] = None
+    output_token_logprobs: Optional[List[tuple[float, int]]] = None  # (logprob, token_id)
+
+
 # /generate output
 class GenerateReqOutput(BaseModel):
     text: str
-    gen_tokens: List[int]
-    logprobs: Optional[List[tuple[int, float]]] = None  # (token_id, logprob)
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    output_ids: List[int]
+    meta_info: GenerateReqMetaOutput

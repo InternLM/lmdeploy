@@ -38,9 +38,9 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponse, CompletionResponseChoice,
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-                                            GenerateReqInput, GenerateReqOutput, GenerateRequest, LogProbs, ModelCard,
-                                            ModelList, ModelPermission, PoolingRequest, PoolingResponse, TopLogprob,
-                                            UpdateParamsRequest, UsageInfo)
+                                            GenerateReqInput, GenerateReqMetaOutput, GenerateReqOutput, GenerateRequest,
+                                            LogProbs, ModelCard, ModelList, ModelPermission, PoolingRequest,
+                                            PoolingResponse, TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -937,25 +937,31 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         do_preprocess=False,
     )
 
-    def create_generate_response_json(text, gen_tokens, logprobs, finish_reason):
-        response = GenerateReqOutput(
-            text=text,
-            gen_tokens=gen_tokens,
-            logprobs=logprobs or None,
-            finish_reason=finish_reason,
-        )
+    def create_finish_reason(finish_reason):
+        # TODO: add detail info
+        if not finish_reason:
+            return None
+        if finish_reason == 'length':
+            return dict(type='length')
+        if finish_reason == 'stop':
+            return dict(type='stop')
+        return dict(type='abort')
+
+    def create_generate_response_json(text, output_ids, logprobs, finish_reason):
+        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(finish_reason),
+                                     output_token_logprobs=logprobs or None)
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
         return response.model_dump_json()
 
     async def generate_stream_generator():
-        text = ''  # full response
         async for res in result_generator:
-            text += res.response or ''
-            gen_tokens = res.token_ids
+            text = res.response or ''
+            output_ids = res.token_ids
             logprobs = []
             if res.logprobs:
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
-                    logprobs.append((tok, tok_logprobs[tok]))
-            response_json = create_generate_response_json(text, gen_tokens, logprobs, res.finish_reason)
+                    logprobs.append((tok_logprobs[tok], tok))
+            response_json = create_generate_response_json(text, output_ids, logprobs, res.finish_reason)
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -963,21 +969,19 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         return StreamingResponse(generate_stream_generator(), media_type='text/event-stream')
 
     text = ''
-    gen_tokens = []
+    output_ids = []
     logprobs = []
     async for res in result_generator:
         text += res.response or ''
-        gen_tokens.extend(res.token_ids or [])
+        output_ids.extend(res.token_ids or [])
         if res.logprobs:
             for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
-                logprobs.append((tok, tok_logprobs[tok]))
+                logprobs.append((tok_logprobs[tok], tok))
 
-    response = GenerateReqOutput(
-        text=text,
-        gen_tokens=gen_tokens,
-        logprobs=logprobs or None,
-        finish_reason=res.finish_reason,
-    )
+    response = GenerateReqOutput(text=text,
+                                 output_ids=output_ids,
+                                 meta_info=GenerateReqMetaOutput(finish_reason=create_finish_reason(res.finish_reason),
+                                                                 output_token_logprobs=logprobs or None))
     return response
 
 
