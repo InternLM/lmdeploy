@@ -41,9 +41,15 @@ def blocked_fp8(model: str,
 
     # collect all linear layers
     fcs = collect_target_modules(model, nn.Linear)
-
-    # NOTE: don't quantize 'mlp1' in InternVL3
-    skip_patterns = ['lm_head', 'embed_tokens', 'vision_model', 'mlp1']
+    skip_patterns = [
+        'lm_head',
+        'embed_tokens',
+        'mlp.gate',  # sparse MOE router gate
+        'vision_model',  # non-HF InternVL, vision part
+        'mlp1',  # non-HF InternVL, projector
+        'vision_tower',  # HF InternVL, vision part
+        'multi_modal_projector',  # HF InternVL, projector
+    ]
     modules_to_not_convert = []
 
     # quantize and replace linear layers
@@ -88,9 +94,10 @@ def blocked_fp8(model: str,
     # save model and tokenizer
     if not osp.exists(work_dir):
         os.makedirs(work_dir)
+    print('Saving the quantized model ...')
     model.save_pretrained(work_dir, safe_serialization=True)
     tokenizer.save_pretrained(work_dir)
-    print(f'Blocked FP8 model saved to {work_dir}')
+    print(f'Blocked FP8 model successfully saved to {work_dir}')
 
 
 if __name__ == '__main__':
