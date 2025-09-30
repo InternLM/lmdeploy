@@ -970,22 +970,30 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     if request.stream:
         return StreamingResponse(generate_stream_generator(), media_type='text/event-stream')
 
-    text = ''
-    output_ids = []
-    logprobs = []
-    async for res in result_generator:
-        text += res.response or ''
-        output_ids.extend(res.token_ids or [])
-        if res.logprobs:
-            for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
-                logprobs.append((tok_logprobs[tok], tok))
+    response = None
 
-    response = GenerateReqOutput(text=text,
-                                 output_ids=output_ids,
-                                 meta_info=GenerateReqMetaOutput(finish_reason=create_finish_reason(res.finish_reason),
-                                                                 output_token_logprobs=logprobs or None,
-                                                                 prompt_tokens=res.input_token_len,
-                                                                 completion_tokens=res.generate_token_len))
+    async def _inner_call():
+        text = ''
+        output_ids = []
+        logprobs = []
+        async for res in result_generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                await VariableInterface.async_engine.stop_session(request.session_id)
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+            text += res.response or ''
+            output_ids.extend(res.token_ids or [])
+            if res.logprobs:
+                for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
+                    logprobs.append((tok_logprobs[tok], tok))
+        nonlocal response
+        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(res.finish_reason),
+                                     output_token_logprobs=logprobs or None,
+                                     prompt_tokens=res.input_token_len,
+                                     completion_tokens=res.generate_token_len)
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
+
+    await _inner_call()
     return response
 
 
