@@ -36,7 +36,7 @@ def blocked_fp8(model: str,
         model_path = model
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.float16)
+    model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True, dtype=torch.bfloat16)
     model = model.eval().cuda()
 
     # collect all linear layers
