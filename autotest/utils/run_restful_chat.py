@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import subprocess
@@ -31,7 +32,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     # temp remove testcase because of issue 3434
     if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
-        if 'turbomind' in backend_type and extra is not None and 'communicator native' in extra and tp_num > 1:
+        if 'turbomind' in backend_type and extra is not None and 'cuda-ipc' in extra and tp_num > 1:
             return
 
     if 'modelscope' in param.keys():
@@ -84,7 +85,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         cmd += ' --cache-max-entry-count 0.5'
 
-    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '_' + timestamp + '.log')
 
     print('reproduce command restful: ' + cmd)
 
@@ -96,8 +98,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     start_timeout = 300
-    if not _is_bf16_supported_by_device():
-        start_timeout = 600
+    if not _is_bf16_supported_by_device() or tp_num >= 4:
+        start_timeout = 720
 
     sleep(5)
     for i in range(start_timeout):
