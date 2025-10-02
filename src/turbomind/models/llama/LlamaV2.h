@@ -69,6 +69,8 @@ private:
                  Buffer_<int>     h_context_length,
                  Buffer           rope_base,
                  MropeRope*       mrope,
+                 Tensor           cp_M,
+                 Tensor           cp_L,
                  Buffer           finished,
                  Buffer           local_token_nums,
                  Buffer           lora_mask,

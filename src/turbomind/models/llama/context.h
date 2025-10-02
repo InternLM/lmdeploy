@@ -17,11 +17,13 @@ namespace turbomind {
 
 struct Communicators {
     comm::HostComm h_comm;
+    comm::HostComm h_tp_cp_group;
     comm::HostComm h_tp_group;
     comm::HostComm h_dp_group;
 
     comm::DeviceComm d_comm;
     int              d_tp_group;
+    int              d_cp_group;
 };
 
 // Execution context for the model
