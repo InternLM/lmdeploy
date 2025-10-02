@@ -238,8 +238,11 @@ class AscendOpsBackend(DlinferOpsBackend):
         else:
             kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(step_context.q_seqlens, 0).cpu()
             block_offsets_int32 = step_context.block_offsets.to(torch.int32)
-            step_context.block_offsets = block_offsets_int32\
-                .repeat_interleave(step_context.q_seqlens, 0)
+            try:
+                step_context.block_offsets = block_offsets_int32\
+                    .repeat_interleave(step_context.q_seqlens.to(block_offsets_int32.device), 0)
+            except:
+                logger.error(f'block offsets: {step_context.block_offsets.device}   qseq: {step_context.q_seqlens.device}')
         kv_seqlens = kv_seqlens_cpu
 
         attn_meta_cls = cls.get_attention_metadata_cls()

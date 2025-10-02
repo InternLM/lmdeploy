@@ -253,11 +253,14 @@ class ModelInputs:
                 max_q_seqlen = max_q_seqlen.item()
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
-                seq_length=input_ids.new_tensor([end - start]),
+                seq_length=input_ids.new_tensor([end - start]).cpu(),
+                seq_length_npu=input_ids.new_tensor([end - start]),
                 block_offsets=self.block_offsets,
                 history_lengths=self.history_lengths + start,
+                history_lengths_cpu=(self.history_lengths + start).cpu(),
                 is_decoding=self.is_decoding,
-                num_ignored_history=self.num_ignored_history,
+                num_ignored_history=self.num_ignored_history.cpu(),
+                num_ignored_history_npu=self.num_ignored_history.to(self.input_ids.device),
                 max_q_seqlen=max_q_seqlen,
                 max_kv_seqlen=max_kv_seqlen,
                 sum_kv_seqlen=max_kv_seqlen,
