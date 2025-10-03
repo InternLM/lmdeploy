@@ -58,9 +58,17 @@ class GptOssChatParser:
                                                     index=base_index,
                                                     function=DeltaFunctionCall(name=tool_name, arguments=''))
                 elif delta_text:
+                    # Continuing the same tool call. Ensure we don't duplicate the
+                    # very first delta string in this chunk. Previously we initialized
+                    # with arguments=delta_text and then appended again, causing
+                    # duplicated content like "locationlocation".
                     if delta_tool_call is None:
+                        # We are in the middle of a tool call carried over from the
+                        # previous chunk. Initialize an empty arguments buffer and
+                        # attach the tool name for completeness.
+                        tool_name = cur_recipient.split('functions.', 1)[1]
                         delta_tool_call = DeltaToolCall(index=base_index,
-                                                        function=DeltaFunctionCall(arguments=delta_text))
+                                                        function=DeltaFunctionCall(name=tool_name, arguments=''))
                     delta_tool_call.function.arguments += delta_text
 
         if delta_tool_call:
