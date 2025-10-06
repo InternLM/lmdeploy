@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import torch
 from torch import Tensor
@@ -34,6 +34,9 @@ class CudaGraphMeta:
     input_buffers: BuffType = None
     output_buffers: BuffType = None
     vocab_size: int = 1
+    use_mla_fp8_cache: bool = False
+    use_flash_mla: bool = False
+    mla_index_topk: Optional[int] = None
 
 
 class CudaGraphMixin:
@@ -68,10 +71,16 @@ class CudaGraphMixin:
             import flash_mla
 
             # create buffers for flash mla
+            num_attention_heads = self.config.num_attention_heads
+            index_topk = graph_meta.mla_index_topk
+            num_heads_q = None if index_topk is None else num_attention_heads
             input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
                 torch.ones(max_batches, dtype=torch.int32, device=device),
-                self.config.num_attention_heads,
-                num_heads_k=1)
+                num_attention_heads,
+                num_heads_k=1,
+                num_heads_q=num_heads_q,
+                is_fp8_kvcache=graph_meta.use_mla_fp8_cache,
+                topk=index_topk)
 
         # flash_mla requires block_offsets and kv_lens int32
         input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks), dtype=torch.int32, device=device)
@@ -125,9 +134,16 @@ class CudaGraphMixin:
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
         if getattr(self.config, 'use_flash_mla', False) is True:
             import flash_mla
-            tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
-                                                                             self.config.num_attention_heads,
-                                                                             num_heads_k=1)
+            num_attention_heads = self.config.num_attention_heads
+            index_topk = graph_meta.mla_index_topk
+            num_heads_q = None if index_topk is None else num_attention_heads
+            tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
+                attn_metadata.kv_seqlens.to(torch.int32),
+                num_attention_heads,
+                num_heads_k=1,
+                num_heads_q=num_heads_q,
+                is_fp8_kvcache=graph_meta.use_mla_fp8_cache,
+                topk=index_topk)
             # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
             input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
             input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])

@@ -45,4 +45,6 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
             index_k_shape = ([hf_config.index_head_dim], torch.float8_e4m3fn)
             index_k_scale_shape = ([1], torch.float32)
             config.cache_shapes = [index_k_shape, index_k_scale_shape]
+            config.use_mla_fp8_cache = True
+            config.mla_index_topk = hf_config.index_topk
         return config

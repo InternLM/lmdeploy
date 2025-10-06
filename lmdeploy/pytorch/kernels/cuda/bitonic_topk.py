@@ -191,7 +191,7 @@ def bitonic_topk(scores: torch.Tensor, kv_seqlens: torch.Tensor, k: int, fill: i
                                 descending=1 if descending else 0,
                                 num_warps=4)
 
-    out = kv_seqlens.new_empty((batch, k))
+    out = kv_seqlens.new_empty((batch, k), dtype=torch.int32)
     _bitonic_topk_kernel1[(batch, )](tmp_scores,
                                      tmp_ids,
                                      kv_seqlens,

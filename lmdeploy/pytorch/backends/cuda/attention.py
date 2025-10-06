@@ -264,7 +264,12 @@ class FlashMLAImpl(TritonAttentionImpl):
         )
 
         import flash_mla
+
+        from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache_mla_fp8
         self.flash_mla_with_kvcache = flash_mla.flash_mla_with_kvcache
+        self.fill_kv_cache_blocked_fp8 = fill_kv_cache_blocked_fp8
+        self.flatten_kv_cache_mla_fp8 = flatten_kv_cache_mla_fp8
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
 
     def forward(
@@ -301,8 +306,43 @@ class FlashMLAImpl(TritonAttentionImpl):
             fill_max_q_seqlen = key.numel() // (key.size(-1) * key.size(-2))
             fill_q_start_loc = fill_seqlens.cumsum(0) - fill_seqlens
 
+        # check nsa
+        is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
+        if nsa_indices is not None:
+            nsa_indices = nsa_indices[:, None]
+            causal = False if nsa_indices is not None else self.causal
+            assert is_fp8_kvcache
+
         # fill kv cache
-        if key is not None and value is not None:
+        if is_fp8_kvcache:
+            k_cache_scale = k_cache[..., 512:512 + 16].view(torch.float32)
+            k_cache_nope = k_cache[..., :512]
+            k_cache_pe = k_cache[..., 512 + 16:].view(key.dtype)
+            self.fill_kv_cache_blocked_fp8(
+                key[..., :512],
+                None,
+                k_cache_nope,
+                None,
+                k_cache_scale,
+                None,
+                cu_seqlen_q=attn_metadata.cu_seqlens_q,
+                kv_seqlens=attn_metadata.kv_seqlens,
+                max_q_seqlen=max_q_seqlen,
+                block_offsets=block_offsets,
+                group_size=128,
+            )
+            self.fill_kv_cache(
+                key[..., 512:],
+                None,
+                k_cache_pe,
+                None,
+                fill_q_start_loc,
+                fill_seqlens,
+                kv_seq_length=kv_seqlens,
+                max_q_seq_length=fill_max_q_seqlen,
+                block_offsets=block_offsets,
+            )
+        else:
             self.fill_kv_cache(
                 key,
                 value,
@@ -326,9 +366,6 @@ class FlashMLAImpl(TritonAttentionImpl):
             query = query.unsqueeze(1)
             if kv_seqlens.dtype == torch.int64:
                 kv_seqlens = kv_seqlens.to(torch.int32)
-            causal = False if nsa_indices is not None else self.causal
-            if nsa_indices is not None:
-                nsa_indices = nsa_indices[:, None]
             attn_output, _ = self.flash_mla_with_kvcache(query,
                                                          k_cache=k_cache,
                                                          block_table=block_offsets,
@@ -338,25 +375,39 @@ class FlashMLAImpl(TritonAttentionImpl):
                                                          tile_scheduler_metadata=attn_metadata.tile_scheduler_metadata,
                                                          num_splits=attn_metadata.num_splits,
                                                          causal=causal,
+                                                         is_fp8_kvcache=is_fp8_kvcache,
                                                          indices=nsa_indices)
             attn_output = attn_output.squeeze(1)
         else:
             BLOCK_BS = k_cache.size(1)
             # pad one more block to avoid invalid kv visit
             out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
-            flatten_k, flatten_v = self.flatten_kv_cache(
-                k_cache,
-                v_cache,
-                kv_seqlens,
-                block_offsets,
-                start_loc=kv_start_loc,
-                out_size=kv_flatten_size if use_fa3 else out_size,
-                out_dtype=query.dtype,
-                k_scales_zeros=k_scales_zeros,
-                v_scales_zeros=v_scales_zeros,
-                quant_policy=quant_policy,
-                flatten_kv_layout='shd' if use_fa3 else 'hsd',
-            )
+            flatten_kv_layout = 'shd' if use_fa3 else 'hsd'
+            if is_fp8_kvcache:
+                flatten_k = self.flatten_kv_cache_mla_fp8(
+                    k_cache,
+                    kv_seqlens,
+                    block_offsets,
+                    start_loc=kv_start_loc,
+                    out_size=out_size,
+                    out_dtype=query.dtype,
+                    flatten_kv_layout=flatten_kv_layout,
+                )
+                flatten_v = flatten_k[..., :512]
+            else:
+                flatten_k, flatten_v = self.flatten_kv_cache(
+                    k_cache,
+                    v_cache,
+                    kv_seqlens,
+                    block_offsets,
+                    start_loc=kv_start_loc,
+                    out_size=kv_flatten_size if use_fa3 else out_size,
+                    out_dtype=query.dtype,
+                    k_scales_zeros=k_scales_zeros,
+                    v_scales_zeros=v_scales_zeros,
+                    quant_policy=quant_policy,
+                    flatten_kv_layout=flatten_kv_layout,
+                )
             if use_fa3:
                 q_rope = query[:, :, self.v_head_size:]
                 q_nope = query[:, :, :self.v_head_size]

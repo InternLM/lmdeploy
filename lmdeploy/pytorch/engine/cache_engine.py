@@ -51,6 +51,11 @@ class CacheEngine:
         self.block_size = cache_config.block_size
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = model_config.dtype
+
+        if self.model_config.use_mla_fp8_cache:
+            self.kv_cache_dtype = torch.float8_e4m3fn
+            cache_config.quant_policy = 0
+
         if cache_config.quant_policy > 0:
             if self.cache_config.device_type in ['cuda']:
                 self.kv_cache_dtype = torch.uint8
@@ -106,6 +111,12 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
+
+        if model_config.use_mla_fp8_cache:
+            # 512*1 + 4*4 + 64*2 = 656
+            # TODO: Dirty magic number
+            return (block_size, num_heads, 656)
+
         if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
@@ -128,6 +139,12 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
+
+        if model_config.use_mla_fp8_cache:
+            # 512*1 + 4*4 + 64*2 = 656
+            # TODO: Dirty magic number
+            return (block_size, num_heads, 0)
+
         if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'

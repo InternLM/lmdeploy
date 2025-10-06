@@ -267,6 +267,7 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
         torch.testing.assert_close(v_caches, gt[1])
 
 
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestFillKVCacheBlockedFP8(TestFillKVCache):
 
     @pytest.fixture

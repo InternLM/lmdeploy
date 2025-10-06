@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from transformers import AutoConfig
-from lmdeploy.utils import get_logger
 from functools import lru_cache
+
+from transformers import AutoConfig
+
+from lmdeploy.utils import get_logger
 
 
 @lru_cache()
@@ -12,7 +14,9 @@ def register_config(model_type: str):
     else:
         logger.debug(f'Can not register config for model_type: {model_type}')
 
+
 logger = get_logger('lmdeploy')
+
 
 def config_from_pretrained(pretrained_model_name_or_path: str, **kwargs):
     try:

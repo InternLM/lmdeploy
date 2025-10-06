@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 import triton
@@ -267,9 +267,9 @@ def _fill_kv_cache_quant_kernel(
 
 
 def fill_kv_cache(k_states: Tensor,
-                  v_states: Tensor,
+                  v_states: Optional[Tensor],
                   k_caches: Tensor,
-                  v_caches: Tensor,
+                  v_caches: Optional[Tensor],
                   q_start_loc: Tensor,
                   q_seq_length: Tensor,
                   kv_seq_length: Tensor,
@@ -286,6 +286,10 @@ def fill_kv_cache(k_states: Tensor,
         b_dim, s_dim, h_dim, d_dim = (0, 2, 1, 3)
     else:
         raise RuntimeError('Unsupported layout.')
+    if v_states is None:
+        v_states = k_states[..., :0]
+    if v_caches is None:
+        v_caches = k_caches[..., :0]
 
     block_offsets = block_offsets.contiguous()
     batch_size = block_offsets.size(0)
@@ -529,11 +533,11 @@ def _fill_kv_cache_blocked_fp8_kernel(
 
 
 def fill_kv_cache_blocked_fp8(k_states: Tensor,
-                              v_states: Tensor,
+                              v_states: Optional[Tensor],
                               k_caches: Tensor,
-                              v_caches: Tensor,
+                              v_caches: Optional[Tensor],
                               ks_caches: Tensor,
-                              vs_caches: Tensor,
+                              vs_caches: Optional[Tensor],
                               cu_seqlen_q: Tensor,
                               kv_seqlens: Tensor,
                               max_q_seqlen: int,
@@ -552,7 +556,9 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
 
     if v_states is None:
         v_states = k_states[..., :0]
+    if v_caches is None:
         v_caches = k_caches[..., :0]
+    if vs_caches is None:
         vs_caches = ks_caches[..., :0]
 
     block_offsets = block_offsets.contiguous()

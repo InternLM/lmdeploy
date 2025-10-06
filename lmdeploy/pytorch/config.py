@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import torch
 
@@ -203,10 +203,17 @@ class ModelConfig:
     llm_config: Any = None
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
+
+    # flash mla
     use_flash_mla: bool = False
+    use_mla_fp8_cache: bool = False
+    mla_index_topk: Optional[int] = None
+
+    # dllm
     model_paradigm: str = 'ar'
     dllm_mask_token: int = 0
     dllm_block_length: int = None
+
     cache_shapes: List[Tuple[List[int], torch.dtype]] = field(default_factory=list)
 
     def get_head_size(self):

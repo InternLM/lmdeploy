@@ -12,15 +12,6 @@ from ..default import DefaultOpsBackend
 logger = get_logger('lmdeploy')
 
 
-def _get_meta_flashmla(kv_seqlens, num_attention_heads):
-    """Get meta for flashmla."""
-    import flash_mla
-    tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(kv_seqlens.to(torch.int32),
-                                                                     num_attention_heads,
-                                                                     num_heads_k=1)
-    return tile_scheduler_metadata, num_splits
-
-
 class CudaOpsBackend(DefaultOpsBackend):
     """Cuda layer backend."""
 
@@ -116,10 +107,19 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
 
     @classmethod
-    def update_meta_flashmla(cls, attn_metadata, num_attention_heads):
+    def update_meta_flashmla(cls, attn_metadata, model_config: ModelConfig):
         """Update meta for flashmla."""
-        tile_scheduler_metadata, num_splits = _get_meta_flashmla(attn_metadata.kv_seqlens.to(torch.int32),
-                                                                 num_attention_heads)
+        import flash_mla
+        num_attention_heads = model_config.num_attention_heads
+        is_fp8_kvcache = model_config.use_mla_fp8_cache
+        index_topk = model_config.mla_index_topk
+        num_heads_q = None if index_topk is None else num_attention_heads
+        tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
+                                                                         num_attention_heads,
+                                                                         num_heads_k=1,
+                                                                         num_heads_q=num_heads_q,
+                                                                         is_fp8_kvcache=is_fp8_kvcache,
+                                                                         topk=index_topk)
         attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
         attn_metadata.num_splits = num_splits
 
@@ -154,7 +154,8 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
         if getattr(step_context.model_config, 'use_flash_mla', False) is True:
             if step_context.is_decoding is True:
-                cls.update_meta_flashmla(attn_metadata, step_context.model_config.num_attention_heads)
+                model_config = step_context.model_config
+                cls.update_meta_flashmla(attn_metadata, model_config)
 
         cross_seqlens = step_context.cross_seqlens
         cross_kv_seqlens = step_context.cross_kv_seqlens

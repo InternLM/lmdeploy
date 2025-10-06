@@ -24,6 +24,7 @@ def _make_A(M, K, group_size, out_dtype, device):
     return A, quant_A, scale
 
 
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestDSIndex:
 
     @pytest.fixture
