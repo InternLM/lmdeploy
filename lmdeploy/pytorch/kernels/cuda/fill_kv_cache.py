@@ -525,11 +525,11 @@ def _fill_kv_cache_blocked_fp8_kernel(
         v = tl.load(vs_ptrs, mask=mask_vs)
     kc, kcs = _quant_blocked_fp8(k, fp8_min, fp8_max, KCaches.dtype.element_ty, GROUP_SIZE)
     tl.store(kc_ptrs, kc, mask=mask_kc)
-    tl.store(ksc_ptrs, kcs)
+    tl.store(ksc_ptrs, kcs, mask=kv_mask[:, None] & (ds_off[None, :] < _div_up(head_dim, GROUP_SIZE)))
     if BLOCK_DV > 0:
         vc, vcs = _quant_blocked_fp8(v, fp8_min, fp8_max, VCaches.dtype.element_ty, GROUP_SIZE)
         tl.store(vc_ptrs, vc, mask=mask_vc)
-        tl.store(vsc_ptrs, vcs)
+        tl.store(vsc_ptrs, vcs, mask=kv_mask[:, None] & (ds_off[None, :] < _div_up(head_dim_v, GROUP_SIZE)))
 
 
 def fill_kv_cache_blocked_fp8(k_states: Tensor,
@@ -584,7 +584,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
     fmax = finfo.max
 
     grid = (num_heads, max_num_blocks, batch_size)
-    is_decoding = max_num_blocks == 1
+    is_decoding = max_q_seqlen == 1
     _fill_kv_cache_blocked_fp8_kernel[grid](
         k_states,
         v_states,

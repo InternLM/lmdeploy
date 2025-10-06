@@ -25,8 +25,11 @@ def config_from_pretrained(pretrained_model_name_or_path: str, **kwargs):
         logger.debug(f'AutoConfig.from_pretrained failed: {e}, try register config manually.')
         # some models (dsv32) does not provide auto map for config
         from transformers import PretrainedConfig
+        trust_remote_code = kwargs.pop('trust_remote_code', None)
         config_dict, _ = PretrainedConfig.get_config_dict(pretrained_model_name_or_path, **kwargs)
         model_type = config_dict.get('model_type', None)
+        if trust_remote_code is not None:
+            kwargs['trust_remote_code'] = trust_remote_code
         register_config(model_type)
 
     return AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)

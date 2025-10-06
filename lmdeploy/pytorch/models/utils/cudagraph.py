@@ -93,6 +93,10 @@ class CudaGraphMixin:
         # create buffer for cross_attn_metadata here
         input_buffers['fill_seqlens'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
 
+        input_buffers['cu_seqlens'] = torch.zeros(2, max_batches + 1, dtype=torch.int32, device=device)
+        input_buffers['cu_seqlens_q'] = input_buffers['cu_seqlens'][0]
+        input_buffers['cu_seqlens_k'] = input_buffers['cu_seqlens'][1]
+
         return input_buffers
 
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
@@ -119,6 +123,8 @@ class CudaGraphMixin:
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
         input_buffers['qkv_lens'].zero_()
         input_buffers['qkv_lens'][:, :batch_size] = qkv
+        input_buffers['cu_seqlens_q'][1:batch_size + 1] = input_buffers['q_seqlens'][:batch_size].cumsum(0)
+        input_buffers['cu_seqlens_k'][1:batch_size + 1] = input_buffers['kv_seqlens'][:batch_size].cumsum(0)
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
             if 'inputs_embeds' not in input_buffers:
@@ -132,6 +138,8 @@ class CudaGraphMixin:
         attn_metadata.q_start_loc = input_buffers['q_start_loc']
         attn_metadata.q_seqlens = input_buffers['q_seqlens']
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
+        attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
+        attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
         if getattr(self.config, 'use_flash_mla', False) is True:
             import flash_mla
             num_attention_heads = self.config.num_attention_heads

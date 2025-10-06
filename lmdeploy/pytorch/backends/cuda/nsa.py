@@ -46,7 +46,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                   kv_seqlens=k_seqlens,
                                   max_q_seqlen=max_q_seqlen,
                                   block_offsets=block_offset,
-                                  group_size=128)
+                                  group_size=self.block_size)
 
         scores = fp8_index(q,
                            q_s,
