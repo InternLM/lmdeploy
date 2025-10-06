@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from dataclasses import dataclass
-from typing import Any, Dict, List, Literal
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Tuple
 
 import torch
 
@@ -207,6 +207,7 @@ class ModelConfig:
     model_paradigm: str = 'ar'
     dllm_mask_token: int = 0
     dllm_block_length: int = None
+    cache_shapes: List[Tuple[List[int], torch.dtype]] = field(default_factory=list)
 
     def get_head_size(self):
         """Get head size."""
@@ -232,9 +233,9 @@ class ModelConfig:
         """
         from transformers import AutoConfig
 
+        from lmdeploy.pytorch.transformers import config_from_pretrained
         from lmdeploy.utils import get_logger
-
-        hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
+        hf_config = config_from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)

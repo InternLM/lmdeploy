@@ -107,6 +107,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         v_scales_zeros: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
         inplace: bool = True,
+        **kwargs,
     ) -> torch.Tensor:
         """forward."""
         block_offsets = attn_metadata.block_offsets
@@ -262,10 +263,9 @@ class FlashMLAImpl(TritonAttentionImpl):
             **kwargs,
         )
 
-        from lmdeploy.pytorch.kernels.cuda import flash_mla_fwd
-        self.flash_mla_fwd = flash_mla_fwd
+        import flash_mla
+        self.flash_mla_with_kvcache = flash_mla.flash_mla_with_kvcache
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
-        use_fa3_warning()
 
     def forward(
         self,
@@ -277,8 +277,8 @@ class FlashMLAImpl(TritonAttentionImpl):
         attn_metadata: TritonAttentionMetadata,
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
-        learnable_sink: torch.Tensor = None,
-        inplace: bool = True,
+        nsa_indices: torch.Tensor = None,
+        **kwargs,
     ) -> torch.Tensor:
         """forward."""
 
@@ -326,15 +326,20 @@ class FlashMLAImpl(TritonAttentionImpl):
             query = query.unsqueeze(1)
             if kv_seqlens.dtype == torch.int64:
                 kv_seqlens = kv_seqlens.to(torch.int32)
-            attn_output = self.flash_mla_fwd(query,
-                                             k_cache=k_cache,
-                                             block_table=block_offsets,
-                                             cache_seqlens=kv_seqlens,
-                                             head_dim_v=self.v_head_size,
-                                             softmax_scale=self.scale,
-                                             tile_scheduler_metadata=attn_metadata.tile_scheduler_metadata,
-                                             num_splits=attn_metadata.num_splits,
-                                             causal=True)
+            causal = False if nsa_indices is not None else self.causal
+            if nsa_indices is not None:
+                nsa_indices = nsa_indices[:, None]
+            attn_output, _ = self.flash_mla_with_kvcache(query,
+                                                         k_cache=k_cache,
+                                                         block_table=block_offsets,
+                                                         cache_seqlens=kv_seqlens,
+                                                         head_dim_v=self.v_head_size,
+                                                         softmax_scale=self.scale,
+                                                         tile_scheduler_metadata=attn_metadata.tile_scheduler_metadata,
+                                                         num_splits=attn_metadata.num_splits,
+                                                         causal=causal,
+                                                         indices=nsa_indices)
+            attn_output = attn_output.squeeze(1)
         else:
             BLOCK_BS = k_cache.size(1)
             # pad one more block to avoid invalid kv visit

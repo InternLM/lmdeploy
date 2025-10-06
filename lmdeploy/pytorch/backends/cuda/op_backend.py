@@ -15,7 +15,9 @@ logger = get_logger('lmdeploy')
 def _get_meta_flashmla(kv_seqlens, num_attention_heads):
     """Get meta for flashmla."""
     import flash_mla
-    tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(kv_seqlens.to(torch.int32), num_attention_heads, 1)
+    tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(kv_seqlens.to(torch.int32),
+                                                                     num_attention_heads,
+                                                                     num_heads_k=1)
     return tile_scheduler_metadata, num_splits
 
 
@@ -72,6 +74,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.LinearBlockedF8:
             from .blockedf8_modules import TritonLinearBlockedF8Builder
             return TritonLinearBlockedF8Builder
+        elif layer_type == OpType.NSAIndexFP8:
+            from .nsa import TritonNSAIndexFP8Builder
+            return TritonNSAIndexFP8Builder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)

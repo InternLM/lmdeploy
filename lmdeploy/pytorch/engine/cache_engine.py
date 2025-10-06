@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import json
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 import torch
 
@@ -207,8 +207,9 @@ class CacheEngine:
     def allocate_gpu_cache(self):
         """Allocate caches on GPU."""
         caches = self._allocate_cache(self.num_gpu_blocks, 'cuda')
-        self.full_gpu_cache = caches
-        self.local_gpu_cache = list(zip(*caches))
+        custom_caches = self.allocate_custom_cache(device='cuda')
+        self.full_gpu_cache = tuple(caches) + tuple(custom_caches)
+        self.local_gpu_cache = list(zip(*self.full_gpu_cache))
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
@@ -218,6 +219,31 @@ class CacheEngine:
         self.full_cpu_cache = caches
         self.local_cpu_cache = list(zip(*caches))
         return self.local_cpu_cache
+
+    @staticmethod
+    def get_custom_cache_shape_impl(num_layers: int, num_blocks: int, block_size: int, shape: List[int]):
+        """Get single block shape."""
+        return (num_layers, num_blocks, block_size, *shape)
+
+    @staticmethod
+    def _allocate_single_custom_cache(shape: Sequence[int], dtype: torch.dtype, device: str):
+        """Allocate custom cache."""
+        return torch.empty(shape, dtype=dtype, device=device)
+
+    def allocate_custom_cache(self, device: str):
+        """Allocate custom caches on GPU."""
+        num_layers = self.model_config.num_layers
+        custom_caches = []
+        for shape, dtype in self.model_config.cache_shapes:
+            custom_shape = self.get_custom_cache_shape_impl(
+                num_layers=num_layers,
+                num_blocks=self.num_gpu_blocks,
+                block_size=self.block_size,
+                shape=shape,
+            )
+            custom_cache = self._allocate_single_custom_cache(shape=custom_shape, dtype=dtype, device=device)
+            custom_caches.append(custom_cache)
+        return custom_caches
 
     @torch.inference_mode()
     def _swap(self, src: List[torch.Tensor], dst: List[torch.Tensor], src_to_dst: Dict[int, int]):
@@ -315,6 +341,18 @@ class CacheEngine:
             raise ValueError(f'unsupported quant_policy {quant_policy}')
 
         total = num_layers * (mem_key_block + mem_value_block)
+
+        # custom caches
+        if model_config.cache_shapes:
+            for shape, dtype in model_config.cache_shapes:
+                custom_shape = cls.get_custom_cache_shape_impl(
+                    num_layers=num_layers,
+                    num_blocks=block_size,
+                    block_size=block_size,
+                    shape=shape,
+                )
+                custom_cache = cls._allocate_single_custom_cache(shape=custom_shape, dtype=dtype, device='meta')
+                total += custom_cache.numel() * custom_cache.element_size()
         return total
 
     """ Metheds for PD Disaggregation Begin. """
