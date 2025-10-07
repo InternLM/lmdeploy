@@ -32,6 +32,7 @@ def _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):
     ix = x.to(idtype, bitcast=True)
 
     cond = (left > right) ^ flip
+    cond = cond.to(tl.int1)
 
     ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))
 

@@ -1335,14 +1335,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 if __skip_nextn(name, nextn_keys):
                     continue
 
-                # ##### DEBUG #####
-                # import re
-                # matches = re.findall(r'\.layers\.(\d+)\.', name)
-                # layer_id = int(matches[0])
-                # if layer_id > 4:
-                #     continue
-                # ##### DEBUG #####
-
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 
