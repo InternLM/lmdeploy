@@ -112,15 +112,16 @@ class CacheEngine:
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
 
+        if local:
+            assert num_heads % world_size == 0, \
+                f'num_heads: {num_heads}, world_size: {world_size}'
+            num_heads = num_heads // world_size
+
         if model_config.use_mla_fp8_cache:
             # 512*1 + 4*4 + 64*2 = 656
             # TODO: Dirty magic number
             return (block_size, num_heads, 656)
 
-        if local:
-            assert num_heads % world_size == 0, \
-                f'num_heads: {num_heads}, world_size: {world_size}'
-            num_heads = num_heads // world_size
         if quant_policy == 4:  # pack head_dim to uint8
             assert head_size % 2 == 0, \
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
