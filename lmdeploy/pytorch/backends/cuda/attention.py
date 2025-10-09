@@ -243,9 +243,15 @@ def _try_dynamic_compile(func, *args, **kwargs):
 
 
 class NSAIndicesUpdater:
+    """NSA indices updater.
+
+    Flash MLA sparse attention requires different indice format for prefill and decoding. This module is used to update
+    the indices to meet the requirements.
+    """
 
     def __init__(self):
         self._update_decode_func = None
+        self._update_prefill_func = None
 
     def _update_decode_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
                             block_size: int) -> torch.Tensor:
@@ -265,6 +271,23 @@ class NSAIndicesUpdater:
                                                             block_size)
 
         return self._update_decode_func(nsa_indices, block_offsets, block_size)
+
+    def _update_prefill_impl(self, nsa_indices: torch.Tensor, q_seqlens: torch.Tensor, cu_seqlens_k: torch.Tensor):
+        """Update for prefill impl."""
+        num_tokens = nsa_indices.size(0)
+        repeat_cu_seqlens_k = torch.repeat_interleave(cu_seqlens_k[:-1], q_seqlens, output_size=num_tokens)
+        neg_mask = nsa_indices < 0
+        nsa_indices = nsa_indices + repeat_cu_seqlens_k[:, None]
+        nsa_indices[neg_mask] = -1
+        return nsa_indices[:, None]
+
+    def update_prefill(self, nsa_indices: torch.Tensor, q_seqlens: torch.Tensor, cu_seqlens_k: torch.Tensor):
+        """Update for prefill."""
+        if self._update_prefill_func is None:
+            self._update_prefill_func = _try_dynamic_compile(self._update_prefill_impl, nsa_indices, q_seqlens,
+                                                             cu_seqlens_k)
+
+        return self._update_prefill_func(nsa_indices, q_seqlens, cu_seqlens_k)
 
     @staticmethod
     @functools.lru_cache(maxsize=None)
@@ -308,11 +331,23 @@ class FlashMLAImpl(TritonAttentionImpl):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
         from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache_mla_fp8
         self.flash_mla_with_kvcache = flash_mla.flash_mla_with_kvcache
+        self.flash_mla_sparse_fwd = None
         self.fill_kv_cache_blocked_fp8 = fill_kv_cache_blocked_fp8
         self.flatten_kv_cache_mla_fp8 = flatten_kv_cache_mla_fp8
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
 
         self.nsa_updater = NSAIndicesUpdater.build()
+
+    def _get_flash_mla_sparse_fwd(self):
+        if self.flash_mla_sparse_fwd is not None:
+            return self.flash_mla_sparse_fwd
+
+        try:
+            import flash_mla
+            self.flash_mla_sparse_fwd = flash_mla.flash_mla_sparse_fwd
+            return self.flash_mla_sparse_fwd
+        except Exception:
+            logger.exception('Can not import flash_mla_sparse_fwd from flash_mla.')
 
     def forward(
         self,
@@ -350,9 +385,10 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         # check nsa
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
-        if nsa_indices is not None:
+        is_nsa = nsa_indices is not None
+        if is_nsa:
             assert is_fp8_kvcache
-        causal = False if nsa_indices is not None else self.causal
+        causal = False if is_nsa else self.causal
 
         # fill kv cache
         if is_fp8_kvcache:
@@ -409,7 +445,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                 kv_seqlens = kv_seqlens.to(torch.int32)
 
             # update nsa indice according to flash-mla requirement
-            if nsa_indices is not None:
+            if is_nsa:
                 block_size = k_cache.size(1)
                 nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, block_size)
             attn_output, _ = self.flash_mla_with_kvcache(query,
@@ -428,7 +464,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             BLOCK_BS = k_cache.size(1)
             # pad one more block to avoid invalid kv visit
             out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
-            flatten_kv_layout = 'shd' if use_fa3 else 'hsd'
+            flatten_kv_layout = 'shd' if use_fa3 or is_nsa else 'hsd'
             if is_fp8_kvcache:
                 flatten_k = self.flatten_kv_cache_mla_fp8(
                     k_cache,
@@ -474,6 +510,21 @@ class FlashMLAImpl(TritonAttentionImpl):
                     window_size=(-1, -1) if self.sliding_window is None else self.sliding_window,
                     softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
                 )
+            elif is_nsa:
+                flash_mla_sparse_fwd = self._get_flash_mla_sparse_fwd()
+                num_q_heads = query.size(1)
+                # flash_mla_sparse_fwd requires query heads to be multiple of 64
+                if num_q_heads % 64 != 0:
+                    query = torch.nn.functional.pad(query, (0, 0, 0, 64 - num_q_heads % 64))
+                nsa_indices = self.nsa_updater.update_prefill(nsa_indices, q_seqlens, attn_metadata.cu_seqlens_k)
+                output = flash_mla_sparse_fwd(
+                    query,
+                    flatten_k,
+                    nsa_indices,
+                    sm_scale=self.scale,
+                )
+                attn_output = output[0]
+                attn_output = attn_output[:, :num_q_heads]
             else:
                 attn_output = query.new_empty(o_shape)
                 self.flash_attention_fwd(
