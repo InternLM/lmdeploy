@@ -717,11 +717,11 @@ class TurboMindInstance:
             if decode_grammar_type == 'json_schema':
                 decode_grammar = json.dumps(decode_grammar)
                 grammar = compiler.compile_json_schema(decode_grammar)
-            elif decode_grammar_type == 'regex':
+            elif decode_grammar_type == 'regex_schema':
                 decode_grammar = str(decode_grammar)
                 grammar = compiler.compile_regex(decode_grammar)
             else:
-                assert False, f'Decode grammar type {decode_grammar_type} should be in ["json_schema", "regex"]'
+                assert False, f'Decode grammar type {decode_grammar_type} should be in ["json_schema", "regex_schema"]'
 
             self.model_inst.set_grammar(grammar)
 
