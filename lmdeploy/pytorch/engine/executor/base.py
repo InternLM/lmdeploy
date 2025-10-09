@@ -138,7 +138,7 @@ class ExecutorBase:
             if int(num_available) // cache_block_size >= 16:
                 break
             max_prefill_token_num = max_prefill_token_num // 2
-        logger.warning(f'cache_max_entry_count: {cache_max_entry_count}, num_free_gpu_mem: {num_free_gpu_mem >> 20} mb, cache_block_size: {cache_block_size >> 20} mb, runtime_cache_size: {runtime_cache_size >> 20} mb, max_prefill_token_num: {max_prefill_token_num}')
+        #logger.warning(f'cache_max_entry_count: {cache_max_entry_count}, num_free_gpu_mem: {num_free_gpu_mem >> 20} mb, cache_block_size: {cache_block_size >> 20} mb, runtime_cache_size: {runtime_cache_size >> 20} mb, max_prefill_token_num: {max_prefill_token_num}')
 
         return runtime_cache_size, max_prefill_token_num
 
@@ -182,7 +182,7 @@ class ExecutorBase:
             cache_config.num_gpu_blocks = int(available_mem / cache_block_size)
             if cache_config.num_gpu_blocks <= 0:
                 raise RuntimeError('No enough gpu memory for kv cache.')
-        logger.error(f'num gpu blocks: {cache_config.num_gpu_blocks}')
+        #logger.error(f'num gpu blocks: {cache_config.num_gpu_blocks}')
         self.set_cache_config(cache_config)
         self.set_model_config(model_config)
 

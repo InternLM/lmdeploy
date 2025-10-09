@@ -280,7 +280,7 @@ class Scheduler:
                 continue
 
             if not __evict_for_seq(seq, num_required_blocks):
-                logger.error(f'session[{seq.session_id}] '
+                logger.warning(f'session[{seq.session_id}] '
                                f'sequence[{seq.seq_id}] '
                                'to waiting....')
                 self._set_message_status(seq, MessageStatus.WAITING)
@@ -294,14 +294,14 @@ class Scheduler:
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
-            logger.error('Prefill scheduling')
+            #logger.warning('Prefill scheduling')
             output = self._schedule_prefill(0)
         else:
-            logger.error('Decoding scheduling')
+            #logger.warning('Decoding scheduling')
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
-        if running:
-            logger.error(f'go batch = {len(running)}')
+        #if running:
+        #    logger.warning(f'go batch = {len(running)}')
 
         return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
 

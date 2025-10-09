@@ -399,7 +399,6 @@ class BaseModelAgent:
     def warmup(self):
         """warmup."""
         # TODO: disable for now, do not remove the comments.
-        print('warmup start', flush=True)
         with self.all_context():
             max_batches = self.cache_config.max_batches
             num_tokens = max_batches
@@ -425,7 +424,6 @@ class BaseModelAgent:
                 if dp > 1:
                     inputs.build_dp_meta()
                 self._forward_impl(inputs)
-        print('warmup end  ', flush=True)
 
     def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
         """Slice outputs."""
