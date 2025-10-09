@@ -1285,6 +1285,14 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     return True
             return False
 
+        def __skip_layers():
+            """We might change the number of layers so we can debug the model
+            with less gpus."""
+            import re
+            matches = re.findall(r'\.layers\.(\d+)\.', name)
+            layer_id = int(matches[0])
+            return layer_id >= self.config.num_hidden_layers
+
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ('.gate_up_proj', '.gate_proj', 0),
@@ -1333,6 +1341,9 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if '.layers' in name:
                 # skip nextn
                 if __skip_nextn(name, nextn_keys):
+                    continue
+
+                if __skip_layers():
                     continue
 
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:

@@ -349,48 +349,212 @@ class FlashMLAImpl(TritonAttentionImpl):
         except Exception:
             logger.exception('Can not import flash_mla_sparse_fwd from flash_mla.')
 
-    def forward(
+    def flash_mla_decoding(
         self,
         query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
         k_cache: torch.Tensor,
-        v_cache: torch.Tensor,
+        nsa_indices: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
-        k_scales_zeros: torch.Tensor = None,
-        v_scales_zeros: torch.Tensor = None,
-        nsa_indices: torch.Tensor = None,
-        **kwargs,
-    ) -> torch.Tensor:
-        """forward."""
+    ):
+        """Flash mla decoding."""
+        causal = self.causal
+        kv_seqlens = attn_metadata.kv_seqlens
+        block_offsets = attn_metadata.block_offsets
+        is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
 
+        query = query.unsqueeze(1)
+        if kv_seqlens.dtype == torch.int64:
+            kv_seqlens = kv_seqlens.to(torch.int32)
+
+        # update nsa indice according to flash-mla requirement
+        if nsa_indices is not None:
+            block_size = k_cache.size(1)
+            nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, block_size)
+            causal = False
+
+        attn_output, _ = self.flash_mla_with_kvcache(query,
+                                                     k_cache=k_cache,
+                                                     block_table=block_offsets,
+                                                     cache_seqlens=kv_seqlens,
+                                                     head_dim_v=self.v_head_size,
+                                                     softmax_scale=self.scale,
+                                                     tile_scheduler_metadata=attn_metadata.tile_scheduler_metadata,
+                                                     num_splits=attn_metadata.num_splits,
+                                                     causal=causal,
+                                                     is_fp8_kvcache=is_fp8_kvcache,
+                                                     indices=nsa_indices)
+        attn_output = attn_output.squeeze(1)
+        return attn_output
+
+    def flash_mla_prefill(self, query: torch.Tensor, flatten_k: torch.Tensor, nsa_indices: torch.Tensor,
+                          attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+        """Flash mla prefill, only used in sparse attention."""
+        q_seqlens = attn_metadata.q_seqlens
+        flash_mla_sparse_fwd = self._get_flash_mla_sparse_fwd()
+
+        num_q_heads = query.size(1)
+        # flash_mla_sparse_fwd requires query heads to be multiple of 64
+        if num_q_heads % 64 != 0:
+            query = torch.nn.functional.pad(query, (0, 0, 0, 64 - num_q_heads % 64))
+
+        nsa_indices = self.nsa_updater.update_prefill(nsa_indices, q_seqlens, attn_metadata.cu_seqlens_k)
+        output = flash_mla_sparse_fwd(
+            query,
+            flatten_k,
+            nsa_indices,
+            sm_scale=self.scale,
+        )
+        attn_output = output[0]
+        attn_output = attn_output[:, :num_q_heads]
+        return attn_output
+
+    def flash_attn_triton(
+        self,
+        query: torch.Tensor,
+        flatten_k: torch.Tensor,
+        flatten_v: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+    ):
+        """Triton flash attention, used if flash-attn is not available."""
+        q_start_loc = attn_metadata.q_start_loc
+        q_seqlens = attn_metadata.q_seqlens
+        kv_start_loc = attn_metadata.kv_start_loc
+        kv_seqlens = attn_metadata.kv_seqlens
+        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+
+        q_shape = query.shape
+        o_shape = q_shape[:-1] + (self.v_head_size, )
+        attn_output = query.new_empty(o_shape)
+        self.flash_attention_fwd(
+            query,
+            flatten_k,
+            flatten_v,
+            attn_output,
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seqlens,
+            kv_start_loc=kv_start_loc,
+            kv_seqlens=kv_seqlens,
+            max_seqlen=max_q_seqlen,
+            window_size=self.sliding_window,
+            sm_scale=self.scale,
+            logit_softcapping=self.logit_softcapping,
+            causal=self.causal,
+        )
+
+        return attn_output
+
+    def flash_attn_fa3(
+        self,
+        query: torch.Tensor,
+        flatten_k: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+    ):
+        """Flash attention 3, used if flash-attn 3 is available."""
+        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        kv_flatten_size = attn_metadata.kv_flatten_size
+        causal = self.causal
+        q_rope = query[:, :, self.v_head_size:]
+        q_nope = query[:, :, :self.v_head_size]
+        k_rope = flatten_k.view(kv_flatten_size, self.num_kv_heads, -1)[:, :, self.v_head_size:]
+        c_kv = flatten_k.view(kv_flatten_size, self.num_kv_heads, -1)[:, :, :self.v_head_size]
+        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
+        attn_output = flash_attn_varlen_func(
+            q=q_rope,
+            k=k_rope,
+            v=c_kv,
+            qv=q_nope,
+            cu_seqlens_q=attn_metadata.cu_seqlens_q,
+            cu_seqlens_k=attn_metadata.cu_seqlens_k,
+            max_seqlen_q=max_q_seqlen,
+            max_seqlen_k=kv_flatten_size,
+            softmax_scale=self.scale,
+            causal=causal,
+            window_size=(-1, -1) if self.sliding_window is None else self.sliding_window,
+            softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
+        )
+        return attn_output
+
+    def run_flatten_kv_cache(self,
+                             k_cache: torch.Tensor,
+                             v_cache: torch.Tensor,
+                             attn_metadata: TritonAttentionMetadata,
+                             out_dtype: torch.dtype,
+                             is_nsa: bool,
+                             k_scales_zeros: torch.Tensor = None,
+                             v_scales_zeros: torch.Tensor = None):
+        """Flatten kv cache for prefill."""
+
+        kv_start_loc = attn_metadata.kv_start_loc
+        kv_seqlens = attn_metadata.kv_seqlens
+        block_offsets = attn_metadata.block_offsets
+        kv_flatten_size = attn_metadata.kv_flatten_size
+        quant_policy = attn_metadata.quant_policy
+        is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
+        BLOCK_BS = k_cache.size(1)
+
+        # pad one more block to avoid invalid kv visit
+        out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
+        flatten_kv_layout = 'shd' if use_fa3 or is_nsa else 'hsd'
+        if is_fp8_kvcache:
+            flatten_k = self.flatten_kv_cache_mla_fp8(
+                k_cache,
+                kv_seqlens,
+                block_offsets,
+                start_loc=kv_start_loc,
+                out_size=out_size,
+                out_dtype=out_dtype,
+                flatten_kv_layout=flatten_kv_layout,
+            )
+            flatten_v = flatten_k[..., :512]
+        else:
+            flatten_k, flatten_v = self.flatten_kv_cache(
+                k_cache,
+                v_cache,
+                kv_seqlens,
+                block_offsets,
+                start_loc=kv_start_loc,
+                out_size=kv_flatten_size if use_fa3 else out_size,
+                out_dtype=out_dtype,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
+                quant_policy=quant_policy,
+                flatten_kv_layout=flatten_kv_layout,
+            )
+
+        return flatten_k, flatten_v
+
+    def run_fill_kv_cache(self,
+                          query: torch.Tensor,
+                          key: torch.Tensor,
+                          value: torch.Tensor,
+                          k_cache: torch.Tensor,
+                          v_cache: torch.Tensor,
+                          attn_metadata: TritonAttentionMetadata,
+                          k_scales_zeros: torch.Tensor = None,
+                          v_scales_zeros: torch.Tensor = None):
+        """Fill kv cache."""
         block_offsets = attn_metadata.block_offsets
         q_start_loc = attn_metadata.q_start_loc
         fill_q_start_loc = q_start_loc
         q_seqlens = attn_metadata.q_seqlens
         fill_seqlens = q_seqlens
-        kv_start_loc = attn_metadata.kv_start_loc
         kv_seqlens = attn_metadata.kv_seqlens
-        kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
+
+        # max_q_seqlen
         if attn_metadata.is_decoding:
             max_q_seqlen = 1
         else:
             max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+
+        # fill_max_q_seqlen
         fill_max_q_seqlen = max_q_seqlen
         if attn_metadata.fill_seqlens is not None:
             fill_seqlens = attn_metadata.fill_seqlens
             fill_max_q_seqlen = key.numel() // (key.size(-1) * key.size(-2))
             fill_q_start_loc = fill_seqlens.cumsum(0) - fill_seqlens
 
-        # check nsa
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
-        is_nsa = nsa_indices is not None
-        if is_nsa:
-            assert is_fp8_kvcache
-        causal = False if is_nsa else self.causal
-
-        # fill kv cache
         if is_fp8_kvcache:
             k_cache_scale = k_cache[..., 512:512 + 16].view(torch.float32)
             k_cache_nope = k_cache[..., :512]
@@ -435,113 +599,57 @@ class FlashMLAImpl(TritonAttentionImpl):
                 quant_policy=quant_policy,
             )
 
-        q_shape = query.shape
-        o_shape = q_shape[:-1] + (self.v_head_size, )
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+        nsa_indices: torch.Tensor = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """forward."""
+
+        # check nsa
+        is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
+        is_nsa = nsa_indices is not None
+        if is_nsa:
+            assert is_fp8_kvcache
+
+        # fill kv cache
+        self.run_fill_kv_cache(
+            query,
+            key,
+            value,
+            k_cache,
+            v_cache,
+            attn_metadata,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+        )
 
         is_decoding = attn_metadata.is_decoding
         if is_decoding:
-            query = query.unsqueeze(1)
-            if kv_seqlens.dtype == torch.int64:
-                kv_seqlens = kv_seqlens.to(torch.int32)
-
-            # update nsa indice according to flash-mla requirement
-            if is_nsa:
-                block_size = k_cache.size(1)
-                nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, block_size)
-            attn_output, _ = self.flash_mla_with_kvcache(query,
-                                                         k_cache=k_cache,
-                                                         block_table=block_offsets,
-                                                         cache_seqlens=kv_seqlens,
-                                                         head_dim_v=self.v_head_size,
-                                                         softmax_scale=self.scale,
-                                                         tile_scheduler_metadata=attn_metadata.tile_scheduler_metadata,
-                                                         num_splits=attn_metadata.num_splits,
-                                                         causal=causal,
-                                                         is_fp8_kvcache=is_fp8_kvcache,
-                                                         indices=nsa_indices)
-            attn_output = attn_output.squeeze(1)
+            attn_output = self.flash_mla_decoding(query, k_cache, nsa_indices, attn_metadata)
         else:
-            BLOCK_BS = k_cache.size(1)
-            # pad one more block to avoid invalid kv visit
-            out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
-            flatten_kv_layout = 'shd' if use_fa3 or is_nsa else 'hsd'
-            if is_fp8_kvcache:
-                flatten_k = self.flatten_kv_cache_mla_fp8(
-                    k_cache,
-                    kv_seqlens,
-                    block_offsets,
-                    start_loc=kv_start_loc,
-                    out_size=out_size,
-                    out_dtype=query.dtype,
-                    flatten_kv_layout=flatten_kv_layout,
-                )
-                flatten_v = flatten_k[..., :512]
+            flatten_k, flatten_v = self.run_flatten_kv_cache(k_cache,
+                                                             v_cache,
+                                                             attn_metadata,
+                                                             out_dtype=query.dtype,
+                                                             is_nsa=nsa_indices is not None,
+                                                             k_scales_zeros=k_scales_zeros,
+                                                             v_scales_zeros=v_scales_zeros)
+            if is_nsa:
+                attn_output = self.flash_mla_prefill(query, flatten_k, nsa_indices, attn_metadata)
+            elif use_fa3:
+                attn_output = self.flash_attn_fa3(query, flatten_k, attn_metadata)
             else:
-                flatten_k, flatten_v = self.flatten_kv_cache(
-                    k_cache,
-                    v_cache,
-                    kv_seqlens,
-                    block_offsets,
-                    start_loc=kv_start_loc,
-                    out_size=kv_flatten_size if use_fa3 else out_size,
-                    out_dtype=query.dtype,
-                    k_scales_zeros=k_scales_zeros,
-                    v_scales_zeros=v_scales_zeros,
-                    quant_policy=quant_policy,
-                    flatten_kv_layout=flatten_kv_layout,
-                )
-            if use_fa3:
-                q_rope = query[:, :, self.v_head_size:]
-                q_nope = query[:, :, :self.v_head_size]
-                k_rope = flatten_k.view(kv_flatten_size, self.num_kv_heads, -1)[:, :, self.v_head_size:]
-                c_kv = flatten_k.view(kv_flatten_size, self.num_kv_heads, -1)[:, :, :self.v_head_size]
-                from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
-                attn_output = flash_attn_varlen_func(
-                    q=q_rope,
-                    k=k_rope,
-                    v=c_kv,
-                    qv=q_nope,
-                    cu_seqlens_q=attn_metadata.cu_seqlens_q,
-                    cu_seqlens_k=attn_metadata.cu_seqlens_k,
-                    max_seqlen_q=max_q_seqlen,
-                    max_seqlen_k=kv_flatten_size,
-                    softmax_scale=self.scale,
-                    causal=causal,
-                    window_size=(-1, -1) if self.sliding_window is None else self.sliding_window,
-                    softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
-                )
-            elif is_nsa:
-                flash_mla_sparse_fwd = self._get_flash_mla_sparse_fwd()
-                num_q_heads = query.size(1)
-                # flash_mla_sparse_fwd requires query heads to be multiple of 64
-                if num_q_heads % 64 != 0:
-                    query = torch.nn.functional.pad(query, (0, 0, 0, 64 - num_q_heads % 64))
-                nsa_indices = self.nsa_updater.update_prefill(nsa_indices, q_seqlens, attn_metadata.cu_seqlens_k)
-                output = flash_mla_sparse_fwd(
-                    query,
-                    flatten_k,
-                    nsa_indices,
-                    sm_scale=self.scale,
-                )
-                attn_output = output[0]
-                attn_output = attn_output[:, :num_q_heads]
-            else:
-                attn_output = query.new_empty(o_shape)
-                self.flash_attention_fwd(
-                    query,
-                    flatten_k,
-                    flatten_v,
-                    attn_output,
-                    q_start_loc=q_start_loc,
-                    q_seqlens=q_seqlens,
-                    kv_start_loc=kv_start_loc,
-                    kv_seqlens=kv_seqlens,
-                    max_seqlen=max_q_seqlen,
-                    window_size=self.sliding_window,
-                    sm_scale=self.scale,
-                    logit_softcapping=self.logit_softcapping,
-                    causal=causal,
-                )
+                attn_output = self.flash_attn_triton(query, flatten_k, flatten_v, attn_metadata)
+
         return attn_output
 
 
