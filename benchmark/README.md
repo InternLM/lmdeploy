@@ -19,20 +19,6 @@ python profile_throughput.py \
  --concurrency 64
 ```
 
-## profile without dataset
-
-`profile_generation.py` perform benchmark with dummy data.
-
-```shell
-pip install nvidia-ml-py
-```
-
-```bash
-python profile_generation.py \
- /path/to/your/model \
- --concurrency 1 8 --prompt-tokens 1 512 --completion-tokens 2048 512
-```
-
 ## profile restful api
 
 `profile_restful_api.py` is used to do benchmark on api server.
