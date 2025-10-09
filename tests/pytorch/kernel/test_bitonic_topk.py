@@ -47,6 +47,6 @@ class TestBitonicTopk:
         out = bitonic_topk(scores, kv_seqlens=kv_seqlens, k=k, fill=-1)
         gt[gt < 0] = 0
         out[out < 0] = 0
-        gt_score = torch.gather(scores, 1, gt)
-        out_score = torch.gather(scores, 1, out)
+        gt_score = torch.gather(scores, 1, gt.to(torch.int64))
+        out_score = torch.gather(scores, 1, out.to(torch.int64))
         torch.testing.assert_close(gt_score, out_score)
