@@ -54,10 +54,6 @@ LMDeploy 的 `api_server` 可用于服务化部署 Blocked FP8 模型。
 lmdeploy serve api_server OpenGVLab/InternVL3_5-8B-FP8
 ```
 
-服务的默认端口是 `23333`。在服务启动后，您可以在终端通过 `api_client` 与其进行对话：
+服务的默认端口是 `23333`。
 
-```shell
-lmdeploy serve api_client http://0.0.0.0:23333
-```
-
-您还可以通过 Swagger UI `http://0.0.0.0:23333` 在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](../llm/api_server.md)，了解各接口的定义和使用方法。
+您可以通过 Swagger UI `http://0.0.0.0:23333` 在线阅读和试用 `api_server` 的各接口，也可直接查阅[文档](../llm/api_server.md)，了解各接口的定义和使用方法。

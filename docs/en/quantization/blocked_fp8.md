@@ -14,7 +14,7 @@ A single command is all that is needed to perform blocked FP8 quantization. The 
 
 The command for this is `lmdeploy lite blocked_fp8`.
 
-Here is an example of how to quantize `internlm/internlm2_5-7b-chat`:
+Here is an example of how to quantize `OpenGVLab/InternVL3_5-8B`:
 
 ```shell
 export HF_MODEL=OpenGVLab/InternVL3_5-8B
@@ -54,10 +54,6 @@ LMDeploy's `api_server` can be used to serve the blocked FP8 model.
 lmdeploy serve api_server OpenGVLab/InternVL3_5-8B-FP8
 ```
 
-The default port for the `api_server` is `23333`. Once the server is running, you can interact with it from another terminal using the `api_client`:
+The default port for the `api_server` is `23333`.
 
-```shell
-lmdeploy serve api_client http://0.0.0.0:23333
-```
-
-You can also view the available API endpoints through the Swagger UI at `http://0.0.0.0:23333`. For more details on the API, please refer to the [API Server documentation](../llm/api_server.md).
+You can view the available API endpoints through the Swagger UI at `http://0.0.0.0:23333`. For more details on the API, please refer to the [API Server documentation](../llm/api_server.md).
