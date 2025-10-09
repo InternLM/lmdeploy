@@ -232,6 +232,46 @@ def use_fa3_warning():
     return False
 
 
+def _try_dynamic_compile(func, *args, **kwargs):
+    """Try compile."""
+    try:
+        compiled_func = torch.compile(func, dynamic=True)
+        compiled_func(*args, **kwargs)
+        return compiled_func
+    except Exception:
+        return func
+
+
+class NSAIndicesUpdater:
+
+    def __init__(self):
+        self._update_decode_func = None
+
+    def _update_decode_impl(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor,
+                            block_size: int) -> torch.Tensor:
+        """Update for decode impl."""
+        block_ids = nsa_indices // block_size
+        block_ids = block_ids.clamp_min(0)
+        block_ids = block_offsets.gather(1, block_ids)
+        block_remain = nsa_indices % block_size
+        ret = block_ids * block_size + block_remain
+        ret[nsa_indices < 0] = -1
+        return ret[:, None]
+
+    def update_decode(self, nsa_indices: torch.Tensor, block_offsets: torch.Tensor, block_size: int) -> torch.Tensor:
+        """Update for decode."""
+        if self._update_decode_func is None:
+            self._update_decode_func = _try_dynamic_compile(self._update_decode_impl, nsa_indices, block_offsets,
+                                                            block_size)
+
+        return self._update_decode_func(nsa_indices, block_offsets, block_size)
+
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def build():
+        return NSAIndicesUpdater()
+
+
 class FlashMLAImpl(TritonAttentionImpl):
 
     def __init__(
@@ -272,6 +312,8 @@ class FlashMLAImpl(TritonAttentionImpl):
         self.flatten_kv_cache_mla_fp8 = flatten_kv_cache_mla_fp8
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
 
+        self.nsa_updater = NSAIndicesUpdater.build()
+
     def forward(
         self,
         query: torch.Tensor,
@@ -309,7 +351,6 @@ class FlashMLAImpl(TritonAttentionImpl):
         # check nsa
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
         if nsa_indices is not None:
-            nsa_indices = nsa_indices[:, None]
             assert is_fp8_kvcache
         causal = False if nsa_indices is not None else self.causal
 
@@ -366,6 +407,11 @@ class FlashMLAImpl(TritonAttentionImpl):
             query = query.unsqueeze(1)
             if kv_seqlens.dtype == torch.int64:
                 kv_seqlens = kv_seqlens.to(torch.int32)
+
+            # update nsa indice according to flash-mla requirement
+            if nsa_indices is not None:
+                block_size = k_cache.size(1)
+                nsa_indices = self.nsa_updater.update_decode(nsa_indices, block_offsets, block_size)
             attn_output, _ = self.flash_mla_with_kvcache(query,
                                                          k_cache=k_cache,
                                                          block_table=block_offsets,
