@@ -24,6 +24,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         assert q.dim() == 3
         assert k.dim() == 2
         cu_seqlen_q = meta.cu_seqlen_q
+        q_seqlens = meta.q_seqlens
         k_seqlens = meta.k_seqlens
         block_offset = meta.block_offset
         max_q_seqlen = meta.max_q_seqlen
@@ -57,7 +58,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                            block_offset,
                            max_q_seqlen=max_q_seqlen,
                            max_k_seqlen=max_kv_seqlen)
-        return bitonic_topk(scores, k_seqlens, self.topk, fill=self.fill, descending=True)
+        return bitonic_topk(scores, q_seqlens, k_seqlens, self.topk, fill=self.fill, descending=True)
 
 
 class TritonNSAIndexFP8Builder(BaseNSAIndexFP8Builder):

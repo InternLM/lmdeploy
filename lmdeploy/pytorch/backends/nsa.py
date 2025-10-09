@@ -9,6 +9,7 @@ from torch import Tensor
 class NSAIndexMeta:
     """Meta info of NSAIndex layer."""
     cu_seqlen_q: Tensor
+    q_seqlens: Tensor
     k_seqlens: Tensor
     block_offset: Tensor
     max_q_seqlen: int = None

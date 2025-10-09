@@ -35,6 +35,7 @@ class IndexerTopKFP8(nn.Module):
         # we need to make max_kv_seqlen=max_allocated_cache_len to enable cudagraph
         max_kv_seqlen = max_tokens if is_decoding else attn_metadata.kv_flatten_size
         meta = NSAIndexMeta(cu_seqlen_q=attn_metadata.cu_seqlens_q,
+                            q_seqlens=attn_metadata.q_seqlens,
                             k_seqlens=attn_metadata.kv_seqlens,
                             block_offset=attn_metadata.block_offsets,
                             max_q_seqlen=max_q_seqlen,

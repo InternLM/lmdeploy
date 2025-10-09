@@ -174,16 +174,25 @@ def _bitonic_topk_kernel1(score_ptr,
     tl.store(out_ptrs, ids)
 
 
-def bitonic_topk(scores: torch.Tensor, kv_seqlens: torch.Tensor, k: int, fill: int = -1, descending: bool = True):
+def bitonic_topk(scores: torch.Tensor,
+                 q_seqlens: torch.Tensor,
+                 kv_seqlens: torch.Tensor,
+                 k: int,
+                 fill: int = -1,
+                 descending: bool = True):
     """Bitnoic topk."""
-    batch = kv_seqlens.numel()
+    num_tokens = scores.size(0)
     max_kv_len = scores.size(-1)
 
+    if num_tokens != kv_seqlens.size(0):
+        repeat_kv_seqlens = torch.repeat_interleave(kv_seqlens, q_seqlens, output_size=num_tokens)
+    else:
+        repeat_kv_seqlens = kv_seqlens
     tmp_scores = torch.empty_like(scores)
     tmp_ids = torch.empty_like(scores, dtype=torch.int32)
-    grid = (batch, triton.cdiv(max_kv_len, k))
+    grid = (num_tokens, triton.cdiv(max_kv_len, k))
     _bitonic_topk_kernel0[grid](scores,
-                                kv_seqlens,
+                                repeat_kv_seqlens,
                                 tmp_scores,
                                 tmp_ids,
                                 stride_m=scores.stride(0),
@@ -192,14 +201,14 @@ def bitonic_topk(scores: torch.Tensor, kv_seqlens: torch.Tensor, k: int, fill: i
                                 descending=1 if descending else 0,
                                 num_warps=4)
 
-    out = kv_seqlens.new_empty((batch, k), dtype=torch.int32)
-    _bitonic_topk_kernel1[(batch, )](tmp_scores,
-                                     tmp_ids,
-                                     kv_seqlens,
-                                     out,
-                                     stride_m=tmp_scores.stride(0),
-                                     K=k,
-                                     fill=fill,
-                                     descending=1 if descending else 0,
-                                     num_warps=4)
+    out = kv_seqlens.new_empty((num_tokens, k), dtype=torch.int32)
+    _bitonic_topk_kernel1[(num_tokens, )](tmp_scores,
+                                          tmp_ids,
+                                          repeat_kv_seqlens,
+                                          out,
+                                          stride_m=tmp_scores.stride(0),
+                                          K=k,
+                                          fill=fill,
+                                          descending=1 if descending else 0,
+                                          num_warps=4)
     return out
