@@ -310,7 +310,6 @@ class FlashMLAImpl(TritonAttentionImpl):
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
         if nsa_indices is not None:
             nsa_indices = nsa_indices[:, None]
-            causal = False if nsa_indices is not None else self.causal
             assert is_fp8_kvcache
 
         # fill kv cache
@@ -363,6 +362,7 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         is_decoding = attn_metadata.is_decoding
         if is_decoding:
+            causal = False if nsa_indices is not None else self.causal
             query = query.unsqueeze(1)
             if kv_seqlens.dtype == torch.int64:
                 kv_seqlens = kv_seqlens.to(torch.int32)
