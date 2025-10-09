@@ -578,25 +578,42 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         past_key_values: List[List[torch.Tensor]],
+        vision_embeddings: torch.Tensor = None,
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_mask: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        if inputs_embeds is None and pixel_values is not None:
-            # extract feature
-            self._mark_dynamic_once(pixel_values, [0])
-            vit_embeds = self.get_image_features(
-                pixel_values,
-                self.vision_feature_layer,
-                self.vision_feature_select_strategy,
-            )
-            lang_embeds = self.get_input_embeddings()(input_ids)
-            lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
+        if False:
+            if inputs_embeds is None and pixel_values is not None:
+                # extract feature
+                self._mark_dynamic_once(pixel_values, [0])
+                vit_embeds = self.get_image_features(
+                    pixel_values,
+                    self.vision_feature_layer,
+                    self.vision_feature_select_strategy,
+                )
+                lang_embeds = self.get_input_embeddings()(input_ids)
+                lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
 
-            inputs_embeds = lang_embeds
-            input_ids = None
+                inputs_embeds = lang_embeds
+                input_ids = None
+        else:
+            if inputs_embeds is None and vision_embeddings is not None and image_mask is not None:
+                print('Using encoder_cache as vit_embeds !!!!!')
+                print(f'input_ids: {input_ids.shape}')
+                # use cached feature
+                vit_embeds = vision_embeddings
+                lang_embeds = self.get_input_embeddings()(input_ids)
+                print(f'lang_embeds.shape: {lang_embeds.shape}')
+                print(f'vit_embeds.shape: {vit_embeds.shape}')
+                print(f'image_mask.shape: {image_mask.shape}')
+                print(f'image_mask[..., None].shape: {image_mask[..., None].shape}')
+                lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
+
+                inputs_embeds = lang_embeds
+                input_ids = None
 
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError('You must specify exactly one of input_ids or inputs_embeds')
@@ -614,6 +631,7 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
+        encoder_cache: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
@@ -646,10 +664,27 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
                 inputs_embeds = self.get_input_embeddings()(input_ids)
             inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
+        if not context.is_decoding:
+            if context.encoder_results is not None and context.encoder_results[0] is not None:
+                # FIXME: pick 0 index for now, should fix for batch > 1
+                image_mask = context.encoder_results[0].image_mask
+                image_mask = torch.tensor(image_mask, device=input_ids.device, dtype=torch.bool)
+                remote_block_ids = context.encoder_results[0].remote_block_ids
+                vision_embeddings = encoder_cache[remote_block_ids]
+                print(f'len(remote_block_ids): {len(remote_block_ids)}')
+                print(f'remote_block_ids: {remote_block_ids}')
+                print(f'vision_embeddings.shape: {vision_embeddings.shape}')
+                print(f'vision_embeddings: {vision_embeddings}')
+                # FIXME: we need to change the input_ids here, or maybe even earlier
+                # since multi-modal requests input_ids has image token ids, different from the others
+                encoder_input_ids = context.encoder_results[0].token_ids
+                print(f'encoder_input_ids: {len(encoder_input_ids)}')
+
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,
             past_key_values=past_key_values,
+            vision_embeddings=vision_embeddings,
             attn_metadata=attn_metadata,
             pixel_values=pixel_values,
             image_mask=image_mask,

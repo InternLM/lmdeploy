@@ -649,11 +649,9 @@ class Engine(EngineBase):
                     self.migration_event.set()
                 # if have encoder results here, skip encoding, directly proceed to prefill
                 if encoder_result:
-                    print(f'set waiting EP migration!!!')
+                    logger.info('set waiting EP migration')
                     self.scheduler._set_message_status(msg, MessageStatus.WAITING_EP_MIGRATION)
                     self.ep_migration_event.set()
-
-                # FIXME, seems we need to care about tokens ids, otherwise, the token ids processed will not contain the image token id as place holder
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -716,12 +714,8 @@ class Engine(EngineBase):
             return False
 
         has_encoder_result = any([msg.encoder_result is not None for msg in messages])
-        # FIXME, suppose we already have the image feature migrated to local cache blocks
-        # The only thing left here is to create an indexing tensor to tell the model where the
-        # image tokens are in the input sequence.
+        # FIXME: any special treatment for encoder_result?
         if has_encoder_result:
-            # we need to determine input_embeddings here, but a fake one as place holder? for prefill instance to allocate mem?
-            # second one is the image mask, we can directly fetch from encoder_result
             pass
 
         has_embedding = any([len(msg.history_embeddings) > 0 for msg in messages])
@@ -795,6 +789,7 @@ class Engine(EngineBase):
 
         # model_metas
         model_metas = [msg.model_meta for msg in messages]
+        encoder_results = [msg.encoder_result for msg in messages]
 
         # create model inputs for all required fields
         model_inputs = ModelInputs(
@@ -808,6 +803,7 @@ class Engine(EngineBase):
             max_kv_seqlen=max_kv_seqlen,
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
+            encoder_results=encoder_results,
         )
 
         # adapters
@@ -1092,25 +1088,29 @@ class Engine(EngineBase):
             elif ep_migration_running:
                 self.ep_migration_event.clear()
                 for msg in ep_migration_running:
-                    print(f'fake migration here')
+                    logger.info('performing ep migrations.')
                     migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
                     ep_migration_request = msg.encoder_result
                     encoder_block_ids = ep_migration_request.remote_block_ids
-                    prefill_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
 
-                    # assert len(encoder_block_ids) == len(prefill_block_ids), (
-                    #     f'#encoder block ids ({len(encoder_block_ids)}) must equal to '
-                    #     f'#prefill block ids ({len(prefill_block_ids)}) '
-                    #     f'all id length: {len(msg.num_token_ids)}')
-                    # migration_execution_requests.append((
-                    #     ep_migration_request.remote_engine_id,
-                    #     list(zip(encoder_block_ids, prefill_block_ids)),
-                    # ))
-                    # migration_inputs = MigrationExecutionBatch(protocol=ep_migration_request.protocol,
-                    #                                             requests=migration_execution_requests)
-                    # logger.info(f'migrating encoder features for session: {msg.session_id} begin')
-                    # await self.executor.migrate(migration_inputs)
-                    # logger.info(f'migrating encoder features for session: {msg.session_id} done')
+                    # FIXME: only test one request now, we simply use the same block ids
+                    # ideally we should get block ids from scheduler, corresponding to the msg
+                    prefill_block_ids = ep_migration_request.remote_block_ids
+
+                    assert len(encoder_block_ids) == len(prefill_block_ids), (
+                        f'#encoder block ids ({len(encoder_block_ids)}) must equal to '
+                        f'#prefill block ids ({len(prefill_block_ids)}) '
+                        f'all id length: {len(msg.num_token_ids)}')
+                    migration_execution_requests.append((
+                        ep_migration_request.remote_engine_id,
+                        list(zip(encoder_block_ids, prefill_block_ids)),
+                    ))
+                    migration_inputs = MigrationExecutionBatch(protocol=ep_migration_request.protocol,
+                                                               requests=migration_execution_requests)
+                    logger.info(f'migrating encoder features for session: {msg.session_id} begin')
+                    await self.executor.ep_migrate(migration_inputs)
+                    logger.info(f'migrating encoder features for session: {msg.session_id} done')
+                    # TODO: we don't send free cache via zmq now, leave as future work
                     # await self.engine_conn.zmq_send(remote_engine_id=ep_migration_request.remote_engine_id,
                     #                                 remote_session_id=ep_migration_request.remote_session_id)
 

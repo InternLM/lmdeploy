@@ -242,6 +242,7 @@ def model_forward(
             )
             input_dict = model.prepare_inputs_for_generation(
                 past_key_values=cache_engine.gpu_cache,
+                encoder_cache=cache_engine.encoder_gpu_cache,
                 context=context,
             )
             output = model(**input_dict)

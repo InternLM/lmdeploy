@@ -22,9 +22,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMALinkType, ServingStrategy
+from lmdeploy.pytorch.disagg.conn.ep_proxy_conn import EPConnectionPool
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
-from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
+from lmdeploy.pytorch.disagg.messages import EPConnectionMessage, PDConnectionMessage
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
@@ -108,6 +109,7 @@ class NodeManager:
         self.migration_protocol = MigrationProtocol[migration_protocol]
         self.rdma_config = DistServeRDMAConfig(with_gdr=with_gdr, link_type=RDMALinkType[link_type])
         self.pd_connection_pool = PDConnectionPool()
+        self.ep_connection_pool = EPConnectionPool()
         self.dummy_prefill = False
 
     def get_nodes(self, role: EngineRole) -> Dict:
@@ -125,6 +127,10 @@ class NodeManager:
     @property
     def decode_nodes(self):
         return self.get_nodes(EngineRole.Decode)
+
+    @property
+    def encoder_nodes(self):
+        return self.get_nodes(EngineRole.Encoder)
 
     def update_config_file(self):
         """Update the config file."""
@@ -504,6 +510,18 @@ async def connection_warmup():
                 rdma_config=node_manager.rdma_config,
             )) for p_url in node_manager.prefill_nodes for d_url in node_manager.decode_nodes
     ])
+    logger.info(f'encoder nodes: {node_manager.decode_nodes}\nprefill nodes: {node_manager.prefill_nodes}')
+    # FIXME: use hybrid nodes now, since we start language server in hybrid, not prefill
+    await asyncio.gather(*[
+        node_manager.ep_connection_pool.connect(
+            EPConnectionMessage(
+                e_url=e_url,
+                p_url=p_url,
+                protocol=node_manager.migration_protocol,
+                rdma_config=node_manager.rdma_config,
+                # )) for e_url in node_manager.encoder_nodes for p_url in node_manager.prefill_nodes
+            )) for e_url in node_manager.encoder_nodes for p_url in node_manager.hybrid_nodes
+    ])
     return JSONResponse({'SUCCESS': True})
 
 
@@ -576,21 +594,80 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return check_response
 
     if node_manager.serving_strategy == ServingStrategy.Hybrid:
-        node_url = node_manager.get_node_url(request.model)
+        # Helper: decide whether we need encoder stage
+        def _need_encoder(msgs: List[Dict]) -> bool:
+            try:
+                for m in msgs:
+                    content = m.get('content')
+                    # user role + list content -> possible multimodal
+                    if m.get('role') == 'user' and isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get('type') in ['image_url', 'image_data', 'image']:
+                                return True
+                return False
+            except Exception as e:  # noqa
+                logger.warning(f'encoder detect failed, fallback no-encoder: {e}')
+                return False
+
+        request_dict = request.model_dump()
+        # 1. Encoder stage (only if encoder node exists & messages contain images)
+        encoder_url = None
+        if len(node_manager.encoder_nodes):
+            if _need_encoder(request_dict.get('messages', [])):
+                encoder_url = node_manager.get_node_url(request.model, EngineRole.Encoder)
+                if not encoder_url:
+                    logger.warning(
+                        'Encoder nodes registered but no suitable encoder node found for model; skip encoder stage.')
+                else:
+                    logger.info(f'Encoder stage dispatched to {encoder_url}')
+                    enc_start = node_manager.pre_call(encoder_url)
+                    # encoder endpoint path: using vision server example: /v1/chat/completion (singular)
+                    # fall back to /v1/chat/completions if first fails
+                    encoder_response_text = await node_manager.generate(request_dict, encoder_url,
+                                                                        '/v1/chat/completion')
+                    if isinstance(encoder_response_text, (bytes, bytearray)):
+                        try:
+                            encoder_response_text = encoder_response_text.decode('utf-8')
+                        except Exception:  # noqa
+                            pass
+                    # simple heuristic: if returns timeout structure (bytes) keep original
+                    try:
+                        enc_json = json.loads(encoder_response_text)
+                    except Exception:
+                        # try alternative endpoint if first not json (maybe 404 HTML)
+                        alt_text = await node_manager.generate(request_dict, encoder_url, '/v1/chat/completions')
+                        try:
+                            enc_json = json.loads(alt_text)
+                            encoder_response_text = alt_text
+                        except Exception:
+                            logger.error('Encoder stage failed: cannot parse JSON; skip encoder stage')
+                            enc_json = None
+                    node_manager.post_call(encoder_url, enc_start)
+                    if enc_json and isinstance(enc_json, dict) and 'encoder_result' in enc_json:
+                        # Replace messages with encoder returned (likely empty) to avoid double encoding
+                        request_dict['messages'] = enc_json.get('messages', [])
+                        request_dict['encoder_result'] = enc_json['encoder_result']
+                    else:
+                        logger.warning('Encoder response lacks encoder_result, skip passing encoder_result.')
+        logger.info(f'Post-encoder request dict: {request_dict}')
+        # 2. Hybrid (LLM) generation stage
+        node_url = node_manager.get_node_url(request.model, EngineRole.Hybrid)
         if not node_url:
             return node_manager.handle_unavailable_model(request.model)
-
-        logger.info(f'A request is dispatched to {node_url}')
-        request_dict = request.model_dump()
+        logger.info(f'LLM stage dispatched to {node_url}' + (f' (after encoder {encoder_url})' if encoder_url else ''))
         start = node_manager.pre_call(node_url)
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
             return StreamingResponse(response, background=background_task)
         else:
-            response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
+            response_text = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
             node_manager.post_call(node_url, start)
-            return JSONResponse(json.loads(response))
+            try:
+                return JSONResponse(json.loads(response_text))
+            except Exception:
+                logger.error('Failed to parse LLM response JSON, returning raw text')
+                return JSONResponse({'raw': response_text})
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
         request_dict = request.model_dump()
 
@@ -621,6 +698,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
         if not node_manager.dummy_prefill:
             if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
+                # FIXME: here perform connections! we need to add similar logic for encode connect
+                # currently we connect and warmup manually through /distserve/connection_warmup
                 await node_manager.pd_connection_pool.connect(
                     PDConnectionMessage(
                         p_url=p_url,
@@ -662,6 +741,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
 
 
+# TODO: also change to /v1/completions, similar to /v1/chat/completions
 @app.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.

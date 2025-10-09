@@ -142,6 +142,7 @@ class ModelInputs:
     cross_length: torch.LongTensor = None
     history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
+    encoder_results: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
 
@@ -254,6 +255,7 @@ class ModelInputs:
                 local_adapter_ids=self.local_adapter_ids,
                 vision_inputs=vision_inputs,
                 model_metas=self.model_metas,
+                encoder_results=self.encoder_results,
                 cross_length=cross_length,
                 history_cross_length=history_cross_length,
             )
@@ -319,6 +321,7 @@ class StepContext:
     cross_attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
+    encoder_results: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
     enable_microbatch: bool = False
 
@@ -385,6 +388,7 @@ class StepContext:
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
             model_metas=inputs.model_metas,
+            encoder_results=inputs.encoder_results,
             cross_seqlens=cross_seqlens,
             cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,

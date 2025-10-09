@@ -35,6 +35,7 @@ class EngineRole(enum.Enum):
     Hybrid = enum.auto()
     Prefill = enum.auto()
     Decode = enum.auto()
+    Encoder = enum.auto()
 
 
 class MigrationBackend(enum.Enum):

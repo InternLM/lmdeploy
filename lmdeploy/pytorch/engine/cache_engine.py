@@ -62,6 +62,8 @@ class CacheEngine:
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
+        # FIXME: hardcode cache size for interns1 series
+        self.encoder_gpu_cache = torch.empty(size=(128, 256, 4096), dtype=torch.bfloat16, device='cuda')
 
         self.migration_backend_impl: Optional[MigrationBackendImpl] = None
 
@@ -334,6 +336,19 @@ class CacheEngine:
                                                              offset=t.storage_offset(),
                                                              length=t.numel() * t.itemsize)
             self.migration_backend_impl.register_memory_region(register_mr_request)
+
+        # register memory region for encoder cache, otherwise cannot perform RDMA transfer
+        if self.encoder_gpu_cache.numel() > 0:
+            logger.info('p2p_init encoder_cache')
+            register_mr_request = DistServeRegisterMRMessage(
+                protocol=migration_init_request.protocol,
+                remote_engine_id=migration_init_request.remote_engine_id,
+                mr_key='encoder_cache',  # Use the fixed mr key, same as the one in encoder_cache_engine
+                addr=self.encoder_gpu_cache.data_ptr(),
+                offset=self.encoder_gpu_cache.storage_offset(),
+                length=self.encoder_gpu_cache.numel() * self.encoder_gpu_cache.itemsize)
+            self.migration_backend_impl.register_memory_region(register_mr_request)
+
         return DistServeKVTransferEndpointInfo(protocol=migration_init_request.protocol,
                                                endpoint_info=json.dumps(
                                                    self.migration_backend_impl.endpoint_info(
@@ -383,9 +398,40 @@ class CacheEngine:
                 batch=assignment_batch,
             ))
 
-    async def ep_migrate(self):
-        # TODO, implement actual EP migration logic here
-        # TODO, we may consider a seperate MM cache, may not exactly be here
-        pass
+    async def ep_migrate(self, migration_execution_inputs: MigrationExecutionBatch):
+        """Handles the migration of the Multi-Modal (MM) cache."""
+        if not self.migration_backend_impl:
+            logger.error('Migration backend is not initialized. Cannot perform EP migration.')
+            return
+
+        if self.encoder_gpu_cache.numel() == 0:
+            logger.warning('MM GPU cache is not allocated or is empty. Skipping EP migration.')
+            return
+
+        _, tokens_per_image, hidden_size = self.encoder_gpu_cache.shape
+        assignment_len = tokens_per_image * hidden_size * self.encoder_gpu_cache.element_size()
+
+        assignment_batch: List[AssignmentInstruct] = []
+        mr_key = 'encoder_cache'  # Use the fixed mr key, same as the one in encoder_cache_engine
+
+        for _, blocks_to_migration in migration_execution_inputs.requests:
+            for source_idx, target_idx in blocks_to_migration:
+                source_offset = source_idx * assignment_len
+                target_offset = target_idx * assignment_len
+                instruction = AssignmentInstruct(mr_key=mr_key,
+                                                 target_offset=target_offset,
+                                                 source_offset=source_offset,
+                                                 length=assignment_len)
+                assignment_batch.append(instruction)
+
+        if assignment_batch:
+            remote_engine_id = migration_execution_inputs.requests[0][0]
+            logger.debug(f'Migrating {len(assignment_batch)} MM feature blocks to {remote_engine_id}.')
+            await self.migration_backend_impl.p2p_migrate(
+                MigrationAssignment(
+                    protocol=migration_execution_inputs.protocol,
+                    remote_engine_id=remote_engine_id,
+                    batch=assignment_batch,
+                ))
 
     """ Methods for PD Disaggregation End. """

@@ -56,12 +56,14 @@ class GraphRunner:
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
+        encoder_cache: torch.Tensor,
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
         """Prepare inputs."""
         return self.model.prepare_inputs_for_generation(
             past_key_values,
+            encoder_cache,
             inputs_embeds,
             context,
         )

@@ -79,13 +79,13 @@ class DistServeConnectionResponse(BaseModel):
 
 class EncoderResult(BaseModel):
 
-    token_ids : List[int]  # FIXME, why we need this?
-    image_mask : List[int]
+    token_ids: List[int]
+    image_mask: List[int]
 
-    protocol: MigrationProtocol  # RDMA
-    remote_engine_id: str  # encoder engine id
-    remote_session_id: int  # specify encoder cache to free
-    remote_block_ids: List[int]  # encoder multi-modal cache region
+    protocol: MigrationProtocol
+    remote_engine_id: str
+    remote_session_id: int
+    remote_block_ids: List[int]
 
 
 class MigrationRequest(BaseModel):
