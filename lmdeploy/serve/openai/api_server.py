@@ -362,7 +362,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         encoder_result = EncoderResult.model_validate(encoder_result)
     print(f'=> api server, migration_request: \n{migration_request}\n')
     print(f'=> api server, encoder_result: \n{encoder_result}\n')
-    # import pdb; pdb.set_trace()
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id

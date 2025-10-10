@@ -398,14 +398,14 @@ class CacheEngine:
                 batch=assignment_batch,
             ))
 
-    async def ep_migrate(self, migration_execution_inputs: MigrationExecutionBatch):
+    async def epd_migrate(self, migration_execution_inputs: MigrationExecutionBatch):
         """Handles the migration of the Multi-Modal (MM) cache."""
         if not self.migration_backend_impl:
-            logger.error('Migration backend is not initialized. Cannot perform EP migration.')
+            logger.error('Migration backend is not initialized. Cannot perform EPD migration.')
             return
 
         if self.encoder_gpu_cache.numel() == 0:
-            logger.warning('MM GPU cache is not allocated or is empty. Skipping EP migration.')
+            logger.warning('MM GPU cache is not allocated or is empty. Skipping EPD migration.')
             return
 
         _, tokens_per_image, hidden_size = self.encoder_gpu_cache.shape

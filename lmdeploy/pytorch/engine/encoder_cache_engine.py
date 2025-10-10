@@ -45,8 +45,7 @@ class EncoderCacheEngine:
         self.rank = rank
         self.tp_rank = tp_rank
 
-        # self.feature_dtype = torch.float16
-        # FIXME: turbomind forward() returns float16, pytorch returns bfloat16
+        # FIXME: turbomind forward() returns float16, pytorch forward uses bfloat16
         self.feature_dtype = torch.bfloat16
         self._num_gpu_blocks = num_gpu_blocks
 

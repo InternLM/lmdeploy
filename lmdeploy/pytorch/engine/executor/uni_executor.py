@@ -117,8 +117,8 @@ class UniExecutor(ExecutorBase):
         """KV Cache Migration."""
         return await self.model_agent.cache_engine.migrate(batch)
 
-    async def ep_migrate(self, batch: MigrationExecutionBatch):
+    async def epd_migrate(self, batch: MigrationExecutionBatch):
         """Encoder Cache Migration."""
-        return await self.model_agent.cache_engine.ep_migrate(batch)
+        return await self.model_agent.cache_engine.epd_migrate(batch)
 
     """ PD Disaggregation API End """

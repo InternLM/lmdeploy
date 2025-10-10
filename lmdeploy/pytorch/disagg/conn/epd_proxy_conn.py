@@ -13,7 +13,7 @@ from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
                                                    DistServeConnectionResponse, DistServeDropConnectionRequest,
                                                    DistServeInitRequest, DistServeInitResponse)
-from lmdeploy.pytorch.disagg.messages import EPConnectionMessage
+from lmdeploy.pytorch.disagg.messages import EPDConnectionMessage
 
 logger = get_logger('lmdeploy')
 
@@ -26,23 +26,23 @@ except ValueError:  # fallback silently and log
     AIOHTTP_TIMEOUT = None
 
 
-class EPConnectionStatus(enum.Enum):
+class EPDConnectionStatus(enum.Enum):
     Disconnected = enum.auto()
     Connected = enum.auto()
     Connecting = enum.auto()
 
 
-class EPConnectionState:
-    """EPConnectionState (simple state holder with one event)."""
+class EPDConnectionState:
+    """EPDConnectionState (simple state holder with one event)."""
 
-    def __init__(self, status: EPConnectionStatus, event: asyncio.Event):
+    def __init__(self, status: EPDConnectionStatus, event: asyncio.Event):
         self.status = status
         self.event = event
 
     async def wait(self):
         await self.event.wait()
 
-    def set_status(self, status: EPConnectionStatus):
+    def set_status(self, status: EPDConnectionStatus):
         self.status = status
 
 
@@ -50,8 +50,9 @@ def get_server_api(url: str, api: str):
     return f'{url}/{api}'
 
 
-class EPConnectionPool:
-    """Constructing the link of E & P engine for the migration of KVCache.
+class EPDConnectionPool:
+    """Constructing the link of E & PD engine for the migration of Encoder
+    cache.
 
     Note: we use Peer to Peer transportation in KVCache migration.
     Note: Lazy link construction is supported, which perform connection
@@ -68,13 +69,13 @@ class EPConnectionPool:
     CONN_SEMAPHORE_SIZE = 2048
 
     def __init__(self):
-        # all prefill and decode instances
+        # all encode, prefill and decode instances
         # TODO (JimyMa): Maybe encoding instances
-        self.prefill_endpoints: Set[str] = set()
+        self.prefill_decode_endpoints: Set[str] = set()
         self.encode_endpoints: Set[str] = set()
 
-        # Links of PD Connection.
-        self.pool: Dict[Tuple[str, str], EPConnectionState] = {}
+        # Links of EPD Connection.
+        self.pool: Dict[Tuple[str, str], EPDConnectionState] = {}
 
         # put migrating session to `self.migration_session_shelf` for increasing fault tolerance
         # if a session is finished, then pop it from `self.migration_session_shelf`
@@ -83,7 +84,7 @@ class EPConnectionPool:
         self.migration_session_shelf: Dict[Tuple[str, str], Set[int]] = defaultdict(set)
 
         # conn_perform handler queue
-        self.waiting_conn: asyncio.Queue[Tuple[EPConnectionMessage, asyncio.Event]] = asyncio.Queue()
+        self.waiting_conn: asyncio.Queue[Tuple[EPDConnectionMessage, asyncio.Event]] = asyncio.Queue()
 
         # conn Registry Lock
         self.conn_lock = asyncio.Lock()
@@ -99,7 +100,7 @@ class EPConnectionPool:
 
     def reg_instance(self, role: EngineRole, endpoint: str):
         if role == EngineRole.Prefill:
-            self.prefill_endpoints.add(endpoint)
+            self.prefill_decode_endpoints.add(endpoint)
         elif role == EngineRole.Encoder:
             self.encode_endpoints.add(endpoint)
         else:
@@ -112,14 +113,14 @@ class EPConnectionPool:
             for k in dropped_key:
                 self.drop(k)
             self.encode_endpoints.remove(endpoint)
-        elif endpoint in self.prefill_endpoints:
+        elif endpoint in self.prefill_decode_endpoints:
             dropped_key = [k for k in self.pool.keys() if k[1] == endpoint]
             for k in dropped_key:
                 self.drop(k)
             # TODO(JimyMa): handle side-effect by kvcache migration
-            self.prefill_endpoints.remove(endpoint)
+            self.prefill_decode_endpoints.remove(endpoint)
 
-    async def connect(self, conn_req: EPConnectionMessage):
+    async def connect(self, conn_req: EPDConnectionMessage):
 
         async def get_engine_config(server_endpoint):
             async with self.conn_sem:
@@ -153,23 +154,23 @@ class EPConnectionPool:
                     result = await resp.json()
                     return DistServeConnectionResponse.model_validate(result)
 
-        async def conn_worker(conn_req: EPConnectionMessage, conn_event: asyncio.Event):
+        async def conn_worker(conn_req: EPDConnectionMessage, conn_event: asyncio.Event):
             # try:
-            link = (conn_req.e_url, conn_req.p_url)
+            link = (conn_req.e_url, conn_req.pd_url)
             logger.debug(f'{link} connecting...')
             # Step 1. Get Remote Engine Configuration
-            prefill_engine_config = await get_engine_config(conn_req.p_url)
+            prefill_decode_engine_configs = await get_engine_config(conn_req.pd_url)
             encode_engine_config = await get_engine_config(conn_req.e_url)
-            print(f'prefill_engine_config: {prefill_engine_config}')
+            print(f'prefill_decode_engine_configs: {prefill_decode_engine_configs}')
             print(f'encode_engine_config: {encode_engine_config}')
 
             # encode 的 config 大部分字段为 空
 
             # Step 2. Construct Initialize Configuration
-            prefill_init_req = DistServeInitRequest(
+            prefill_decode_init_req = DistServeInitRequest(
                 protocol=conn_req.protocol,
-                local_engine_id=conn_req.p_url,
-                local_engine_config=prefill_engine_config,
+                local_engine_id=conn_req.pd_url,
+                local_engine_config=prefill_decode_engine_configs,
                 remote_engine_id=conn_req.e_url,
                 remote_engine_config=encode_engine_config,
                 rdma_config=conn_req.rdma_config,
@@ -179,41 +180,41 @@ class EPConnectionPool:
                 protocol=conn_req.protocol,
                 local_engine_id=conn_req.e_url,
                 local_engine_config=encode_engine_config,
-                remote_engine_id=conn_req.p_url,
-                remote_engine_config=prefill_engine_config,
+                remote_engine_id=conn_req.pd_url,
+                remote_engine_config=prefill_decode_engine_configs,
                 rdma_config=conn_req.rdma_config,
                 nvlink_config=conn_req.nvlink_config,
             )
 
-            print(f'prefill_init_req: {prefill_init_req}')
+            print(f'prefill_decode_init_req: {prefill_decode_init_req}')
             print(f'encode_init_req: {encode_init_req}')
-            prefill_init_resp = await p2p_initialize(conn_req.p_url, prefill_init_req)
+            prefill_decode_init_resp = await p2p_initialize(conn_req.pd_url, prefill_decode_init_req)
             encode_init_resp = await p2p_initialize(conn_req.e_url, encode_init_req)
 
             # Step 3. Connection
             encode_endpoint_conn_reqs = DistServeConnectionRequest(
                 protocol=conn_req.protocol,
-                remote_engine_id=conn_req.p_url,
-                remote_engine_endpoint_info=prefill_init_resp.engine_endpoint_info,
-                remote_kvtransfer_endpoint_info=prefill_init_resp.kvtransfer_endpoint_info)
-            prefill_endpoint_conn_reqs = DistServeConnectionRequest(
+                remote_engine_id=conn_req.pd_url,
+                remote_engine_endpoint_info=prefill_decode_init_resp.engine_endpoint_info,
+                remote_kvtransfer_endpoint_info=prefill_decode_init_resp.kvtransfer_endpoint_info)
+            prefill_decode_endpoint_conn_reqs = DistServeConnectionRequest(
                 protocol=conn_req.protocol,
                 remote_engine_id=conn_req.e_url,
                 remote_engine_endpoint_info=encode_init_resp.engine_endpoint_info,
                 remote_kvtransfer_endpoint_info=encode_init_resp.kvtransfer_endpoint_info)
             print(f'encode_endpoint_conn_reqs: {encode_endpoint_conn_reqs}')
-            print(f'prefill_endpoint_conn_reqs: {prefill_endpoint_conn_reqs}')
-            await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
+            print(f'prefill_decode_endpoint_conn_reqs: {prefill_decode_endpoint_conn_reqs}')
+            await p2p_connect(conn_req.pd_url, prefill_decode_endpoint_conn_reqs)
             await p2p_connect(conn_req.e_url, encode_endpoint_conn_reqs)
-            self.pool[link].set_status(EPConnectionStatus.Connected)
-            logger.debug(f'{(conn_req.e_url, conn_req.p_url)} connected')
+            self.pool[link].set_status(EPDConnectionStatus.Connected)
+            logger.debug(f'{(conn_req.e_url, conn_req.pd_url)} connected')
             # except Exception as e:
-            #     self.pool[link].set_status(EPConnectionStatus.Disconnected)
+            #     self.pool[link].set_status(EPDConnectionStatus.Disconnected)
             #     logger.error(f'ep connection error: {e}')
             conn_event.set()
 
-        async def wait_for_conn(conn_req: EPConnectionMessage, conn_event: asyncio.Event):
-            await self.pool[(conn_req.e_url, conn_req.p_url)].event.wait()
+        async def wait_for_conn(conn_req: EPDConnectionMessage, conn_event: asyncio.Event):
+            await self.pool[(conn_req.e_url, conn_req.pd_url)].event.wait()
             conn_event.set()
 
         async def _perform_conn():
@@ -226,16 +227,16 @@ class EPConnectionPool:
 
                 while not self.waiting_conn.empty():
                     conn_req, conn_event = self.waiting_conn.get_nowait()
-                    link = (conn_req.e_url, conn_req.p_url)
+                    link = (conn_req.e_url, conn_req.pd_url)
                     if link not in self.pool:
-                        self.pool[link] = EPConnectionState(
-                            EPConnectionStatus.Disconnected,
+                        self.pool[link] = EPDConnectionState(
+                            EPDConnectionStatus.Disconnected,
                             conn_event,
                         )
-                    if self.pool[link].status == EPConnectionStatus.Connecting:
+                    if self.pool[link].status == EPDConnectionStatus.Connecting:
                         asyncio.create_task(wait_for_conn(conn_req, conn_event))
-                    elif self.pool[link].status == EPConnectionStatus.Disconnected:
-                        self.pool[link].set_status(EPConnectionStatus.Connecting)
+                    elif self.pool[link].status == EPDConnectionStatus.Disconnected:
+                        self.pool[link].set_status(EPDConnectionStatus.Connecting)
                         asyncio.create_task(conn_worker(conn_req, conn_event))
 
         if not self.initialized:
@@ -249,16 +250,16 @@ class EPConnectionPool:
             self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
             self.initialized = True
 
-        print(f'EPConnectionPool connect called: {conn_req.e_url} <-> {conn_req.p_url}')
+        print(f'EPDConnectionPool connect called: {conn_req.e_url} <-> {conn_req.pd_url}')
         self.reg_instance(EngineRole.Encoder, conn_req.e_url)
-        self.reg_instance(EngineRole.Prefill, conn_req.p_url)
+        self.reg_instance(EngineRole.Prefill, conn_req.pd_url)
 
         cnt = 0
         while cnt < self.max_retry_cnt:
-            if self.is_connected(conn_req.e_url, conn_req.p_url):
+            if self.is_connected(conn_req.e_url, conn_req.pd_url):
                 return
             if cnt > 0:
-                logger.warning(f'EP connection failure, retry cnt: {cnt}')
+                logger.warning(f'EPD connection failure, retry cnt: {cnt}')
                 # simple incremental backoff
                 await asyncio.sleep(min(1.0, 0.2 * cnt))
             conn_event = asyncio.Event()
@@ -267,15 +268,15 @@ class EPConnectionPool:
             await conn_event.wait()
             cnt += 1
         async with self.conn_lock:
-            if (conn_req.e_url, conn_req.p_url) in self.pool:
-                self.pool[conn_req.e_url, conn_req.p_url].set_status(EPConnectionStatus.Disconnected)
-        raise TimeoutError('EPConnection Failure')
+            if (conn_req.e_url, conn_req.pd_url) in self.pool:
+                self.pool[conn_req.e_url, conn_req.pd_url].set_status(EPDConnectionStatus.Disconnected)
+        raise TimeoutError('EPDConnection Failure')
 
-    def is_connected(self, e_url: str, p_url: str):
-        link = self.pool.get((e_url, p_url), None)
+    def is_connected(self, e_url: str, pd_url: str):
+        link = self.pool.get((e_url, pd_url), None)
         if not link:
             return False
-        return link.status == EPConnectionStatus.Connected
+        return link.status == EPDConnectionStatus.Connected
 
     def drop(self, ep_key: Tuple[str, str]):
         left = ep_key[0]
@@ -320,4 +321,4 @@ class EPConnectionPool:
             try:
                 await self.conn_sess.close()
             except Exception as e:
-                logger.warning(f'EPConnectionPool close error: {e}')
+                logger.warning(f'EPDConnectionPool close error: {e}')

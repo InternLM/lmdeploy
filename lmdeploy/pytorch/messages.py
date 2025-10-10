@@ -159,10 +159,10 @@ class MessageStatus(enum.Enum):
     MIGRATION_LOCKED = enum.auto()
     MIGRATION_DONE = enum.auto()
 
-    WAITING_EP_MIGRATION = enum.auto()  # waiting for encoder => prefill migration
-    RUNNING_EP_MIGRATION = enum.auto()  # running encoder => prefill migration
-    EP_MIGRATION_LOCKED = enum.auto()  # locked during encoder => prefill migration
-    EP_MIGRATION_DONE = enum.auto()  # done encoder => prefill migration
+    WAITING_EPD_MIGRATION = enum.auto()
+    RUNNING_EPD_MIGRATION = enum.auto()
+    EPD_MIGRATION_LOCKED = enum.auto()
+    EPD_MIGRATION_DONE = enum.auto()
 
 
 SeqMap = Dict[int, 'SchedulerSequence']

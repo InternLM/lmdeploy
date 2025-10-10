@@ -22,10 +22,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMALinkType, ServingStrategy
-from lmdeploy.pytorch.disagg.conn.ep_proxy_conn import EPConnectionPool
+from lmdeploy.pytorch.disagg.conn.epd_proxy_conn import EPDConnectionPool
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
-from lmdeploy.pytorch.disagg.messages import EPConnectionMessage, PDConnectionMessage
+from lmdeploy.pytorch.disagg.messages import EPDConnectionMessage, PDConnectionMessage
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
@@ -109,7 +109,7 @@ class NodeManager:
         self.migration_protocol = MigrationProtocol[migration_protocol]
         self.rdma_config = DistServeRDMAConfig(with_gdr=with_gdr, link_type=RDMALinkType[link_type])
         self.pd_connection_pool = PDConnectionPool()
-        self.ep_connection_pool = EPConnectionPool()
+        self.ep_connection_pool = EPDConnectionPool()
         self.dummy_prefill = False
 
     def get_nodes(self, role: EngineRole) -> Dict:
@@ -511,16 +511,15 @@ async def connection_warmup():
             )) for p_url in node_manager.prefill_nodes for d_url in node_manager.decode_nodes
     ])
     logger.info(f'encoder nodes: {node_manager.decode_nodes}\nprefill nodes: {node_manager.prefill_nodes}')
-    # FIXME: use hybrid nodes now, since we start language server in hybrid, not prefill
+    # FIXME: we set pd_urls to use hybrid nodes, since we start LLM server in hybrid role
     await asyncio.gather(*[
         node_manager.ep_connection_pool.connect(
-            EPConnectionMessage(
+            EPDConnectionMessage(
                 e_url=e_url,
-                p_url=p_url,
+                pd_url=pd_url,
                 protocol=node_manager.migration_protocol,
                 rdma_config=node_manager.rdma_config,
-                # )) for e_url in node_manager.encoder_nodes for p_url in node_manager.prefill_nodes
-            )) for e_url in node_manager.encoder_nodes for p_url in node_manager.hybrid_nodes
+            )) for e_url in node_manager.encoder_nodes for pd_url in node_manager.hybrid_nodes
     ])
     return JSONResponse({'SUCCESS': True})
 
