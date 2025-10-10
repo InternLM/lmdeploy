@@ -1,13 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 
 from lmdeploy.pytorch import consts
 from lmdeploy.pytorch.config import DLLMConfig
+from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.model_inputs import ModelInputs
@@ -22,6 +25,9 @@ SeqList = List[SchedulerSequence]
 class DLLMExtraInputs(ExtraInputs):
     """DLLM extra inputs."""
     dllm_mask: torch.Tensor
+
+    def broadcast(self, src: int, group, async_op=False):
+        return dist.broadcast(self.dllm_mask, src=src, group=group, async_op=async_op)
 
 
 @dataclass
@@ -216,3 +222,19 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
 
         extra_inputs.dllm_mask = dllm_mask
         return next_token_ids, extra_inputs
+
+    def make_dummy_next_token(self, inputs: 'ModelInputs', logits: torch.Tensor, extra_inputs: DLLMExtraInputs):
+        """Make dummy next token for broadcast."""
+        with torch.inference_mode():
+            next_token_ids = inputs.input_ids.new_zeros(logits.size(0))
+        return next_token_ids, extra_inputs
+
+    @contextmanager
+    def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: DLLMExtraInputs, dist_ctx: DistContext):
+        """Broadcast next token ids and extra inputs."""
+        tp_gpu_group = dist_ctx.attn_tp_group.gpu_group
+        rank = dist.get_global_rank(tp_gpu_group, 0)
+        dist.broadcast(next_token_ids, src=rank, group=tp_gpu_group, async_op=True)
+        handle = extra_inputs.broadcast(src=rank, group=tp_gpu_group, async_op=True)
+        yield
+        handle.wait()

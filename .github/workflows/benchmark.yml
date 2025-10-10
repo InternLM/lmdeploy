@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Set benchmark type. Default is "["generation", "throughput", "api_server"]"'
         type: string
-        default: "['apiserver', 'generation', 'throughput']"
+        default: "['apiserver', 'throughput']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
