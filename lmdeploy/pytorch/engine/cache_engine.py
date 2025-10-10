@@ -20,6 +20,13 @@ KVCache = Tuple[torch.Tensor, torch.Tensor]
 logger = get_logger('lmdeploy')
 
 
+def _get_kv_cache_dtype(model_config: ModelConfig):
+    kv_cache_dtype = model_config.dtype
+    if model_config.use_mla_fp8_cache:
+        kv_cache_dtype = torch.float8_e4m3fn
+    return kv_cache_dtype
+
+
 class CacheEngine:
     """Host and Device memory maintainer.
 
@@ -50,10 +57,9 @@ class CacheEngine:
 
         self.block_size = cache_config.block_size
         self.num_layers = model_config.num_layers
-        self.kv_cache_dtype = model_config.dtype
+        self.kv_cache_dtype = _get_kv_cache_dtype(self.model_config)
 
         if self.model_config.use_mla_fp8_cache:
-            self.kv_cache_dtype = torch.float8_e4m3fn
             cache_config.quant_policy = 0
 
         if cache_config.quant_policy > 0:
@@ -341,7 +347,8 @@ class CacheEngine:
             local=True,
         )
         if quant_policy == 0:
-            dtype = model_config.dtype
+            dtype = _get_kv_cache_dtype(model_config)
+
             key_block = torch.empty(key_shape, dtype=dtype, device='meta')
             value_block = torch.empty(value_shape, dtype=dtype, device='meta')
             mem_key_block = key_block.numel() * key_block.element_size()
@@ -365,7 +372,7 @@ class CacheEngine:
             for shape, dtype in model_config.cache_shapes:
                 custom_shape = cls.get_custom_cache_shape_impl(
                     num_layers=num_layers,
-                    num_blocks=block_size,
+                    num_blocks=1,
                     block_size=block_size,
                     shape=shape,
                 )
