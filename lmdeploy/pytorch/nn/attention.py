@@ -77,6 +77,7 @@ class Attention(nn.Module):
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
         s_aux: torch.Tensor = None,
+        nsa_indices: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
@@ -90,6 +91,7 @@ class Attention(nn.Module):
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
             learnable_sink=s_aux,
+            nsa_indices=nsa_indices,
             inplace=inplace,
         )
 

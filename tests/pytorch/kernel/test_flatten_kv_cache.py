@@ -170,3 +170,75 @@ class TestFlattenKVCacheQuant4(TestFlattenKVCacheQuant8):
     @pytest.fixture
     def rtol(self):
         yield 1e-3
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
+class TestFlattenKVCacheMLAFP8(TestFlattenKVCache):
+
+    @pytest.fixture
+    def out_dtype(self):
+        yield torch.bfloat16
+
+    @pytest.fixture
+    def num_heads(self):
+        yield 1
+
+    @pytest.fixture
+    def head_dim(self):
+        yield 576
+
+    @pytest.fixture
+    def block_size(self):
+        yield 64
+
+    @pytest.fixture
+    def k_cache_mla(self, k_caches):
+        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
+        num_blocks, block_size, num_heads, _ = k_caches.shape
+        k_cache_pe = k_caches[:, :, :, 512:]
+        k_cache_nope = k_caches[:, :, :, :512].flatten(0, -2)
+        k_cache_nope, k_cache_scale = quant_fp8(k_cache_nope, group_size=128)
+        k_cache_nope = k_cache_nope.view(num_blocks, block_size, num_heads, -1)
+        k_cache_scale = k_cache_scale.reshape(num_blocks, block_size, num_heads, -1).to(torch.float32)
+        dtype = k_cache_nope.dtype
+        out = torch.cat([k_cache_nope, k_cache_scale.view(dtype), k_cache_pe.view(dtype)], dim=-1)
+        yield out
+
+    def _dequant(self, k_cache_mla):
+        k_cache_nope = k_cache_mla[..., :512].to(torch.float32)
+        k_cache_scale = k_cache_mla[..., 512:512 + 16].view(torch.float32)
+        k_cache_pe = k_cache_mla[..., 512 + 16:].view(torch.bfloat16)
+        k_cache_nope = k_cache_nope.unflatten(-1, (-1, 128))
+        k_cache_scale = k_cache_scale[..., None]
+        k_cache_nope *= k_cache_scale
+        k_cache_nope = k_cache_nope.flatten(-2, -1).to(k_cache_pe.dtype)
+        k_cache = torch.cat([k_cache_nope, k_cache_pe], dim=-1)
+        return k_cache
+
+    @pytest.fixture
+    def gt(self, k_cache_mla, kv_lens, block_offsets, block_size, num_heads, out_size, head_dim):
+        k_caches = self._dequant(k_cache_mla)
+        k_states = k_caches.new_empty(num_heads, out_size, head_dim)
+        start_loc = 0
+        for kv_len, block_offs in zip(kv_lens, block_offsets):
+            remain_len = kv_len
+            for idx, _ in enumerate(range(0, kv_len, block_size)):
+                b_off = block_offs[idx]
+                block_len = min(block_size, remain_len)
+                end_loc = start_loc + block_len
+                k_block = k_caches[b_off, :block_len]
+                k_states[:, start_loc:end_loc] = k_block.transpose(0, 1)
+                start_loc = end_loc
+                remain_len -= block_len
+
+        yield k_states
+
+    def test_flatten_kv_cache(self, k_cache_mla, kv_seqlens, block_offsets, out_size, out_dtype, gt):
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache_mla_fp8
+
+        k_states = flatten_kv_cache_mla_fp8(k_cache_mla,
+                                            kv_seqlens,
+                                            block_offsets,
+                                            out_size=out_size,
+                                            out_dtype=out_dtype)
+        torch.testing.assert_close(k_states, gt)
