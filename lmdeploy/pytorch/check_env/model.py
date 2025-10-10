@@ -57,7 +57,7 @@ class ModelChecker(BaseChecker):
                 if not is_bf16_supported(device_type):
                     logger.warning('Device does not support bfloat16.')
         except Exception as e:
-            message = (f'Checking failed with error {e}', 'Please send issue to LMDeploy with error logs.')
+            message = (f'Checking failed with error {e}. Please send issue to LMDeploy with error logs.')
             self.log_and_exit(e, 'Model', message=message)
 
     def check(self):

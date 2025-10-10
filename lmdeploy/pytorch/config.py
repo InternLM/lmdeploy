@@ -214,6 +214,8 @@ class ModelConfig:
     dllm_mask_token: int = 0
     dllm_block_length: int = None
 
+    # Added for deepseekv3.2 nsa index
+    # caches would be added after kv cache
     cache_shapes: List[Tuple[List[int], torch.dtype]] = field(default_factory=list)
 
     def get_head_size(self):
