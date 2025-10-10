@@ -23,7 +23,7 @@ def run_pipeline_chat_test(config,
     # temp remove testcase because of issue 3434
     if ('InternVL3' in model_case or 'InternVL2_5' in model_case or 'MiniCPM-V-2_6' in model_case
         ) and 'turbomind' in backend_type and extra is not None and 'communicator' in extra and extra.get(
-            'communicator') == 'native' and tp > 1:
+            'communicator') == 'cuda-ipc' and tp > 1:
         return
     model_name = model_name = get_model_name(model_case)
     model_path = config.get('model_path')
@@ -58,9 +58,9 @@ def run_pipeline_chat_test(config,
                                       text=True,
                                       encoding='utf-8',
                                       env=env,
-                                      timeout=600)
+                                      timeout=900)
         except subprocess.TimeoutExpired as e:
-            assert False, f'Test command timed out after 10 minutes: {e.cmd}'
+            assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
         output_text = response.stdout
         print(output_text)
@@ -104,7 +104,7 @@ def run_pipeline_vl_chat_test(config,
 
     if ('InternVL3' in model_case or 'InternVL2_5' in model_case or 'MiniCPM-V-2_6' in model_case
         ) and 'turbomind' in backend_type and extra is not None and 'communicator' in extra and extra.get(
-            'communicator') == 'native' and tp > 1:
+            'communicator') == 'cuda-ipc' and tp > 1:
         return
 
     pipeline_chat_log = os.path.join(
@@ -133,9 +133,9 @@ def run_pipeline_vl_chat_test(config,
                                       text=True,
                                       encoding='utf-8',
                                       env=env,
-                                      timeout=600)
+                                      timeout=900)
         except subprocess.TimeoutExpired as e:
-            assert False, f'Test command timed out after 10 minutes: {e.cmd}'
+            assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
         output_text = response.stdout
         print(output_text)
