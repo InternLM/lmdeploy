@@ -439,6 +439,7 @@ class BaseModelAgent:
     ):
         """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
+        strategy = self.agent_strategy
 
         class _OutputGather:
             """Output gather."""
@@ -470,7 +471,11 @@ class BaseModelAgent:
             def get_output(self):
                 """Get tmp_output."""
                 if not return_logits:
-                    return self._output[:, -1:]
+                    seqlen = torch.full((1, ),
+                                        self._output.numel() // self._output.size(-1),
+                                        device=self._output.device,
+                                        dtype=self._output.dtype)
+                    return strategy.slice_outputs(self._output, seqlen)
                 torch.cuda.synchronize()
                 return self._output.to(self._device)
 
@@ -563,17 +568,14 @@ class BaseModelAgent:
         self._out_que.put_nowait((output, event))
 
     @contextmanager
-    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None, enable: bool = True):
+    def _broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ExtraInputs, enable: bool = True):
         if not enable:
             yield
             return
 
-        if dist_ctx is None:
-            dist_ctx = get_dist_manager().current_context()
-        tp_gpu_group = dist_ctx.tp_gpu_group
-        handle = dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
-        yield
-        handle.wait()
+        dist_ctx = self.dist_ctx
+        with self.agent_strategy.broadcast_next_token(next_token_ids, extra_inputs, dist_ctx) as handle:
+            yield handle
 
     async def _async_step_background(
         self,
@@ -699,6 +701,7 @@ class BaseModelAgent:
             seq_length = output.get('seq_length', inputs.seq_length)
             last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
             extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, seq_length)
+            model_metas = output.get('model_metas')
 
             # output empty for dummy inputs
             if is_dummy:
@@ -712,46 +715,39 @@ class BaseModelAgent:
                 # sampling
                 next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
 
-                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
-                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
+                # post sampling
+                next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
+                                                                                 extra_inputs)
 
-                    # post sampling
-                    next_token_ids, extra_inputs = self.agent_strategy.post_sampling(
-                        inputs, last_logits, next_token_ids, extra_inputs)
+                with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
+                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
 
                     # stopping criteria
                     stopped, stop_pos, stopping_criteria = stopping_criteria.step(next_token_ids,
                                                                                   sampling_inputs.stop_words,
                                                                                   inputs=inputs,
                                                                                   extra_inputs=extra_inputs)
+
+                    # send output
+                    logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
+                    extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+                    self._push_output(
+                        BatchedOutputs(next_token_ids=next_token_ids,
+                                       logits=logits if return_logits else None,
+                                       stopped=stopped,
+                                       stop_pos=stop_pos,
+                                       model_metas=model_metas,
+                                       logprobs=logprobs,
+                                       extra_outputs=extra_outputs))
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
-                with torch.inference_mode():
-                    next_token_ids = inputs.input_ids.new_zeros(last_logits.size(0))
-                logprobs = None
+                next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(
+                    inputs, last_logits, extra_inputs)
 
                 # broadcast next token for TP > 1
-                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
+                with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
-
-                # post sampling
-                next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
-                                                                                 extra_inputs)
-
-            # send output
-            model_metas = output.get('model_metas')
-            if need_output:
-                logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
-                extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
-                self._push_output(
-                    BatchedOutputs(next_token_ids=next_token_ids,
-                                   logits=logits if return_logits else None,
-                                   stopped=stopped,
-                                   stop_pos=stop_pos,
-                                   model_metas=model_metas,
-                                   logprobs=logprobs,
-                                   extra_outputs=extra_outputs))
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
