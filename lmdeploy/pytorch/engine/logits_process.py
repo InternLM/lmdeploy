@@ -2,7 +2,7 @@
 import asyncio
 import json
 from dataclasses import dataclass, fields
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
@@ -78,7 +78,8 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
-def _get_guided_processors(response_formats: Tuple[Dict], tokenizer: object, vocab_size_padded: int):
+def _get_guided_processors(response_formats: Tuple[Dict], tokenizer: object, vocab_size_padded: int,
+                           session_ctx: List[Dict[str, Any]]):
     processors = {}
     for i, _format in enumerate(response_formats):
         if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
@@ -98,8 +99,12 @@ def _get_guided_processors(response_formats: Tuple[Dict], tokenizer: object, voc
             else:
                 raise ValueError(f"unsupported format type: {_format['type']}")
 
+            session_id = session_ctx[i]['session_id']
+            seq_id = session_ctx[i]['seq_id']
+
             from .guided_process import _get_guided_logits_processor
-            processors[i] = _get_guided_logits_processor(schema, tokenizer, _format['type'], vocab_size_padded)
+            processors[i] = _get_guided_logits_processor(session_id, seq_id, schema, tokenizer, _format['type'],
+                                                         vocab_size_padded)
 
     return processors
 
@@ -154,17 +159,20 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
 class FusedLogitsProcessor:
     """Custom logits processor."""
 
-    def __init__(self,
-                 sampling_inputs: SamplingInputs,
-                 tokenizer: Optional[Tokenizer] = None,
-                 sampling_vocab_size: Optional[int] = None,
-                 logprobs_mode: Optional[str] = None):
+    def __init__(
+        self,
+        sampling_inputs: SamplingInputs,
+        tokenizer: Optional[Tokenizer] = None,
+        sampling_vocab_size: Optional[int] = None,
+        logprobs_mode: Optional[str] = None,
+        session_ctx: Optional[List[Dict[str, Any]]] = None,
+    ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.tokenizer = tokenizer
         self.sampling_vocab_size = sampling_vocab_size
         self.logprobs_mode = logprobs_mode
         self.guided_processors = _get_guided_processors(sampling_inputs.response_formats, tokenizer,
-                                                        sampling_vocab_size)
+                                                        sampling_vocab_size, session_ctx)
 
     async def _wait_stream_once(self):
         """Wait stream once."""
@@ -299,3 +307,9 @@ class FusedLogitsProcessor:
             indices = torch.cat([indices, topk_indices], dim=-1)
 
         return logprobs, indices.to(torch.int32)
+
+    @staticmethod
+    def cleanup_sessions(session_ids: List[int]):
+        from .guided_process import _remove_guided_logtis_processor
+        for session_id in session_ids:
+            _remove_guided_logtis_processor(session_id)
