@@ -2,14 +2,13 @@
 import copy
 import json
 import logging
-from functools import lru_cache
 from typing import Optional
 
 import torch
 import xgrammar as xgr
 from transformers import PreTrainedTokenizerBase
 
-logger = logging.getLogger('guided_process')
+logger = logging.getLogger('lmdeploy')
 
 
 class BaseLogitsProcessor:
@@ -70,18 +69,32 @@ class JSONLogitsProcessor(BaseLogitsProcessor):
         super().__init__(compiled, tokenizer_info)
 
 
-@lru_cache(maxsize=32)
-def _get_guided_logits_processor(guide: str,
+_guided_processors = {}
+
+
+def _get_guided_logits_processor(session_id: int,
+                                 seq_id: int,
+                                 guide: str,
                                  tokenizer: PreTrainedTokenizerBase,
                                  type: str,
                                  vocab_size_padded: Optional[int] = None):
-    try:
-        if type == 'json_schema':
-            return JSONLogitsProcessor(guide, tokenizer, vocab_size_padded)
-        elif type == 'regex_schema':
-            return RegexLogitsProcessor(guide, tokenizer, vocab_size_padded)
-        else:
-            return None
-    except Exception as e:
-        logger.error(e)
-        raise
+    if session_id in _guided_processors:
+        session_dict = _guided_processors[session_id]
+        if seq_id in session_dict:
+            processor = session_dict[seq_id]
+            return processor
+
+    if type == 'json_schema':
+        processor = JSONLogitsProcessor(guide, tokenizer, vocab_size_padded)
+    elif type == 'regex_schema':
+        processor = RegexLogitsProcessor(guide, tokenizer, vocab_size_padded)
+    else:
+        assert False, f'Do not support schema type {type}'
+
+    _guided_processors.setdefault(session_id, {})[seq_id] = processor
+    return processor
+
+
+def _remove_guided_logtis_processor(session_id: int):
+    if session_id in _guided_processors:
+        del _guided_processors[session_id]
