@@ -133,12 +133,7 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
 
 def _build_dist_config(engine_config: PytorchEngineConfig):
     """Build dist config."""
-    dist_config = DistConfig(dp=engine_config.dp,
-                             tp=engine_config.tp,
-                             ep=engine_config.ep,
-                             dp_rank=engine_config.dp_rank,
-                             enable_microbatch=engine_config.enable_microbatch,
-                             enable_eplb=engine_config.enable_eplb)
+    dist_config = DistConfig.from_engine_config(engine_config=engine_config)
     return dist_config
 
 
@@ -602,7 +597,9 @@ class Engine(EngineBase):
             sampling_param = msg.sampling_param
             max_new_tokens = sampling_param.max_new_tokens
             num_all_tokens = msg.num_valid_ids
-            if max_new_tokens + num_all_tokens > max_session_len:
+            if self.engine_config.role == EngineRole.Prefill:
+                sampling_param.max_new_tokens = 1
+            elif max_new_tokens + num_all_tokens > max_session_len:
                 logger.warning(
                     f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
                     f'Update max_new_tokens={max_session_len - num_all_tokens}.')
@@ -656,7 +653,7 @@ class Engine(EngineBase):
 
     @property
     def gpu_count(self):
-        return self.tp * self.dp
+        return self.dist_config.world_size
 
     @property
     def torch_int_dtype(self):
