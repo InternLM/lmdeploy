@@ -75,10 +75,6 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         if all_ids is not None:
             sampling_inputs.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
 
-        guided_input_ids = sampling_inputs.guided_input_ids
-        if guided_input_ids is not None:
-            sampling_inputs.guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None]], 1)
-
         return sampling_inputs
 
     def make_stopping_criteria(self, seqs: SeqList) -> ARStoppingCriteria:

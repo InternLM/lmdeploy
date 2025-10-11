@@ -10,6 +10,8 @@
 #include <memory>
 #include <ostream>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -151,6 +153,8 @@ struct Request {
         kCancel        = 8,
         kInconsistency = 9,  // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
     };
+
+    std::shared_ptr<xgrammar::GrammarMatcher> matcher;
 };
 
 inline void UpdateState(Request& r, int status, int seq_len)

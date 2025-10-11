@@ -538,16 +538,20 @@ class BaseModelAgent:
         ret['logits'] = logits
         return ret
 
-    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs, inputs: ModelInputs):
+    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs, inputs: ModelInputs,
+                                    session_ctx: List[Dict[str, Any]]):
         """Sampling logits."""
 
         # record function does not support async function
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
-            logits_processor = FusedLogitsProcessor(sampling_inputs,
-                                                    self.tokenizer,
-                                                    sampling_vocab_size=self.sampling_vocab_size,
-                                                    logprobs_mode=self.misc_config.logprobs_mode)
+            logits_processor = FusedLogitsProcessor(
+                sampling_inputs,
+                self.tokenizer,
+                sampling_vocab_size=self.sampling_vocab_size,
+                logprobs_mode=self.misc_config.logprobs_mode,
+                session_ctx=session_ctx,
+            )
             origin_logits = logits
             logits, raw_logprobs = await logits_processor(origin_logits)
             next_token_ids = logits_processor.sampling(logits)
@@ -588,6 +592,8 @@ class BaseModelAgent:
         is_dummy: bool = False,
         sync_long_context: bool = False,
         extra_inputs: ExtraInputs = None,
+        session_ctx: List[Dict[str, Any]] = None,
+        session_to_cleanup: List[int] = None,
     ):
         """Asyc forward task."""
         dist_ctx = get_dist_manager().current_context()
@@ -680,6 +686,9 @@ class BaseModelAgent:
 
         need_output = dp > 1 or rank % tp == 0
 
+        if session_to_cleanup:
+            self.cleanup_sessions(session_to_cleanup)
+
         # skip dummy forward.
         if is_all_dummy:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
@@ -712,7 +721,8 @@ class BaseModelAgent:
             if need_output:
                 logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
                 # sampling
-                next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
+                next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs,
+                                                                            session_ctx)
 
                 # post sampling
                 next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
@@ -1057,6 +1067,9 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         torch.cuda.empty_cache()
+
+    def cleanup_sessions(self, session_ids: List[int]):
+        FusedLogitsProcessor.cleanup_sessions(session_ids)
 
 
 class DefaultForwardInputsMaker:

@@ -2,7 +2,7 @@
 import asyncio
 import json
 from dataclasses import dataclass, fields
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
@@ -78,12 +78,10 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
-def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor, guided_input_ids: Optional[torch.Tensor],
-                     tokenizer: object):
-    if guided_input_ids is None:
-        return scores
-    for i in range(len(response_formats)):
-        _format = response_formats[i]
+def _get_guided_processors(response_formats: Tuple[Dict], tokenizer: object, vocab_size_padded: int,
+                           session_ctx: List[Dict[str, Any]]):
+    processors = {}
+    for i, _format in enumerate(response_formats):
         if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
             if _format['type'] == 'json_schema':
                 schema = _format['json_schema']
@@ -91,10 +89,8 @@ def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor, guided
                     for key in ['json_schema', 'schema']:
                         if key in schema:
                             schema = json.dumps(schema[key], ensure_ascii=False)
-                elif schema is None:
-                    from .guided_process import JSON_GRAMMAR
-                    schema = JSON_GRAMMAR
-                elif isinstance(schema, str):
+
+                if not isinstance(schema, str):
                     raise ValueError(f'Cannot parse schema {schema}. The schema must be '
                                      'either a dictionary or a string that contains the'
                                      ' JSON Schema specification')
@@ -102,11 +98,15 @@ def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor, guided
                 schema = _format.get('regex_schema', '')
             else:
                 raise ValueError(f"unsupported format type: {_format['type']}")
+
+            session_id = session_ctx[i]['session_id']
+            seq_id = session_ctx[i]['seq_id']
+
             from .guided_process import _get_guided_logits_processor
-            processor = _get_guided_logits_processor(schema, tokenizer, _format['type'])
-            if processor:
-                scores[i] = processor(guided_input_ids[i].tolist(), scores[i])
-    return scores
+            processors[i] = _get_guided_logits_processor(session_id, seq_id, schema, tokenizer, _format['type'],
+                                                         vocab_size_padded)
+
+    return processors
 
 
 SeqList = List[SchedulerSequence]
@@ -131,7 +131,6 @@ class SamplingInputs:
     logits_processors: List[List[LogitsProcessor]] = None
     max_num_logprobs: Optional[int] = None
     all_ids: Optional[torch.Tensor] = None
-    guided_input_ids: Optional[torch.Tensor] = None
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0
 
@@ -160,15 +159,20 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
 class FusedLogitsProcessor:
     """Custom logits processor."""
 
-    def __init__(self,
-                 sampling_inputs: SamplingInputs,
-                 tokenizer: Optional[Tokenizer] = None,
-                 sampling_vocab_size: Optional[int] = None,
-                 logprobs_mode: Optional[str] = None):
+    def __init__(
+        self,
+        sampling_inputs: SamplingInputs,
+        tokenizer: Optional[Tokenizer] = None,
+        sampling_vocab_size: Optional[int] = None,
+        logprobs_mode: Optional[str] = None,
+        session_ctx: Optional[List[Dict[str, Any]]] = None,
+    ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.tokenizer = tokenizer
         self.sampling_vocab_size = sampling_vocab_size
         self.logprobs_mode = logprobs_mode
+        self.guided_processors = _get_guided_processors(sampling_inputs.response_formats, tokenizer,
+                                                        sampling_vocab_size, session_ctx)
 
     async def _wait_stream_once(self):
         """Wait stream once."""
@@ -205,9 +209,12 @@ class FusedLogitsProcessor:
 
         sampling_inputs = self.sampling_inputs
         all_ids = sampling_inputs.all_ids
-        guided_input_ids = sampling_inputs.guided_input_ids
-
         custom_logits_processors = self.sampling_inputs.logits_processors
+        if self.guided_processors:
+            await self._wait_stream_once()
+            for i, processor in self.guided_processors.items():
+                scores[i] = processor.process(scores[i])
+
         if any(custom_logits_processors):
             await self._wait_stream_once()
             scores = _apply_custom_logits_processors(custom_logits_processors, all_ids, scores)
@@ -232,9 +239,6 @@ class FusedLogitsProcessor:
             stop_mask = torch.where(ignore_eos[:, None], stop_mask, False)
             scores = _process_bad_words_(scores, stop_words, stop_mask)
 
-        if guided_input_ids is not None:
-            await self._wait_stream_once()
-            scores = _guided_sampling(sampling_inputs.response_formats, scores, guided_input_ids, self.tokenizer)
         return scores, logprobs
 
     @torch.inference_mode()
@@ -272,7 +276,7 @@ class FusedLogitsProcessor:
             logits = logits[..., :self.sampling_vocab_size]
 
         if sampling_inputs.max_top_k == 1:
-            return logits.argmax(-1)
+            result = logits.argmax(-1)
         else:
             # sort logits is too slow. and we only need topk logits
             max_topk = sampling_inputs.max_top_k
@@ -280,7 +284,13 @@ class FusedLogitsProcessor:
                 scores, indices = logits.sort(1, descending=True)
             else:
                 scores, indices = logits.topk(max_topk, dim=1)
-            return __random_sampling(scores, indices)
+            result = __random_sampling(scores, indices)
+
+        if self.guided_processors:
+            for i, processor in self.guided_processors.items():
+                processor.accept(result[i])
+
+        return result
 
     @torch.inference_mode()
     def compute_logprobs(self, raw_logprobs: torch.Tensor, token_ids: torch.LongTensor):
@@ -297,3 +307,9 @@ class FusedLogitsProcessor:
             indices = torch.cat([indices, topk_indices], dim=-1)
 
         return logprobs, indices.to(torch.int32)
+
+    @staticmethod
+    def cleanup_sessions(session_ids: List[int]):
+        from .guided_process import _remove_guided_logtis_processor
+        for session_id in session_ids:
+            _remove_guided_logtis_processor(session_id)
