@@ -22,7 +22,17 @@ class BaseLogitsProcessor:
         """Apply grammar constraints to logits before sampling the next
         token."""
         self.matcher.fill_next_token_bitmask(self.token_bitmask)
-        xgr.apply_token_bitmask_inplace(scores, self.token_bitmask.to(scores.device))
+        device = scores.device
+        dtype = scores.dtype
+
+        if device.type in {'cpu', 'cuda'}:
+            xgr.apply_token_bitmask_inplace(scores, self.token_bitmask.to(device))
+        else:
+            cpu_scores = scores.cpu().float()
+            cpu_mask = self.token_bitmask.cpu()
+            xgr.apply_token_bitmask_inplace(cpu_scores, cpu_mask)
+            scores.copy_(cpu_scores.to(device, dtype))
+
         return scores
 
     def accept(self, token_id: int) -> bool:
