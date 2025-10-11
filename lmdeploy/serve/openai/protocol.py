@@ -5,7 +5,7 @@ import time
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import shortuuid
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ErrorResponse(BaseModel):
@@ -90,10 +90,12 @@ class JsonSchema(BaseModel):
     name: str
     # description is not used since it depends on model
     description: Optional[str] = None
+    # `schema` is a reserved field in Pydantic BaseModel
     # use alias since pydantic does not support the OpenAI key `schema`
     json_schema: Optional[Dict[str, Any]] = Field(default=None, alias='schema', examples=[None])
     # strict is not used
     strict: Optional[bool] = False
+    model_config = ConfigDict(serialize_by_alias=True)
 
 
 class ResponseFormat(BaseModel):

@@ -7,7 +7,7 @@ mmengine-lite
 numpy
 openai
 openai_harmony
-outlines
+outlines<0.1.0
 partial_json_parser
 peft<=0.14.0
 pillow

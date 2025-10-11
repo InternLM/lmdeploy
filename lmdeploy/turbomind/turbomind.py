@@ -33,6 +33,9 @@ from .supported_models import is_supported
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
+import _xgrammar as _xgr  # noqa: E402
+
+from .tokenizer_info import TokenizerInfo  # noqa: E402
 
 logger = get_logger('lmdeploy')
 
@@ -701,6 +704,26 @@ class TurboMindInstance:
                                                 input_embedding_ranges=input_embedding_ranges,
                                                 input_meta=input_meta,
                                                 gen_config=gen_config)
+
+        if gen_config.response_format is not None:
+            tokenizer = self.tm_model.tokenizer
+            vocab_size = self.tm_model.config.model_config.vocab_size
+            decode_grammar_type = gen_config.response_format['type']
+            decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
+
+            tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
+            compiler = _xgr.GrammarCompiler(tokenizer_info)
+
+            if decode_grammar_type == 'json_schema':
+                decode_grammar = json.dumps(decode_grammar)
+                grammar = compiler.compile_json_schema(decode_grammar)
+            elif decode_grammar_type == 'regex_schema':
+                decode_grammar = str(decode_grammar)
+                grammar = compiler.compile_regex(decode_grammar)
+            else:
+                assert False, f'Decode grammar type {decode_grammar_type} should be in ["json_schema", "regex_schema"]'
+
+            self.model_inst.set_grammar(grammar)
 
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
