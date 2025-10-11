@@ -25,6 +25,7 @@ def build_pipe(model_path, backend, **kwargs):
     else:
         engine_config = PytorchEngineConfig()
         for key, value in kwargs.items():
+            key = 'device_type' if key == 'device' else key
             if hasattr(PytorchEngineConfig, key):
                 setattr(engine_config, key, value)
         if kwargs.get('adapters', None):
