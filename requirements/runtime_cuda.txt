@@ -24,5 +24,5 @@ tiktoken
 torch<=2.8.0,>=2.0.0
 torchvision<=0.23.0,>=0.15.0
 transformers
-triton<=3.4.0,>=3.0.0; sys_platform == "linux"
+triton<=3.4.0,>=3.0.0; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
 uvicorn
