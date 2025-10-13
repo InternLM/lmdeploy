@@ -294,14 +294,14 @@ class Scheduler:
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
-            #logger.warning('Prefill scheduling')
+            #logger.error('Prefill scheduling')
             output = self._schedule_prefill(0)
         else:
-            #logger.warning('Decoding scheduling')
+            #logger.error('Decoding scheduling')
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
         #if running:
-        #    logger.warning(f'go batch = {len(running)}')
+        #    logger.error(f'prefill {is_prefil} go batch = {len(running)}')
 
         return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
 
