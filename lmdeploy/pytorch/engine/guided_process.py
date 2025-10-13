@@ -16,24 +16,10 @@ class BaseLogitsProcessor:
 
     def __init__(self, compiled_grammar: xgr.CompiledGrammar, tokenizer_info: xgr.TokenizerInfo):
         self.matcher = xgr.GrammarMatcher(compiled_grammar, terminate_without_stop_token=True)
-        self.token_bitmask = xgr.allocate_token_bitmask(1, tokenizer_info.vocab_size)
 
-    def process(self, scores: torch.Tensor) -> torch.Tensor:
-        """Apply grammar constraints to logits before sampling the next
-        token."""
-        self.matcher.fill_next_token_bitmask(self.token_bitmask)
-        device = scores.device
-        dtype = scores.dtype
-
-        if device.type in {'cpu', 'cuda'}:
-            xgr.apply_token_bitmask_inplace(scores, self.token_bitmask.to(device))
-        else:
-            cpu_scores = scores.cpu().float()
-            cpu_mask = self.token_bitmask.cpu()
-            xgr.apply_token_bitmask_inplace(cpu_scores, cpu_mask)
-            scores.copy_(cpu_scores.to(device, dtype))
-
-        return scores
+    def fill_bitmap(self, guided_bitmask: torch.Tensor, index: int) -> None:
+        """Fill the bitmask for the next token prediction at given index."""
+        self.matcher.fill_next_token_bitmask(guided_bitmask, index)
 
     def accept(self, token_id: int) -> bool:
         """Update matcher state after a token is generated."""
@@ -108,3 +94,20 @@ def _get_guided_logits_processor(session_id: int,
 def _remove_guided_logtis_processor(session_id: int):
     if session_id in _guided_processors:
         del _guided_processors[session_id]
+
+
+def _allocate_batched_bitmap(batch_size: int, vocab_size: int):
+    return xgr.allocate_token_bitmask(batch_size, vocab_size)
+
+
+def _apply_batched_bitmap(logits: torch.Tensor, guided_bitmask: torch.Tensor) -> None:
+    device = logits.device
+    dtype = logits.dtype
+
+    if device.type in {'cpu', 'cuda'}:
+        xgr.apply_token_bitmask_inplace(logits, guided_bitmask.to(device))
+    else:
+        cpu_logits = logits.cpu().float()
+        cpu_mask = guided_bitmask.cpu()
+        xgr.apply_token_bitmask_inplace(cpu_logits, cpu_mask)
+        logits.copy_(cpu_logits.to(device, dtype))

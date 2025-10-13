@@ -211,9 +211,19 @@ class FusedLogitsProcessor:
         all_ids = sampling_inputs.all_ids
         custom_logits_processors = self.sampling_inputs.logits_processors
         if self.guided_processors:
+            from .guided_process import _allocate_batched_bitmap, _apply_batched_bitmap
+
+            if not hasattr(self, 'guided_bitmask'):
+                self.guided_bitmask = _allocate_batched_bitmap(len(scores), self.sampling_vocab_size)
+
+            assert self.guided_bitmask is not None
+            guided_bitmask = self.guided_bitmask
+
             await self._wait_stream_once()
             for i, processor in self.guided_processors.items():
-                scores[i] = processor.process(scores[i])
+                processor.fill_bitmap(guided_bitmask, i)
+
+            _apply_batched_bitmap(scores, guided_bitmask)
 
         if any(custom_logits_processors):
             await self._wait_stream_once()
