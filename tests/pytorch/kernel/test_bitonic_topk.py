@@ -58,7 +58,9 @@ class TestBitonicTopk:
         return topk_indices
 
     def test_bitonic_topk(self, scores, q_seqlens, kv_seqlens, k, gt):
-        from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
+        from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk, enable_bitonic_topk
+        if not enable_bitonic_topk:
+            pytest.skip('bitonic_topk requires triton>=3.3.1')
         out = bitonic_topk(scores, q_seqlens=q_seqlens, kv_seqlens=kv_seqlens, k=k, fill=-1)
         gt[gt < 0] = 0
         out[out < 0] = 0
