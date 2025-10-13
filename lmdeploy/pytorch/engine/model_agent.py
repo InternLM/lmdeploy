@@ -514,7 +514,7 @@ class BaseModelAgent:
                                         self._output.numel() // self._output.size(-1),
                                         device=self._output.device,
                                         dtype=self._output.dtype)
-                    return strategy.slice_outputs(self._output, seqlen)
+                    return strategy.slice_outputs(self._output, seqlen), self._aux_output
                 torch.cuda.synchronize()
                 if self._aux_output is not None:
                     self._aux_output = self._aux_output.to(self._device)
@@ -796,13 +796,14 @@ class BaseModelAgent:
                     logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
                     extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
                     self._push_output(
-                        BatchedOutputs(next_token_ids=next_token_ids if self.spec_agent is None else extra_inputs.output_token_ids,
-                                       logits=logits if return_logits else None,
-                                       stopped=stopped,
-                                       stop_pos=stop_pos,
-                                       model_metas=model_metas,
-                                       logprobs=logprobs,
-                                       extra_outputs=extra_outputs))
+                        BatchedOutputs(
+                            next_token_ids=next_token_ids if self.spec_agent is None else extra_inputs.output_token_ids,
+                            logits=logits if return_logits else None,
+                            stopped=stopped,
+                            stop_pos=stop_pos,
+                            model_metas=model_metas,
+                            logprobs=logprobs,
+                            extra_outputs=extra_outputs))
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.

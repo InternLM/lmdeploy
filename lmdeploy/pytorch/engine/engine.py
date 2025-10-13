@@ -854,7 +854,6 @@ class Engine(EngineBase):
 
     def _debug_spec_stats(self, batched_outputs: BatchedOutputs, is_decoding: bool = False):
         """Make spec stats."""
-        # if self.speculative_config is not None and (debug or self.engine_config.enable_metrics):
         if self.speculative_config is not None:
             if not hasattr(self, 'spec_stats'):
                 from lmdeploy.metrics.stats import SpeculativeDecodingStats
@@ -880,7 +879,7 @@ class Engine(EngineBase):
         logprobs = batched_outputs.logprobs
 
         # for debug
-        debug = True
+        debug = False
         if debug:
             self._debug_spec_stats(batched_outputs, is_decoding=is_decoding)
 
@@ -912,8 +911,13 @@ class Engine(EngineBase):
             cur_logprobs = None
             if num_logprobs >= 0:
                 cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
-
-            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=None)
+            # get spec stats info
+            spec_info = None
+            if self.speculative_config is not None and is_decoding and self.engine_config.enable_metrics:
+                num_draft_tokens = self.speculative_config.num_speculative_tokens
+                num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
+                spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
+            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 
@@ -17,6 +17,46 @@ def _get_meta_flashmla(kv_seqlens, num_attention_heads):
     import flash_mla
     tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(kv_seqlens.to(torch.int32), num_attention_heads, 1)
     return tile_scheduler_metadata, num_splits
+
+
+def _get_meta_flashattn(
+        batch_size: int,
+        max_seqlen_q: int,
+        max_seqlen_k: int,
+        num_heads_q: int,
+        num_heads_kv: int,
+        headdim: int,
+        cache_seqlens: torch.Tensor,
+        qkv_dtype=torch.bfloat16,
+        headdim_v=None,
+        cu_seqlens_q: Optional[torch.Tensor] = None,
+        cu_seqlens_k_new: Optional[torch.Tensor] = None,
+        page_size: Optional[int] = None,
+        causal=True,
+        window_size=(-1, -1),  # -1 means infinite context window
+        num_splits=0,
+):
+    """Get scheduler metadata for flash attn."""
+    from flash_attn_interface import get_scheduler_metadata
+
+    metadata = get_scheduler_metadata(
+        batch_size,
+        max_seqlen_q,
+        max_seqlen_k,
+        num_heads_q,
+        num_heads_kv,
+        headdim,
+        cache_seqlens,
+        qkv_dtype=qkv_dtype,
+        headdim_v=headdim_v,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k_new=cu_seqlens_k_new,
+        page_size=page_size,
+        causal=causal,
+        window_size=window_size,
+        num_splits=num_splits,
+    )
+    return metadata
 
 
 class CudaOpsBackend(DefaultOpsBackend):
@@ -122,6 +162,28 @@ class CudaOpsBackend(DefaultOpsBackend):
             attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
 
     @classmethod
+    def update_meta_flashattn(cls, attn_metadata, step_context):
+        batch_size = attn_metadata.q_seqlens.size(0)
+        max_seqlen_q = step_context.input_ids.size(1) // batch_size
+        block_size = step_context.kv_caches[0][0].size(1)
+        window_size = (step_context.model_config.sliding_window, ) * 2
+        scheduler_metadata = _get_meta_flashattn(
+            batch_size=batch_size,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=step_context.max_kv_seqlen,
+            num_heads_q=step_context.model_config.num_attention_heads,
+            num_heads_kv=step_context.model_config.num_key_value_heads,
+            headdim=step_context.model_config.head_dim,
+            cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
+            qkv_dtype=step_context.model_config.dtype,
+            page_size=block_size,
+            window_size=window_size,
+        )
+        attn_metadata.scheduler_metadata = scheduler_metadata
+        attn_metadata.max_kv_seqlen = step_context.max_kv_seqlen
+        return attn_metadata
+
+    @classmethod
     def update_step_context(cls, step_context):
         """Update step context."""
         attn_meta_cls = cls.get_attention_metadata_cls()
@@ -135,9 +197,10 @@ class CudaOpsBackend(DefaultOpsBackend):
         cu_seqlens_q = None
         cu_seqlens_k = None
         if use_flash_mla or use_flash_attn3:
-            cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
-            cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
             step_context.block_offsets = step_context.block_offsets.to(torch.int32)
+            if not step_context.is_decoding:
+                cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
+                cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
 
         if not step_context.is_decoding:
             kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
@@ -159,6 +222,10 @@ class CudaOpsBackend(DefaultOpsBackend):
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
                 cls.update_meta_flashmla(attn_metadata,
                                          step_context.model_config.num_attention_heads * decode_query_len)
+
+        if use_flash_attn3:
+            if step_context.is_decoding is True:
+                attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 
         cross_seqlens = step_context.cross_seqlens
         cross_kv_seqlens = step_context.cross_kv_seqlens

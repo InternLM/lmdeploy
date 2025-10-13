@@ -42,6 +42,9 @@ class TritonAttentionMetadata(AttentionMetadata):
     num_splits: torch.Tensor = None
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
+    # flash attn
+    scheduler_metadata: torch.Tensor = None
+    max_kv_seqlen: int = None
 
 
 def _cdiv(a, b):
@@ -477,42 +480,41 @@ class FA3Impl(TritonAttentionImpl):
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
             )
-        # sliding_window = (-1, -1) if self.sliding_window is None else self.sliding_window
-        # if isinstance(sliding_window, int):
-        #     sliding_window = (sliding_window, sliding_window)
-        # attn_output = self.flash_attn_with_kvcache_v3(
-        #     query,
-        #     k_cache,
-        #     v_cache,
-        #     cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
-        #     cu_seqlens_q=attn_metadata.cu_seqlens_q,
-        #     cu_seqlens_k_new=attn_metadata.cu_seqlens_k,
-        #     max_seqlen_q=max_q_seqlen,
-        #     page_table=block_offsets,
-        #     softmax_scale=self.scale,
-        #     causal=self.causal,
-        #     window_size=sliding_window,
-        #     softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
-        # )
-        # return attn_output
         if is_decoding:
-            q_shape = query.shape
-            o_shape = q_shape[:-1] + (self.v_head_size, )
-            attn_output = query.new_empty(o_shape)
-            self.paged_attention_fwd(
+            sliding_window = (-1, -1) if self.sliding_window is None else self.sliding_window
+            if isinstance(sliding_window, int):
+                sliding_window = (sliding_window, sliding_window)
+            query = query.unflatten(0, (-1, max_q_seqlen))
+            attn_output = self.flash_attn_with_kvcache_v3(
                 query,
                 k_cache,
                 v_cache,
-                attn_output,
-                block_offsets,
-                kv_seqlens=kv_seqlens,
-                k_scales_zeros=k_scales_zeros,
-                v_scales_zeros=v_scales_zeros,
-                quant_policy=quant_policy,
-                window_size=self.sliding_window,
-                sm_scale=self.scale,
-                logit_softcapping=self.logit_softcapping,
+                cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
+                max_seqlen_q=max_q_seqlen,
+                scheduler_metadata=attn_metadata.scheduler_metadata,
+                page_table=block_offsets,
+                softmax_scale=self.scale,
+                causal=self.causal,
+                window_size=sliding_window,
+                softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
             )
+            # q_shape = query.shape
+            # o_shape = q_shape[:-1] + (self.v_head_size, )
+            # attn_output = query.new_empty(o_shape)
+            # self.paged_attention_fwd(
+            #     query,
+            #     k_cache,
+            #     v_cache,
+            #     attn_output,
+            #     block_offsets,
+            #     kv_seqlens=kv_seqlens,
+            #     k_scales_zeros=k_scales_zeros,
+            #     v_scales_zeros=v_scales_zeros,
+            #     quant_policy=quant_policy,
+            #     window_size=self.sliding_window,
+            #     sm_scale=self.scale,
+            #     logit_softcapping=self.logit_softcapping,
+            # )
         else:
             # sliding_window = (-1, -1) if self.sliding_window is None else self.sliding_window
             # if isinstance(sliding_window, int):

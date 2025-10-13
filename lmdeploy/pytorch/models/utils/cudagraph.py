@@ -69,8 +69,7 @@ class CudaGraphMixin:
         seqlens_dtype = torch.int64
         use_flash_mla = getattr(self.config, 'use_flash_mla', False)
         use_flash_attn3 = getattr(self.config, 'use_flash_attn3', False)
-        if use_flash_attn3 and not graph_meta.is_decoding:
-            seqlens_dtype = torch.int32
+
         if use_flash_mla is True:
             import flash_mla
             if graph_meta.is_decoding:
@@ -79,6 +78,9 @@ class CudaGraphMixin:
             input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
                 torch.ones(max_batches, dtype=torch.int32, device=device),
                 self.config.num_attention_heads * decode_query_len, 1)
+        elif use_flash_attn3 is True:
+            seqlens_dtype = torch.int32
+            input_buffers['scheduler_metadata'] = torch.zeros(max_batches + 1, dtype=torch.int32, device=device)
 
         # flash_mla requires block_offsets and kv_lens int32
         input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks), dtype=seqlens_dtype, device=device)
@@ -129,7 +131,11 @@ class CudaGraphMixin:
         attn_metadata.q_start_loc = input_buffers['q_start_loc']
         attn_metadata.q_seqlens = input_buffers['q_seqlens']
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
-        if getattr(self.config, 'use_flash_mla', False) is True:
+
+        use_flash_mla = getattr(self.config, 'use_flash_mla', False)
+        use_flash_attn3 = getattr(self.config, 'use_flash_attn3', False)
+
+        if use_flash_mla is True:
             import flash_mla
             tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
                 attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads * decode_query_len, 1)
@@ -138,6 +144,25 @@ class CudaGraphMixin:
             input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])
             attn_metadata.tile_scheduler_metadata = input_buffers['tile_scheduler_metadata']
             attn_metadata.num_splits = input_buffers['num_splits']
+
+        if use_flash_attn3:
+            from flash_attn_interface import get_scheduler_metadata
+            block_size = past_key_values[0][0].size(1)
+            # TODO may check tp>1?
+            scheduler_metadata = get_scheduler_metadata(
+                batch_size=batch_size,
+                max_seqlen_q=decode_query_len,
+                max_seqlen_k=attn_metadata.max_kv_seqlen,
+                num_heads_q=self.config.num_attention_heads,
+                num_heads_kv=self.config.num_key_value_heads,
+                headdim=self.config.head_dim,
+                cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
+                qkv_dtype=self.config.torch_dtype,
+                page_size=block_size,
+            )
+            input_buffers['scheduler_metadata'].zero_()
+            input_buffers['scheduler_metadata'][:batch_size + 1].copy_(scheduler_metadata[:batch_size + 1])
+            attn_metadata.scheduler_metadata = input_buffers['scheduler_metadata']
 
         new_inputs = dict(
             past_key_values=past_key_values,

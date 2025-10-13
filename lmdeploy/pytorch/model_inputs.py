@@ -314,6 +314,7 @@ class StepContext:
     kv_caches: List
     is_decoding: bool
     sum_kv_seqlen: int
+    max_kv_seqlen: int = None
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
@@ -388,6 +389,7 @@ class StepContext:
             kv_caches=kv_caches,
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
+            max_kv_seqlen=inputs.max_kv_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
