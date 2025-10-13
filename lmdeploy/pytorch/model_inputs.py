@@ -323,7 +323,10 @@ class StepContext:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
     enable_microbatch: bool = False
+
+    # states for ssm
     state_caches: List = None
+    state_offsets: torch.LongTensor = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -333,6 +336,7 @@ class StepContext:
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build step context.
@@ -392,6 +396,8 @@ class StepContext:
             cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
+            state_caches=state_caches,
+            state_offsets=inputs.state_offsets,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -435,13 +441,6 @@ class StepContext:
         position_ids_1d[indices.flatten()] = position_ids.flatten()
         return attention_mask, position_ids_1d
 
-    def get_state_caches(self):
-        """Get state caches."""
-        if self.state_caches is not None:
-            return self.state_caches
-
-        # TODO: return state object
-
 
 @dataclass
 class BuildModelContext:
@@ -464,6 +463,7 @@ class StepContextManager:
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build context."""
@@ -471,6 +471,7 @@ class StepContextManager:
             inputs,
             model_config,
             kv_caches,
+            state_caches,
             kv_quant_policy,
         )
 

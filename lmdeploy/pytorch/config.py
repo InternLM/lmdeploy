@@ -206,10 +206,13 @@ class ModelConfig:
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
     use_flash_mla: bool = False
-    states_shapes: List[Tuple] = field(default_factory=list)
     model_paradigm: str = 'ar'
     dllm_mask_token: int = 0
     dllm_block_length: int = None
+
+    # added for qwen3_next
+    # could used for any SSM model.
+    states_shapes: List[Tuple[Tuple[int], torch.dtype]] = field(default_factory=list)
 
     def get_head_size(self):
         """Get head size."""

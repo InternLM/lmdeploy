@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import torch
+
 from .builder import AutoModelConfigBuilder
 from .default import DefaultModelConfigBuilder
 
@@ -11,7 +13,7 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type == 'qwen3_next'
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None, **kwargs):
+    def build(cls, hf_config, model_path: str = None, tp: int = 1, **kwargs):
         """build."""
         cfg = DefaultModelConfigBuilder.build(hf_config, model_path, **kwargs)
 
@@ -24,8 +26,8 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
         # set state shapes
         head_k_dim = hf_config.linear_key_head_dim
         head_v_dim = hf_config.linear_value_head_dim
-        num_v_heads = hf_config.linear_num_value_heads
-        num_k_heads = hf_config.linear_num_key_heads
+        num_v_heads = hf_config.linear_num_value_heads // tp
+        num_k_heads = hf_config.linear_num_key_heads // tp
         key_dim = head_k_dim * num_k_heads
         value_dim = head_v_dim * num_v_heads
         conv_dim = key_dim * 2 + value_dim
@@ -33,5 +35,6 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
 
         conv_state_shape = (num_delta_layers, conv_dim, conv_kernel_size)
         recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
-        cfg.states_shapes = [conv_state_shape, recurrent_state_shape]
+        dtype = torch.bfloat16
+        cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
         return cfg

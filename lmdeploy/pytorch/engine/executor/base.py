@@ -163,7 +163,8 @@ class ExecutorBase:
 
         num_state_caches = cache_config.num_state_caches
         if num_state_caches is None:
-            num_state_caches = int(cache_config.max_batches * 2.5)
+            # add more caches for eviction
+            num_state_caches = int(cache_config.max_batches + 8)
             cache_config.num_state_caches = num_state_caches
 
         mems = 0

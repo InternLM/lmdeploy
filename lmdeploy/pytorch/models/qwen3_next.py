@@ -3,19 +3,121 @@
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
-from lmdeploy.pytorch.nn.eplb import EPLBManager
-from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_o_proj, build_qkv_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMixin
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+
+
+class CausalConv1d:
+
+    def __init__(self, activation: str = 'silu'):
+        try:
+            import causal_conv1d
+            self.causal_conv1d_fn = causal_conv1d.causal_conv1d_fn
+            self.causal_conv1d_update = causal_conv1d.causal_conv1d_update
+        except Exception:
+            raise RuntimeError(
+                'causal_conv1d is not installed, please refer to https://github.com/Dao-AILab/causal-conv1d')
+        self.activation = activation
+
+    def conv1d_func(self, x: torch.Tensor, conv1d: nn.Conv1d, seqlens: torch.Tensor):
+        weight = conv1d.weight
+        bias = conv1d.bias
+        if weight.dim() == 3:
+            assert weight.size(1) == 1
+            weight = weight[:, 0]
+        num_tokens = x.size(-1)
+        batch_size = seqlens.numel()
+        device = seqlens.device
+        batch_idx = torch.arange(0, batch_size, dtype=torch.int32, device=device)
+        seq_idx = torch.repeat_interleave(batch_idx, seqlens, output_size=num_tokens)
+
+        return self.causal_conv1d_fn(
+            x,
+            weight,
+            bias,
+            seq_idx,
+            return_final_states=True,
+            activation=self.activation,
+        )
+
+    def conv1d_update(self, x: torch.Tensor, conv1d: nn.Conv1d, conv_state: torch.Tensor):
+        weight = conv1d.weight
+        bias = conv1d.bias
+        if weight.dim() == 3:
+            assert weight.size(1) == 1
+            weight = weight[:, 0]
+        return self.causal_conv1d_update(x, conv_state, weight, bias, activation=self.activation)
+
+    def __call__(self, x: torch.Tensor, conv1d: nn.Conv1d, conv_state: torch.Tensor, seqlens: torch.Tensor):
+        num_tokens = x.size(-1)
+        batch_size = seqlens.numel()
+
+        if num_tokens == batch_size:
+            return self.conv1d_update(x, conv1d, conv_state), conv_state
+        return self.conv1d_func(x, conv1d, seqlens)
+
+
+class GatedDelta:
+
+    def __init__(self, use_qk_l2norm_in_kernel: bool = True):
+        try:
+            import fla
+            self.chunk_gated_delta_rule = fla.chunk_gated_delta_rule
+            self.fused_recurrent_gated_delta_rule = fla.fused_recurrent_gated_delta_rule
+        except Exception:
+            raise RuntimeError(
+                'fla is not installed, please refer to https://github.com/fla-org/flash-linear-attention')
+        self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
+
+    def __call__(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        g: torch.Tensor,
+        beta: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        is_decoding: bool,
+        cu_seqlens: torch.Tensor,
+    ):
+        """call."""
+        if not is_decoding:
+            core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
+                query,
+                key,
+                value,
+                g=g,
+                beta=beta,
+                initial_state=None,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+                cu_seqlens=cu_seqlens,
+            )
+
+        else:
+            core_attn_out, last_recurrent_state = self.fused_recurrent_gated_delta_rule(
+                query,
+                key,
+                value,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
+            )
+        return core_attn_out, last_recurrent_state
 
 
 class Qwen3NextGatedDeltaNet(nn.Module):
@@ -27,6 +129,184 @@ class Qwen3NextGatedDeltaNet(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        self.hidden_size = config.hidden_size
+        self.num_v_heads = config.linear_num_value_heads
+        self.num_k_heads = config.linear_num_key_heads
+        self.head_k_dim = config.linear_key_head_dim
+        self.head_v_dim = config.linear_value_head_dim
+        self.key_dim = self.head_k_dim * self.num_k_heads
+        self.value_dim = self.head_v_dim * self.num_v_heads
+        self.kv_ratio = self.num_v_heads // self.num_k_heads
+
+        self.conv_kernel_size = config.linear_conv_kernel_dim
+        self.layer_idx = layer_idx
+        self.layer_norm_epsilon = config.rms_norm_eps
+
+        # QKV
+        self.conv_dim = self.key_dim * 2 + self.value_dim
+        self.conv1d = nn.Conv1d(
+            in_channels=self.conv_dim,
+            out_channels=self.conv_dim,
+            bias=False,
+            kernel_size=self.conv_kernel_size,
+            groups=self.conv_dim,
+            padding=self.conv_kernel_size - 1,
+            dtype=dtype,
+            device=device,
+        )
+
+        # projection of the input hidden states
+        projection_size_qkvz = self.key_dim * 2 + self.value_dim * 2
+        projection_size_ba = self.num_v_heads * 2
+        self.in_proj_qkvz = build_colwise_linear(self.hidden_size,
+                                                 projection_size_qkvz,
+                                                 bias=False,
+                                                 dtype=dtype,
+                                                 device=device,
+                                                 is_tp=True)
+        self.in_proj_ba = build_colwise_linear(self.hidden_size,
+                                               projection_size_ba,
+                                               bias=False,
+                                               dtype=dtype,
+                                               device=device,
+                                               is_tp=True)
+
+        # time step projection (discretization)
+        # instantiate once and copy inv_dt in init_weights of PretrainedModel
+        self.dt_bias = nn.Parameter(torch.empty(self.num_v_heads, device=device))
+
+        A = torch.empty(self.num_v_heads, device=device).uniform_(0, 16)
+        self.A_log = nn.Parameter(torch.log(A))
+        self.A_log_exp = None
+
+        self.norm = RMSNorm(self.head_v_dim, eps=self.layer_norm_epsilon, dtype=dtype, device=device)
+        self.out_proj = build_o_proj(self.value_dim,
+                                     self.hidden_size,
+                                     bias=False,
+                                     dtype=dtype,
+                                     device=device,
+                                     is_tp=True)
+
+        self.causal_conv1d = CausalConv1d(activation='silu')
+        self.gated_delta = GatedDelta()
+
+    def get_A_log_exp(self):
+        if self.A_log_exp is None:
+            self.A_log_exp = -self.A_log.float().exp()
+
+        return self.A_log_exp
+
+    def fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
+        """Derives `query`, `key` and `value` tensors from `mixed_qkvz` and
+        `mixed_ba`."""
+        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
+            -1,
+            2 * self.head_k_dim + 2 * self.head_v_dim * self.kv_ratio,
+        )
+        new_tensor_shape_ba = mixed_ba.size()[:-1] + (-1, 2 * self.kv_ratio)
+
+        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
+        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
+        split_arg_list_qkvz = [
+            self.head_k_dim,
+            self.head_k_dim,
+            (self.kv_ratio * self.head_v_dim),
+            (self.kv_ratio * self.head_v_dim),
+        ]
+        split_arg_list_ba = [self.kv_ratio, self.kv_ratio]
+        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=-1)
+        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=-1)
+        # [..., ng, np/ng * hn] -> [..., np, hn]
+        value = value.reshape(*value.shape[:-2], -1, self.head_v_dim)
+        z = z.reshape(*z.shape[:-2], -1, self.head_v_dim)
+        b = b.reshape(*b.shape[:-2], self.num_v_heads)
+        a = a.reshape(*a.shape[:-2], self.num_v_heads)
+        return query, key, value, z, b, a
+
+    def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], state_ids: torch.Tensor):
+        """Load states from cache."""
+        conv_cache, recurrent_cache = past_key_value[:2]
+
+        return conv_cache.index_select(0, state_ids), recurrent_cache.index_select(0, state_ids)
+
+    def _store_state(self, conv_state: torch.Tensor, recurrent_state: torch.Tensor,
+                     past_key_value: Tuple[torch.Tensor, torch.Tensor], state_ids: torch.Tensor):
+        """Store states to cache."""
+        conv_cache, recurrent_cache = past_key_value[:2]
+
+        conv_cache = conv_cache.index_copy(0, state_ids, conv_state)
+        recurrent_cache = recurrent_cache.index_copy(0, state_ids, recurrent_state)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        past_key_value: Tuple[torch.Tensor, torch.Tensor],
+        state_ids: torch.Tensor,
+        attn_metadata: Any,
+    ):
+        """forward."""
+        seqlens = attn_metadata.q_seqlens
+        cu_seqlens = attn_metadata.cu_seqlens_q
+        is_decoding = attn_metadata.is_decoding
+
+        # load states
+        conv_state, recurrent_state = self._load_state(past_key_value, state_ids)
+
+        # inputs proj
+        projected_states_qkvz = self.in_proj_qkvz(hidden_states)
+        projected_states_ba = self.in_proj_ba(hidden_states)
+        query, key, value, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
+        query, key, value = (x.reshape(*x.shape[:-2], -1) for x in (query, key, value))
+
+        mixed_qkv = torch.cat((query, key, value), dim=-1)
+        mixed_qkv = mixed_qkv.transpose(-2, -1)
+
+        mixed_qkv, conv_state = self.causal_conv1d(mixed_qkv, self.conv1d, conv_state, seqlens=seqlens)
+
+        mixed_qkv = mixed_qkv.transpose(-2, -1)
+        query, key, value = torch.split(
+            mixed_qkv,
+            [
+                self.key_dim,
+                self.key_dim,
+                self.value_dim,
+            ],
+            dim=-1,
+        )
+        query = query.unflatten(-1, (-1, self.head_k_dim))
+        key = key.unflatten(-1, (-1, self.head_k_dim))
+        value = value.unflatten(-1, (-1, self.head_v_dim))
+
+        beta = b.sigmoid()
+        # If the model is loaded in fp16, without the .float() here, A might be -inf
+        g = self.get_A_log_exp() * F.softplus(a.float() + self.dt_bias)
+        if self.kv_ratio > 1:
+            query = query.repeat_interleave(self.kv_ratio, dim=-2)
+            key = key.repeat_interleave(self.kv_ratio, dim=-2)
+
+        core_attn_out, recurrent_state = self.gated_delta(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            recurrent_state=recurrent_state,
+            cu_seqlens=cu_seqlens,
+            is_decoding=is_decoding,
+        )
+
+        # store states
+        self._store_state(conv_state, recurrent_state, past_key_value, state_ids)
+
+        z_shape_og = z.shape
+        core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
+        z = z.reshape(-1, z.shape[-1])
+        core_attn_out = self.norm(core_attn_out, z)
+        core_attn_out = core_attn_out.reshape(z_shape_og)
+        core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
+
+        output = self.out_proj(core_attn_out)
+        return output
 
 
 class Qwen3NextAttention(nn.Module):
@@ -68,13 +348,13 @@ class Qwen3NextAttention(nn.Module):
         )
 
         # o_proj
-        self.o_proj = build_rowwise_linear(num_heads * head_dim,
-                                           hidden_size,
-                                           bias=config.attention_bias,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        self.o_proj = build_o_proj(num_heads * head_dim,
+                                   hidden_size,
+                                   bias=config.attention_bias,
+                                   quant_config=quantization_config,
+                                   dtype=dtype,
+                                   device=device,
+                                   is_tp=True)
 
         # q, k norm
         self.q_norm = RMSNorm(head_dim,
@@ -309,8 +589,9 @@ class Qwen3NextDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[List[torch.FloatTensor]],
-        residual: Optional[torch.Tensor] = None,
-        attn_metadata: Any = None,
+        residual: Optional[torch.Tensor],
+        attn_metadata: Any,
+        state_ids: torch.Tensor,
     ):
 
         if residual is None:
@@ -324,8 +605,8 @@ class Qwen3NextDecoderLayer(nn.Module):
             past_states = past_key_value
             hidden_states = self.linear_attn(
                 hidden_states=hidden_states,
-                rotary_pos_emb=rotary_pos_emb,
                 past_states=past_states,
+                state_ids=state_ids,
                 attn_metadata=attn_metadata,
             )
         elif self.layer_type == 'full_attention':
@@ -373,9 +654,10 @@ class Qwen3NextModel(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor,
-        position_ids: Optional[torch.LongTensor],
-        past_key_values: Optional[List[torch.FloatTensor]],
+        position_ids: torch.LongTensor,
+        past_key_values: List[torch.FloatTensor],
         attn_metadata: Any,
+        state_ids: torch.Tensor,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
         """Rewrite of LlamaModel.forward."""
@@ -394,19 +676,13 @@ class Qwen3NextModel(nn.Module):
         # decoding
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
-            layer_types = self.config.layer_types[idx]
-            if layer_types == 'linear_attention':
-                # TODO: add linear attention support
-                continue
-            elif layer_types == 'full_attention':
-                full_attention_interval = self.config.full_attention_interval
-                past_key_value = past_key_values[idx // full_attention_interval]
             hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
-                past_key_value=past_key_value,
+                past_key_value=past_key_values[idx],
                 residual=residual,
                 attn_metadata=attn_metadata,
+                state_ids=state_ids,
             )
 
         # norm
@@ -458,7 +734,7 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
-        past_states: List[List[torch.Tensor]] = None,
+        state_ids: torch.Tensor = None,
         **kwargs,
     ):
         """Model forward, return logits."""
@@ -468,6 +744,7 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            state_ids=state_ids,
         )
         return hidden_states
 
@@ -491,8 +768,16 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
 
-        # TODO: read past states
-        # past_states = context.get_state_caches()
+        # make past_key_values
+        state_caches = list(cache.permute(0, 1) for cache in context.state_caches)
+        state_caches = list(zip(state_caches[0], state_caches[1]))
+        past_key_values = list(past_key_values)
+        new_past_key_values = []
+        for layer_type in self.config.layer_types:
+            if layer_type == 'linear_attention':
+                new_past_key_values.append(state_caches.pop(0))
+            elif layer_type == 'full_attention':
+                new_past_key_values.append(past_key_values.pop(0))
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -506,11 +791,33 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,
-            past_key_values=past_key_values,
+            past_key_values=new_past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
-            past_states=None,
+            state_ids=context.state_offsets,
         )
+
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """Make cudagraph buffers from forward inputs."""
+        max_batchs = graph_meta.max_batchs
+        device = graph_meta.device
+
+        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
+        state_ids = torch.zeros(max_batchs, dtype=torch.long, device=device)
+        input_buffers['state_ids'] = state_ids
+
+        return input_buffers
+
+    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """Fill cudagraph buffers from forward inputs."""
+        input_buffers = graph_meta.input_buffers
+
+        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
+        state_ids = kwargs['state_ids']
+        input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
+        new_inputs['state_ids'] = input_buffers['state_ids']
+
+        return new_inputs
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):

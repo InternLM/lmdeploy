@@ -29,7 +29,7 @@ from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
-from .cache_engine import CacheEngine
+from .cache_engine import CacheEngine, StateCacheEngine
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -221,6 +221,7 @@ def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
+    state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
 ):
     """Perform model forward."""
@@ -232,6 +233,7 @@ def model_forward(
             inputs=inputs,
             model_config=cache_engine.model_config,
             kv_caches=cache_engine.gpu_cache,
+            state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
@@ -351,6 +353,7 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.state_cache_engine = None
         self.profiler: AgentProfiler = None
 
         # microbatch
@@ -958,12 +961,14 @@ class BaseModelAgent:
                                             tp_rank=self.tp_rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
+            self.state_cache_engine = StateCacheEngine(self.cache_config)
 
     def _forward_impl(self, inputs: ModelInputs):
         output = model_forward(
             self.patched_model,
             inputs,
             self.cache_engine,
+            state_cache_engine=self.state_cache_engine,
             stream=self.stream,
         )
         return output
