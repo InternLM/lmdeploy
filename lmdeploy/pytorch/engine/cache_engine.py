@@ -384,3 +384,31 @@ class CacheEngine:
             ))
 
     """ Metheds for PD Disaggregation End. """
+
+
+class StateCacheEngine:
+    """Cache engine for state cache."""
+
+    def __init__(self, cache_config: CacheConfig):
+        self.cache_config = cache_config
+        self._state_caches = self._allocate_caches(num_caches=cache_config.num_state_caches,
+                                                   state_shapes=cache_config.states_shapes,
+                                                   device='cuda')
+
+    @staticmethod
+    def _allocate_caches(num_caches: int, state_shapes: List[Tuple[Tuple[int], torch.dtype]], device: torch.device):
+        """Allocate cache implement."""
+        caches = []
+        for shape, dtype in state_shapes:
+            cache = torch.zeros(
+                size=(num_caches, *shape),
+                dtype=dtype,
+                device=device,
+            )
+            caches.append(cache)
+        return caches
+
+    @property
+    def state_caches(self):
+        """State caches."""
+        return self._state_caches

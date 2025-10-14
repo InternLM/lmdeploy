@@ -14,6 +14,8 @@ class BaseEvictionHelper:
         self.scheduler = scheduler
         self.block_manager = scheduler.block_manager
         self.block_trie = scheduler.block_trie
+        self.state_manager = scheduler.state_manager
+        self.cache_config = scheduler.cache_config
 
     def need_swap_in(self, seq: SchedulerSequence):
         """Sequence need swap in."""
