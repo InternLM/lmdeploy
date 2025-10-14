@@ -394,7 +394,6 @@ class BaseModelAgent:
 
     def warmup(self):
         """warmup."""
-        # TODO: disable for now, do not remove the comments.
         with self.all_context():
             max_batches = self.cache_config.max_batches
             num_tokens = max_batches

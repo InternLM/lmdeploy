@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -8,18 +8,37 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_dist_manager
+from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_o_proj, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
-from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
 
-class CausalConv1d:
+class GatedDeltaMeta:
+
+    def __init__(self, num_tokens: int, conv_kernel_size: int, attn_metadata: Any):
+        self.num_tokens = num_tokens
+        self.is_decoding = attn_metadata.is_decoding
+        self.cu_seqlens = attn_metadata.cu_seqlens_q
+        device = self.cu_seqlens.device
+
+        # get seq_idx (1, num_tokens)
+        seqlens = attn_metadata.q_seqlens
+        batch_size = seqlens.numel()
+        batch_idx = torch.arange(0, batch_size, dtype=torch.int32, device=device)
+        self.seq_idx = torch.repeat_interleave(batch_idx, seqlens, output_size=num_tokens)[None]
+
+        # conv_idx
+        range_idx = torch.arange(-conv_kernel_size, 0, device=device)
+        self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
+
+
+class CausalConv1dFunc:
 
     def __init__(self, activation: str = 'silu'):
         try:
@@ -31,51 +50,68 @@ class CausalConv1d:
                 'causal_conv1d is not installed, please refer to https://github.com/Dao-AILab/causal-conv1d')
         self.activation = activation
 
-    def conv1d_func(self, x: torch.Tensor, conv1d: nn.Conv1d, seqlens: torch.Tensor):
-        weight = conv1d.weight
-        bias = conv1d.bias
+    def conv1d_func(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, conv_state: torch.Tensor,
+                    gated_delta_meta: GatedDeltaMeta):
+        """
+        x: (b, seqlen, dim)
+        seqlen: (b)
+        out: (b, seqlen, dim)
+        conv_state: (b, dim, kernel_size)
+        """
+        seq_idx = gated_delta_meta.seq_idx
+        conv_idx = gated_delta_meta.conv_idx
+
+        assert x.dim() == 3
+        x = x.transpose(-2, -1)
         if weight.dim() == 3:
             assert weight.size(1) == 1
             weight = weight[:, 0]
-        num_tokens = x.size(-1)
-        batch_size = seqlens.numel()
-        device = seqlens.device
-        batch_idx = torch.arange(0, batch_size, dtype=torch.int32, device=device)
-        seq_idx = torch.repeat_interleave(batch_idx, seqlens, output_size=num_tokens)
 
-        return self.causal_conv1d_fn(
+        out = self.causal_conv1d_fn(
             x,
             weight,
             bias,
             seq_idx,
-            return_final_states=True,
+            return_final_states=False,
             activation=self.activation,
         )
 
-    def conv1d_update(self, x: torch.Tensor, conv1d: nn.Conv1d, conv_state: torch.Tensor):
-        weight = conv1d.weight
-        bias = conv1d.bias
+        # fill conv state
+        batch_size = conv_state.size(0)
+        conv_idx = conv_idx[:, None].expand(-1, out.size(1), -1)
+        torch.gather(out.expand(batch_size, -1, -1), -1, conv_idx, out=conv_state)
+        out = out.transpose(-2, -1)
+
+        # store conv_state
+        return out, conv_state
+
+    def conv1d_update(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, conv_state: torch.Tensor):
         if weight.dim() == 3:
             assert weight.size(1) == 1
             weight = weight[:, 0]
-        return self.causal_conv1d_update(x, conv_state, weight, bias, activation=self.activation)
+        out = self.causal_conv1d_update(x[0], conv_state, weight, bias, activation=self.activation)
+        return out[None], conv_state
 
-    def __call__(self, x: torch.Tensor, conv1d: nn.Conv1d, conv_state: torch.Tensor, seqlens: torch.Tensor):
-        num_tokens = x.size(-1)
-        batch_size = seqlens.numel()
-
-        if num_tokens == batch_size:
-            return self.conv1d_update(x, conv1d, conv_state), conv_state
-        return self.conv1d_func(x, conv1d, seqlens)
+    def __call__(
+        self,
+        x: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+        conv_state: torch.Tensor,
+        gated_delta_meta: GatedDeltaMeta,
+    ):
+        if gated_delta_meta.is_decoding:
+            return self.conv1d_update(x, weight, bias, conv_state)
+        return self.conv1d_func(x, weight, bias, conv_state, gated_delta_meta=gated_delta_meta)
 
 
 class GatedDelta:
 
     def __init__(self, use_qk_l2norm_in_kernel: bool = True):
         try:
-            import fla
-            self.chunk_gated_delta_rule = fla.chunk_gated_delta_rule
-            self.fused_recurrent_gated_delta_rule = fla.fused_recurrent_gated_delta_rule
+            from fla.ops.gated_delta_rule import chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
+            self.chunk_gated_delta_rule = chunk_gated_delta_rule
+            self.fused_recurrent_gated_delta_rule = fused_recurrent_gated_delta_rule
         except Exception:
             raise RuntimeError(
                 'fla is not installed, please refer to https://github.com/fla-org/flash-linear-attention')
@@ -89,10 +125,12 @@ class GatedDelta:
         g: torch.Tensor,
         beta: torch.Tensor,
         recurrent_state: torch.Tensor,
-        is_decoding: bool,
-        cu_seqlens: torch.Tensor,
+        gated_delta_meta: GatedDeltaMeta,
     ):
         """call."""
+        is_decoding = gated_delta_meta.is_decoding
+        cu_seqlens = gated_delta_meta.cu_seqlens
+
         if not is_decoding:
             core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
                 query,
@@ -105,19 +143,98 @@ class GatedDelta:
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
                 cu_seqlens=cu_seqlens,
             )
-
         else:
+            # qkvgb (1, seqlen, ...) -> (seqlen, 1, ...)
             core_attn_out, last_recurrent_state = self.fused_recurrent_gated_delta_rule(
-                query,
-                key,
-                value,
-                g=g,
-                beta=beta,
+                query[0, :, None],
+                key[0, :, None],
+                value[0, :, None],
+                g=g[0, :, None],
+                beta=beta[0, :, None],
                 initial_state=recurrent_state,
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
             )
+            # out (seqlen, 1, ...) -> (1, seqlen, ...)
+            core_attn_out = core_attn_out[None, :, 0]
         return core_attn_out, last_recurrent_state
+
+
+def build_rmsnorm_gated(hidden_size: int, eps=1e-6, **kwargs):
+    from fla.modules import FusedRMSNormGated
+    return FusedRMSNormGated(hidden_size, eps, **kwargs)
+
+
+class CausalConv1d(nn.Module):
+    """Causal conv1d wrapper."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Union[int, Tuple[int]],
+        groups: int = 1,
+        bias: bool = True,
+        device=None,
+        dtype=None,
+    ):
+        super().__init__()
+        tp, rank = get_tp_world_rank()
+        self.tp = tp
+        self.rank = rank
+        out_channels = out_channels // tp
+
+        weight, bias = self.make_weight(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            groups=groups,
+            bias=bias,
+            device=device,
+            dtype=dtype,
+        )
+
+        self.register_weight(weight, bias)
+        self.causal_conv1d_func = CausalConv1dFunc(activation='silu')
+
+    @staticmethod
+    def make_weight(
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Union[int, Tuple[int]],
+        groups: int = 1,
+        bias: bool = True,
+        device=None,
+        dtype=None,
+    ):
+        weight_shape = (out_channels, in_channels // groups,
+                        kernel_size if isinstance(kernel_size, int) else kernel_size[0])
+        bias_shape = (out_channels, ) if bias else None
+
+        weight = torch.empty(weight_shape, device=device, dtype=dtype)
+        if bias_shape is not None:
+            bias = torch.empty(bias_shape, device=device, dtype=dtype)
+        else:
+            bias = None
+        return weight, bias
+
+    def register_weight(self, weight: torch.Tensor, bias: Optional[torch.Tensor] = None):
+        self.register_parameter('weight', nn.Parameter(weight))
+        self.weight.weight_loader = self.weight_loader
+        if bias is not None:
+            self.register_parameter('bias', nn.Parameter(bias))
+            self.bias.weight_loader = self.weight_loader
+        else:
+            self.register_parameter('bias', None)
+
+    def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader."""
+        loaded_weight = loaded_weight.split(self.tp, dim=0)[self.rank]
+        default_weight_loader(param, loaded_weight)
+
+    def forward(self, x: torch.Tensor, conv_state: torch.Tensor, gated_delta_meta: GatedDeltaMeta):
+        """forward."""
+        return self.causal_conv1d_func(x, self.weight, self.bias, conv_state, gated_delta_meta=gated_delta_meta)
 
 
 class Qwen3NextGatedDeltaNet(nn.Module):
@@ -144,13 +261,12 @@ class Qwen3NextGatedDeltaNet(nn.Module):
 
         # QKV
         self.conv_dim = self.key_dim * 2 + self.value_dim
-        self.conv1d = nn.Conv1d(
+        self.conv1d = CausalConv1d(
             in_channels=self.conv_dim,
             out_channels=self.conv_dim,
             bias=False,
             kernel_size=self.conv_kernel_size,
             groups=self.conv_dim,
-            padding=self.conv_kernel_size - 1,
             dtype=dtype,
             device=device,
         )
@@ -173,13 +289,10 @@ class Qwen3NextGatedDeltaNet(nn.Module):
 
         # time step projection (discretization)
         # instantiate once and copy inv_dt in init_weights of PretrainedModel
-        self.dt_bias = nn.Parameter(torch.empty(self.num_v_heads, device=device))
-
-        A = torch.empty(self.num_v_heads, device=device).uniform_(0, 16)
-        self.A_log = nn.Parameter(torch.log(A))
+        self.make_params(self.num_v_heads, device=device)
         self.A_log_exp = None
 
-        self.norm = RMSNorm(self.head_v_dim, eps=self.layer_norm_epsilon, dtype=dtype, device=device)
+        self.norm = build_rmsnorm_gated(self.head_v_dim, eps=self.layer_norm_epsilon, dtype=dtype, device=device)
         self.out_proj = build_o_proj(self.value_dim,
                                      self.hidden_size,
                                      bias=False,
@@ -187,7 +300,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
                                      device=device,
                                      is_tp=True)
 
-        self.causal_conv1d = CausalConv1d(activation='silu')
         self.gated_delta = GatedDelta()
 
     def get_A_log_exp(self):
@@ -195,6 +307,23 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             self.A_log_exp = -self.A_log.float().exp()
 
         return self.A_log_exp
+
+    def make_params(self, num_v_heads: int, device: torch.device):
+        tp, _ = get_tp_world_rank()
+        num_v_heads = num_v_heads // tp
+        A = torch.empty(num_v_heads, device=device).uniform_(0, 16)
+        dt_bias = torch.empty(num_v_heads, device=device).uniform_(0, 1)
+
+        self.register_parameter('A_log', nn.Parameter(torch.log(A)))
+        self.register_parameter('dt_bias', nn.Parameter(dt_bias))
+        self.A_log.weight_loader = self.weight_loader
+        self.dt_bias.weight_loader = self.weight_loader
+
+    def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader."""
+        tp, rank = get_tp_world_rank()
+        loaded_weight = loaded_weight.split(tp, dim=0)[rank]
+        default_weight_loader(param, loaded_weight)
 
     def fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
         """Derives `query`, `key` and `value` tensors from `mixed_qkvz` and
@@ -219,8 +348,8 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         # [..., ng, np/ng * hn] -> [..., np, hn]
         value = value.reshape(*value.shape[:-2], -1, self.head_v_dim)
         z = z.reshape(*z.shape[:-2], -1, self.head_v_dim)
-        b = b.reshape(*b.shape[:-2], self.num_v_heads)
-        a = a.reshape(*a.shape[:-2], self.num_v_heads)
+        b = b.reshape(*b.shape[:-2], -1)
+        a = a.reshape(*a.shape[:-2], -1)
         return query, key, value, z, b, a
 
     def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], state_ids: torch.Tensor):
@@ -234,8 +363,8 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         """Store states to cache."""
         conv_cache, recurrent_cache = past_key_value[:2]
 
-        conv_cache = conv_cache.index_copy(0, state_ids, conv_state)
-        recurrent_cache = recurrent_cache.index_copy(0, state_ids, recurrent_state)
+        conv_cache = conv_cache.index_copy_(0, state_ids, conv_state)
+        recurrent_cache = recurrent_cache.index_copy_(0, state_ids, recurrent_state.to(recurrent_cache.dtype))
 
     def forward(
         self,
@@ -243,12 +372,9 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         past_key_value: Tuple[torch.Tensor, torch.Tensor],
         state_ids: torch.Tensor,
         attn_metadata: Any,
+        gated_delta_meta: GatedDeltaMeta,
     ):
         """forward."""
-        seqlens = attn_metadata.q_seqlens
-        cu_seqlens = attn_metadata.cu_seqlens_q
-        is_decoding = attn_metadata.is_decoding
-
         # load states
         conv_state, recurrent_state = self._load_state(past_key_value, state_ids)
 
@@ -259,17 +385,16 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         query, key, value = (x.reshape(*x.shape[:-2], -1) for x in (query, key, value))
 
         mixed_qkv = torch.cat((query, key, value), dim=-1)
-        mixed_qkv = mixed_qkv.transpose(-2, -1)
 
-        mixed_qkv, conv_state = self.causal_conv1d(mixed_qkv, self.conv1d, conv_state, seqlens=seqlens)
+        mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
 
-        mixed_qkv = mixed_qkv.transpose(-2, -1)
+        tp = (self.key_dim * 2 + self.value_dim) // mixed_qkv.size(-1)
         query, key, value = torch.split(
             mixed_qkv,
             [
-                self.key_dim,
-                self.key_dim,
-                self.value_dim,
+                self.key_dim // tp,
+                self.key_dim // tp,
+                self.value_dim // tp,
             ],
             dim=-1,
         )
@@ -291,8 +416,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             g=g,
             beta=beta,
             recurrent_state=recurrent_state,
-            cu_seqlens=cu_seqlens,
-            is_decoding=is_decoding,
+            gated_delta_meta=gated_delta_meta,
         )
 
         # store states
@@ -591,6 +715,7 @@ class Qwen3NextDecoderLayer(nn.Module):
         past_key_value: Optional[List[torch.FloatTensor]],
         residual: Optional[torch.Tensor],
         attn_metadata: Any,
+        gated_delta_meta: GatedDeltaMeta,
         state_ids: torch.Tensor,
     ):
 
@@ -602,12 +727,12 @@ class Qwen3NextDecoderLayer(nn.Module):
 
         # Self Attention
         if self.layer_type == 'linear_attention':
-            past_states = past_key_value
             hidden_states = self.linear_attn(
                 hidden_states=hidden_states,
-                past_states=past_states,
+                past_key_value=past_key_value,
                 state_ids=state_ids,
                 attn_metadata=attn_metadata,
+                gated_delta_meta=gated_delta_meta,
             )
         elif self.layer_type == 'full_attention':
             hidden_states = self.self_attn(
@@ -642,8 +767,10 @@ class Qwen3NextModel(nn.Module):
 
         # build all decode layers
         # TODO: use full config.num_hidden_layers
-        self.layers = nn.ModuleList(
-            [Qwen3NextDecoderLayer(config, layer_idx, dtype=dtype, device=device) for layer_idx in range(4)])
+        self.layers = nn.ModuleList([
+            Qwen3NextDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            for layer_idx in range(self.config.num_hidden_layers)
+        ])
 
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
@@ -673,6 +800,9 @@ class Qwen3NextModel(nn.Module):
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
 
+        # make seq_idx
+        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, attn_metadata)
+
         # decoding
         residual = None
         for idx, decoder_layer in enumerate(self.layers):
@@ -682,6 +812,7 @@ class Qwen3NextModel(nn.Module):
                 past_key_value=past_key_values[idx],
                 residual=residual,
                 attn_metadata=attn_metadata,
+                gated_delta_meta=gated_delta_meta,
                 state_ids=state_ids,
             )
 
@@ -769,7 +900,7 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
         attn_metadata = context.attn_metadata
 
         # make past_key_values
-        state_caches = list(cache.permute(0, 1) for cache in context.state_caches)
+        state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
         state_caches = list(zip(state_caches[0], state_caches[1]))
         past_key_values = list(past_key_values)
         new_past_key_values = []
@@ -837,7 +968,6 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """Load weights."""
         # TODO: remove this after debug
-        return
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

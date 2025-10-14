@@ -168,8 +168,8 @@ class ExecutorBase:
             cache_config.num_state_caches = num_state_caches
 
         mems = 0
-        dtype_size = 2
-        for shape in cache_config.states_shapes:
+        for shape, dtype in cache_config.states_shapes:
+            dtype_size = dtype.itemsize
             mems += math.prod(shape) * num_state_caches * dtype_size
 
         if cache_config.enable_prefix_caching:
