@@ -15,7 +15,7 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str = None, tp: int = 1, **kwargs):
         """build."""
-        cfg = DefaultModelConfigBuilder.build(hf_config, model_path, **kwargs)
+        cfg = DefaultModelConfigBuilder.build(hf_config, model_path, tp=tp, **kwargs)
 
         # update num layers
         num_layers = cfg.num_layers

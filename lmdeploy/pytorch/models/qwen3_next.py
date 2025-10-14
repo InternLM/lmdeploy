@@ -36,6 +36,7 @@ class GatedDeltaMeta:
         # conv_idx
         range_idx = torch.arange(-conv_kernel_size, 0, device=device)
         self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
+        self.conv_idx = self.conv_idx.clamp_min(0)
 
 
 class CausalConv1dFunc:
@@ -162,7 +163,7 @@ class GatedDelta:
 
 def build_rmsnorm_gated(hidden_size: int, eps=1e-6, **kwargs):
     from fla.modules import FusedRMSNormGated
-    return FusedRMSNormGated(hidden_size, eps, **kwargs)
+    return FusedRMSNormGated(hidden_size, eps=eps, **kwargs)
 
 
 class CausalConv1d(nn.Module):
@@ -175,6 +176,7 @@ class CausalConv1d(nn.Module):
         kernel_size: Union[int, Tuple[int]],
         groups: int = 1,
         bias: bool = True,
+        split=None,
         device=None,
         dtype=None,
     ):
@@ -183,6 +185,8 @@ class CausalConv1d(nn.Module):
         self.tp = tp
         self.rank = rank
         out_channels = out_channels // tp
+        assert len(split) == 3
+        self.split = split
 
         weight, bias = self.make_weight(
             in_channels,
@@ -229,7 +233,11 @@ class CausalConv1d(nn.Module):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
-        loaded_weight = loaded_weight.split(self.tp, dim=0)[self.rank]
+        q, k, v = loaded_weight.split(self.split, dim=0)
+        q = q.chunk(self.tp, dim=0)[self.rank]
+        k = k.chunk(self.tp, dim=0)[self.rank]
+        v = v.chunk(self.tp, dim=0)[self.rank]
+        loaded_weight = torch.cat([q, k, v], dim=0)
         default_weight_loader(param, loaded_weight)
 
     def forward(self, x: torch.Tensor, conv_state: torch.Tensor, gated_delta_meta: GatedDeltaMeta):
@@ -257,6 +265,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
 
         self.conv_kernel_size = config.linear_conv_kernel_dim
         self.layer_idx = layer_idx
+        self.activation = config.hidden_act
         self.layer_norm_epsilon = config.rms_norm_eps
 
         # QKV
@@ -267,6 +276,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             bias=False,
             kernel_size=self.conv_kernel_size,
             groups=self.conv_dim,
+            split=[self.key_dim, self.key_dim, self.value_dim],
             dtype=dtype,
             device=device,
         )
@@ -280,6 +290,8 @@ class Qwen3NextGatedDeltaNet(nn.Module):
                                                  dtype=dtype,
                                                  device=device,
                                                  is_tp=True)
+        # dirty patch to qkvz
+        self.in_proj_qkvz.weight.weight_loader = self.weight_loader_qkvz
         self.in_proj_ba = build_colwise_linear(self.hidden_size,
                                                projection_size_ba,
                                                bias=False,
@@ -292,7 +304,11 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         self.make_params(self.num_v_heads, device=device)
         self.A_log_exp = None
 
-        self.norm = build_rmsnorm_gated(self.head_v_dim, eps=self.layer_norm_epsilon, dtype=dtype, device=device)
+        self.norm = build_rmsnorm_gated(self.head_v_dim,
+                                        eps=self.layer_norm_epsilon,
+                                        activation=self.activation,
+                                        dtype=dtype,
+                                        device=device)
         self.out_proj = build_o_proj(self.value_dim,
                                      self.hidden_size,
                                      bias=False,
@@ -316,13 +332,34 @@ class Qwen3NextGatedDeltaNet(nn.Module):
 
         self.register_parameter('A_log', nn.Parameter(torch.log(A)))
         self.register_parameter('dt_bias', nn.Parameter(dt_bias))
-        self.A_log.weight_loader = self.weight_loader
-        self.dt_bias.weight_loader = self.weight_loader
+        self.A_log.weight_loader = self.weight_loader_a_dt
+        self.dt_bias.weight_loader = self.weight_loader_a_dt
 
-    def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+    def weight_loader_qkvz(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader qkvz."""
+        tp, rank = get_tp_world_rank()
+        split_arg_list_qkvz = [
+            self.head_k_dim,
+            self.head_k_dim,
+            (self.kv_ratio * self.head_v_dim),
+            (self.kv_ratio * self.head_v_dim),
+        ]
+        sum_split = sum(split_arg_list_qkvz)
+        loaded_weight = loaded_weight.unflatten(0, (-1, sum_split))
+        q, k, v, z = loaded_weight.split(split_arg_list_qkvz, dim=1)
+        q = q.chunk(tp, dim=0)[rank]
+        k = k.chunk(tp, dim=0)[rank]
+        v = v.chunk(tp, dim=0)[rank]
+        z = z.chunk(tp, dim=0)[rank]
+
+        loaded_weight = torch.cat([q, k, v, z], dim=1)
+        loaded_weight = loaded_weight.flatten(0, 1)
+        default_weight_loader(param, loaded_weight)
+
+    def weight_loader_a_dt(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
         tp, rank = get_tp_world_rank()
-        loaded_weight = loaded_weight.split(tp, dim=0)[rank]
+        loaded_weight = loaded_weight.chunk(tp, dim=0)[rank]
         default_weight_loader(param, loaded_weight)
 
     def fix_query_key_value_ordering(self, mixed_qkvz: torch.Tensor, mixed_ba: torch.Tensor):
@@ -385,7 +422,6 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         query, key, value = (x.reshape(*x.shape[:-2], -1) for x in (query, key, value))
 
         mixed_qkv = torch.cat((query, key, value), dim=-1)
-
         mixed_qkv, conv_state = self.conv1d(mixed_qkv, conv_state, gated_delta_meta=gated_delta_meta)
 
         tp = (self.key_dim * 2 + self.value_dim) // mixed_qkv.size(-1)
@@ -967,7 +1003,17 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """Load weights."""
-        # TODO: remove this after debug
+
+        def __skip_layers(name):
+            """We might change the number of layers so we can debug the model
+            with less gpus."""
+            import re
+            if '.layers.' not in name:
+                return False
+            matches = re.findall(r'\.layers\.(\d+)\.', name)
+            layer_id = int(matches[0])
+            return layer_id >= self.config.num_hidden_layers
+
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -987,11 +1033,14 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
             down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
+        rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
+
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
-            if '.linear_attn' in name:
-                # TODO: support linear attn
+
+            if __skip_layers(name):
                 continue
+
             if 'mtp.' in name:
                 continue
             if 'rotary_emb.inv_freq' in name:
@@ -1000,6 +1049,7 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
+
             name = name.replace('.block_sparse_moe.', '.mlp.')
             if '.experts' in name and '.shared_expert' not in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
@@ -1012,5 +1062,9 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
                     load_weight(param, loaded_weight, shard_id=shard_id)
                     break
                 else:
+                    for rms_norm_key in rms_norm_keys:
+                        if rms_norm_key in name and 'weight' in name:
+                            loaded_weight = loaded_weight + 1
+                            break
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
