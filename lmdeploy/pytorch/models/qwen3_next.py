@@ -139,7 +139,7 @@ class GatedDelta:
                 value,
                 g=g,
                 beta=beta,
-                initial_state=None,
+                initial_state=recurrent_state,
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=self.use_qk_l2norm_in_kernel,
                 cu_seqlens=cu_seqlens,
