@@ -2,13 +2,8 @@
 import torch
 import triton
 import triton.language as tl
-from packaging import version
 from triton.language import core
 from triton.language.standard import _log2
-
-TRITON_VERSION = version.parse(triton.__version__)
-VERSION_331 = version.parse('3.3.1')
-enable_bitonic_topk = TRITON_VERSION >= VERSION_331
 
 
 @triton.jit
@@ -118,7 +113,8 @@ def _concate(a, b):
     """concate."""
     c = tl.join(a, b)  # [k, 2]
     c = c.trans()  # [2, k]
-    c = tl.ravel(c)  # [2*k]
+    # there are bugs in `tr.ravel` when triton<=3.2.0
+    c = tl.reshape(c, (a.numel + b.numel, ))
     return c
 
 
@@ -186,7 +182,6 @@ def bitonic_topk(scores: torch.Tensor,
                  fill: int = -1,
                  descending: bool = True):
     """Bitnoic topk."""
-    assert enable_bitonic_topk, f'bitonic_topk requires triton>=3.3.1, got {triton.__version__}'
     num_tokens = scores.size(0)
     max_kv_len = scores.size(-1)
 
