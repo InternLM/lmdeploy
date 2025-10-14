@@ -7,8 +7,12 @@ from .builder import AutoModelConfigBuilder
 from .utils import flash_mla_available
 
 
-def _check_env_v32():
+def _check_env_v32(device: str = 'cuda'):
     """Environment check."""
+    if device != 'cuda':
+        return
+
+    # check cuda
     try:
         import fast_hadamard_transform  # noqa: F401
     except ImportError:
@@ -58,10 +62,10 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
 
         if hf_config.model_type == 'deepseek_v32':
             assert hf_config.use_flash_mla, 'DeepSeek-V3.2 requires flash_mla to be available.'
-            _check_env_v32()
             index_k_shape = ([hf_config.index_head_dim], torch.float8_e4m3fn)
             index_k_scale_shape = ([1], torch.float32)
             config.cache_shapes = [index_k_shape, index_k_scale_shape]
             config.use_mla_fp8_cache = True
             config.mla_index_topk = hf_config.index_topk
+            config.check_env_func = _check_env_v32
         return config

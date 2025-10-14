@@ -60,6 +60,12 @@ class ModelChecker(BaseChecker):
             message = (f'Checking failed with error {e}. Please send issue to LMDeploy with error logs.')
             self.log_and_exit(e, 'Model', message=message)
 
+        try:
+            model_config.check_env_func(device_type)
+        except Exception as e:
+            message = (f'Checking failed with error {e}.')
+            self.log_and_exit(e, 'Model', message=message)
+
     def check(self):
         """check."""
         import transformers
