@@ -5,6 +5,23 @@ from .builder import AutoModelConfigBuilder
 from .default import DefaultModelConfigBuilder
 
 
+def _check_env_qwen3_next(device: str):
+    """Check env for qwen3 next."""
+    if device != 'cuda':
+        return
+
+    # check cuda
+    try:
+        import causal_conv1d  # noqa: F401
+    except ImportError:
+        raise ImportError('Qwen3-Next cuda support requires https://github.com/Dao-AILab/causal-conv1d.')
+
+    try:
+        import fla  # noqa: F401
+    except ImportError:
+        raise ImportError('Qwen3-Next cuda support requires https://github.com/fla-org/flash-linear-attention.')
+
+
 class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
@@ -37,4 +54,5 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
         recurrent_state_shape = (num_delta_layers, num_v_heads, head_k_dim, head_v_dim)
         dtype = torch.bfloat16
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, dtype)]
+        cfg.check_env_func = _check_env_qwen3_next
         return cfg

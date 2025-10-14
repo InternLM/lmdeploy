@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Tuple
+from typing import Any, Callable, Dict, List, Literal, Tuple
 
 import torch
 
@@ -185,6 +185,10 @@ def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
         _override_hf_config(hf_config, k, v)
 
 
+def _default_check_env(device: str):
+    pass
+
+
 @dataclass
 class ModelConfig:
     """Config of model."""
@@ -213,6 +217,9 @@ class ModelConfig:
     # added for qwen3_next
     # could used for any SSM model.
     states_shapes: List[Tuple[Tuple[int], torch.dtype]] = field(default_factory=list)
+
+    # check env for model-device combination
+    check_env_func: Callable = _default_check_env
 
     def get_head_size(self):
         """Get head size."""
