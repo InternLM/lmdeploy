@@ -382,8 +382,6 @@ class Engine(EngineBase):
                                        dtype=engine_config.dtype)
         self.executor.init()
 
-        self.session_to_cleanup = []
-
         # strategies
         self.strategy_factory = build_strategy_factory(self.model_config, self.executor.misc_config)
         self.sampling_strategy = self.strategy_factory.build_sampling_strategy()
@@ -915,14 +913,6 @@ class Engine(EngineBase):
 
         sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
 
-        session_ctx = [{
-            'session_id': seq.session.session_id,
-            'seq_id': seq.seq_id,
-        } for seq in running]
-
-        session_to_cleanup = self.session_to_cleanup
-        self.session_to_cleanup = []
-
         return dict(
             running=running,
             inputs=inputs,
@@ -935,8 +925,6 @@ class Engine(EngineBase):
             is_dummy=False,
             sync_long_context=sync_long_context,
             extra_inputs=extra_inputs,
-            session_ctx=session_ctx,
-            session_to_cleanup=session_to_cleanup,
         )
 
     async def _await_forward_event(self, forward_event: asyncio.Event):
@@ -1250,7 +1238,7 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
-            self.session_to_cleanup.append(session_id)
+            self.sampling_strategy.on_session_end(session_id)
             self.scheduler.end_session(session_id)
             return True
         return False

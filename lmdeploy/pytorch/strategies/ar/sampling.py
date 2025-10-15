@@ -39,6 +39,7 @@ class ARSamplingStrategy(SamplingStrategy):
     def __init__(self, pad_token_id: int) -> None:
         pad_token_id = 0 if pad_token_id is None else pad_token_id
         self.pad_token_id = pad_token_id
+        self.session_to_cleanup = []
 
     def make_sampling_inputs(self, seqs: SeqList) -> SamplingInputs:
         """Create sampling inputs from the sequences."""
@@ -55,6 +56,8 @@ class ARSamplingStrategy(SamplingStrategy):
         response_formats = [None] * batch_size
         logits_processors = [None] * batch_size
         num_logprobs = [None] * batch_size
+        session_to_cleanup = self.session_to_cleanup
+        self.session_to_cleanup = []
 
         def __gather_params():
             """Gather params."""
@@ -148,6 +151,11 @@ class ARSamplingStrategy(SamplingStrategy):
 
         max_num_logprobs = max(num_logprobs)
 
+        session_ctx = [{
+            'session_id': seq.session.session_id,
+            'seq_id': seq.seq_id,
+        } for seq in seqs]
+
         sampling_input = SamplingInputs(
             temperature=temperature,
             bad_words=bad_words,
@@ -166,9 +174,14 @@ class ARSamplingStrategy(SamplingStrategy):
             logits_processors=logits_processors,
             max_num_logprobs=max_num_logprobs,
             batch_size=batch_size,
+            session_ctx=session_ctx,
+            session_to_cleanup=session_to_cleanup,
         )
 
         pad_token_id = self.pad_token_id
         sampling_input.all_ids = _gather_all_ids(pad_token_id, seqs, sampling_input)
         sampling_input.num_ignore_eos = _get_num_ignore_eos(seqs)
         return sampling_input
+
+    def on_session_end(self, session_id: int):
+        self.session_to_cleanup.append(session_id)

@@ -30,6 +30,7 @@ from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCri
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
+from .guided_process import GuidedDecodingMangager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -352,6 +353,7 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.profiler: AgentProfiler = None
+        self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
 
         # microbatch
         self.enable_microbatch = self.dist_ctx.dist_config.enable_microbatch
@@ -538,8 +540,7 @@ class BaseModelAgent:
         ret['logits'] = logits
         return ret
 
-    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs, inputs: ModelInputs,
-                                    session_ctx: List[Dict[str, Any]]):
+    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs, inputs: ModelInputs):
         """Sampling logits."""
 
         # record function does not support async function
@@ -547,10 +548,9 @@ class BaseModelAgent:
         with record_function('sampling_logits'):
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
-                self.tokenizer,
                 sampling_vocab_size=self.sampling_vocab_size,
                 logprobs_mode=self.misc_config.logprobs_mode,
-                session_ctx=session_ctx,
+                guided_decoding_manager=self.guided_decoding_manager,
             )
             origin_logits = logits
             logits, raw_logprobs = await logits_processor(origin_logits)
@@ -592,8 +592,6 @@ class BaseModelAgent:
         is_dummy: bool = False,
         sync_long_context: bool = False,
         extra_inputs: ExtraInputs = None,
-        session_ctx: List[Dict[str, Any]] = None,
-        session_to_cleanup: List[int] = None,
     ):
         """Asyc forward task."""
         dist_ctx = get_dist_manager().current_context()
@@ -686,9 +684,6 @@ class BaseModelAgent:
 
         need_output = dp > 1 or rank % tp == 0
 
-        if session_to_cleanup:
-            self.cleanup_sessions(session_to_cleanup)
-
         # skip dummy forward.
         if is_all_dummy:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
@@ -721,8 +716,7 @@ class BaseModelAgent:
             if need_output:
                 logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
                 # sampling
-                next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs,
-                                                                            session_ctx)
+                next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
 
                 # post sampling
                 next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
@@ -866,6 +860,8 @@ class BaseModelAgent:
             if not self._preprocess_task.done():
                 self._preprocess_task.cancel()
 
+        self.guided_decoding_manager.clear()
+
     async def stop_async(self):
         """Stop task."""
         if self.dist_ctx.dp > 1:
@@ -893,6 +889,8 @@ class BaseModelAgent:
                     await self._preprocess_task
                 except asyncio.CancelledError:
                     logger.debug('ModelAgent preprocess task cancelled.')
+
+        self.guided_decoding_manager.clear()
 
     def set_forward_inputs(self, inputs):
         """Set forward inputs."""
@@ -1067,9 +1065,6 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         torch.cuda.empty_cache()
-
-    def cleanup_sessions(self, session_ids: List[int]):
-        FusedLogitsProcessor.cleanup_sessions(session_ids)
 
 
 class DefaultForwardInputsMaker:

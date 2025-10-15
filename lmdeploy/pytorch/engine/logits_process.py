@@ -1,15 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import json
 from dataclasses import dataclass, fields
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
 from lmdeploy.messages import LogitsProcessor
-from lmdeploy.tokenizer import Tokenizer
 
 from ..messages import SchedulerSequence
+from .guided_process import GuidedDecodingMangager
 
 
 def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
@@ -78,37 +77,6 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
-def _get_guided_processors(response_formats: Tuple[Dict], tokenizer: object, vocab_size_padded: int,
-                           session_ctx: List[Dict[str, Any]]):
-    processors = {}
-    for i, _format in enumerate(response_formats):
-        if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
-            if _format['type'] == 'json_schema':
-                schema = _format['json_schema']
-                if isinstance(schema, Dict):
-                    for key in ['json_schema', 'schema']:
-                        if key in schema:
-                            schema = json.dumps(schema[key], ensure_ascii=False)
-
-                if not isinstance(schema, str):
-                    raise ValueError(f'Cannot parse schema {schema}. The schema must be '
-                                     'either a dictionary or a string that contains the'
-                                     ' JSON Schema specification')
-            elif _format['type'] == 'regex_schema':
-                schema = _format.get('regex_schema', '')
-            else:
-                raise ValueError(f"unsupported format type: {_format['type']}")
-
-            session_id = session_ctx[i]['session_id']
-            seq_id = session_ctx[i]['seq_id']
-
-            from .guided_process import _get_guided_logits_processor
-            processors[i] = _get_guided_logits_processor(session_id, seq_id, schema, tokenizer, _format['type'],
-                                                         vocab_size_padded)
-
-    return processors
-
-
 SeqList = List[SchedulerSequence]
 
 
@@ -133,6 +101,8 @@ class SamplingInputs:
     all_ids: Optional[torch.Tensor] = None
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0
+    session_ctx: Optional[List[Dict[str, Any]]] = None
+    session_to_cleanup: Optional[List[int]] = None
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -162,17 +132,22 @@ class FusedLogitsProcessor:
     def __init__(
         self,
         sampling_inputs: SamplingInputs,
-        tokenizer: Optional[Tokenizer] = None,
         sampling_vocab_size: Optional[int] = None,
         logprobs_mode: Optional[str] = None,
-        session_ctx: Optional[List[Dict[str, Any]]] = None,
+        guided_decoding_manager: Optional[GuidedDecodingMangager] = None,
     ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
-        self.tokenizer = tokenizer
         self.sampling_vocab_size = sampling_vocab_size
         self.logprobs_mode = logprobs_mode
-        self.guided_processors = _get_guided_processors(sampling_inputs.response_formats, tokenizer,
-                                                        sampling_vocab_size, session_ctx)
+        self.guided_decoding_manager = guided_decoding_manager
+        if sampling_inputs.session_to_cleanup:
+            self.cleanup_sessions(sampling_inputs.session_to_cleanup)
+
+        if self.guided_decoding_manager:
+            self.guided_processors = self.guided_decoding_manager.get_processors(sampling_inputs.session_ctx,
+                                                                                 sampling_inputs.response_formats)
+        else:
+            self.guided_processors = {}
 
     async def _wait_stream_once(self):
         """Wait stream once."""
@@ -210,20 +185,18 @@ class FusedLogitsProcessor:
         sampling_inputs = self.sampling_inputs
         all_ids = sampling_inputs.all_ids
         custom_logits_processors = self.sampling_inputs.logits_processors
-        if self.guided_processors:
-            from .guided_process import _allocate_batched_bitmap, _apply_batched_bitmap
-
+        if self.guided_decoding_manager and self.guided_processors:
             if not hasattr(self, 'guided_bitmask'):
-                self.guided_bitmask = _allocate_batched_bitmap(len(scores), self.sampling_vocab_size)
+                self.guided_bitmask = self.guided_decoding_manager.allocate_batched_bitmap(len(scores))
 
             assert self.guided_bitmask is not None
             guided_bitmask = self.guided_bitmask
 
             await self._wait_stream_once()
             for i, processor in self.guided_processors.items():
-                processor.fill_bitmap(guided_bitmask, i)
+                self.guided_decoding_manager.fill_bitmap(processor, guided_bitmask, i)
 
-            _apply_batched_bitmap(scores, guided_bitmask)
+            self.guided_decoding_manager.apply_batched_bitmap(scores, guided_bitmask)
 
         if any(custom_logits_processors):
             await self._wait_stream_once()
@@ -296,9 +269,9 @@ class FusedLogitsProcessor:
                 scores, indices = logits.topk(max_topk, dim=1)
             result = __random_sampling(scores, indices)
 
-        if self.guided_processors:
+        if self.guided_decoding_manager and self.guided_processors:
             for i, processor in self.guided_processors.items():
-                processor.accept(result[i])
+                self.guided_decoding_manager.accept_token(processor, result[i])
 
         return result
 
@@ -318,8 +291,7 @@ class FusedLogitsProcessor:
 
         return logprobs, indices.to(torch.int32)
 
-    @staticmethod
-    def cleanup_sessions(session_ids: List[int]):
-        from .guided_process import _remove_guided_logtis_processor
-        for session_id in session_ids:
-            _remove_guided_logtis_processor(session_id)
+    def cleanup_sessions(self, session_ids: List[int]):
+        if self.guided_decoding_manager:
+            for session_id in session_ids:
+                self.guided_decoding_manager.remove_processor(session_id)
