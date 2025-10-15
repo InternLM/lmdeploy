@@ -7,7 +7,6 @@ mmengine-lite
 numpy
 openai
 openai_harmony
-outlines<0.1.0
 partial_json_parser
 peft<=0.14.0
 pillow
@@ -26,3 +25,4 @@ torchvision<=0.23.0,>=0.15.0
 transformers
 triton<=3.4.0,>=3.0.0; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
 uvicorn
+xgrammar

@@ -64,7 +64,6 @@ jobs:
           python3 -m pip install /root/packages/cu118/flash_attn-*.whl
           python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt
           python3 -m pip install -e .
-          python3 -m pip install -U 'numpy<2.0'
       - name: Check env
         run: |
           python3 -m pip list
