@@ -164,6 +164,7 @@ class ExecutorBase:
         num_state_caches = cache_config.num_state_caches
         if num_state_caches is None:
             # add more caches for eviction
+            # TODO: Share memory between state cache and pageable cache
             num_state_caches = int(cache_config.max_batches + 8)
             cache_config.num_state_caches = num_state_caches
 
