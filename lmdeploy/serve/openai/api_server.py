@@ -38,8 +38,9 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponse, CompletionResponseChoice,
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-                                            GenerateRequest, LogProbs, ModelCard, ModelList, ModelPermission,
-                                            PoolingRequest, PoolingResponse, TopLogprob, UpdateParamsRequest, UsageInfo)
+                                            GenerateReqInput, GenerateReqMetaOutput, GenerateReqOutput, GenerateRequest,
+                                            LogProbs, ModelCard, ModelList, ModelPermission, PoolingRequest,
+                                            PoolingResponse, TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -129,17 +130,17 @@ def create_error_response(status: HTTPStatus, message: str, error_type='invalid_
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
-        return create_error_response(HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
+        return create_error_response(HTTPStatus.NOT_FOUND, f'The model {request.model!r} does not exist.')
     if hasattr(request, 'n') and request.n <= 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n `{request.n}` must be a positive int.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n {request.n!r} must be a positive int.')
     if hasattr(request, 'top_p') and not (request.top_p > 0 and request.top_p <= 1):
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p `{request.top_p}` must be in (0, 1].')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p {request.top_p!r} must be in (0, 1].')
     if hasattr(request, 'top_k') and request.top_k < 0:
         return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The top_k `{request.top_k}` cannot be a negative integer.')
+                                     f'The top_k {request.top_k!r} cannot be a negative integer.')
     if hasattr(request, 'temperature') and not (request.temperature <= 2 and request.temperature >= 0):
         return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The temperature `{request.temperature}` must be in [0, 2]')
+                                     f'The temperature {request.temperature!r} must be in [0, 2]')
     return
 
 
@@ -315,8 +316,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
-    - response_format (Dict | None): Only pytorch backend support formatting
-        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+    - response_format (Dict | None): To generate response according to given
+        schema. Examples: `{"type": "json_schema", "json_schema": {"name":
         "test","schema": {"properties": {"name": {"type": "string"}},
         "required": ["name"], "type": "object"}}}`
         or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
@@ -369,7 +370,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
 
     model_name = request.model
     adapter_name = None
@@ -389,8 +390,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         gen_logprobs = request.top_logprobs
     response_format = None
     if request.response_format and request.response_format.type != 'text':
-        if VariableInterface.async_engine.backend != 'pytorch':
-            return create_error_response(HTTPStatus.BAD_REQUEST, 'only pytorch backend can use response_format now')
         response_format = request.response_format.model_dump()
 
     if request.logit_bias is not None:
@@ -722,7 +721,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
 
     model_name = request.model
     adapter_name = None
@@ -898,6 +897,106 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         response['cache_block_ids'] = cache_block_ids
         response['remote_token_ids'] = remote_token_ids
 
+    return response
+
+
+@router.post('/generate', dependencies=[Depends(check_api_key)])
+async def generate(request: GenerateReqInput, raw_request: Request = None):
+
+    if request.session_id == -1:
+        VariableInterface.session_id += 1
+        request.session_id = VariableInterface.session_id
+    error_check_ret = await check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
+    if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+
+    gen_config = GenerationConfig(
+        max_new_tokens=request.max_tokens,
+        do_sample=True,
+        logprobs=1 if request.return_logprob else None,
+        top_k=request.top_k,
+        top_p=request.top_p,
+        min_p=request.min_p,
+        temperature=request.temperature,
+        repetition_penalty=request.repetition_penalty,
+        ignore_eos=request.ignore_eos,
+        stop_words=request.stop,
+        stop_token_ids=request.stop_token_ids,
+        skip_special_tokens=request.skip_special_tokens,
+        spaces_between_special_tokens=request.spaces_between_special_tokens,
+        include_stop_str_in_output=request.include_stop_str_in_output,
+    )
+
+    result_generator = VariableInterface.async_engine.generate(
+        messages=request.prompt,
+        session_id=request.session_id,
+        input_ids=request.input_ids,
+        gen_config=gen_config,
+        stream_response=True,  # always use stream to enable batching
+        sequence_start=True,
+        sequence_end=True,
+        do_preprocess=False,
+    )
+
+    def create_finish_reason(finish_reason):
+        # TODO: add detail info
+        if not finish_reason:
+            return None
+        if finish_reason == 'length':
+            return dict(type='length')
+        if finish_reason == 'stop':
+            return dict(type='stop')
+        return dict(type='abort')
+
+    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason):
+        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(finish_reason),
+                                     output_token_logprobs=logprobs or None,
+                                     prompt_tokens=res.input_token_len,
+                                     completion_tokens=res.generate_token_len)
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
+        return response.model_dump_json()
+
+    async def generate_stream_generator():
+        async for res in result_generator:
+            text = res.response or ''
+            output_ids = res.token_ids
+            logprobs = []
+            if res.logprobs:
+                for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
+                    logprobs.append((tok_logprobs[tok], tok))
+            response_json = create_generate_response_json(res, text, output_ids, logprobs, res.finish_reason)
+            yield f'data: {response_json}\n\n'
+        yield 'data: [DONE]\n\n'
+
+    if request.stream:
+        return StreamingResponse(generate_stream_generator(), media_type='text/event-stream')
+
+    response = None
+
+    async def _inner_call():
+        text = ''
+        output_ids = []
+        logprobs = []
+        async for res in result_generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                await VariableInterface.async_engine.stop_session(request.session_id)
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
+            text += res.response or ''
+            output_ids.extend(res.token_ids or [])
+            if res.logprobs:
+                for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
+                    logprobs.append((tok_logprobs[tok], tok))
+        nonlocal response
+        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(res.finish_reason),
+                                     output_token_logprobs=logprobs or None,
+                                     prompt_tokens=res.input_token_len,
+                                     completion_tokens=res.generate_token_len)
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
+
+    await _inner_call()
     return response
 
 

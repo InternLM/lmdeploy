@@ -17,6 +17,8 @@
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
+#include "src/turbomind/layers/sampling_layers/GuidedDecodeMaskLayer.h"
+#include "src/turbomind/layers/sampling_layers/GuidedDecodeUpdateLayer.h"
 #include "src/turbomind/layers/sampling_layers/LogitsProcessorLayer.h"
 #include "src/turbomind/layers/sampling_layers/SamplingLayer.h"
 #include "src/turbomind/layers/sampling_layers/StopCriteriaLayer.h"
@@ -35,7 +37,9 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
     TM_CHECK(dtype == kFloat32);
     BaseDynamicDecodeLayer::BaseParam param{max_batch_size, vocab_size, vocab_size_padded, stream, device_prop};
     layers_.emplace_back(new LogitsProcessorLayer<float>{param});
+    layers_.emplace_back(new GuidedDecodeMaskLayer<float>{param});
     layers_.emplace_back(new SamplingLayer<float>{param});
+    layers_.emplace_back(new GuidedDecodeUpdateLayer<float>{param});
     layers_.emplace_back(new StopCriteriaLayer<float>{param});
 }
 

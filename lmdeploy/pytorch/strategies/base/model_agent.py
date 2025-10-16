@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, List, Optional
 
@@ -7,6 +8,7 @@ import numpy as np
 import torch
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.engine.logits_process import SamplingInputs
     from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.model_inputs import ModelInputs
@@ -32,6 +34,10 @@ class ExtraInputs(ABC):
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
         return to_device(self, device, non_blocking)
+
+    def broadcast(self, src: int, group, async_op=False):
+        """Broadcast extra inputs."""
+        pass
 
 
 @dataclass
@@ -130,3 +136,14 @@ class ModelAgentStrategy(ABC):
                       extra_inputs: ExtraInputs):
         """Post sampling."""
         pass
+
+    def make_dummy_next_token(self, inputs: 'ModelInputs', logits: torch.Tensor, extra_inputs: ExtraInputs):
+        """Make dummy next token for broadcast."""
+        with torch.inference_mode():
+            next_token_ids = inputs.input_ids.new_zeros(logits.size(0))
+        return next_token_ids, extra_inputs
+
+    @abstractmethod
+    @contextmanager
+    def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ExtraInputs, dist_ctx: 'DistContext'):
+        """Broadcast next token ids and extra inputs."""
