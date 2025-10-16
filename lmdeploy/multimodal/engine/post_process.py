@@ -38,12 +38,8 @@ class PostProcessor():
             print(f'=> PostProcessor post-processed data: {out}')
 
             session_id = out.pop('session_id', None)
-            print(f'=> PostProcessor session_id: {session_id}')
             messages, future = self._future_store.pop(session_id, None)
-            print(messages)
-            # add out as an attri named 'encoder_result' to messages
-
-            messages[0]['encoder_result'] = out
+            messages[0]['block_ids'] = out['block_ids']
             if future and not future.done():
                 print(f'=> PostProcessor setting future result: {messages}')
                 future.set_result(messages)

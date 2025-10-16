@@ -64,7 +64,6 @@ class BaseModelAgent:
         self.out_stream = torch.cuda.Stream()
         self.forward_stream = torch.cuda.Stream()
 
-        # self.model_path = model_path
         self.model = model
         self.device = 'cuda'
 
@@ -87,8 +86,7 @@ class BaseModelAgent:
             self.next_inputs = None
 
             with torch.cuda.stream(self.forward_stream):
-                forward_outputs, allocated_blocks = self._forward_impl(forward_inputs)
-                print(f'check forward output: {forward_outputs}')
+                feats, allocated_blocks = self._forward_impl(forward_inputs)
 
                 # event for async fetch outputs
                 event = torch.cuda.Event()
@@ -97,8 +95,8 @@ class BaseModelAgent:
                 # put inside out_que
                 out = dict(
                     session_id=session_id,
-                    # output=forward_outputs,
-                    output=allocated_blocks,
+                    feats=feats,
+                    block_ids=allocated_blocks,
                     event=event,
                 )
                 self._out_que.put_nowait(out)

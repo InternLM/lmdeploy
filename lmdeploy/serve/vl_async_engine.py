@@ -44,6 +44,7 @@ class VLAsyncEngine(AsyncEngine):
         if self.backend_config.role == EngineRole.Encoder:
             from lmdeploy.multimodal.engine.engine import MultiModalEngine
             self.engine = MultiModalEngine.from_pretrained(pretrained_model_name_or_path=model_path,
+                                                           chat_template=self.chat_template,
                                                            tokenizer=self.tokenizer,
                                                            engine_config=backend_config)
 

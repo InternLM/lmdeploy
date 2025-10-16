@@ -911,14 +911,40 @@ class AsyncEngine(LogitsMixin):
                     # manually end pytorch session
                     await inst.async_end(session_id)
 
-    async def encode_generate(self, messages, session_id: int):
+    async def encode_generate(self, messages, session_id: int, **kwargs):
         """Perform encoding."""
         if not hasattr(self.engine, 'encode'):
             raise NotImplementedError('encode() is not implemented for the current backend')
 
         encoder_result = await self.engine.encode(messages, session_id)
+        print(f'check encoder_result: {encoder_result}')
+        remote_block_ids = encoder_result[0]['block_ids']
 
-        return encoder_result
+        # FIXME: for simplicity, we reuse previous get_prompt_input function
+        # in order to get input_ids, and for calculatin image_mask
+        # but get_prompt_input() will invoke vl_encoder preprocess(), which duplicate with above encode()
+        # we should adopt a new function to get input_ids and image_mask only
+        prompt = messages
+        self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
+        prompt_input = await self._get_prompt_input(prompt,
+                                                    do_preprocess=True,
+                                                    sequence_start=True,
+                                                    adapter_name=None,
+                                                    **kwargs)
+        prompt = prompt_input['prompt']
+        input_ids = prompt_input['input_ids']
+
+        # get image_mask
+        image_token_id = prompt_input['multimodal'][0]['image_token_id']
+        image_mask = [1 if x == image_token_id else 0 for x in prompt_input['input_ids']]
+
+        # pack results together and return to api server
+        return {
+            'token_ids': input_ids,
+            'image_mask': image_mask,
+            'remote_session_id': session_id,
+            'remote_block_ids': remote_block_ids
+        }
 
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)
