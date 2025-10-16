@@ -911,6 +911,15 @@ class AsyncEngine(LogitsMixin):
                     # manually end pytorch session
                     await inst.async_end(session_id)
 
+    async def encode_generate(self, messages, session_id: int):
+        """Perform encoding."""
+        if not hasattr(self.engine, 'encode'):
+            raise NotImplementedError('encode() is not implemented for the current backend')
+
+        encoder_result = await self.engine.encode(messages, session_id)
+
+        return encoder_result
+
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)
         loop = loop or self.internal_thread.loop

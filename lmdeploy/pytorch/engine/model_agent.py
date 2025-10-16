@@ -30,7 +30,7 @@ from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCri
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
-from .guided_process import GuidedDecodingMangager
+# from .guided_process import GuidedDecodingMangager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -354,7 +354,7 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.profiler: AgentProfiler = None
-        self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
+        # self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
 
         # microbatch
         self.enable_microbatch = self.dist_ctx.dist_config.enable_microbatch

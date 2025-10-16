@@ -7,6 +7,7 @@ import PIL
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.model import BaseChatTemplate
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.utils import get_logger, try_import_deeplink
 from lmdeploy.vl.engine import ImageEncoder
@@ -37,6 +38,14 @@ class VLAsyncEngine(AsyncEngine):
             raise RuntimeError(
                 'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501
             )
+
+        # if the server started as encoder, we replace with mm engine
+        # TODO: find a way to disable LLM engine initialization and weight loading
+        if self.backend_config.role == EngineRole.Encoder:
+            from lmdeploy.multimodal.engine.engine import MultiModalEngine
+            self.engine = MultiModalEngine.from_pretrained(pretrained_model_name_or_path=model_path,
+                                                           tokenizer=self.tokenizer,
+                                                           engine_config=backend_config)
 
     @classmethod
     def _convert_prompts(cls, prompts: Union[VLPromptType, List[Dict], List[VLPromptType], List[List[Dict]]]):

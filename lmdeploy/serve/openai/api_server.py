@@ -25,7 +25,7 @@ from lmdeploy.archs import get_task
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
                                                    DistServeDropConnectionRequest, DistServeInitRequest, EncoderResult,
                                                    MigrationRequest)
@@ -371,6 +371,18 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
+
+    # if encoder, we only do encoding and return
+    engine_role = VariableInterface.async_engine.backend_config.role
+    if engine_role == EngineRole.Encoder:
+        from fastapi.encoders import jsonable_encoder
+        from fastapi.responses import JSONResponse
+        encoder_result = await VariableInterface.async_engine.encode_generate(
+            request.messages,
+            request.session_id,
+        )
+        print(f'api_server, v1/completion, encoder_result: {encoder_result}')
+        return JSONResponse(jsonable_encoder(encoder_result))
 
     model_name = request.model
     adapter_name = None
