@@ -152,6 +152,8 @@ class EngineInstance(EngineInstanceBase):
             cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
             req_metrics = resp.data.get('req_metrics', None) if resp.data else None
             logprobs = resp.data.pop('logprobs', None) if resp.data else None
+            routed_experts = resp.data.get('routed_experts', None) if resp.data else None
+
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids) - output_offset
@@ -161,6 +163,7 @@ class EngineInstance(EngineInstanceBase):
                                    num_ids,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
+                                   routed_experts=routed_experts,
                                    logprobs=logprobs)
                 output_offset = len(token_ids)
             elif resp.type == ResponseType.FINISH:
@@ -175,6 +178,7 @@ class EngineInstance(EngineInstanceBase):
                                    logits=logits,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
+                                   routed_experts=routed_experts,
                                    logprobs=logprobs)
                 break
             else:

@@ -98,6 +98,8 @@ class GenOut:
     # for disaggregation
     cache_block_ids: List[int] = None
 
+    routed_experts: Any = None
+
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
     return Response(text=out.response,
@@ -108,6 +110,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     logprobs=out.logprobs,
                     last_hidden_state=out.last_hidden_state,
                     logits=out.logits,
+                    routed_experts=out.routed_experts,
                     index=index)
 
 
@@ -125,6 +128,7 @@ def _append_response(dst: Response, src: Response):
     if src.logprobs:
         dst.logprobs = dst.logprobs or []
         dst.logprobs += src.logprobs
+    dst.routed_experts = src.routed_experts
     return dst
 
 
@@ -879,6 +883,7 @@ class AsyncEngine(LogitsMixin):
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
+                                 routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
@@ -918,6 +923,7 @@ class AsyncEngine(LogitsMixin):
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
+                                 routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     # Update a session's sequence only when it is in finished status
                     if outputs.status == ResponseType.FINISH:
@@ -933,6 +939,7 @@ class AsyncEngine(LogitsMixin):
                                  input_token_len=len(input_ids),
                                  generate_token_len=0,
                                  finish_reason='error',
+                                 routed_experts=outputs.routed_experts,
                                  token_ids=[])
             # update step
             if sequence_end:

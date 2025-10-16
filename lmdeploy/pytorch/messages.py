@@ -56,6 +56,7 @@ class SamplingParam:
     out_logits: bool = False
     out_last_hidden_states: bool = False
     num_logprobs: int = -1
+    return_routed_experts: bool = False
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
@@ -121,21 +122,24 @@ class SamplingParam:
         if random_seed is None:
             import random
             random_seed = random.getrandbits(64)
-        return SamplingParam(top_p=top_p,
-                             top_k=top_k,
-                             min_p=min_p,
-                             temperature=temperature,
-                             repetition_penalty=repetition_penalty,
-                             ignore_eos=gen_config.ignore_eos,
-                             random_seed=random_seed,
-                             stop_words=stop_words,
-                             bad_words=bad_words,
-                             response_format=response_format,
-                             max_new_tokens=max_new_tokens,
-                             min_new_tokens=min_new_tokens,
-                             logits_processors=gen_config.logits_processors,
-                             out_logits=(output_logits is not None),
-                             num_logprobs=logprobs)
+        return SamplingParam(
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            ignore_eos=gen_config.ignore_eos,
+            random_seed=random_seed,
+            stop_words=stop_words,
+            bad_words=bad_words,
+            response_format=response_format,
+            max_new_tokens=max_new_tokens,
+            min_new_tokens=min_new_tokens,
+            logits_processors=gen_config.logits_processors,
+            out_logits=(output_logits is not None),
+            num_logprobs=logprobs,
+            return_routed_experts=gen_config.return_routed_experts,
+        )
 
 
 class MessageStatus(enum.Enum):
@@ -407,6 +411,79 @@ class HistoryTokenIds:
         return self.clone()
 
 
+class HistoryRouterExperts:
+    """History router experts."""
+    ALLOC_SIZE = 512
+
+    def __init__(self,
+                 num_layer: int = None,
+                 topk: int = None,
+                 expert_ids: np.ndarray = None,
+                 dtype: np.dtype = np.int16):
+
+        if expert_ids is None:
+            assert num_layer is not None
+            assert topk is not None
+            self._expert_ids = np.empty((self.ALLOC_SIZE, num_layer, topk), dtype=dtype)
+            self._num_real = 0
+            self.num_layer = num_layer
+            self.topk = topk
+        else:
+            self._expert_ids = expert_ids
+            self._num_real = len(expert_ids)
+            self.num_layer = expert_ids.shape[1]
+            self.topk = expert_ids.shape[2]
+
+    def reserve(self, size: int):
+        """Reserve cache."""
+        num_tokens = len(self._expert_ids)
+        if num_tokens >= size:
+            return
+        reserve_size = _round_up(size - num_tokens, self.ALLOC_SIZE)
+        new_expert_ids = np.pad(self._expert_ids, ((0, reserve_size), (0, 0), (0, 0)))
+        self._expert_ids = new_expert_ids
+
+    def get_real(self):
+        """Get logical blocks."""
+        return self._expert_ids[:self._num_real]
+
+    def resize(self, size: int):
+        """Set size."""
+        assert size <= self._num_real
+        self._num_real = size
+
+    def __setitem__(self, *args, **kwargs):
+        """Set values."""
+        return self.get_real().__setitem__(*args, **kwargs)
+
+    def __getitem__(self, *args, **kwargs):
+        """Get values."""
+        return self.get_real().__getitem__(*args, **kwargs)
+
+    def append(self, expert_ids: np.ndarray):
+        """Append token ids."""
+        num_tokens = len(expert_ids)
+        self.reserve(num_tokens + self._num_real)
+        slice_start = self._num_real
+        slice_end = slice_start + num_tokens
+        self._num_real += num_tokens
+        self._expert_ids[slice_start:slice_end] = expert_ids
+
+    def __len__(self):
+        """Get length."""
+        return self._num_real
+
+    def clone(self):
+        """clone."""
+        ret = HistoryRouterExperts(num_layer=self.num_layer, topk=self.topk)
+        ret.append(self.get_real())
+        return ret
+
+    def copy(self):
+        """copy."""
+        return self.clone()
+
+
 class HistoryMultiModals:
 
     def __init__(self, multimodals: MultiModalInputs = None):
@@ -499,6 +576,11 @@ class SchedulerSequence:
     # For logging
     engine_events: List[EngineEvent] = field(default_factory=list)
 
+    # for router replay
+    num_moe_layers: int = None
+    num_experts_per_tok: int = None
+    all_routed_experts: HistoryRouterExperts = None
+
     def __post_init__(self):
         """Post init."""
         self._seq_meta: SequenceMeta = self.session.seq_meta
@@ -510,6 +592,8 @@ class SchedulerSequence:
         self._num_images: int = len(self.history_embeddings)
         self._num_history_cross: int = 0
         self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
+        if self.return_routed_experts:
+            self.all_routed_experts = HistoryRouterExperts(num_layer=self.num_moe_layers, topk=self.num_experts_per_tok)
 
     @property
     def block_size(self) -> int:
@@ -565,6 +649,20 @@ class SchedulerSequence:
         end = self.num_valid_ids
         start = end - self.num_new_tokens
         return self.history_cache._token_ids[start:end]
+
+    @property
+    def return_routed_experts(self) -> bool:
+        ret = self.sampling_param.return_routed_experts and \
+            self.num_moe_layers is not None and \
+            self.num_experts_per_tok is not None
+        return ret
+
+    @property
+    def routed_experts(self) -> np.ndarray:
+        if (not self.return_routed_experts) or self.all_routed_experts is None:
+            return None
+        end = max(0, self.num_valid_ids - 1)
+        return self.all_routed_experts._expert_ids[:end]
 
     @property
     def num_history_ids(self):

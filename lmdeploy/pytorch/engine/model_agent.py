@@ -246,12 +246,14 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-
+            if isinstance(output, torch.Tensor):
+                output = dict(hidden_states=output)
+            assert isinstance(output, Dict)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             model_metas = context.model_metas
             seq_length = context.q_seqlens[:len(inputs.seq_length)]
-
-    return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
+            output.update(dict(model_metas=model_metas, seq_length=seq_length))
+            return output
 
 
 def _try_to_cuda(val, non_blocking: bool = False):
@@ -445,6 +447,7 @@ class BaseModelAgent:
         """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         strategy = self.agent_strategy
+        enable_return_routed_experts = self.misc_config.enable_return_routed_experts
 
         class _OutputGather:
             """Output gather."""
@@ -454,10 +457,23 @@ class BaseModelAgent:
                 self._start = 0
                 self._output: torch.Tensor = None
                 self._device: torch.device = None
+                self._exp_output: torch.Tensor = None
 
             def gather(self, output):
                 """gather."""
                 tmp_output = output['hidden_states']
+                seq_len = tmp_output.size(-2)
+
+                if 'all_routed_experts' in output:
+                    tmp_exp_ids = output['all_routed_experts']
+                    out_exp_ids = self._exp_output
+                    if out_exp_ids is None:
+                        out_exp_ids = tmp_exp_ids.new_empty(self._max_seq_len, *tmp_exp_ids.shape[1:], device='cpu')
+                        self._device = tmp_output.device
+                    out_exp_ids[self._start:self._start + seq_len, ...].copy_(tmp_exp_ids, non_blocking=True)
+                    self._exp_output = out_exp_ids
+                    if not return_logits:
+                        self._start += seq_len
 
                 if not return_logits:
                     self._output = tmp_output
@@ -465,7 +481,7 @@ class BaseModelAgent:
 
                 out_logits = self._output
                 start = self._start
-                seq_len = tmp_output.size(-2)
+
                 if out_logits is None:
                     out_logits = tmp_output.new_empty(1, self._max_seq_len, tmp_output.size(-1), device='cpu')
                     self._device = tmp_output.device
@@ -475,14 +491,26 @@ class BaseModelAgent:
 
             def get_output(self):
                 """Get tmp_output."""
-                if not return_logits:
+                if not (return_logits or enable_return_routed_experts):
                     seqlen = torch.full((1, ),
                                         self._output.numel() // self._output.size(-1),
                                         device=self._output.device,
                                         dtype=self._output.dtype)
-                    return strategy.slice_outputs(self._output, seqlen)
-                torch.cuda.synchronize()
-                return self._output.to(self._device)
+                    return strategy.slice_outputs(self._output, seqlen), None
+                else:
+                    torch.cuda.synchronize()
+                    if return_logits:
+                        output_hidden_states = self._output.to(self._device)
+                    else:
+                        seqlen = torch.full((1, ),
+                                            self._output.numel() // self._output.size(-1),
+                                            device=self._output.device,
+                                            dtype=self._output.dtype)
+                        output_hidden_states = strategy.slice_outputs(self._output, seqlen)
+                    all_routed_experts = None
+                    if enable_return_routed_experts:
+                        all_routed_experts = self._exp_output.to(self._device)
+                    return output_hidden_states, all_routed_experts
 
         __forward = self.async_forward
 
@@ -500,7 +528,11 @@ class BaseModelAgent:
                 model_metas = tmp_out.get('model_metas')
                 output_gather.gather(tmp_out)
                 tmp_out.pop('hidden_states', None)
-            tmp_out['hidden_states'] = output_gather.get_output()
+                tmp_out.pop('all_routed_experts', None)
+            tmp_out['hidden_states'], expert_ids = output_gather.get_output()
+
+            if enable_return_routed_experts:
+                tmp_out['all_routed_experts'] = expert_ids
             return tmp_out
 
         origin_inputs = inputs
@@ -725,6 +757,8 @@ class BaseModelAgent:
                 # post sampling
                 next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
                                                                                  extra_inputs)
+                # for router replay
+                extra_inputs.all_routed_experts = output.get('all_routed_experts', None)
 
                 with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')

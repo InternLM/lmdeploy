@@ -14,7 +14,7 @@ from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_pr
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMixin
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
 
 class Qwen3MoeAttention(nn.Module):
@@ -220,12 +220,18 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             layer_idx=layer_idx,
         )
 
-    def forward(self, hidden_states: torch.Tensor):
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        all_routed_experts: torch.Tensor = None,
+    ):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         router_logits = self.gate(hidden_states)
         topk_weights, topk_ids = self.softmax_topk(router_logits)
+        if all_routed_experts is not None:
+            all_routed_experts[:, self.layer_idx, :] = topk_ids
         if get_dist_manager().current_context().dist_config.enable_eplb:
             topk_ids = EPLBManager.topk_ids_logical_to_physical(topk_ids, self.eplb_dispatch_info)
         out_states = self.experts(
@@ -277,6 +283,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
         past_key_value: Optional[List[torch.FloatTensor]],
         residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
+        all_routed_experts: torch.Tensor = None,
     ):
 
         if residual is None:
@@ -295,7 +302,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
 
         outputs = (hidden_states, residual)
         return outputs
@@ -346,6 +353,7 @@ class Qwen3MoeModel(nn.Module):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        all_routed_experts: torch.Tensor = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -370,6 +378,7 @@ class Qwen3MoeModel(nn.Module):
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
+                all_routed_experts=all_routed_experts,
             )
 
         # norm
@@ -413,6 +422,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
+        self.enable_return_routed_experts = getattr(self.config, 'enable_return_routed_experts', False)
 
     def forward(
         self,
@@ -421,6 +431,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
+        all_routed_experts: torch.Tensor = None,
         **kwargs,
     ):
         """Model forward, return logits."""
@@ -430,8 +441,11 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            all_routed_experts=all_routed_experts,
         )
-        return hidden_states
+        if all_routed_experts is None:
+            return hidden_states
+        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
 
     def get_logits(self, hidden_states: torch.Tensor):
         """Compute logits of the model output."""
@@ -440,6 +454,37 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
+
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids, **kwargs):
+        """Make cudagraph buffers from forward inputs."""
+        max_tokens = graph_meta.max_tokens
+
+        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
+        if self.enable_return_routed_experts:
+            input_buffers['all_routed_experts'] = input_ids.new_full(
+                (max_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok), -1, dtype=torch.int32)
+
+        return input_buffers
+
+    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
+        """Fill cudagraph buffers from forward inputs."""
+
+        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
+
+        input_buffers = graph_meta.input_buffers
+        if self.enable_return_routed_experts:
+            input_buffers['all_routed_experts'].fill_(-1)
+            new_inputs['all_routed_experts'] = input_buffers['all_routed_experts']
+        return new_inputs
+
+    def get_outputs_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: torch.Tensor, **kwargs):
+        """Get outputs from buffers."""
+        num_tokens = input_ids.size(-1)
+        outputs = dict()
+        outputs['hidden_states'] = graph_meta.output_buffers['hidden_states'][:, :num_tokens]
+        if self.enable_return_routed_experts:
+            outputs['all_routed_experts'] = graph_meta.output_buffers['all_routed_experts'][:num_tokens, ...].clone()
+        return outputs
 
     def prepare_inputs_for_generation(
         self,
@@ -461,6 +506,13 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
                 inputs_embeds = self.get_input_embeddings()(input_ids)
             inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
+        # expert ids
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            all_routed_experts = input_ids.new_full(
+                (input_ids.size(1), self.config.num_hidden_layers, self.config.num_experts_per_tok),
+                -1,
+                dtype=torch.int32)
         # inputs of forward
         return dict(
             input_ids=input_ids,
@@ -468,6 +520,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            all_routed_experts=all_routed_experts,
         )
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],

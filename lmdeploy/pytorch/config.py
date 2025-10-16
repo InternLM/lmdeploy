@@ -208,17 +208,24 @@ class ModelConfig:
     dllm_mask_token: int = 0
     dllm_block_length: int = None
 
+    # router replay
+    num_moe_layers: int = None
+    num_experts_per_tok: int = None
+
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
 
     @classmethod
-    def from_pretrained(cls,
-                        pretrained_model_name_or_path: str,
-                        trust_remote_code: bool = True,
-                        dtype: str = 'auto',
-                        dist_config: DistConfig = None,
-                        hf_overrides: Dict[str, Any] = None):
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str,
+        trust_remote_code: bool = True,
+        dtype: str = 'auto',
+        dist_config: DistConfig = None,
+        hf_overrides: Dict[str, Any] = None,
+        enable_return_routed_experts: bool = False,
+    ):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -248,6 +255,9 @@ class ModelConfig:
             logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
             override_hf_config(model_config.hf_config, hf_overrides)
+
+        # for router replay
+        model_config.hf_config.enable_return_routed_experts = enable_return_routed_experts
 
         return model_config
 
@@ -334,6 +344,7 @@ class MiscConfig:
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
+    enable_return_routed_experts: bool = False
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -343,12 +354,15 @@ class MiscConfig:
                                  unmasking_strategy=dllm_unmasking_strategy,
                                  denoising_steps=engine_config.dllm_denoising_steps,
                                  confidence_threshold=engine_config.dllm_confidence_threshold)
-        misc_config = cls(custom_module_map=engine_config.custom_module_map,
-                          empty_init=engine_config.empty_init,
-                          prefill_interval=engine_config.prefill_interval,
-                          model_format=engine_config.model_format,
-                          hf_overrides=engine_config.hf_overrides,
-                          disable_vision_encoder=engine_config.disable_vision_encoder,
-                          logprobs_mode=engine_config.logprobs_mode,
-                          dllm_config=dllm_config)
+        misc_config = cls(
+            custom_module_map=engine_config.custom_module_map,
+            empty_init=engine_config.empty_init,
+            prefill_interval=engine_config.prefill_interval,
+            model_format=engine_config.model_format,
+            hf_overrides=engine_config.hf_overrides,
+            disable_vision_encoder=engine_config.disable_vision_encoder,
+            logprobs_mode=engine_config.logprobs_mode,
+            dllm_config=dllm_config,
+            enable_return_routed_experts=engine_config.enable_return_routed_experts,
+        )
         return misc_config

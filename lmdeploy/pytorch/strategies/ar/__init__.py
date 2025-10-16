@@ -51,4 +51,4 @@ class ARStrategyFactory(StrategyFactoryBase):
 
     def build_sequence_strategy(self) -> SequenceStrategy:
         from .sequence import ARSequenceStrategy
-        return ARSequenceStrategy()
+        return ARSequenceStrategy(model_config=self.model_config)

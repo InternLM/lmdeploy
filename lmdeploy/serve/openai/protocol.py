@@ -458,6 +458,7 @@ class GenerateReqInput(BaseModel):
     skip_special_tokens: Optional[bool] = True
     spaces_between_special_tokens: Optional[bool] = True
     include_stop_str_in_output: Optional[bool] = False
+    return_routed_experts: Optional[bool] = False
 
 
 class GenerateReqMetaOutput(BaseModel):
@@ -465,6 +466,7 @@ class GenerateReqMetaOutput(BaseModel):
     completion_tokens: Optional[int] = None
     finish_reason: Optional[Dict[str, Any]] = None
     output_token_logprobs: Optional[List[tuple[float, int]]] = None  # (logprob, token_id)
+    routed_experts: Optional[List[List[List[int]]]] = None  # (num_token, num_layer, topk_expert)
 
 
 # /generate output

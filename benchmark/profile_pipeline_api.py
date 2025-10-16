@@ -254,6 +254,7 @@ def parse_args():
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     ArgumentHelper.eager_mode(pt_group)
+    ArgumentHelper.enable_return_routed_experts(pt_group)
 
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -302,6 +303,7 @@ def main():
             thread_safe=False,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
+            enable_return_routed_experts=args.enable_return_routed_experts,
         )
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)

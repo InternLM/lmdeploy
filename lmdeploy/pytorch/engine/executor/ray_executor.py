@@ -160,10 +160,13 @@ class RayWorkerWrapper(WorkerWrapperBase):
         init_backend(device_type)
         try_import_deeplink(device_type)
 
-        model_config = ModelConfig.from_pretrained(model_path,
-                                                   dtype=dtype,
-                                                   hf_overrides=misc_config.hf_overrides,
-                                                   dist_config=dist_config)
+        model_config = ModelConfig.from_pretrained(
+            model_path,
+            dtype=dtype,
+            hf_overrides=misc_config.hf_overrides,
+            dist_config=dist_config,
+            enable_return_routed_experts=misc_config.enable_return_routed_experts,
+        )
 
         super().__init__(
             model_path=model_path,
