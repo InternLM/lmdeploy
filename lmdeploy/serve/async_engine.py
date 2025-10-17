@@ -13,7 +13,6 @@ from queue import Queue
 from threading import Thread
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
-import torch
 import tqdm
 
 from lmdeploy import Tokenizer
@@ -307,7 +306,6 @@ class AsyncEngine(LogitsMixin):
         self.free_insts = None
         self.instances.clear()
         self.engine.close()
-        torch._C._cuda_clearCublasWorkspaces()
 
     def __enter__(self):
         return self

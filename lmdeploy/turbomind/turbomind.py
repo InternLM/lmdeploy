@@ -729,7 +729,7 @@ class TurboMindInstance:
                 self.model_inst.set_grammar(grammar)
             except ValueError as e:
                 logger.warning(f'Failed to initialize guided decoding for tokenizer {tokenizer}, '
-                               f'disable guided decoding: {e.message}')
+                               f'disable guided decoding: {e}')
                 gen_config.response_format = None
 
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
