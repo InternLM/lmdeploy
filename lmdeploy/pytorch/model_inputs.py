@@ -144,6 +144,7 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    is_dummy: bool = False
 
     def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -224,7 +225,7 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
-        max_kv_seqlen = self.max_kv_seqlen
+        max_kv_seqlen = self.max_kv_seqlen - self.max_q_seqlen
 
         # for mllama
         history_cross_length = self.history_cross_length
@@ -239,6 +240,7 @@ class ModelInputs:
                 end = min(max_seq_len, start + split_size)
 
             max_q_seqlen = end - start
+            max_kv_seqlen += max_q_seqlen
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
             inp = ModelInputs(
@@ -259,7 +261,6 @@ class ModelInputs:
             )
             ret.append(inp)
             history_cross_length = cross_length
-            max_kv_seqlen += max_q_seqlen
 
             start = end
 
@@ -367,6 +368,8 @@ class StepContext:
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
+        if inputs.is_dummy:
+            kv_seqlens = torch.zeros_like(kv_seqlens)
 
         ret = StepContext(
             input_ids=inputs.input_ids,
