@@ -134,6 +134,7 @@ jobs:
       - name: Install opencompass
         run: |
           python3 -m pip install opencompass
+          python3 -m pip install langdetect
       - name: Check env
         run: |
           python3 -m pip list
