@@ -5,7 +5,7 @@ curl -X POST http://0.0.0.0:8001/distserve/connection_warmup
 curl http://0.0.0.0:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "/mnt/137_nvme3/interns1-mini-remote",
+    "model": "/nvme3/interns1-mini-remote",
     "messages": [
       {
         "role": "user",
@@ -18,7 +18,7 @@ curl http://0.0.0.0:8001/v1/chat/completions \
 curl http://0.0.0.0:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "/mnt/137_nvme3/interns1-mini-remote",
+    "model": "/nvme3/interns1-mini-remote",
     "messages": [
       {
         "role": "user",
