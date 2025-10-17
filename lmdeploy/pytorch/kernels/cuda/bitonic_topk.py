@@ -86,8 +86,8 @@ def _bitonic_topk_kernel0(score_ptr,
                           fill: tl.constexpr,
                           descending: tl.constexpr = core.CONSTEXPR_0):
     """kernel0."""
-    batch_id = tl.program_id(0)
-    block_id = tl.program_id(1)
+    batch_id = tl.program_id(0).to(tl.int64)
+    block_id = tl.program_id(1).to(tl.int64)
 
     seqlen = tl.load(seqlen_ptr + batch_id)
 
@@ -136,7 +136,7 @@ def _bitonic_topk_kernel1(score_ptr,
                           fill: tl.constexpr,
                           descending: tl.constexpr = core.CONSTEXPR_0):
     """kernel1."""
-    batch_id = tl.program_id(0)
+    batch_id = tl.program_id(0).to(tl.int64)
 
     seqlen = tl.load(seqlen_ptr + batch_id)
     offs_k = tl.arange(0, K)

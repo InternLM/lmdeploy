@@ -37,8 +37,8 @@ def _fp8_index_kernel(
     NUM_SPLIT: tl.constexpr,
 ):
     """Fp8 index kernel."""
-    m_id = tl.program_id(0)
-    split_id = tl.program_id(1)
+    m_id = tl.program_id(0).to(tl.int64)
+    split_id = tl.program_id(1).to(tl.int64)
 
     assert stride_qd == 1
     assert stride_kd == 1
