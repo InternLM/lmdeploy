@@ -4,7 +4,6 @@ from lmdeploy.messages import PytorchEngineConfig
 
 def build_mp_engine(backend: str, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs):
     """Build mp engine."""
-    engine_config.mp_engine_backend = f'_{backend}'
     if backend == 'mp':
         from .zmq_engine import ZMQMPEngine
         return ZMQMPEngine(model_path, engine_config=engine_config, **kwargs)

@@ -3,7 +3,6 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from lmdeploy.messages import EngineOutput
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
 from lmdeploy.utils import get_logger
@@ -126,23 +125,5 @@ class EngineWorkerBase:
 
     async def instance_async_stream_infer(self, *args, **kwargs):
         """Send stream inference request."""
-
-        def __handle_logprobs(result):
-            if not isinstance(result, EngineOutput) or not result.logprobs:
-                return result
-
-            offset = 0
-            logprobs = []
-            ns, indice_vals = result.logprobs
-            for n in ns:
-                indices = indice_vals[offset:offset + n]
-                vals = indice_vals[offset + n:offset + 2 * n]
-                offset += 2 * n
-                logprobs.append(dict(zip(indices, vals)))
-
-            result.logprobs = logprobs
-            return result
-
         async for result in self.instance_pool.async_stream_infer(*args, **kwargs):
-            result = __handle_logprobs(result)
             yield result

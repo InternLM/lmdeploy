@@ -5,7 +5,7 @@ from typing import Dict
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import EngineOutput, PytorchEngineConfig
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.ray import RayContext, get_device_str, get_resource_kwargs
 from lmdeploy.utils import get_logger
@@ -142,9 +142,27 @@ class RayMPEngine(MPEngine):
         # ray generator would try cache every result, which is too verbose.
         stream_id = await self._collective_rpc_async('create_stream_task', func, *args, **kwargs)
 
+        def __handle_logprobs(result):
+            if not isinstance(result, EngineOutput) or not result.logprobs:
+                result
+
+            offset = 0
+            logprobs = []
+            ns, indice_vals = result.logprobs
+            for n in ns:
+                indices = indice_vals[offset:offset + n]
+                vals = indice_vals[offset + n:offset + 2 * n]
+                offset += 2 * n
+                logprobs.append(dict(zip(indices, vals)))
+
+            result.logprobs = logprobs
+            return result
+
         stopped = False
         while not stopped:
             result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
+            result = __handle_logprobs(result)
+
             yield result
 
     def close(self) -> None:

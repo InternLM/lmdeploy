@@ -960,7 +960,7 @@ class Engine(EngineBase):
                 vals = cur_logprobs[0].tolist()
                 indices = cur_logprobs[1].tolist()
                 logprobs = [] if out.resp.data is None else out.resp.data.get('logprobs', [])
-                if self.engine_config.mp_engine_backend.startswith('_'):  # indicate using mp engine
+                if self.engine_config.mp_engine_backend == 'ray':  # how to check enable_mp_engine?
                     logprobs = logprobs or [[], []]
                     logprobs[0].append(len(vals))
                     logprobs[1].extend(indices)
