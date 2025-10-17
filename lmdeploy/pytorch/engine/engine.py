@@ -342,7 +342,6 @@ class Engine(EngineBase):
                  trust_remote_code: bool = True) -> None:
         # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
-        print(engine_config)
 
         # dist args
         self.tp = engine_config.tp
