@@ -124,7 +124,6 @@ jobs:
           name: my-artifact-${{ github.run_id }}-py310
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r requirements_cuda.txt
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
