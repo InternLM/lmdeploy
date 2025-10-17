@@ -21,7 +21,7 @@ from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
 class GatedDeltaMeta:
 
-    def __init__(self, num_tokens: int, conv_kernel_size: int, attn_metadata: Any):
+    def __init__(self, num_tokens: int, conv_kernel_size: int, state_ids: torch.Tensor, attn_metadata: Any):
         self.num_tokens = num_tokens
         self.is_decoding = attn_metadata.is_decoding
         self.cu_seqlens = attn_metadata.cu_seqlens_q
@@ -37,6 +37,11 @@ class GatedDeltaMeta:
         range_idx = torch.arange(-conv_kernel_size, 0, device=device)
         self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
         self.conv_idx = self.conv_idx.clamp_min(0)
+
+        # state_ids, fill invalid state with state_ids[0]
+        self.valid_state = state_ids >= 0
+        self.state_ids = torch.where(self.valid_state, state_ids, state_ids[0])
+        self.state_ids = self.state_ids.clamp(0)
 
 
 class CausalConv1dFunc:
@@ -389,16 +394,26 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         a = a.reshape(*a.shape[:-2], -1)
         return query, key, value, z, b, a
 
-    def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], state_ids: torch.Tensor):
+    def _load_state(self, past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Load states from cache."""
+        state_ids = gated_delta_meta.state_ids
         conv_cache, recurrent_cache = past_key_value[:2]
 
         return conv_cache.index_select(0, state_ids), recurrent_cache.index_select(0, state_ids)
 
     def _store_state(self, conv_state: torch.Tensor, recurrent_state: torch.Tensor,
-                     past_key_value: Tuple[torch.Tensor, torch.Tensor], state_ids: torch.Tensor):
+                     past_key_value: Tuple[torch.Tensor, torch.Tensor], gated_delta_meta: GatedDeltaMeta):
         """Store states to cache."""
         conv_cache, recurrent_cache = past_key_value[:2]
+        state_ids = gated_delta_meta.state_ids
+        valid_state = gated_delta_meta.valid_state
+
+        # fill invalid state with state[0]
+        conv_dim = conv_state.dim()
+        recurrent_dim = recurrent_state.dim()
+        conv_state = torch.where(valid_state.view(-1, *[1] * (conv_dim - 1)), conv_state, conv_state[:1])
+        recurrent_state = torch.where(valid_state.view(-1, *[1] * (recurrent_dim - 1)), recurrent_state,
+                                      recurrent_state[:1])
 
         conv_cache = conv_cache.index_copy_(0, state_ids, conv_state)
         recurrent_cache = recurrent_cache.index_copy_(0, state_ids, recurrent_state.to(recurrent_cache.dtype))
@@ -407,13 +422,12 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         self,
         hidden_states: torch.Tensor,
         past_key_value: Tuple[torch.Tensor, torch.Tensor],
-        state_ids: torch.Tensor,
-        attn_metadata: Any,
         gated_delta_meta: GatedDeltaMeta,
     ):
         """forward."""
+
         # load states
-        conv_state, recurrent_state = self._load_state(past_key_value, state_ids)
+        conv_state, recurrent_state = self._load_state(past_key_value, gated_delta_meta)
 
         # inputs proj
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
@@ -456,7 +470,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         )
 
         # store states
-        self._store_state(conv_state, recurrent_state, past_key_value, state_ids)
+        self._store_state(conv_state, recurrent_state, past_key_value, gated_delta_meta)
 
         z_shape_og = z.shape
         core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
@@ -752,7 +766,6 @@ class Qwen3NextDecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
         attn_metadata: Any,
         gated_delta_meta: GatedDeltaMeta,
-        state_ids: torch.Tensor,
     ):
 
         if residual is None:
@@ -766,8 +779,6 @@ class Qwen3NextDecoderLayer(nn.Module):
             hidden_states = self.linear_attn(
                 hidden_states=hidden_states,
                 past_key_value=past_key_value,
-                state_ids=state_ids,
-                attn_metadata=attn_metadata,
                 gated_delta_meta=gated_delta_meta,
             )
         elif self.layer_type == 'full_attention':
@@ -837,7 +848,8 @@ class Qwen3NextModel(nn.Module):
         rotary_pos_emb = (cos, sin)
 
         # make seq_idx
-        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, attn_metadata)
+        gated_delta_meta = GatedDeltaMeta(hidden_states.size(1), self.config.linear_conv_kernel_dim, state_ids,
+                                          attn_metadata)
 
         # decoding
         residual = None
@@ -849,7 +861,6 @@ class Qwen3NextModel(nn.Module):
                 residual=residual,
                 attn_metadata=attn_metadata,
                 gated_delta_meta=gated_delta_meta,
-                state_ids=state_ids,
             )
 
         # norm
@@ -970,7 +981,7 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
         device = graph_meta.device
 
         input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
-        state_ids = torch.zeros(max_batchs, dtype=torch.long, device=device)
+        state_ids = torch.full((max_batchs, ), -1, dtype=torch.long, device=device)
         input_buffers['state_ids'] = state_ids
 
         return input_buffers
@@ -981,6 +992,7 @@ class Qwen3NextForCausalLM(nn.Module, CudaGraphMixin):
 
         new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
         state_ids = kwargs['state_ids']
+        input_buffers['state_ids'].fill_(-1)
         input_buffers['state_ids'][:state_ids.size(0)].copy_(state_ids)
         new_inputs['state_ids'] = input_buffers['state_ids']
 
