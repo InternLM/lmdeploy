@@ -186,6 +186,7 @@ jobs:
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
+
   test_tools:
     if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, 5080-r1]
@@ -222,6 +223,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
+          python3 -m pip install -r requirements_cuda.txt
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -263,6 +265,7 @@ jobs:
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
+
   test_restful:
     if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, 5080-r1]
@@ -286,6 +289,7 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
+          python3 -m pip install -r requirements_cuda.txt
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -351,6 +355,7 @@ jobs:
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
+
   get_coverage_report:
     if: ${{!cancelled() && success()}}
     runs-on: [self-hosted, 5080-r1]

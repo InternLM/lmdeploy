@@ -123,6 +123,7 @@ jobs:
           name: my-artifact-${{ github.run_id }}-py310
       - name: Install lmdeploy - dependency
         run: |
+          python3 -m pip install -r requirements_cuda.txt
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
