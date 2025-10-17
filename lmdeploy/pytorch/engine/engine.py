@@ -959,9 +959,15 @@ class Engine(EngineBase):
                 # logprobs to dict
                 vals = cur_logprobs[0].tolist()
                 indices = cur_logprobs[1].tolist()
-                cur_logprobs = dict(zip(indices, vals))
                 logprobs = [] if out.resp.data is None else out.resp.data.get('logprobs', [])
-                logprobs = logprobs + [cur_logprobs]
+                if self.engine_config.mp_engine_backend == 'ray':  # how to check enable_mp_engine?
+                    logprobs = logprobs or [[], []]
+                    logprobs[0].append(len(vals))
+                    logprobs[1].extend(indices)
+                    logprobs[1].extend(vals)
+                else:
+                    cur_logprobs = dict(zip(indices, vals))
+                    logprobs = logprobs + [cur_logprobs]
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids,
