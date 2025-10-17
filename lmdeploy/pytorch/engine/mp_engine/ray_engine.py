@@ -161,8 +161,7 @@ class RayMPEngine(MPEngine):
         stopped = False
         while not stopped:
             result, stopped = await self._collective_rpc_async('get_stream_task_result', stream_id)
-            if isinstance(func, str) and func == 'instance_async_stream_infer':
-                result = __handle_logprobs(result)
+            result = __handle_logprobs(result)
 
             yield result
 
