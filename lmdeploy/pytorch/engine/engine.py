@@ -551,7 +551,7 @@ class Engine(EngineBase):
                 if len(msgs) > 0 and msgs[0].preserve_cache:
                     self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
                 else:
-                    self.scheduler.end_session(session_id)
+                    self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -912,6 +912,7 @@ class Engine(EngineBase):
         stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
 
         sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
+
         return dict(
             running=running,
             inputs=inputs,
@@ -1211,6 +1212,11 @@ class Engine(EngineBase):
             self._loop_finally()
 
     def close(self):
+        if self.executor.device_type == 'cuda':
+            # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879/32
+            # W/O this, repeatedly rebuilding and destroying engines within the same process
+            # will cause more and more reserved CUDA memory.
+            torch._C._cuda_clearCublasWorkspaces()
         if self._loop_main is not None:
             self._loop_main.cancel()
         else:
@@ -1237,6 +1243,7 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
+            self.sampling_strategy.on_session_end(session_id)
             self.scheduler.end_session(session_id)
             return True
         return False

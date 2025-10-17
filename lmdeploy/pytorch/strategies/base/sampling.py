@@ -15,3 +15,8 @@ class SamplingStrategy(ABC):
     def make_sampling_inputs(self, seqs: SeqList) -> SamplingInputs:
         """Create sampling inputs from the sequences."""
         pass
+
+    @abstractmethod
+    def on_session_end(self, session_id: int) -> None:
+        """Invoked on session ends."""
+        pass
