@@ -375,14 +375,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     # if encoder, we only do encoding and return
     engine_role = VariableInterface.async_engine.backend_config.role
     if engine_role == EngineRole.Encoder:
-        from fastapi.encoders import jsonable_encoder
-        from fastapi.responses import JSONResponse
         encoder_result = await VariableInterface.async_engine.encode_generate(
             request.messages,
             request.session_id,
         )
+        # TODO: use CompleteResponse prototype
         print(f'api_server, v1/completion, encoder_result: {encoder_result}')
-        return JSONResponse(jsonable_encoder(encoder_result))
+        return encoder_result
 
     model_name = request.model
     adapter_name = None

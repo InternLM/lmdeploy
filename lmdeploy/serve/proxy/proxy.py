@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from lmdeploy.pytorch.disagg.config import DistServeRDMAConfig, EngineRole, RDMALinkType, ServingStrategy
 from lmdeploy.pytorch.disagg.conn.epd_proxy_conn import EPDConnectionPool
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import EncoderResult, MigrationProtocol, MigrationRequest
 from lmdeploy.pytorch.disagg.conn.proxy_conn import PDConnectionPool
 from lmdeploy.pytorch.disagg.messages import EPDConnectionMessage, PDConnectionMessage
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
@@ -510,7 +510,7 @@ async def connection_warmup():
                 rdma_config=node_manager.rdma_config,
             )) for p_url in node_manager.prefill_nodes for d_url in node_manager.decode_nodes
     ])
-    logger.info(f'encoder nodes: {node_manager.decode_nodes}\nprefill nodes: {node_manager.prefill_nodes}')
+    logger.info(f'encoder nodes: {node_manager.encoder_nodes}\nprefill nodes: {node_manager.hybrid_nodes}')
     # FIXME: we set pd_urls to use hybrid nodes, since we start LLM server in hybrid role
     await asyncio.gather(*[
         node_manager.ep_connection_pool.connect(
@@ -620,24 +620,32 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 else:
                     logger.info(f'Encoder stage dispatched to {encoder_url}')
                     enc_start = node_manager.pre_call(encoder_url)
-                    # encoder endpoint path: using vision server example: /v1/chat/completion (singular)
                     # fall back to /v1/chat/completions if first fails
-                    encoder_response_text = await node_manager.generate(request_dict, encoder_url,
-                                                                        '/v1/chat/completion')
-                    if isinstance(encoder_response_text, (bytes, bytearray)):
-                        try:
-                            encoder_response_text = encoder_response_text.decode('utf-8')
-                        except Exception:  # noqa
-                            pass
+                    encoder_info = await node_manager.generate(request_dict, encoder_url, '/v1/chat/completions')
+                    print(encoder_info)
+                    encoder_info = json.loads(encoder_info)
+                    remote_session_id = encoder_info['remote_session_id']
+                    remote_block_ids = encoder_info['remote_block_ids']
+                    remote_token_ids = encoder_info['token_ids']
+                    image_mask = encoder_info['image_mask']
+                    request_dict['encoder_result'] = EncoderResult(
+                        token_ids=remote_token_ids,
+                        image_mask=image_mask,
+                        protocol=node_manager.migration_protocol,
+                        remote_engine_id=encoder_url,
+                        remote_session_id=remote_session_id,
+                        remote_block_ids=remote_block_ids).model_dump(mode='json')
+
                     # simple heuristic: if returns timeout structure (bytes) keep original
                     try:
-                        enc_json = json.loads(encoder_response_text)
+                        # enc_json = json.loads(encoder_info)
+                        enc_json = request_dict
                     except Exception:
                         # try alternative endpoint if first not json (maybe 404 HTML)
                         alt_text = await node_manager.generate(request_dict, encoder_url, '/v1/chat/completions')
                         try:
                             enc_json = json.loads(alt_text)
-                            encoder_response_text = alt_text
+                            # encoder_response_text = alt_text
                         except Exception:
                             logger.error('Encoder stage failed: cannot parse JSON; skip encoder stage')
                             enc_json = None

@@ -30,7 +30,7 @@ from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCri
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
-# from .guided_process import GuidedDecodingMangager
+from .guided_process import GuidedDecodingMangager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -354,7 +354,11 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.profiler: AgentProfiler = None
-        # self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
+        try:
+            self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
+        except ValueError as e:
+            logger.warning(f'Failed to create GuidedManager for tokenizer {self.tokenizer}: {e}')
+            self.guided_decoding_manager = None
 
         # microbatch
         self.enable_microbatch = self.dist_ctx.dist_config.enable_microbatch
@@ -861,7 +865,8 @@ class BaseModelAgent:
             if not self._preprocess_task.done():
                 self._preprocess_task.cancel()
 
-        self.guided_decoding_manager.clear()
+        if self.guided_decoding_manager:
+            self.guided_decoding_manager.clear()
 
     async def stop_async(self):
         """Stop task."""
@@ -891,7 +896,8 @@ class BaseModelAgent:
                 except asyncio.CancelledError:
                     logger.debug('ModelAgent preprocess task cancelled.')
 
-        self.guided_decoding_manager.clear()
+        if self.guided_decoding_manager:
+            self.guided_decoding_manager.clear()
 
     def set_forward_inputs(self, inputs):
         """Set forward inputs."""

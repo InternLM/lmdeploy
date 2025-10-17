@@ -3,10 +3,15 @@ import asyncio
 import copy
 from typing import Dict, List, Optional
 
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
-from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
-                                                   DistServeInitRequest)
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeConnectionResponse,
+                                                   DistServeConnectionStatus, DistServeDropConnectionRequest,
+                                                   DistServeEngineEndpointInfo, DistServeInitRequest,
+                                                   DistServeInitResponse)
 from lmdeploy.utils import get_logger
 
 from ..models.builder import load_mm_model
@@ -122,11 +127,32 @@ class MultiModalEngine():
                 messages[i]['preprocess'] = None
         return result
 
-    async def p2p_initialize(self, init_request: DistServeInitRequest):
-        return await self.engine_conn.p2p_initialize(init_request)
+    def p2p_initialize(self, init_request: DistServeInitRequest):
+        """Initialize p2p connection.
+
+        FIXME: This method is synchronous (`def`).
+        The standard PytorchEngine (in multi-process mode) has a synchronous
+        `p2p_initialize` that acts as an RPC bridge to an async worker.
+        To maintain a compatible interface for the `AsyncEngine` adapter,
+        this single-process engine also provides a synchronous implementation.
+        """
+        kv_eps = self.model_agent.cache_engine.p2p_initialize(init_request)
+        # encoder has no zmq communication for now; return a dummy address
+        zmq_addr = 'tcp://0.0.0.0:65001'
+        resp = DistServeInitResponse(
+            status=DistServeConnectionStatus.SUCCESS,
+            engine_endpoint_info=DistServeEngineEndpointInfo(zmq_address=zmq_addr),
+            kvtransfer_endpoint_info=kv_eps,
+        )
+        return JSONResponse(jsonable_encoder(resp.model_dump()))
 
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
-        return self.engine_conn.p2p_connect(conn_request)
+        self.model_agent.cache_engine.p2p_connect(
+            conn_request.remote_engine_id,
+            conn_request.remote_kvtransfer_endpoint_info,
+        )
+        resp = DistServeConnectionResponse(status=DistServeConnectionStatus.SUCCESS)
+        return JSONResponse(jsonable_encoder(resp.model_dump()))
 
     async def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
         return self.engine_conn.p2p_drop_connect(drop_conn_request)
