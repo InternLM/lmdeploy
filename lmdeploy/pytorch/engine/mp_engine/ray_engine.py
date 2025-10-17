@@ -4,11 +4,12 @@ from collections import defaultdict
 from typing import Dict
 
 import ray
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
 from lmdeploy.messages import EngineOutput, PytorchEngineConfig
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.ray import RayContext, get_device_str, get_resource_kwargs
 from lmdeploy.utils import get_logger
-from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from .base import MPEngine
 from .base_worker import EngineWorkerBase
