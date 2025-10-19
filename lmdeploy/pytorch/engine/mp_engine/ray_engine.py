@@ -73,7 +73,7 @@ class RayEngineWorker(EngineWorkerBase):
             if not isinstance(result, EngineOutput):
                 return
             old_offset = self._engine_output_offset[stream_id]
-            new_offset = len(result.logprobs)
+            new_offset = len(result.token_ids)
             if old_offset:
                 if result.token_ids:
                     result.token_ids = result.token_ids[old_offset:]
