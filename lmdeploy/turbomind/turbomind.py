@@ -425,11 +425,22 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor,
                        output_ids: List[int],
                        logprobs: int,
                        out_logprobs: List[Dict[int, float]] = None):
-    length = len(output_ids)
+    """Get logprob of each generated token.
+
+    Args:
+        logprob_vals (torch.Tensor): shape (session_len, vocab_size)
+        logprob_idxs (torch.Tensor): shape (session_len, vocab_size)
+        logprob_nums (torch.Tensor): shape (session_len)
+        output_ids (List[int]): new generated token ids
+        logprobs (int): top n logprobs to return
+        out_logprobs (List[Dict[int, float]]): existing logprobs to append to. It saves all generated tokens' logprobs.
+    """
+
+    # offset indicates where to start getting logprobs for the current generated tokens `output_ids`
     offset = len(out_logprobs)
-    if length == offset:
-        return out_logprobs
-    for (pos, idx, val, n) in zip(range(offset, length), logprob_idxs[offset:length], logprob_vals[offset:length],
+    # the total generated token number until now
+    length = len(output_ids) + offset
+    for (pos, idx, val, n) in zip(range(len(output_ids)), logprob_idxs[offset:length], logprob_vals[offset:length],
                                   logprob_nums[offset:length]):
         topn = min(n.item(), logprobs)
         tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
@@ -443,7 +454,8 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor,
             if tok_res[k] == float('-inf'):
                 tok_res.pop(k)
         out_logprobs.append(tok_res)
-    return out_logprobs
+    # return the logprobs of the current generated tokens
+    return out_logprobs[-len(output_ids):]
 
 
 def _get_logprobs(outputs, output_logprobs: int):
@@ -467,7 +479,7 @@ def _get_metrics(metrics):
 
     is_first = True
 
-    def _func(out: EngineOutput, step: int, is_first_token: bool = False, **kwargs):
+    def _func(out: EngineOutput, step: int, **kwargs):
         nonlocal is_first
         if not is_first:
             out.req_metrics = RequestMetrics(token_timestamp=time.time())
@@ -766,8 +778,8 @@ class TurboMindInstance:
                 if seq_len == prev_len and not finish:
                     continue
 
-                output_ids += output_ids_buf[prev_len:seq_len].tolist()
-                output_len += seq_len - prev_len
+                output_ids = output_ids_buf[prev_len:seq_len].tolist()
+                output_len = seq_len - prev_len
                 output = EngineOutput(ret_status, output_ids, output_len)
 
                 for f in extra_fs:
