@@ -14,14 +14,10 @@ with read_base():
     # Datasets
     from opencompass.configs.datasets.aime2025.aime2025_llmjudge_academic import aime2025_datasets
     from opencompass.configs.datasets.gpqa.gpqa_cascade_eval_academic import gpqa_datasets
+    from opencompass.configs.datasets.HLE.hle_llmverify_academic import hle_datasets
     from opencompass.configs.datasets.IFEval.IFEval_gen_353ae7 import ifeval_datasets
-    # LiveCodeBench dataset commented out to avoid version errors
-    # from opencompass.configs.datasets.livecodebench.livecodebench_v6_academic import \
-    #     LCBCodeGeneration_dataset
+    from opencompass.configs.datasets.livecodebench.livecodebench_v6_academic import LCBCodeGeneration_dataset
     from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import mmlu_pro_datasets
-    # HLE dataset commented out to avoid connection errors
-    # from opencompass.configs.datasets.HLE.hle_llmverify_academic import \
-    #     hle_datasets
     # Summary Groups
     from opencompass.configs.summarizers.groups.mmlu_pro import mmlu_pro_summary_groups
 
@@ -57,12 +53,10 @@ models = [
 #                          PART 1  Datasets List                      #
 #######################################################################
 # datasets list for evaluation
-# Remove LCBCodeGeneration_dataset due to version errors
-
 mmlu_pro_datasets = [x for x in mmlu_pro_datasets if 'math' in x['abbr'] or 'other' in x['abbr']]
 
 # Modify datasets list to exclude hle_datasets and LCBCodeGeneration_dataset
-datasets = sum((v for k, v in locals().items() if k.endswith('_datasets') and k != 'hle_datasets'), [])
+datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), []) + [LCBCodeGeneration_dataset]
 
 # LLM judge config: using LLM to evaluate predictions
 judge_cfg = dict(
@@ -100,15 +94,13 @@ core_summary_groups = [
         'core_average',
         'subsets': [
             ['IFEval', 'Prompt-level-strict-accuracy'],
-            # Remove hle_llmjudge due to unavailable dataset
-            # ['hle_llmjudge', 'accuracy'],
+            ['hle_llmjudge', 'accuracy'],
             ['aime2025_repeat_32', 'accuracy (32 runs average)'],
             ['GPQA_diamond_repeat_4', 'accuracy (4 runs average)'],
             ['mmlu_pro', 'naive_average'],
             'mmlu_pro_math',
             'mmlu_pro_other',
-            # Remove lcb_code_generation_repeat_6 due to version errors
-            # ['lcb_code_generation_repeat_6', 'pass@1 (6 runs average)'],
+            ['lcb_code_generation_repeat_6', 'pass@1 (6 runs average)'],
         ],
     },
 ]
@@ -117,8 +109,7 @@ summarizer = dict(
     dataset_abbrs=[
         ['core_average', 'naive_average'],
         ['IFEval', 'Prompt-level-strict-accuracy'],
-        # Remove hle_llmjudge due to unavailable dataset
-        # ['hle_llmjudge', 'accuracy'],
+        ['hle_llmjudge', 'accuracy'],
         ['GPQA_diamond_repeat_4', 'accuracy (4 runs average)'],
         ['aime2025_repeat_32', 'accuracy (32 runs average)'],
         ['mmlu_pro', 'naive_average'],

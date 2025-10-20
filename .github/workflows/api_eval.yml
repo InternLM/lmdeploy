@@ -47,6 +47,10 @@ env:
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
+  HF_DATASETS_OFFLINE: 1
+  HF_DATASETS_CACHE: /nvme/qa_test_models/hf_datasets
+  HF_HUB_OFFLINE: 1
+  HF_EVALUATE_OFFLINE: 1
 
 jobs:
   linux-build:
