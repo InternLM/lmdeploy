@@ -271,7 +271,7 @@ class Scheduler:
             num_required_blocks = self.block_manager.num_required_blocks(seq, prealloc_size)
             if len(seq.logical_blocks) + num_required_blocks > self.block_manager.num_gpu_blocks:
                 # Reach max gpu cache size.
-                logger.error(f'session[{seq.session_id}] '
+                logger.warning(f'session[{seq.session_id}] '
                                f'sequence[{seq.seq_id}] '
                                'reach max gpu size.')
                 self._set_message_status(seq, MessageStatus.ABORTED)
@@ -280,9 +280,6 @@ class Scheduler:
                 continue
 
             if not __evict_for_seq(seq, num_required_blocks):
-                logger.warning(f'session[{seq.session_id}] '
-                               f'sequence[{seq.seq_id}] '
-                               'to waiting....')
                 self._set_message_status(seq, MessageStatus.WAITING)
                 continue
 
@@ -294,14 +291,10 @@ class Scheduler:
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
-            #logger.error('Prefill scheduling')
             output = self._schedule_prefill(0)
         else:
-            #logger.error('Decoding scheduling')
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
-        #if running:
-        #    logger.error(f'prefill {is_prefil} go batch = {len(running)}')
 
         return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
 

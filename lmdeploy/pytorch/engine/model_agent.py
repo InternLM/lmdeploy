@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 import torch.distributed as dist
-import torch_npu
 from torch.profiler import ProfilerActivity, profile, record_function
 
 from lmdeploy.pytorch.disagg.config import EngineRole
@@ -803,19 +802,6 @@ class BaseModelAgent:
                 for k in keys:
                     if k not in forward_inputs:
                         continue
-                    '''
-                    if k == 'inputs':
-                        forward_inputs[k].input_ids = _try_to_cuda(forward_inputs[k].input_ids, non_blocking=non_blocking)
-                        forward_inputs[k].block_offsets = _try_to_cuda(forward_inputs[k].block_offsets, non_blocking=non_blocking)
-                        #forward_inputs[k].num_ignored_history = _try_to_cuda(forward_inputs[k].num_ignored_history, non_blocking=non_blocking)
-                        forward_inputs[k].local_adapter_ids = _try_to_cuda(forward_inputs[k].local_adapter_ids, non_blocking=non_blocking)
-                        forward_inputs[k].vision_inputs = _try_to_cuda(forward_inputs[k].vision_inputs, non_blocking=non_blocking)
-                        forward_inputs[k].cross_length = _try_to_cuda(forward_inputs[k].cross_length, non_blocking=non_blocking)
-                        forward_inputs[k].history_cross_length = _try_to_cuda(forward_inputs[k].history_cross_length, non_blocking=non_blocking)
-                        #forward_inputs[k].model_metas =_try_to_cuda(forward_inputs[k].model_metas, non_blocking=non_blocking)
-                    else:
-                        forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
-                    '''
                     forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
                 self.out_stream.synchronize()
             logger.debug('preprocessing forward inputs done.')

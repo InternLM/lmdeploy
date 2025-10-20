@@ -4,7 +4,6 @@ from dataclasses import dataclass, fields
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-import torch_npu
 
 from lmdeploy.messages import LogitsProcessor
 
@@ -25,7 +24,7 @@ def _process_bad_words_(scores: torch.Tensor,
                         filter_value: float = -99999.9999):
     """Process bad words."""
     filtered_scores = scores.gather(1, bad_words)
-    #filtered_scores[mask] = filter_value
+    # filtered_scores[mask] = filter_value
     filtered_scores = mask.to(filtered_scores.dtype) * filter_value + filtered_scores
     scores.scatter_(1, bad_words, filtered_scores)
     return scores

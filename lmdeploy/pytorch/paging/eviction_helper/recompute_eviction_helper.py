@@ -3,8 +3,6 @@ from typing import List
 
 from ...messages import SchedulerSequence
 from .base_eviction_helper import BaseEvictionHelper
-from lmdeploy.utils import get_logger, logging_timer
-logger = get_logger('lmdeploy')
 
 
 class RecomputeEvictionHelper(BaseEvictionHelper):
@@ -15,12 +13,8 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
         block_manager = self.block_manager
         block_trie = self.block_trie
         num_required_blocks = block_manager.num_required_blocks(seq, prealloc_size)
-        #if prealloc_size == 1:
-        #    logger.error(f"[Eviction] Need {num_required_blocks} blocks for seq {seq.seq_id}")
 
         if block_manager.get_num_free_gpu_blocks() >= num_required_blocks:
-            #if prealloc_size == 1:
-            #    logger.error(f"[Eviction] No need to evict for seq {seq.seq_id}, free blocks: {block_manager.get_num_free_gpu_blocks()}")
             return True
 
         success = False
@@ -32,16 +26,12 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True
-                #if prealloc_size == 1:
-                #    logger.error(f"[Eviction] After evicting seq {evict_seq.seq_id}, free blocks: {block_manager.get_num_free_gpu_blocks()}, need {num_required_blocks} blocks for seq {seq.seq_id}, evict success: {success}")
                 break
 
             block_trie.evict(num_req)
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True
-                #if prealloc_size == 1:
-                #    logger.error(f"[Eviction] After evicting seq {evict_seq.seq_id} and trie eviction, free blocks: {block_manager.get_num_free_gpu_blocks()}, need {num_required_blocks} blocks for seq {seq.seq_id}, evict success: {success}")
                 break
 
         # for empty evictable_seqs case
@@ -50,7 +40,5 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             block_trie.evict(num_req)
             if num_required_blocks <= block_manager.get_num_free_gpu_blocks():
                 success = True
-        #if prealloc_size == 1:
-        #    logger.error(f"[Eviction] After eviction, free blocks: {block_manager.get_num_free_gpu_blocks()}, need {num_required_blocks} blocks for seq {seq.seq_id}, evict success: {success}")
 
         return success

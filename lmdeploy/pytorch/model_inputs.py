@@ -421,7 +421,6 @@ class StepContext:
         history_seqlens = inputs.history_lengths
         max_q_seqlen = inputs.max_q_seqlen
 
-        #import pdb; pdb.set_trace()
         # decoding
         if max_q_seqlen == 1:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
