@@ -69,7 +69,7 @@ class RayEngineWorker(EngineWorkerBase):
         result, stopped = self._stream_aiter[stream_id][1]
         event.clear()
 
-        def __return_engine_output_increamental(result):
+        def __return_engine_output_incrementally(result):
             if not isinstance(result, EngineOutput):
                 return
             old_offset = self._engine_output_offset[stream_id]
@@ -83,7 +83,7 @@ class RayEngineWorker(EngineWorkerBase):
             if stopped:
                 self._engine_output_offset.pop(stream_id, None)
 
-        __return_engine_output_increamental(result)
+        __return_engine_output_incrementally(result)
 
         if stopped:
             self._stream_aiter.pop(stream_id, None)
