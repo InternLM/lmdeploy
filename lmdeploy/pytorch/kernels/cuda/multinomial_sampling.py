@@ -14,21 +14,21 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, strid
     # sampling random seed
     seed = tl.load(Seeds + batch_id)
     offset = tl.load(Offsets + batch_id).to(tl.int32)
-    samp = tl.rand(seed, offset)[:, None]
+    samp = tl.rand(seed, offset)
 
     # initialize
     acc = 0.0
-    output = tl.load(Indices + batch_id * stride_ib)
-    score_ptr = Scores + batch_id * stride_sb
+    score_ptr = Scores + batch_id * stride_sb + n_off * stride_st
     indice_ptr = Indices + batch_id * stride_ib
+    output = tl.load(indice_ptr)
 
     found_mask = False
-    for b_idx in range(0, num_tokens, BLOCK_N):
+    for b_idx in tl.range(0, num_tokens, BLOCK_N):
         # triton does not have break statement, use mask to skip computation
         if not found_mask:
             s_off = b_idx + n_off
             s_mask = (s_off < num_tokens)
-            scores = tl.load(score_ptr + s_off * stride_st, mask=s_mask, other=0.0).to(tl.float32)
+            scores = tl.load(score_ptr, mask=s_mask, other=0.0).to(tl.float32)
             c_scores = tl.cumsum(scores, 0)
             cum_scores = acc + c_scores
             acc += tl.max(c_scores, 0)
@@ -38,9 +38,11 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, strid
             found_mask = tl.sum(valid_mask, 0) > 0
 
             if found_mask:
-                valid_pos = b_idx + tl.argmax(valid_mask.to(tl.int32), 0)
+                valid_pos = tl.argmax(valid_mask.to(tl.int32), 0)
                 indice = tl.load(indice_ptr + valid_pos * stride_it)
                 output = indice
+        score_ptr += stride_st * BLOCK_N
+        indice_ptr += stride_it * BLOCK_N
 
     tl.store(Outputs + batch_id, output)
 
