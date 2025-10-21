@@ -419,25 +419,21 @@ def _get_last_hidden_state(outputs, offset: int):
     return _func
 
 
-def _get_logprobs_impl(logprob_vals: torch.Tensor,
-                       logprob_idxs: torch.Tensor,
-                       logprob_nums: torch.Tensor,
-                       output_ids: List[int],
-                       logprobs: int,
-                       out_logprobs: List[Dict[int, float]] = None):
+def _get_logprobs_impl(logprob_vals: torch.Tensor, logprob_idxs: torch.Tensor, logprob_nums: torch.Tensor,
+                       output_ids: List[int], logprobs: int, offset: int):
     """Get logprob of each generated token.
 
     Args:
-        logprob_vals (torch.Tensor): shape (session_len, vocab_size)
-        logprob_idxs (torch.Tensor): shape (session_len, vocab_size)
-        logprob_nums (torch.Tensor): shape (session_len)
+        logprob_vals (torch.Tensor): shape (max_new_tokens, 1024),
+            1024 is the max_logprobs that turbomind engine can output
+        logprob_idxs (torch.Tensor): shape (max_new_tokens, 1024)
+        logprob_nums (torch.Tensor): shape (max_new_tokens,)
         output_ids (List[int]): new generated token ids
         logprobs (int): top n logprobs to return
-        out_logprobs (List[Dict[int, float]]): existing logprobs to append to. It saves all generated tokens' logprobs.
+        offset (int): offset to index logprob_vals, logprob_idxs and logprob_nums.
+            It indicates where to start getting logprobs for the current generated tokens `output_ids`
     """
-
-    # offset indicates where to start getting logprobs for the current generated tokens `output_ids`
-    offset = len(out_logprobs)
+    out_logprobs = []
     # the total generated token number until now
     length = len(output_ids) + offset
     for (pos, idx, val, n) in zip(range(len(output_ids)), logprob_idxs[offset:length], logprob_vals[offset:length],
@@ -454,20 +450,20 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor,
             if tok_res[k] == float('-inf'):
                 tok_res.pop(k)
         out_logprobs.append(tok_res)
-    # return the logprobs of the current generated tokens
-    return out_logprobs[-len(output_ids):]
+    return out_logprobs
 
 
 def _get_logprobs(outputs, output_logprobs: int):
-    logprob_vals = outputs['logprob_vals']
-    logprob_idxs = outputs['logprob_indexes']
-    logprob_nums = outputs['logprob_nums']
-
-    logprobs = []
+    logprob_vals = outputs['logprob_vals']  # shape {max_new_tokens, 1024}
+    logprob_idxs = outputs['logprob_indexes']  # shape {max_new_tokens, 1024}
+    logprob_nums = outputs['logprob_nums']  # shape {max_new_tokens,}
+    offset = 0  # offset to index logprob_vals, logprob_idxs and logprob_nums
 
     def _func(out: EngineOutput, step: int, **kwargs):
+        nonlocal offset
         out.logprobs = _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs,
-                                          logprobs)
+                                          offset)
+        offset += len(out.token_ids)
 
     return _func
 
