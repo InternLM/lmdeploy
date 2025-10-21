@@ -702,7 +702,6 @@ class BaseModelAgent:
                 return_logits=return_logits,
                 sync_long_context=sync_long_context,
             )
-
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
             seq_length = inputs.seq_length
@@ -778,12 +777,6 @@ class BaseModelAgent:
 
                 if forward_event is not None:
                     forward_event.clear()
-                forward_inputs['inputs'].history_lengths = forward_inputs['inputs'].history_lengths
-                forward_inputs['inputs'].history_lengths_cpu = forward_inputs['inputs'].history_lengths.cpu()
-                forward_inputs['inputs'].seq_length_npu = forward_inputs['inputs'].seq_length
-                forward_inputs['inputs'].seq_length = forward_inputs['inputs'].seq_length.cpu()
-                forward_inputs['inputs'].num_ignored_history_npu = forward_inputs['inputs'].num_ignored_history
-                forward_inputs['inputs'].num_ignored_history = forward_inputs['inputs'].num_ignored_history.cpu()
                 await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()

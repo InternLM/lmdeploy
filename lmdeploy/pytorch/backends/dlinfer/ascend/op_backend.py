@@ -148,28 +148,28 @@ class AscendOpsBackend(DlinferOpsBackend):
             return cls.total_slots
 
         kv_start_indices, attention_mask = [], []
-        block_num, block_size, *_ = step_context.kv_caches[0][0].shape
+        if SocVersion.is_Ascend910():
+            block_num, block_size, *_ = step_context.kv_caches[0][0].shape
+        elif SocVersion.is_Ascend310P():
+            block_num, _, block_size, _ = step_context.kv_caches[0][0].shape
 
         is_unpaged_prefill = False
         if not step_context.is_decoding:
             is_unpaged_prefill = \
                 all((step_context.q_seqlens ==
                      step_context.kv_seqlens).tolist())
-
-        max_q_seq_len, max_kv_seq_len = 0, 0
+        q_seqlens_list = step_context.q_seqlens.tolist()
+        kv_seqlens_list = step_context.kv_seqlens.tolist()
+        max_q_seq_len = max(q_seqlens_list)
+        max_kv_seq_len = max(kv_seqlens_list)
         if step_context.is_decoding:
             # collect kv_start_indices without using a for-loop,
             # (fill kv-cache for just ONE token during the decoding phase)
-
-            idx = (step_context.kv_seqlens_npu - 1) % block_size
-            block_num = (step_context.kv_seqlens_npu - 1) // block_size
+            idx = (step_context.kv_seqlens - 1) % block_size
+            block_num = (step_context.kv_seqlens - 1) // block_size
             last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
             kv_start_indices = last_block * block_size + idx
         else:
-            q_seqlens_list = step_context.q_seqlens.tolist()
-            kv_seqlens_list = step_context.kv_seqlens.tolist()
-            max_q_seq_len = max(q_seqlens_list)
-            max_kv_seq_len = max(kv_seqlens_list)
             for i in range(step_context.q_start_loc.size(0)):
                 q_seq_len = q_seqlens_list[i]
                 kv_seq_len = kv_seqlens_list[i]
@@ -231,20 +231,57 @@ class AscendOpsBackend(DlinferOpsBackend):
             q_start_loc_cpu, q_seqlens_cpu = None, None
             attention_mask = [torch.cat([mask for mask in attention_mask])]
 
-        if step_context.is_decoding:
-            kv_seqlens_cpu = step_context.kv_seqlens
-        elif is_unpaged_prefill:
-            pass
+        if cls.enable_graph:
+            kv_start_indices = kv_start_indices.view(-1).to(torch.int32)
+            import torch._dynamo as dynamo
+            if not is_unpaged_prefill:
+                step_context.block_offsets = step_context.block_offsets.to(torch.int32)
+                if not step_context.is_decoding:
+                    step_context.block_offsets = step_context.block_offsets\
+                        .repeat_interleave(step_context.q_seqlens, 0)
+            dynamo.mark_dynamic(step_context.block_offsets, [0, 1])
+            kv_seqlens = step_context.kv_seqlens.to(torch.int32)
+            if not step_context.is_decoding:
+                if is_unpaged_prefill:
+                    if SocVersion.is_Ascend910():
+                        attention_mask = [mask.half() for mask in attention_mask]
+                else:
+                    if SocVersion.is_Ascend910():
+                        attention_mask = [
+                            torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
+                        ]
+                    elif SocVersion.is_Ascend310P():
+                        # Convert mask to NZ format.
+                        attention_mask = [
+                            nd_to_nz_spec(torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]))
+                        ]
+                    else:
+                        raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
+                    kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
         else:
-            kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(step_context.q_seqlens, 0).cpu()
-            block_offsets_int32 = step_context.block_offsets.to(torch.int32)
-            try:
+            if step_context.is_decoding:
+                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
+            elif is_unpaged_prefill:
+                pass
+            else:
+                kv_seqlens_cpu = step_context.kv_seqlens.repeat_interleave(step_context.q_seqlens, 0).cpu()
+                block_offsets_int32 = step_context.block_offsets.to(torch.int32)
                 step_context.block_offsets = block_offsets_int32\
-                    .repeat_interleave(step_context.q_seqlens.to(block_offsets_int32.device), 0)
-            except:
-                logger.error(
-                    f'block offsets: {step_context.block_offsets.device}   qseq: {step_context.q_seqlens.device}')
-        kv_seqlens = kv_seqlens_cpu
+                    .repeat_interleave(step_context.q_seqlens, 0)
+            kv_seqlens = kv_seqlens_cpu
+
+        if not cls.enable_graph and step_context.kv_quant_policy == 8:
+            record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
+            assert record_file, 'please specify valid ASCEND_QUANT_RECORD_FILE'
+            path = Path(record_file)
+            is_path = path.is_absolute() or path.is_relative_to('/')
+            exists = path.exists()
+            if not (is_path and exists):
+                raise ValueError('please specify valid ASCEND_QUANT_RECORD_FILE')
+            if not AscendKVQuantMeta.has_set_value:
+                total_layers = len(step_context.kv_caches)
+                AscendKVQuantMeta.set_value(step_context.block_offsets.device, step_context.model_config.dtype,
+                                            record_file, total_layers)
 
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
@@ -252,7 +289,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             step_context.block_offsets,
             q_start_loc=q_start_loc_cpu,
             q_seqlens=q_seqlens_cpu,
-            kv_seqlens=kv_seqlens,
+            kv_seqlens=kv_seqlens.cpu().tolist() if step_context.is_decoding else kv_seqlens,
             kv_start_indices=kv_start_indices,
             block_size=block_size,
             attention_mask=attention_mask,
