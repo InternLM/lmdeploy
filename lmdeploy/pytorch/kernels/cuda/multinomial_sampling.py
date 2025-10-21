@@ -11,11 +11,12 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, strid
     batch_id = tl.program_id(0)
     n_off = tl.arange(0, BLOCK_N)
 
-    # random seed
+    # sampling random seed
     seed = tl.load(Seeds + batch_id)
     offset = tl.load(Offsets + batch_id).to(tl.int32)
     samp = tl.rand(seed, offset)[:, None]
 
+    # initialize
     acc = 0.0
     output = tl.load(Indices + batch_id * stride_ib)
     score_ptr = Scores + batch_id * stride_sb
@@ -23,6 +24,7 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, strid
 
     found_mask = False
     for b_idx in range(0, num_tokens, BLOCK_N):
+        # triton does not have break statement, use mask to skip computation
         if not found_mask:
             s_off = b_idx + n_off
             s_mask = (s_off < num_tokens)
@@ -35,9 +37,10 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, strid
             valid_mask = (samp > pre_cum_scores) & (samp <= cum_scores)
             found_mask = tl.sum(valid_mask, 0) > 0
 
-            valid_pos = b_idx + tl.argmax(valid_mask.to(tl.int32), 0)
-            indices = tl.load(indice_ptr + valid_pos * stride_it, mask=found_mask, other=-1)
-            output = tl.where(found_mask, indices, output)
+            if found_mask:
+                valid_pos = b_idx + tl.argmax(valid_mask.to(tl.int32), 0)
+                indice = tl.load(indice_ptr + valid_pos * stride_it)
+                output = indice
 
     tl.store(Outputs + batch_id, output)
 
@@ -46,7 +49,15 @@ def multinomial_sampling(scores: torch.Tensor,
                          seeds: torch.LongTensor,
                          offsets: torch.LongTensor,
                          indices: torch.Tensor = None):
-    """Multinomial sampling."""
+    """Multinomial sampling.
+
+    Note that this kernel assumes the input scores are already sorted in descending order.
+
+    scores: [batch_size, num_tokens], sorted softmax scores
+    seeds: [batch_size]
+    offsets: [batch_size]
+    indices: [batch_size, num_tokens], original token indices before sorting
+    """
     assert scores.dim() == 2
     batch_size, num_tokens = scores.size()
     device = scores.device
