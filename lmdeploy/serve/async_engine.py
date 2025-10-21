@@ -13,6 +13,7 @@ from queue import Queue
 from threading import Thread
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
+import torch
 import tqdm
 
 from lmdeploy import Tokenizer
@@ -31,57 +32,6 @@ from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg,
 logger = get_logger('lmdeploy')
 
 
-def _merge_message_content(msg: Dict) -> Dict:
-    """Merge multimodal content blocks and ensure content field exists.
-
-    This function normalizes message content to match vLLM's behavior:
-    1. Missing content field -> add content='' (empty string)
-    2. None content -> convert to content='' (empty string)
-    3. String content -> return as-is
-    4. List content (multimodal) -> merge all text blocks with newline separator
-
-    Args:
-        msg: A message dict with 'role' and optionally 'content' field
-
-    Returns:
-        A message dict with 'content' field guaranteed to exist
-
-    Note:
-        This implementation is based on vLLM's content processing logic.
-        vLLM uses "\n".join() to merge multiple text blocks from multimodal content.
-
-    References:
-        - vLLM content normalization:
-          https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/chat_utils.py
-          See _parse_chat_message_content() and _parse_chat_message_content_parts()
-        - vLLM text merging logic:
-          text_prompt = "\n".join(texts)
-    """
-    # If content is missing or None, convert to empty string (matches vLLM behavior)
-    # This prevents Jinja2 template errors when rendering chat templates
-    if 'content' not in msg or msg['content'] is None:
-        result = dict(msg)
-        result['content'] = ''
-        return result
-
-    # If content is already a string, return as-is
-    if isinstance(msg['content'], str):
-        return msg
-
-    # If content is a list, merge all text blocks into a single string
-    # This matches vLLM's behavior: text_prompt = "\n".join(texts)
-    content_parts = []
-    for block in msg['content']:
-        if isinstance(block, dict) and block.get('type') == 'text':
-            content_parts.append(block.get('text', ''))
-    merged_content = '\n'.join(content_parts)
-
-    # Preserve all other fields in the message (e.g., tool_calls)
-    result = dict(msg)
-    result['content'] = merged_content
-    return result
-
-
 @dataclasses.dataclass
 class GenOut:
     """Pack all response information together."""
@@ -97,6 +47,9 @@ class GenOut:
 
     # for disaggregation
     cache_block_ids: List[int] = None
+    
+    # for DLLM
+    step_map: List[int] = None
 
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
@@ -108,6 +61,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     logprobs=out.logprobs,
                     last_hidden_state=out.last_hidden_state,
                     logits=out.logits,
+                    step_map=out.step_map,
                     index=index)
 
 
@@ -125,6 +79,9 @@ def _append_response(dst: Response, src: Response):
     if src.logprobs:
         dst.logprobs = dst.logprobs or []
         dst.logprobs += src.logprobs
+    if src.step_map:
+        dst.step_map = dst.step_map or []
+        dst.step_map += src.step_map
     return dst
 
 
@@ -357,6 +314,7 @@ class AsyncEngine(LogitsMixin):
         self.free_insts = None
         self.instances.clear()
         self.engine.close()
+        torch._C._cuda_clearCublasWorkspaces()
 
     def __enter__(self):
         return self
@@ -658,9 +616,11 @@ class AsyncEngine(LogitsMixin):
         # Change multimodal data to openai text messages, i.e.,
         # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
         # [{'role': 'user', 'content': 'hi']
-        # Also ensure all messages have 'content' field (set to None if missing, e.g., assistant with tool_calls)
-        if isinstance(prompt, list):
-            prompt = [_merge_message_content(msg) for msg in prompt]
+        if isinstance(prompt, list) and any(isinstance(msg['content'], list) for msg in prompt):
+            prompt = [
+                msg if isinstance(msg['content'], str) else dict(role=msg['role'], content=msg['content'][0]['text'])
+                for msg in prompt
+            ]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
@@ -871,6 +831,11 @@ class AsyncEngine(LogitsMixin):
                     mask = slice(prev_len - output_len, output_len - hit_stop_token)
                     token_ids += outputs.token_ids[mask]
                     gen_len = len(token_ids) - input_len
+                    
+                    # 提取本次增量的 step_map
+                    step_map_increment = None
+                    if hasattr(outputs, 'step_map') and outputs.step_map is not None:
+                        step_map_increment = outputs.step_map[mask]
 
                     prev_len = output_len
 
@@ -888,7 +853,8 @@ class AsyncEngine(LogitsMixin):
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
-                                 cache_block_ids=outputs.cache_block_ids)
+                                 cache_block_ids=outputs.cache_block_ids,
+                                 step_map=step_map_increment)
 
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
@@ -926,6 +892,10 @@ class AsyncEngine(LogitsMixin):
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, output_tokens {gen_len}')
+                    
+                    # 最后的 finish 输出不需要返回 step_map（已经在流式输出中累加了）
+                    final_step_map = None
+                    
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),
@@ -935,6 +905,7 @@ class AsyncEngine(LogitsMixin):
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
+                                 step_map=final_step_map,
                                  cache_block_ids=outputs.cache_block_ids)
                     # Update a session's sequence only when it is in finished status
                     if outputs.status == ResponseType.FINISH:

@@ -151,6 +151,8 @@ class EngineInstance(EngineInstanceBase):
             cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
             req_metrics = resp.data.get('req_metrics', None) if resp.data else None
             logprobs = resp.data.get('logprobs', None) if resp.data else None
+            step_map = resp.data.get('step_map', None) if resp.data else None
+            
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids)
@@ -160,7 +162,8 @@ class EngineInstance(EngineInstanceBase):
                                    num_ids,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
-                                   logprobs=logprobs)
+                                   logprobs=logprobs,
+                                   step_map=step_map)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
@@ -173,7 +176,8 @@ class EngineInstance(EngineInstanceBase):
                                    logits=logits,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
-                                   logprobs=logprobs)
+                                   logprobs=logprobs,
+                                   step_map=step_map)
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')

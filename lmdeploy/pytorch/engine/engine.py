@@ -55,6 +55,9 @@ class InferOutput:
 
     # for logging
     req_metrics: RequestMetrics = None
+    
+    # step map for DLLM: track which step each token was decoded
+    step_map: List[int] = None
 
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
@@ -551,7 +554,7 @@ class Engine(EngineBase):
                 if len(msgs) > 0 and msgs[0].preserve_cache:
                     self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
                 else:
-                    self.end_session(session_id)
+                    self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -838,6 +841,7 @@ class Engine(EngineBase):
         # generate output
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
+            # print(f"{idx}: {msg}")
             if not is_run[idx]:
                 continue
             token_ids = msg.generated_ids
@@ -860,6 +864,11 @@ class Engine(EngineBase):
             if num_logprobs >= 0:
                 cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
 
+            # step_map: 获取每个 token 被解码的步数
+            step_map = None
+            if hasattr(msg, 'generated_step_map'):
+                step_map = msg.generated_step_map.tolist()
+
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
@@ -867,7 +876,8 @@ class Engine(EngineBase):
                               token_ids=token_ids,
                               cache_block_ids=cache_block_ids,
                               req_metrics=req_metrics,
-                              logprobs=cur_logprobs)
+                              logprobs=cur_logprobs,
+                              step_map=step_map)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -912,7 +922,6 @@ class Engine(EngineBase):
         stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
 
         sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
-
         return dict(
             running=running,
             inputs=inputs,
@@ -962,13 +971,15 @@ class Engine(EngineBase):
                 cur_logprobs = dict(zip(indices, vals))
                 logprobs = [] if out.resp.data is None else out.resp.data.get('logprobs', [])
                 logprobs = logprobs + [cur_logprobs]
+            
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids,
                                      logits=out.logits,
                                      cache_block_ids=out.cache_block_ids,
                                      req_metrics=out.req_metrics,
-                                     logprobs=logprobs))
+                                     logprobs=logprobs,
+                                     step_map=out.step_map))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
@@ -1212,11 +1223,6 @@ class Engine(EngineBase):
             self._loop_finally()
 
     def close(self):
-        if self.executor.device_type == 'cuda':
-            # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879/32
-            # W/O this, repeatedly rebuilding and destroying engines within the same process
-            # will cause more and more reserved CUDA memory.
-            torch._C._cuda_clearCublasWorkspaces()
         if self._loop_main is not None:
             self._loop_main.cancel()
         else:
@@ -1243,7 +1249,6 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
-            self.sampling_strategy.on_session_end(session_id)
             self.scheduler.end_session(session_id)
             return True
         return False

@@ -34,18 +34,26 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
 
     # For dllm
     history_dllm_mask: HistoryDLLMMask = field(default_factory=HistoryDLLMMask)
+    history_step_map: HistoryTokenIds = field(default_factory=HistoryTokenIds)  # 添加 step_map 追踪
 
     def __post_init__(self):
         """Post init."""
         super().__post_init__()
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: DLLMSequenceStrategy = self._seq_meta.strategy
+        self._current_step: int = 0  # 当前解码步数
 
     @property
     def dllm_mask(self):
         start = self.num_history_ids
         end = start + self._num_token_ids
         return self.history_dllm_mask._token_ids[start:end]
+
+    @property
+    def step_map(self):
+        start = self.num_history_ids
+        end = start + self._num_token_ids
+        return self.history_step_map._token_ids[start:end]
 
     @property
     def num_valid_ids(self):
@@ -56,6 +64,12 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         end = self.num_valid_ids
         start = end - self.num_new_tokens
         return self.history_cache._token_ids[start:end]
+
+    @property
+    def generated_step_map(self) -> np.ndarray:
+        end = self.num_valid_ids
+        start = end - self.num_new_tokens
+        return self.history_step_map._token_ids[start:end]
 
     @property
     def all_dllm_mask(self):
@@ -82,6 +96,8 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         dllm_mask_token = self.dllm_mask_token
         new_token_ids = [token_ids]
         new_dllm_mask = [dllm_mask]
+        # 输入阶段标记为步骤 0（prefill）
+        new_step_map = [np.zeros(len(token_ids), dtype=np.int32)]
 
         # add uncached tokens in token_ids
         # for example, [cccc cccc uumm], the [uu] in last block is remain valid.
@@ -89,10 +105,13 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         if num_remain_valid != 0:
             prev_token_ids = self.valid_ids[-num_remain_valid:]
             prev_dllm_mask = np.full_like(prev_token_ids, DLLM_UNMASKED, dtype=DLLM_MASK_DTYPE)
+            prev_step_map = self.history_step_map._token_ids[self.num_history_ids:self.num_history_ids + num_remain_valid]
             new_token_ids = [prev_token_ids] + new_token_ids
             new_dllm_mask = [prev_dllm_mask] + new_dllm_mask
+            new_step_map = [prev_step_map] + new_step_map
             self.history_cache.resize(self.num_history_ids)
             self.history_dllm_mask.resize(self.num_history_ids)
+            self.history_step_map.resize(self.num_history_ids)
             num_tokens += num_remain_valid
 
         # pad to align with dllm_block_length
@@ -100,20 +119,25 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         if num_pad > 0:
             pad_ids = np.full_like(token_ids, dllm_mask_token, shape=(num_pad, ))
             pad_mask = np.full_like(dllm_mask, DLLM_MASKED, shape=(num_pad, ))
+            pad_step = np.zeros(num_pad, dtype=np.int32)
             new_token_ids += [pad_ids]
             new_dllm_mask += [pad_mask]
+            new_step_map += [pad_step]
 
         token_ids = np.concatenate(new_token_ids)
         dllm_mask = np.concatenate(new_dllm_mask)
+        step_map = np.concatenate(new_step_map)
 
         assert len(token_ids) % dllm_block_length == 0
 
         self.history_cache.append(token_ids)
         self.history_dllm_mask.append(dllm_mask)
+        self.history_step_map.append(step_map)
         self.output_start_pos = self._num_valid_ids + len(token_ids)
         self._num_valid_ids = self.num_history_ids + num_tokens
         self._num_token_ids = len(token_ids)
         self.num_new_tokens = 0
+        self._current_step = 0  # 重置步数计数器
 
     def _update_token_ids_decode(self, token_ids: np.ndarray, dllm_mask: np.ndarray):
         """Update token ids for decode."""
@@ -123,9 +147,25 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         assert num_tokens % dllm_block_length == 0
         num_history_ids = self.num_history_ids
 
+        # 获取旧的 mask 和 step_map 来判断哪些 token 是新解码的
+        old_mask = self.history_dllm_mask._token_ids[num_history_ids:num_history_ids + num_tokens].copy()
+        old_step_map = self.history_step_map._token_ids[num_history_ids:num_history_ids + num_tokens].copy()
+        
+        # 检查是否有新的 tokens 被 unmask
+        newly_unmasked = (old_mask == DLLM_MASKED) & (dllm_mask == DLLM_UNMASKED)
+        
+        # 只有当有新 tokens 被 unmask 时才递增步数
+        if newly_unmasked.any():
+            self._current_step += 1
+        
+        # 更新 step_map：对于从 MASKED 变成 UNMASKED 的 token，设置为当前步数
+        new_step_map = old_step_map.copy()
+        new_step_map[newly_unmasked] = self._current_step
+
         token_ids[dllm_mask == DLLM_MASKED] = dllm_mask_token
         self.history_cache[num_history_ids:] = token_ids
         self.history_dllm_mask[num_history_ids:] = dllm_mask
+        self.history_step_map[num_history_ids:] = new_step_map
 
         # check if all blocks are cached
         last_mask = dllm_mask[-dllm_block_length:]
@@ -141,8 +181,10 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
             # add new block
             new_token_ids = np.full_like(token_ids, dllm_mask_token, shape=(dllm_block_length, ))
             new_dllm_mask = np.full_like(dllm_mask, DLLM_MASKED, shape=(dllm_block_length, ))
+            new_step_map_block = np.zeros(dllm_block_length, dtype=np.int32)
             self.history_cache.append(new_token_ids)
             self.history_dllm_mask.append(new_dllm_mask)
+            self.history_step_map.append(new_step_map_block)
             self._num_history_ids += self._num_token_ids
             self._num_token_ids = dllm_block_length
 
@@ -154,9 +196,13 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         # fill input cache
         if self.num_token_ids > dllm_block_length:
             end = self.num_token_ids - dllm_block_length
-            self.history_dllm_mask[num_history_ids:end] = DLLM_CACHED
+            self.history_dllm_mask[num_history_ids:num_history_ids + end] = DLLM_CACHED
+            # prefill 阶段缓存的部分标记为 0（这些是输入，不在 generated_ids 中）
+            self.history_step_map[num_history_ids:num_history_ids + end] = 0
             self._num_history_ids += end
             self._num_token_ids -= end
+        
+        # prefill 后开始 decode，保持 _current_step = 0，第一次 unmask 会变成 1
 
         # decoding update
         self._update_token_ids_decode(token_ids, dllm_mask)
