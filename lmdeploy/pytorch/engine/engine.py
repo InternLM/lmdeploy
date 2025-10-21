@@ -1223,6 +1223,11 @@ class Engine(EngineBase):
             self._loop_finally()
 
     def close(self):
+        if self.executor.device_type == 'cuda':
+            # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879/32
+            # W/O this, repeatedly rebuilding and destroying engines within the same process
+            # will cause more and more reserved CUDA memory.
+            torch._C._cuda_clearCublasWorkspaces()
         if self._loop_main is not None:
             self._loop_main.cancel()
         else:
