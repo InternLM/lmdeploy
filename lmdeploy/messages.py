@@ -370,7 +370,7 @@ class PytorchEngineConfig:
     enable_microbatch: bool = False
     enable_eplb: bool = False
     enable_mp_engine: bool = False
-    mp_engine_backend: str = 'ray'
+    mp_engine_backend: str = 'mp'
     model_format: str = None
     enable_metrics: bool = False
     hf_overrides: Optional[Dict[str, Any]] = None
