@@ -716,22 +716,29 @@ class TurboMindInstance:
         if gen_config.response_format is not None:
             tokenizer = self.tm_model.tokenizer
             vocab_size = self.tm_model.config.model_config.vocab_size
-            decode_grammar_type = gen_config.response_format['type']
-            decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
 
-            tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
-            compiler = _xgr.GrammarCompiler(tokenizer_info)
+            try:
+                tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
+                decode_grammar_type = gen_config.response_format['type']
+                decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
 
-            if decode_grammar_type == 'json_schema':
-                decode_grammar = json.dumps(decode_grammar)
-                grammar = compiler.compile_json_schema(decode_grammar)
-            elif decode_grammar_type == 'regex_schema':
-                decode_grammar = str(decode_grammar)
-                grammar = compiler.compile_regex(decode_grammar)
-            else:
-                assert False, f'Decode grammar type {decode_grammar_type} should be in ["json_schema", "regex_schema"]'
+                compiler = _xgr.GrammarCompiler(tokenizer_info)
 
-            self.model_inst.set_grammar(grammar)
+                if decode_grammar_type == 'json_schema':
+                    decode_grammar = json.dumps(decode_grammar)
+                    grammar = compiler.compile_json_schema(decode_grammar)
+                elif decode_grammar_type == 'regex_schema':
+                    decode_grammar = str(decode_grammar)
+                    grammar = compiler.compile_regex(decode_grammar)
+                else:
+                    assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
+                                   '["json_schema", "regex_schema"]'
+
+                self.model_inst.set_grammar(grammar)
+            except ValueError as e:
+                logger.warning(f'Failed to initialize guided decoding for tokenizer {tokenizer}, '
+                               f'disable guided decoding: {e}')
+                gen_config.response_format = None
 
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 

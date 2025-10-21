@@ -289,6 +289,7 @@ turbomind_quatization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Chat
+        - Qwen/Qwen2.5-7B-Instruct
 
 pytorch_quatization:
     awq:
