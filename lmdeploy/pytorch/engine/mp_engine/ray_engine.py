@@ -5,13 +5,13 @@ from typing import Dict
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import EngineOutput, PytorchEngineConfig
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.ray import RayContext, get_device_str, get_resource_kwargs
 from lmdeploy.utils import get_logger
 
 from .base import MPEngine
-from .base_worker import EngineWorkerBase
+from .base_worker import EngineOutputGather, EngineWorkerBase
 
 logger = get_logger('lmdeploy')
 
@@ -35,12 +35,15 @@ class RayEngineWorker(EngineWorkerBase):
         self._stream_id = 0
         self._stream_aiter = dict()
         self._stream_task = dict()
+        self._engine_output_gather = EngineOutputGather()
 
     async def _stream_task_wrapper(self, stream_id: int, func: str, *args, **kwargs):
         """Create a stream task."""
         method = getattr(self, func)
         event = self._stream_aiter[stream_id][0]
         async for result in method(*args, **kwargs):
+            if isinstance(result, EngineOutput):
+                self._engine_output_gather.add(stream_id, result)
             self._stream_aiter[stream_id][1] = (result, False)
             event.set()
         self._stream_aiter[stream_id][1] = (result, True)
@@ -66,6 +69,9 @@ class RayEngineWorker(EngineWorkerBase):
         await event.wait()
         result, stopped = self._stream_aiter[stream_id][1]
         event.clear()
+
+        if isinstance(result, EngineOutput):
+            result = self._engine_output_gather.pop(stream_id, result)
 
         if stopped:
             self._stream_aiter.pop(stream_id, None)
