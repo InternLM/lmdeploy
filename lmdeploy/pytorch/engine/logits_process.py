@@ -151,6 +151,7 @@ class FusedLogitsProcessor:
 
     async def _wait_stream_once(self):
         """Wait stream once."""
+        print(1111111111)
         stream = torch.cuda.current_stream()
         if not stream.query():
             await asyncio.sleep(0)
@@ -236,7 +237,7 @@ class FusedLogitsProcessor:
             if max_topk <= 0:
                 max_topk = scores.size(1)
                 if top_k is not None:
-                    top_k = torch.where(top_k <= 0, top_k.new_tensor(max_topk), top_k)
+                    top_k = torch.masked_fill(top_k, top_k <= 0, max_topk)
 
             if top_k is not None:
                 scores = _filter_topk_sorted_(scores, top_k)
