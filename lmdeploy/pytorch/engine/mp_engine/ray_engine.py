@@ -5,7 +5,7 @@ from typing import Dict
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from lmdeploy.messages import EngineOutput, PytorchEngineConfig
+from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.ray import RayContext, get_device_str, get_resource_kwargs
 from lmdeploy.utils import get_logger
@@ -42,8 +42,7 @@ class RayEngineWorker(EngineWorkerBase):
         method = getattr(self, func)
         event = self._stream_aiter[stream_id][0]
         async for result in method(*args, **kwargs):
-            if isinstance(result, EngineOutput):
-                self._engine_output_gather.add(stream_id, result)
+            self._engine_output_gather.add(stream_id, result)
             self._stream_aiter[stream_id][1] = (result, False)
             event.set()
         self._stream_aiter[stream_id][1] = (result, True)
@@ -70,8 +69,7 @@ class RayEngineWorker(EngineWorkerBase):
         result, stopped = self._stream_aiter[stream_id][1]
         event.clear()
 
-        if isinstance(result, EngineOutput):
-            result = self._engine_output_gather.pop(stream_id, result)
+        result = self._engine_output_gather.pop(stream_id, result)
 
         if stopped:
             self._stream_aiter.pop(stream_id, None)

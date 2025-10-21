@@ -9,7 +9,6 @@ import zmq
 import zmq.asyncio
 from zmq.asyncio import Context
 
-from lmdeploy.messages import EngineOutput
 from lmdeploy.utils import get_logger
 
 from .base_worker import EngineOutputGather
@@ -102,8 +101,7 @@ class AsyncRPCServer:
         try:
             generator = method(*args, **kwargs)
             async for result in generator:
-                if isinstance(result, EngineOutput):
-                    self._engine_output_gather.add(stream_id, result)
+                self._engine_output_gather.add(stream_id, result)
                 stream_out['result'] = result
                 stream_out['event'].set()
         except Exception as e:
@@ -122,8 +120,7 @@ class AsyncRPCServer:
         event.clear()
         result = stream_out['result']
         stopped = stream_out['stopped']
-        if isinstance(result, EngineOutput):
-            result = self._engine_output_gather.pop(stream_id, result)
+        result = self._engine_output_gather.pop(stream_id, result)
         if stopped:
             self.stream_output.pop(stream_id)
         if 'error' in stream_out:
