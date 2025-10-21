@@ -833,15 +833,13 @@ class AsyncEngine(LogitsMixin):
                                  finish_reason,
                                  token_ids=res,
                                  cache_block_ids=outputs.cache_block_ids)
-
                     if outputs.logprobs is not None:
-                        out.logprobs = (outputs.logprobs if hit_stop_token else outputs.logprobs[:-hit_stop_token])
+                        out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
                     if outputs.last_hidden_state is not None:
-                        out.last_hidden_state = (outputs.last_hidden_state
-                                                 if hit_stop_token else outputs.last_hidden_state[:-hit_stop_token])
+                        out.last_hidden_state = (outputs.last_hidden_state[:-hit_stop_token]
+                                                 if hit_stop_token else outputs.last_hidden_state)
                     if outputs.logits is not None:
-                        out.logits = (outputs.logits if hit_stop_token else outputs.logits[:-hit_stop_token])
-
+                        out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
                 metrics_processor.increment_finished_requests()
