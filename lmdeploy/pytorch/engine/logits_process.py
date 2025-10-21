@@ -151,7 +151,6 @@ class FusedLogitsProcessor:
 
     async def _wait_stream_once(self):
         """Wait stream once."""
-        print(1111111111)
         stream = torch.cuda.current_stream()
         if not stream.query():
             await asyncio.sleep(0)
