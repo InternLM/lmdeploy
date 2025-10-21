@@ -115,6 +115,7 @@ summarizer = dict(
         ['mmlu_pro', 'naive_average'],
         'mmlu_pro_math',
         'mmlu_pro_other',
+        ['lcb_code_generation_repeat_6', 'pass@1 (6 runs average)'],
     ],
     summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []) + core_summary_groups,
 )
