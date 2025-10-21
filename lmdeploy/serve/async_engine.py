@@ -32,6 +32,57 @@ from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg,
 logger = get_logger('lmdeploy')
 
 
+def _merge_message_content(msg: Dict) -> Dict:
+    """Merge multimodal content blocks and ensure content field exists.
+
+    This function normalizes message content to match vLLM's behavior:
+    1. Missing content field -> add content='' (empty string)
+    2. None content -> convert to content='' (empty string)
+    3. String content -> return as-is
+    4. List content (multimodal) -> merge all text blocks with newline separator
+
+    Args:
+        msg: A message dict with 'role' and optionally 'content' field
+
+    Returns:
+        A message dict with 'content' field guaranteed to exist
+
+    Note:
+        This implementation is based on vLLM's content processing logic.
+        vLLM uses "\n".join() to merge multiple text blocks from multimodal content.
+
+    References:
+        - vLLM content normalization:
+          https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/chat_utils.py
+          See _parse_chat_message_content() and _parse_chat_message_content_parts()
+        - vLLM text merging logic:
+          text_prompt = "\n".join(texts)
+    """
+    # If content is missing or None, convert to empty string (matches vLLM behavior)
+    # This prevents Jinja2 template errors when rendering chat templates
+    if 'content' not in msg or msg['content'] is None:
+        result = dict(msg)
+        result['content'] = ''
+        return result
+
+    # If content is already a string, return as-is
+    if isinstance(msg['content'], str):
+        return msg
+
+    # If content is a list, merge all text blocks into a single string
+    # This matches vLLM's behavior: text_prompt = "\n".join(texts)
+    content_parts = []
+    for block in msg['content']:
+        if isinstance(block, dict) and block.get('type') == 'text':
+            content_parts.append(block.get('text', ''))
+    merged_content = '\n'.join(content_parts)
+
+    # Preserve all other fields in the message (e.g., tool_calls)
+    result = dict(msg)
+    result['content'] = merged_content
+    return result
+
+
 @dataclasses.dataclass
 class GenOut:
     """Pack all response information together."""
