@@ -1,5 +1,6 @@
 accelerate>=0.29.3
 aiohttp
+cloudpickle
 einops
 fastapi
 fire
