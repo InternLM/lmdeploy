@@ -136,6 +136,16 @@ class AscendOpsBackend(DlinferOpsBackend):
             raise ValueError(f'dlinfer does not support {SocVersion.device_name()} device currently.')
 
     @classmethod
+    @lru_cache(maxsize=1)
+    def enable_alcgraph(cls) -> bool:
+        if os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'aclgraph' and not SocVersion.is_Ascend310P():
+            return True
+        elif os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'atbgraph' or SocVersion.is_Ascend310P():
+            return False
+        else:
+            raise ValueError(f"unsupported ASCEND_GRAPH_MODE: {os.getenv('ASCEND_GRAPH_MODE')}")
+
+    @classmethod
     def update_step_context(cls, step_context):
         """Update step context."""
 
@@ -259,8 +269,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                     else:
                         raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
                     kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
-            if not is_unpaged_prefill and os.getenv('ASCEND_GRAPH_MODE',
-                                                    'aclgraph') == 'aclgraph' and not SocVersion.is_Ascend310P():
+            if not is_unpaged_prefill and AscendOpsBackend.enable_alcgraph():
                 kv_seqlens = kv_seqlens.cpu().tolist()
         else:
             if step_context.is_decoding:
@@ -311,16 +320,14 @@ class AscendOpsBackend(DlinferOpsBackend):
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
-        if os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'aclgraph' and not SocVersion.is_Ascend310P():
+        if AscendOpsBackend.enable_alcgraph():
             from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
             return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
-        elif os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'atbgraph' or SocVersion.is_Ascend310P():
+        else:
             from .graph_runner import AscendGraphRunner
             ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
             AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
             return ascend_graph_runner
-        else:
-            raise ValueError(f"unsupported ASCEND_GRAPH_MODE: {os.getenv('ASCEND_GRAPH_MODE')}")
 
     @staticmethod
     def init():
