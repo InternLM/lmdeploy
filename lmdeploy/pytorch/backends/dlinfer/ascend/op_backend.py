@@ -314,7 +314,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         if os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'aclgraph' and not SocVersion.is_Ascend310P():
             from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
             return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
-        elif os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'atbgraph':
+        elif os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'atbgraph' or SocVersion.is_Ascend310P():
             from .graph_runner import AscendGraphRunner
             ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
             AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
