@@ -198,7 +198,7 @@ class IterationStats:
             outputs (EngineOutput): The output from the engine containing information about the current iteration.
             req_state (RequestState): The state of the request, including timestamps and token counts.
         """
-        new_generation_tokens = outputs.num_token - req_state.generation_tokens
+        new_generation_tokens = outputs.num_token
         if new_generation_tokens == 0:
             return
         self.new_generation_tokens = new_generation_tokens
