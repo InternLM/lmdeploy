@@ -144,31 +144,33 @@ class EngineInstance(EngineInstanceBase):
         )
         logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
+        output_offset = 0
 
         while True:
             resp = await self.req_sender.async_recv(resp)
 
             cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
             req_metrics = resp.data.get('req_metrics', None) if resp.data else None
-            logprobs = resp.data.get('logprobs', None) if resp.data else None
+            logprobs = resp.data.pop('logprobs', None) if resp.data else None
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
-                num_ids = len(token_ids)
+                num_ids = len(token_ids) - output_offset
                 logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
-                                   token_ids,
+                                   token_ids[output_offset:],
                                    num_ids,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
                                    logprobs=logprobs)
+                output_offset = len(token_ids)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
-                num_ids = len(token_ids)
+                num_ids = len(token_ids) - output_offset
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
-                                   token_ids,
+                                   token_ids[output_offset:],
                                    num_ids,
                                    logits=logits,
                                    cache_block_ids=cache_block_ids,
