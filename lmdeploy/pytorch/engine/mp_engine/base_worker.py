@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, List, Optional
 
+from lmdeploy.messages import EngineOutput
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
 from lmdeploy.utils import get_logger
@@ -127,3 +128,28 @@ class EngineWorkerBase:
         """Send stream inference request."""
         async for result in self.instance_pool.async_stream_infer(*args, **kwargs):
             yield result
+
+
+class EngineOutputGather:
+    """Helper class to gather incremental engine output."""
+
+    def __init__(self):
+        self._output = dict()
+
+    def get(self, stream_id):
+        if stream_id not in self._output:
+            self._output[stream_id] = EngineOutput(status=None, token_ids=[], num_token=0, logprobs=[])
+        return self._output[stream_id]
+
+    def add(self, stream_id, result):
+        assert isinstance(result, EngineOutput)
+        output = self.get(stream_id)
+        output.token_ids.extend(result.token_ids or [])
+        output.logprobs.extend(result.logprobs or [])
+
+    def pop(self, stream_id, result):
+        assert isinstance(result, EngineOutput)
+        output = self._output.pop(stream_id)
+        result.token_ids = output.token_ids or []
+        result.logprobs = output.logprobs or None
+        return result
