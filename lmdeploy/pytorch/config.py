@@ -208,7 +208,6 @@ class ModelConfig:
     model_paradigm: str = 'ar'
     dllm_mask_token: int = 0
     dllm_block_length: int = None
-    use_flash_attn3: bool = False
 
     def get_head_size(self):
         """Get head size."""

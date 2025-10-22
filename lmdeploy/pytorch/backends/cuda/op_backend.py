@@ -192,19 +192,20 @@ class CudaOpsBackend(DefaultOpsBackend):
         kv_seqlens = step_context.kv_seqlens
         kv_start_loc = None
         kv_flatten_size = None
-        use_flash_mla = getattr(step_context.model_config, 'use_flash_mla', False)
-        use_flash_attn3 = getattr(step_context.model_config, 'use_flash_attn3', False)
+        use_flash_mla = step_context.model_config.use_flash_mla
+        use_flash_attn3_decoding = step_context.model_config.model_paradigm == 'ar_spec'
+
+        if use_flash_mla or use_flash_attn3_decoding:
+            step_context.block_offsets = step_context.block_offsets.to(torch.int32)
+
         cu_seqlens_q = None
         cu_seqlens_k = None
-        if use_flash_mla or use_flash_attn3:
-            step_context.block_offsets = step_context.block_offsets.to(torch.int32)
-            if not step_context.is_decoding:
-                cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
-                cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
-
         if not step_context.is_decoding:
+            cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
+            cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
             kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
             kv_flatten_size = step_context.sum_kv_seqlen
+
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
@@ -223,7 +224,7 @@ class CudaOpsBackend(DefaultOpsBackend):
                 cls.update_meta_flashmla(attn_metadata,
                                          step_context.model_config.num_attention_heads * decode_query_len)
 
-        if use_flash_attn3:
+        if use_flash_attn3_decoding:
             if step_context.is_decoding is True:
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 

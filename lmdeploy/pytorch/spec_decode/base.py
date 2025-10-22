@@ -37,8 +37,6 @@ def draft_model_forward(
             model_config=model_config,
             kv_caches=kv_caches,
         )
-        # print(f'Draft model context: position_ids={context.position_ids} '
-        #       f'q_seqlens={context.q_seqlens} kv_seqlens={context.kv_seqlens}')
         with ctx_mgr.context(context):
             model_metas = None
             model_metas = model.update_model_metas(

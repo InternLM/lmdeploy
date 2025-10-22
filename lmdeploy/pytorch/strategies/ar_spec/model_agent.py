@@ -7,10 +7,10 @@ import torch
 from torch.profiler import record_function
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.model_inputs import ModelInputs
-from lmdeploy.pytorch.distributed import DistContext
 
 from ..ar.model_agent import ARStoppingCriteria
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy
@@ -47,6 +47,7 @@ class ARSpecExtraInputs(ExtraInputs):
         handle = dist.broadcast(self.num_rejected_tokens, src=src, group=group, async_op=async_op)
         return handle
 
+
 @dataclass
 class ARSpecExtraOutputs(ExtraOutputs):
     """ARSpec extra outputs."""
@@ -68,7 +69,6 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
              inputs: Optional[ModelInputs] = None,
              extra_inputs: Optional[ARSpecExtraInputs] = None):
         """Check whether to stop generation."""
-        # print(f'self.num_appendable_ids={self.num_appendable_ids}')
         token_ids = extra_inputs.output_token_ids
 
         if token_ids.ndim == 1:
@@ -90,9 +90,6 @@ class ARSpecStoppingCriteria(ARStoppingCriteria):
         num_appendable_ids = self.num_appendable_ids - num_valid_tokens
         one_ids = torch.clamp_max(num_appendable_ids, 0)
         num_appendable_ids = torch.where(stopped, one_ids, num_appendable_ids)
-        # print(f'stop step>>>\ntoken_ids={token_ids}\nstopped={stopped}'
-        #       f'\nnum_appendable_ids={num_appendable_ids}\nnum_valid_tokens={num_valid_tokens}')
-
         return stopped, stop_pos, ARSpecStoppingCriteria(num_appendable_ids=num_appendable_ids)
 
 
@@ -167,7 +164,6 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
                                     next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ARSpecExtraInputs,
                                     **kwargs):
         """Step next inputs."""
-        # print(f'Before update_inputs_for_next_step: model_inputs={model_inputs} extra_inputs={extra_inputs}')
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length
         batch_size = step_seqlens.size(0)
@@ -179,7 +175,6 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         input_ids = input_ids.flatten()[None, :]
         model_inputs.step(input_ids, step_seqlens)
         self._step_sampling_inputs(sampling_inputs, next_token_ids)
-        # print(f'update_inputs_for_next_step: input_ids={model_inputs} extra_inputs={extra_inputs}')
         return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,
@@ -191,13 +186,13 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         """Make dummy next token for broadcast."""
         with torch.inference_mode():
             next_token_ids = inputs.input_ids.new_zeros(logits.size(0))
-            extra_inputs.output_draft_token_ids = inputs.input_ids.new_zeros(
-                (logits.size(0), self.num_spec_tokens))
+            extra_inputs.output_draft_token_ids = inputs.input_ids.new_zeros((logits.size(0), self.num_spec_tokens))
             extra_inputs.num_rejected_tokens = inputs.input_ids.new_zeros(logits.size(0))
         return next_token_ids, extra_inputs
-    
+
     @contextmanager
-    def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ARSpecExtraInputs, dist_ctx: DistContext):
+    def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ARSpecExtraInputs,
+                             dist_ctx: DistContext):
         """Broadcast next token ids and extra inputs."""
         tp_gpu_group = dist_ctx.tp_gpu_group
         dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)

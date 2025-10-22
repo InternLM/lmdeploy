@@ -49,7 +49,6 @@ class LlamaAttention(nn.Module):
             head_dim,
             num_kv_heads=num_key_value_heads,
             v_head_size=head_dim,
-            use_flash_attn3=getattr(config, 'use_flash_attn3', False),
         )
 
         # o_proj

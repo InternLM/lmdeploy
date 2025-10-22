@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-from typing import Dict, List
+from typing import Dict
 
 import torch
 
@@ -212,8 +212,6 @@ class SpecModelAgent:
     ):
         """Draft model forward."""
         draft_model_inputs, draft_extra_inputs = self.rejection_sampling(next_token_ids, model_inputs, extra_inputs)
-        # print(f'Draft model inputs: {draft_model_inputs}')
-        # print(f'Rejection sample: extra_inputs={draft_extra_inputs}')
         next_draft_ids = await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
         draft_extra_inputs.output_draft_token_ids = next_draft_ids
         return draft_extra_inputs

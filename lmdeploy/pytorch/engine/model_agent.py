@@ -612,7 +612,6 @@ class BaseModelAgent:
 
     def _push_output(self, output: BatchedOutputs):
         """Push output."""
-        # print(f'=== push output={output}')
         event = torch.cuda.Event()
         event.record()
         self._out_que.put_nowait((output, event))
@@ -642,7 +641,6 @@ class BaseModelAgent:
     ):
         """Asyc forward task."""
         dist_ctx = get_dist_manager().current_context()
-        # print(f'>>>> inputs={inputs}, loop_count={loop_count}, extra_inputs={extra_inputs}')
 
         @record_function('update_inputs_for_next_step')
         def __update_inputs(next_token_ids, model_metas, extra_inputs):
@@ -776,10 +774,8 @@ class BaseModelAgent:
                                                                                  extra_inputs)
                 # spec decoding
                 if self.spec_agent is not None:
-                    # print(f'Draft in  extra inputs={extra_inputs}')
                     extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
                                                                              sampling_inputs)
-                    # print(f'Draft out extra inputs={extra_inputs}')
                     next_token_ids = extra_inputs.next_token_ids
                     logits = None
 

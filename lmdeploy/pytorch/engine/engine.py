@@ -853,8 +853,9 @@ class Engine(EngineBase):
                 msg.status = MessageStatus.STOPPED
 
     def _debug_spec_stats(self, batched_outputs: BatchedOutputs, is_decoding: bool = False):
-        """Make spec stats."""
-        if self.speculative_config is not None:
+        """Debugging spec stats."""
+        is_debugging = False
+        if is_debugging and self.speculative_config is not None:
             if not hasattr(self, 'spec_stats'):
                 from lmdeploy.metrics.stats import SpeculativeDecodingStats
                 self.spec_stats = SpeculativeDecodingStats(self.speculative_config.num_speculative_tokens)
@@ -863,8 +864,8 @@ class Engine(EngineBase):
                     num_draft_tokens = self.speculative_config.num_speculative_tokens
                     num_accepted_tokens = (tokens > -1).sum() - 1
                     self.spec_stats.update_per_draft(num_draft_tokens, num_accepted_tokens)
-            if self.spec_stats.num_drafts % 100 == 1:
-                print(self.spec_stats, flush=True)
+            if self.spec_stats.num_drafts > 0:
+                logger.debug(self.spec_stats)
 
     @record_function('make_infer_outputs')
     def _make_infer_outputs(
@@ -879,9 +880,7 @@ class Engine(EngineBase):
         logprobs = batched_outputs.logprobs
 
         # for debug
-        debug = False
-        if debug:
-            self._debug_spec_stats(batched_outputs, is_decoding=is_decoding)
+        self._debug_spec_stats(batched_outputs, is_decoding=is_decoding)
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
