@@ -24,7 +24,7 @@ class _ASNI_COLOR:
 
 # copy from: https://github.com/termcolor/termcolor
 @functools.cache
-def _can_do_colour(*, no_color: bool | None = None, force_color: bool | None = None) -> bool:
+def can_do_colour(*, no_color: bool | None = None, force_color: bool | None = None) -> bool:
     """Check env vars and for tty/dumb terminal."""
     import io
     if no_color is not None and no_color:
@@ -65,7 +65,7 @@ class ColorFormatter(logging.Formatter):
 
     def format(self, record: LogRecord):
         """format."""
-        if not _can_do_colour():
+        if not can_do_colour():
             # windows does not support ASNI color
             return super().format(record)
         levelname = record.levelname
