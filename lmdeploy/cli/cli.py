@@ -45,7 +45,6 @@ class CLI(object):
                             ', "baichuan-inc/baichuan2-7b-chat" and so on')
         # common args
         ArgumentHelper.backend(parser)
-        ArgumentHelper.log_level(parser)
         # chat template args
         ArgumentHelper.chat_template(parser)
         # model args

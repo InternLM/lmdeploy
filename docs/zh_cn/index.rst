@@ -104,6 +104,7 @@ LMDeploy 工具箱提供以下核心功能：
    advance/pytorch_multinodes.md
    advance/pytorch_profiling.md
    advance/metrics.md
+   advance/spec_decoding.md
 
 .. toctree::
    :maxdepth: 1
