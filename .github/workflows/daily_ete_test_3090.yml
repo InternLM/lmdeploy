@@ -125,7 +125,7 @@ jobs:
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
-      - name: Check env
+      - name: Mark as start
         run: |
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
@@ -344,7 +344,7 @@ jobs:
           chmod -R 777 $workdir
 
   get_coverage_report:
-    if: ${{!cancelled() && success()}}
+    if: ${{!cancelled()}}
     runs-on: [self-hosted, 3090-r1]
     needs: [test_tools, test_restful]
     timeout-minutes: 5

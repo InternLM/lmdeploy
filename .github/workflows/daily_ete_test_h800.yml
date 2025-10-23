@@ -303,7 +303,7 @@ jobs:
           chmod -R 777 $workdir
 
   get_coverage_report:
-    if: ${{!cancelled() && success()}}
+    if: ${{!cancelled()}}
     runs-on: [self-hosted, h800-r1]
     needs: [test_tools, test_restful]
     timeout-minutes: 5
