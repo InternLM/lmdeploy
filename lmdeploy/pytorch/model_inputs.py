@@ -9,7 +9,7 @@ from torch.profiler import record_function
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
+from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 
 if TYPE_CHECKING:
@@ -144,6 +144,7 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    is_dummy: bool = False
 
     def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -224,7 +225,7 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
-        max_kv_seqlen = self.max_kv_seqlen
+        max_kv_seqlen = self.max_kv_seqlen - self.max_q_seqlen
 
         # for mllama
         history_cross_length = self.history_cross_length
@@ -239,6 +240,7 @@ class ModelInputs:
                 end = min(max_seq_len, start + split_size)
 
             max_q_seqlen = end - start
+            max_kv_seqlen += max_q_seqlen
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
             inp = ModelInputs(
@@ -259,7 +261,6 @@ class ModelInputs:
             )
             ret.append(inp)
             history_cross_length = cross_length
-            max_kv_seqlen += max_q_seqlen
 
             start = end
 
@@ -299,6 +300,7 @@ class StepContext:
     """
     input_ids: torch.LongTensor
     model_config: ModelConfig
+    cache_config: CacheConfig
     block_offsets: torch.IntTensor
     position_ids: torch.LongTensor
     attention_mask: torch.LongTensor
@@ -329,6 +331,7 @@ class StepContext:
         cls,
         inputs: ModelInputs,
         model_config: ModelConfig,
+        cache_config: CacheConfig,
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
@@ -365,10 +368,13 @@ class StepContext:
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
+        if inputs.is_dummy:
+            kv_seqlens = torch.zeros_like(kv_seqlens)
 
         ret = StepContext(
             input_ids=inputs.input_ids,
             model_config=model_config,
+            cache_config=cache_config,
             block_offsets=inputs.block_offsets,
             position_ids=position_ids,
             input_embeddings=input_embeddings,
@@ -453,6 +459,7 @@ class StepContextManager:
         self,
         inputs: ModelInputs,
         model_config: ModelConfig,
+        cache_config: CacheConfig,
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
@@ -460,6 +467,7 @@ class StepContextManager:
         return StepContext.new(
             inputs,
             model_config,
+            cache_config,
             kv_caches,
             kv_quant_policy,
         )
