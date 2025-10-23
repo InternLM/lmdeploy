@@ -142,13 +142,15 @@ class EngineOutputGather:
         return self._output[stream_id]
 
     def add(self, stream_id, result):
-        assert isinstance(result, EngineOutput)
+        if not isinstance(result, EngineOutput):
+            return
         output = self.get(stream_id)
         output.token_ids.extend(result.token_ids or [])
         output.logprobs.extend(result.logprobs or [])
 
     def pop(self, stream_id, result):
-        assert isinstance(result, EngineOutput)
+        if not isinstance(result, EngineOutput):
+            return result
         output = self._output.pop(stream_id)
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
