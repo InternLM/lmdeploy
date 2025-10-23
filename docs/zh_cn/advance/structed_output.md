@@ -1,6 +1,8 @@
 # 结构化输出
 
-目前只有 Pytorch 后端具有该能力。所以无论是使用 pipline 还是使用 api_server，请指定使用 pytorch 后端。
+结构化输出（也称为引导解码）会强制模型生成与用户提供的 JSON 模式、语法或正则表达式完全匹配的文本。
+当前，PyTorch 与 Turbomind 两个后端均已支持这种（受模式约束的）结构化生成。
+以下分别为 pipeline API 和 API 服务的使用示例。
 
 ## pipeline
 

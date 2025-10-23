@@ -1,15 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import json
 from dataclasses import dataclass, fields
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
 from lmdeploy.messages import LogitsProcessor
-from lmdeploy.tokenizer import Tokenizer
 
 from ..messages import SchedulerSequence
+from .guided_process import GuidedDecodingMangager
 
 
 def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
@@ -78,37 +77,6 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
-def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor, guided_input_ids: Optional[torch.Tensor],
-                     tokenizer: object):
-    if guided_input_ids is None:
-        return scores
-    for i in range(len(response_formats)):
-        _format = response_formats[i]
-        if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
-            if _format['type'] == 'json_schema':
-                schema = _format['json_schema']
-                if isinstance(schema, Dict):
-                    for key in ['json_schema', 'schema']:
-                        if key in schema:
-                            schema = json.dumps(schema[key], ensure_ascii=False)
-                elif schema is None:
-                    from .guided_process import JSON_GRAMMAR
-                    schema = JSON_GRAMMAR
-                elif isinstance(schema, str):
-                    raise ValueError(f'Cannot parse schema {schema}. The schema must be '
-                                     'either a dictionary or a string that contains the'
-                                     ' JSON Schema specification')
-            elif _format['type'] == 'regex_schema':
-                schema = _format.get('regex_schema', '')
-            else:
-                raise ValueError(f"unsupported format type: {_format['type']}")
-            from .guided_process import _get_guided_logits_processor
-            processor = _get_guided_logits_processor(schema, tokenizer, _format['type'])
-            if processor:
-                scores[i] = processor(guided_input_ids[i].tolist(), scores[i])
-    return scores
-
-
 SeqList = List[SchedulerSequence]
 
 
@@ -131,9 +99,10 @@ class SamplingInputs:
     logits_processors: List[List[LogitsProcessor]] = None
     max_num_logprobs: Optional[int] = None
     all_ids: Optional[torch.Tensor] = None
-    guided_input_ids: Optional[torch.Tensor] = None
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0
+    session_ctx: Optional[List[Dict[str, Any]]] = None
+    session_to_cleanup: Optional[List[int]] = None
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -160,15 +129,25 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
 class FusedLogitsProcessor:
     """Custom logits processor."""
 
-    def __init__(self,
-                 sampling_inputs: SamplingInputs,
-                 tokenizer: Optional[Tokenizer] = None,
-                 sampling_vocab_size: Optional[int] = None,
-                 logprobs_mode: Optional[str] = None):
+    def __init__(
+        self,
+        sampling_inputs: SamplingInputs,
+        sampling_vocab_size: Optional[int] = None,
+        logprobs_mode: Optional[str] = None,
+        guided_decoding_manager: Optional[GuidedDecodingMangager] = None,
+    ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
-        self.tokenizer = tokenizer
         self.sampling_vocab_size = sampling_vocab_size
         self.logprobs_mode = logprobs_mode
+        self.guided_decoding_manager = guided_decoding_manager
+        if sampling_inputs.session_to_cleanup:
+            self.cleanup_sessions(sampling_inputs.session_to_cleanup)
+
+        if self.guided_decoding_manager:
+            self.guided_processors = self.guided_decoding_manager.get_processors(sampling_inputs.session_ctx,
+                                                                                 sampling_inputs.response_formats)
+        else:
+            self.guided_processors = {}
 
     async def _wait_stream_once(self):
         """Wait stream once."""
@@ -205,9 +184,20 @@ class FusedLogitsProcessor:
 
         sampling_inputs = self.sampling_inputs
         all_ids = sampling_inputs.all_ids
-        guided_input_ids = sampling_inputs.guided_input_ids
-
         custom_logits_processors = self.sampling_inputs.logits_processors
+        if self.guided_decoding_manager and self.guided_processors:
+            if not hasattr(self, 'guided_bitmask'):
+                self.guided_bitmask = self.guided_decoding_manager.allocate_batched_bitmap(len(scores))
+
+            assert self.guided_bitmask is not None
+            guided_bitmask = self.guided_bitmask
+
+            await self._wait_stream_once()
+            for i, processor in self.guided_processors.items():
+                self.guided_decoding_manager.fill_bitmap(processor, guided_bitmask, i)
+
+            self.guided_decoding_manager.apply_batched_bitmap(scores, guided_bitmask)
+
         if any(custom_logits_processors):
             await self._wait_stream_once()
             scores = _apply_custom_logits_processors(custom_logits_processors, all_ids, scores)
@@ -232,9 +222,6 @@ class FusedLogitsProcessor:
             stop_mask = torch.where(ignore_eos[:, None], stop_mask, False)
             scores = _process_bad_words_(scores, stop_words, stop_mask)
 
-        if guided_input_ids is not None:
-            await self._wait_stream_once()
-            scores = _guided_sampling(sampling_inputs.response_formats, scores, guided_input_ids, self.tokenizer)
         return scores, logprobs
 
     @torch.inference_mode()
@@ -249,7 +236,7 @@ class FusedLogitsProcessor:
             if max_topk <= 0:
                 max_topk = scores.size(1)
                 if top_k is not None:
-                    top_k = torch.where(top_k <= 0, top_k.new_tensor(max_topk), top_k)
+                    top_k = torch.masked_fill(top_k, top_k <= 0, max_topk)
 
             if top_k is not None:
                 scores = _filter_topk_sorted_(scores, top_k)
@@ -272,7 +259,7 @@ class FusedLogitsProcessor:
             logits = logits[..., :self.sampling_vocab_size]
 
         if sampling_inputs.max_top_k == 1:
-            return logits.argmax(-1)
+            result = logits.argmax(-1)
         else:
             # sort logits is too slow. and we only need topk logits
             max_topk = sampling_inputs.max_top_k
@@ -280,7 +267,13 @@ class FusedLogitsProcessor:
                 scores, indices = logits.sort(1, descending=True)
             else:
                 scores, indices = logits.topk(max_topk, dim=1)
-            return __random_sampling(scores, indices)
+            result = __random_sampling(scores, indices)
+
+        if self.guided_decoding_manager and self.guided_processors:
+            for i, processor in self.guided_processors.items():
+                self.guided_decoding_manager.accept_token(processor, result[i])
+
+        return result
 
     @torch.inference_mode()
     def compute_logprobs(self, raw_logprobs: torch.Tensor, token_ids: torch.LongTensor):
@@ -297,3 +290,8 @@ class FusedLogitsProcessor:
             indices = torch.cat([indices, topk_indices], dim=-1)
 
         return logprobs, indices.to(torch.int32)
+
+    def cleanup_sessions(self, session_ids: List[int]):
+        if self.guided_decoding_manager:
+            for session_id in session_ids:
+                self.guided_decoding_manager.remove_processor(session_id)

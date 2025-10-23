@@ -22,6 +22,36 @@ class _ASNI_COLOR:
     GREEN = '\033[32m'
 
 
+# copy from: https://github.com/termcolor/termcolor
+@functools.cache
+def can_colorize(*, no_color: bool | None = None, force_color: bool | None = None) -> bool:
+    """Check env vars and for tty/dumb terminal."""
+    import io
+    if no_color is not None and no_color:
+        return False
+    if force_color is not None and force_color:
+        return True
+
+    # Then check env vars:
+    if os.environ.get('ANSI_COLORS_DISABLED'):
+        return False
+    if os.environ.get('NO_COLOR'):
+        return False
+    if os.environ.get('FORCE_COLOR'):
+        return True
+
+    # Then check system:
+    if os.environ.get('TERM') == 'dumb':
+        return False
+    if not hasattr(sys.stdout, 'fileno'):
+        return False
+
+    try:
+        return os.isatty(sys.stdout.fileno())
+    except io.UnsupportedOperation:
+        return sys.stdout.isatty()
+
+
 class ColorFormatter(logging.Formatter):
 
     _LEVELNAME_COLOR_MAP = dict(CRITICAL=_ASNI_COLOR.BRIGHT_RED,
@@ -35,7 +65,7 @@ class ColorFormatter(logging.Formatter):
 
     def format(self, record: LogRecord):
         """format."""
-        if sys.platform == 'win32':
+        if not can_colorize():
             # windows does not support ASNI color
             return super().format(record)
         levelname = record.levelname
