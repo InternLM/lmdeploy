@@ -169,6 +169,8 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         num_ignore_eos = sampling_inputs.num_ignore_eos.view(-1, dllm_block_size)
         num_ignore_eos = torch.where(is_unmasked, num_ignore_eos - dllm_block_size, num_ignore_eos)
         sampling_inputs.num_ignore_eos = num_ignore_eos.flatten()
+        if sampling_inputs.random_offsets is not None:
+            sampling_inputs.random_offsets += 1
         return sampling_inputs
 
     def make_stopping_criteria(self, seqs: SeqList) -> DLLMStoppingCriteria:
