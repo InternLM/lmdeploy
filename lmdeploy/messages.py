@@ -530,8 +530,8 @@ class EngineOutput:
 
     Args:
         status (ResponseType): the response type.
-        token_ids (List[int]): the output token ids.
-        num_token (int): the number of output tokens, which is equal to `len(token_ids)`
+        token_ids (List[int]): the newly generated token ids in each iteration.
+        num_token (int): the newly generated token number, equal to `len(token_ids)`
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in
