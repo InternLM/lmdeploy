@@ -213,9 +213,8 @@ class IterationStats:
         # update the latest token generation time
         req_state.lastest_token_time = outputs.req_metrics.token_timestamp
         # update the number of generated tokens
-        req_state.generation_tokens = outputs.num_token
+        req_state.generation_tokens += outputs.num_token
 
         if outputs.status != ResponseType.SUCCESS:
             req_state.finish_reason = outputs.status
             req_state.finish_time = self.iteration_timestamp
-            req_state.generation_tokens = outputs.num_token

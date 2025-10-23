@@ -154,4 +154,5 @@ class EngineOutputGather:
         output = self._output.pop(stream_id)
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
+        result.num_token = len(output.token_ids)
         return result
