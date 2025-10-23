@@ -137,7 +137,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
     @classmethod
     @lru_cache(maxsize=1)
-    def enable_alcgraph(cls) -> bool:
+    def enable_aclgraph(cls) -> bool:
         if os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'aclgraph' and not SocVersion.is_Ascend310P():
             return True
         elif os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'atbgraph' or SocVersion.is_Ascend310P():
@@ -269,7 +269,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                     else:
                         raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
                     kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
-            if not is_unpaged_prefill and AscendOpsBackend.enable_alcgraph():
+            if not is_unpaged_prefill and AscendOpsBackend.enable_aclgraph():
                 kv_seqlens = kv_seqlens.cpu().tolist()
         else:
             if step_context.is_decoding:
@@ -320,7 +320,7 @@ class AscendOpsBackend(DlinferOpsBackend):
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
-        if AscendOpsBackend.enable_alcgraph():
+        if AscendOpsBackend.enable_aclgraph():
             from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
             return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
         else:
