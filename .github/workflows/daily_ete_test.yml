@@ -125,6 +125,10 @@ jobs:
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Mark as start
+        run: |
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
 
   test_quantization:
     needs: download_pkgs
