@@ -21,5 +21,5 @@ add_library(DynamicDecodeLayer STATIC DynamicDecodeLayer.cc)
 set_property(TARGET DynamicDecodeLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET DynamicDecodeLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(DynamicDecodeLayer PUBLIC CUDA::cudart
-        LogitsProcessorLayer SamplingLayer StopCriteriaLayer
-        gpt_kernels nvtx_utils)
+  LogitsProcessorLayer SamplingLayer StopCriteriaLayer GuidedDecodeLayer
+  gpt_kernels nvtx_utils)

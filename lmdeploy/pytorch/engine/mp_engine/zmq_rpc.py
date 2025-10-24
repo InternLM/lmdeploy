@@ -11,6 +11,8 @@ from zmq.asyncio import Context
 
 from lmdeploy.utils import get_logger
 
+from .base_worker import EngineOutputGather
+
 logger = get_logger('lmdeploy')
 
 
@@ -32,7 +34,9 @@ def _task_callback(task: asyncio.Task) -> None:
 class AsyncRPCServer:
 
     def __init__(self):
-        address = 'tcp://*'
+        # Warning: DO NOT allow visit rpc server from external network
+        # unauthorized access may lead to code execution vulnerability
+        address = 'tcp://localhost'
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.ROUTER)
         self.port = self.socket.bind_to_random_port(address)
@@ -42,6 +46,7 @@ class AsyncRPCServer:
         # streaming
         self.stream_output = dict()
         self._stream_idx = 0
+        self._engine_output_gather = EngineOutputGather()
 
     def get_port(self):
         return self.port
@@ -96,6 +101,7 @@ class AsyncRPCServer:
         try:
             generator = method(*args, **kwargs)
             async for result in generator:
+                self._engine_output_gather.add(stream_id, result)
                 stream_out['result'] = result
                 stream_out['event'].set()
         except Exception as e:
@@ -114,6 +120,7 @@ class AsyncRPCServer:
         event.clear()
         result = stream_out['result']
         stopped = stream_out['stopped']
+        result = self._engine_output_gather.pop(stream_id, result)
         if stopped:
             self.stream_output.pop(stream_id)
         if 'error' in stream_out:

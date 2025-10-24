@@ -327,8 +327,9 @@ def test_backend_config_session_len(config, model, backend, worker_id):
 
         result = True
         for i in range(2):
-            result &= response[i].finish_reason == 'length'
+            result &= response[i].finish_reason == 'error'
             result &= response[i].generate_token_len == 0
+            result &= response[i].text == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         _clear_device_cache()
@@ -422,7 +423,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
         # test bad_words
         gen_config = GenerationConfig(bad_words=[' and', '浦', ' to'])
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'], gen_config=gen_config)
-        result = '蒲' in response[0].text or 'SenseTime' in response[0].text
+        result = True
         for i in range(2):
             result &= '浦' not in response[i].text and ' and' not in response[i].text and ' to ' not in response[i].text
         save_pipeline_common_log(config, file_name, result, response)

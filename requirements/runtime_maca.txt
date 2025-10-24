@@ -5,7 +5,7 @@ fire
 mmengine-lite
 numpy
 openai
-outlines<0.1.0
+openai_harmony
 partial_json_parser
 peft<=0.11.1
 pillow
@@ -21,3 +21,4 @@ torchvision<=0.21.0,>=0.15.0
 transformers
 triton>=2.1.0; sys_platform == "linux"
 uvicorn
+xgrammar

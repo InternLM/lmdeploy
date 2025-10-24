@@ -17,7 +17,6 @@ if [[ ${PYTHON_VERSION} = "3.13" ]]; then
 
     pip install setuptools_rust
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/google/sentencepiece.git@v0.2.0#subdirectory=python"
-    pip wheel -v --no-build-isolation --no-deps -w /wheels --use-deprecated=legacy-resolver outlines_core==0.1.26
 fi
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then

@@ -1,6 +1,8 @@
 # Structured output
 
-Currently, only the Pytorch backend has this capability. Therefore, whether you are using the pipeline or the api_server, please specify the use of the Pytorch backend.
+Structured output, also known as guided decoding, forces the model to generate text that exactly matches a user-supplied JSON schema, grammar, or regex.
+Both the PyTorch and Turbomind backends now support structured (schema-constrained) generation.
+Below are examples for the pipeline API and the API server.
 
 ## pipeline
 

@@ -35,7 +35,6 @@ class DLLMSamplingStrategy(ARSamplingStrategy):
             'random_seeds',
             'random_offsets',
             'all_ids',
-            'guided_input_ids',
             'num_ignore_eos',
         ]
         for name in update_attr_names:

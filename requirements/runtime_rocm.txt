@@ -5,7 +5,7 @@ fire
 mmengine-lite
 numpy
 openai
-outlines
+openai_harmony
 partial_json_parser
 peft<=0.14.0
 pillow
@@ -19,3 +19,4 @@ shortuuid
 tiktoken
 transformers
 uvicorn
+xgrammar

@@ -13,7 +13,6 @@ from queue import Queue
 from threading import Thread
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
-import torch
 import tqdm
 
 from lmdeploy import Tokenizer
@@ -30,6 +29,57 @@ from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 logger = get_logger('lmdeploy')
+
+
+def _merge_message_content(msg: Dict) -> Dict:
+    """Merge multimodal content blocks and ensure content field exists.
+
+    This function normalizes message content to match vLLM's behavior:
+    1. Missing content field -> add content='' (empty string)
+    2. None content -> convert to content='' (empty string)
+    3. String content -> return as-is
+    4. List content (multimodal) -> merge all text blocks with newline separator
+
+    Args:
+        msg: A message dict with 'role' and optionally 'content' field
+
+    Returns:
+        A message dict with 'content' field guaranteed to exist
+
+    Note:
+        This implementation is based on vLLM's content processing logic.
+        vLLM uses "\n".join() to merge multiple text blocks from multimodal content.
+
+    References:
+        - vLLM content normalization:
+          https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/chat_utils.py
+          See _parse_chat_message_content() and _parse_chat_message_content_parts()
+        - vLLM text merging logic:
+          text_prompt = "\n".join(texts)
+    """
+    # If content is missing or None, convert to empty string (matches vLLM behavior)
+    # This prevents Jinja2 template errors when rendering chat templates
+    if 'content' not in msg or msg['content'] is None:
+        result = dict(msg)
+        result['content'] = ''
+        return result
+
+    # If content is already a string, return as-is
+    if isinstance(msg['content'], str):
+        return msg
+
+    # If content is a list, merge all text blocks into a single string
+    # This matches vLLM's behavior: text_prompt = "\n".join(texts)
+    content_parts = []
+    for block in msg['content']:
+        if isinstance(block, dict) and block.get('type') == 'text':
+            content_parts.append(block.get('text', ''))
+    merged_content = '\n'.join(content_parts)
+
+    # Preserve all other fields in the message (e.g., tool_calls)
+    result = dict(msg)
+    result['content'] = merged_content
+    return result
 
 
 @dataclasses.dataclass
@@ -307,7 +357,6 @@ class AsyncEngine(LogitsMixin):
         self.free_insts = None
         self.instances.clear()
         self.engine.close()
-        torch._C._cuda_clearCublasWorkspaces()
 
     def __enter__(self):
         return self
@@ -609,11 +658,9 @@ class AsyncEngine(LogitsMixin):
         # Change multimodal data to openai text messages, i.e.,
         # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
         # [{'role': 'user', 'content': 'hi']
-        if isinstance(prompt, list) and any(isinstance(msg['content'], list) for msg in prompt):
-            prompt = [
-                msg if isinstance(msg['content'], str) else dict(role=msg['role'], content=msg['content'][0]['text'])
-                for msg in prompt
-            ]
+        # Also ensure all messages have 'content' field (set to None if missing, e.g., assistant with tool_calls)
+        if isinstance(prompt, list):
+            prompt = [_merge_message_content(msg) for msg in prompt]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
@@ -787,7 +834,6 @@ class AsyncEngine(LogitsMixin):
             input_len = len(input_ids)
             output_len, gen_len = 0, 0
             state = DetokenizeState(len(input_ids))
-            start_ids_offset = state.ids_offset
             response = ''
             finish_reason = None
             async with self.safe_run(inst,
@@ -799,7 +845,6 @@ class AsyncEngine(LogitsMixin):
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
-                prev_len = 0
                 hit_stop_token = 0
                 req_state = RequestState(prompt_tokens=input_len)  # per-requst state
                 async for outputs in gen:
@@ -810,22 +855,15 @@ class AsyncEngine(LogitsMixin):
                         break
 
                     output_len = outputs.num_token
-
-                    if hit_stop_token or prev_len == output_len:
+                    if hit_stop_token:
                         continue
 
                     # This assumes the engine will stop when stop token is hit
                     if output_len and outputs.token_ids[-1] in stop_ids:
                         hit_stop_token = 1
-                        # one token and it's been skipped
-                        if output_len == prev_len + 1:
-                            continue
 
-                    mask = slice(prev_len - output_len, output_len - hit_stop_token)
-                    token_ids += outputs.token_ids[mask]
+                    token_ids += outputs.token_ids
                     gen_len = len(token_ids) - input_len
-
-                    prev_len = output_len
 
                     ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
@@ -842,21 +880,13 @@ class AsyncEngine(LogitsMixin):
                                  finish_reason,
                                  token_ids=res,
                                  cache_block_ids=outputs.cache_block_ids)
-
                     if outputs.logprobs is not None:
-                        log_offset = ids_offset - start_ids_offset
-                        out.logprobs = outputs.logprobs[log_offset:]
-                        if hit_stop_token:
-                            out.logprobs = out.logprobs[:-hit_stop_token]
+                        out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
                     if outputs.last_hidden_state is not None:
-                        out.last_hidden_state = outputs.last_hidden_state
-                        if hit_stop_token:
-                            out.last_hidden_state = out.last_hidden_state[:-hit_stop_token]
+                        out.last_hidden_state = (outputs.last_hidden_state[:-hit_stop_token]
+                                                 if hit_stop_token else outputs.last_hidden_state)
                     if outputs.logits is not None:
-                        out.logits = outputs.logits
-                        if hit_stop_token:
-                            out.logits = out.logits[:-hit_stop_token]
-
+                        out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
                 metrics_processor.increment_finished_requests()

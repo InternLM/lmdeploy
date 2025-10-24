@@ -3,14 +3,10 @@
 from typing import List
 
 import shortuuid
+from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
 
 from lmdeploy.serve.openai.protocol import (ChatMessage, DeltaFunctionCall, DeltaMessage, DeltaToolCall, FunctionCall,
                                             ToolCall)
-
-try:
-    from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
-except (ImportError, ModuleNotFoundError):
-    pass
 
 _harmony_encoding = None
 
@@ -62,9 +58,14 @@ class GptOssChatParser:
                                                     index=base_index,
                                                     function=DeltaFunctionCall(name=tool_name, arguments=''))
                 elif delta_text:
+                    # Continuing the same tool call. Ensure we don't duplicate the
+                    # very first delta string in this chunk. Previously we initialized
+                    # with arguments=delta_text and then appended again, causing
+                    # duplicated content like "locationlocation".
                     if delta_tool_call is None:
-                        delta_tool_call = DeltaToolCall(index=base_index,
-                                                        function=DeltaFunctionCall(arguments=delta_text))
+                        # We are in the middle of a tool call carried over from the
+                        # previous chunk. Initialize an empty arguments buffer.
+                        delta_tool_call = DeltaToolCall(index=base_index, function=DeltaFunctionCall(arguments=''))
                     delta_tool_call.function.arguments += delta_text
 
         if delta_tool_call:
