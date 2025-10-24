@@ -236,8 +236,6 @@ class TurboMind:
                     tm_params[k] = [v]
                 else:
                     tm_params[k].append(v)
-        # for k, v in tm_params.items():
-        #     print(k, len(v))
         logger.warning(f'get {len(tm_params)} model params')
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):

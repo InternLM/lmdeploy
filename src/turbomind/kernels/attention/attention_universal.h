@@ -430,7 +430,6 @@ struct AttentionUniversal {
         const int offset_K = (first_K_tile + iter_end - 1) * CTA_S;
 
         // This is for avoiding OOB access only
-        // const int max_K = min(context_len, (first_K_tile + iter_end) * CTA_S);
         const int max_K = min(get_cp_len(context_len), (first_K_tile + iter_end) * CTA_S);
 
         int tile_iter = iter_end - iter_begin;
@@ -445,10 +444,6 @@ struct AttentionUniversal {
         int mask_iter_front = cdiv(max(0, offset_Q + CTA_Q - offset_K + tile_iter * CTA_S - params.window_size), CTA_S);
 
         if (params.cp_size > 1) {
-            // mask all iter for simplicity
-            // mask_iter_back  = 1 << 30;
-            // mask_iter_front = 1 << 30;
-            // TODO: use accurate mask_iter
             mask_iter_back =
                 cdiv(max(0, params.cp_size * (offset_K + CTA_S) - offset_Q + params.cp_rank), params.cp_size * CTA_S);
             mask_iter_front = cdiv(max(0,

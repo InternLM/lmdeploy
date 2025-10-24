@@ -453,14 +453,10 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     for (int i = 0; i < device_num; ++i) {
         auto& e         = engine_params_[i];
         e.outer_dp_rank = i / comm_size_;
-        // e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
-        // e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
-        // e.mlp_tp_rank   = i % comm_size_;
-
-        e.attn_cp_rank = i % comm_size_ % e.attn_cp_size;
-        e.attn_tp_rank = i % tp_cp_size / e.attn_cp_size;
-        e.attn_dp_rank = i % comm_size_ / tp_cp_size;
-        e.mlp_tp_rank  = i % comm_size_;
+        e.attn_cp_rank  = i % comm_size_ % e.attn_cp_size;
+        e.attn_tp_rank  = i % tp_cp_size / e.attn_cp_size;
+        e.attn_dp_rank  = i % comm_size_ / tp_cp_size;
+        e.mlp_tp_rank   = i % comm_size_;
     }
 
     TM_LOG_INFO("%s", toString().c_str());
@@ -592,7 +588,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
     if (first_create) {
         try {
-            // engine.Warmup();
+            engine.Warmup();
         }
         catch (const std::exception& e) {
             TM_LOG_ERROR("[Engine][Warmup] %s", e.what());

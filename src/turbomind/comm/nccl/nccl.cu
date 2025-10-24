@@ -261,21 +261,6 @@ public:
         NCCLCHECK(ncclGroupEnd());
     }
 
-    void AllGatherCP(const void*  send_M,
-                     void*        recv_M,
-                     const void*  send_L,
-                     void*        recv_L,
-                     size_t       sendcount,
-                     DataType     type,
-                     int          group,
-                     cudaStream_t stream)
-    {
-        NCCLCHECK(ncclGroupStart());
-        NCCLCHECK(ncclAllGather(send_M, recv_M, sendcount, to_nccl_dtype(type), groups_.at(group), stream));
-        NCCLCHECK(ncclAllGather(send_L, recv_L, sendcount, to_nccl_dtype(type), groups_.at(group), stream));
-        NCCLCHECK(ncclGroupEnd());
-    }
-
     void ReduceScatter(
         const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, int group, cudaStream_t stream) override
     {
