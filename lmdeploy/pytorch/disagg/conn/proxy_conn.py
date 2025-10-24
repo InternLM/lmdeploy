@@ -147,6 +147,7 @@ class PDConnectionPool:
                         timeout=self.aiotimeout,
                 ) as resp:
                     result = await resp.json()
+                    logger.info(f'=> p2p_connect response: {result}')
                     return DistServeConnectionResponse.model_validate(result)
 
         async def conn_worker(conn_req: PDConnectionMessage, conn_event: asyncio.Event):
@@ -161,6 +162,7 @@ class PDConnectionPool:
                 assert prefill_engine_config.tp_size == decode_engine_config.tp_size
 
                 # Step 2. Construct Initialize Configuration
+                logger.info(f'=> check conn_req: {conn_req}')
                 prefill_init_req = DistServeInitRequest(
                     protocol=conn_req.protocol,
                     local_engine_id=conn_req.p_url,
@@ -183,6 +185,8 @@ class PDConnectionPool:
                 prefill_init_resp = await p2p_initialize(conn_req.p_url, prefill_init_req)
                 decode_init_resp = await p2p_initialize(conn_req.d_url, decode_init_req)
 
+                logger.info(f'=> p2p init, prefill_init_resp: \n{prefill_init_resp}\n')
+                logger.info(f'=> p2p init, decode_init_resp: \n{decode_init_resp}\n')
                 # Step 3. Connection
                 prefill_endpoint_conn_reqs = DistServeConnectionRequest(
                     protocol=conn_req.protocol,
