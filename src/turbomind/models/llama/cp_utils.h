@@ -1,18 +1,23 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/kernels/attention/attention_params.h"
 
 namespace turbomind {
 
-template<typename T>
-void invokeCpReduce(T*           out,
-                    float*       ML,
-                    int          token_num,
-                    int          head_num,
-                    int          size_per_head,
-                    int          cp_size,
-                    int          cp_rank,
-                    float        exp_scale,
-                    cudaStream_t stream);
+struct CpPostContext {
+
+    CpPostContext(comm::DeviceCommImpl* d_comm, int attn_cp_group): d_comm(d_comm), attn_cp_group(attn_cp_group) {}
+
+    comm::DeviceCommImpl* d_comm;
+    int                   attn_cp_group;
+
+    float*   cp_ML;
+    void*    attn_param;
+    DataType attn_type;
+};
+
+void CpPost(void* context, int split_cnt);
 
 }  // namespace turbomind

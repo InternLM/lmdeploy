@@ -523,7 +523,7 @@ struct AttentionUniversal {
             StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params, storage);
         }
         else {
-            StorePartial(frag_O, frag_M, frag_L, qi_begin, qi_end, head_idx, split_idx, params, storage);
+            StorePartial(frag_O, frag_M, frag_L, split_cnt, qi_begin, qi_end, head_idx, split_idx, params, storage);
             if (!separate_reduce && split_cnt > 1) {
                 Reduce(qi_begin, head_idx, split_idx, iter_end == tile_count, params, cta_map, smem_buf);
             }
@@ -556,6 +556,8 @@ struct AttentionUniversal {
                       params.partial_L,
                       params.partial_O,
                       params.cp_ML,
+                      params.cp_k_ML,
+                      params.cp_q_offset,
                       qi_begin,
                       head_idx,
                       params.num_heads,
@@ -612,6 +614,7 @@ struct AttentionUniversal {
     __device__ void StorePartial(FragO&           frag_O,
                                  FragM&           frag_M,
                                  FragL&           frag_L,
+                                 int              split_cnt,
                                  int              qi_begin,
                                  int              qi_end,
                                  int              head_idx,
@@ -627,10 +630,10 @@ struct AttentionUniversal {
 
         Impl::StoreO<false>(frag_O, frag_L, storage, [&](int hi, int qi, int di, const auto& vec) {
             if (qi_begin + qi < qi_end && check_h(hi)) {
-                if (params.max_split_k > 1) {  // decode
+                if (split_cnt > 1) {  // decode
                     Store(&params.partial_O[get_index(hi, qi) * kHeadDim + di], vec);
                 }
-                if (params.cp_size > 1 && split_idx == 0) {
+                if (params.cp_size > 1 && split_cnt == 1) {
                     const int index = ((qi_begin + qi) * params.num_heads + (head_idx + hi)) * kHeadDim + di;
                     Store(&params.out[index], cast<T>(vec));
                 }
@@ -640,14 +643,23 @@ struct AttentionUniversal {
         Impl::ForeachML(frag_M, frag_L, [&](int hi, int qi, int ri, float M, float L) {
             const int index = get_index(hi, qi);
             if (qi_begin + qi < qi_end && ri == 0 && check_h(hi)) {
-                if (params.max_split_k > 1) {  // decode
+                if (split_cnt > 1) {  // decode
                     params.partial_M[index] = M;
                     params.partial_L[index] = L;
                 }
-                if (params.cp_size > 1 && split_idx == 0) {
-                    const int index         = ((qi_begin + qi) * params.num_heads + (head_idx + hi)) * 2;
-                    params.cp_ML[index]     = M;
-                    params.cp_ML[index + 1] = L;
+
+                auto save_cp_stats = [&](int max_split_k, int split_idx, float* ml, float M, float L) {
+                    const int q       = qi_begin + qi - params.cp_q_offset;
+                    const int index   = (q * params.num_heads + (head_idx + hi)) * max_split_k + split_idx;
+                    ml[index * 2]     = M;
+                    ml[index * 2 + 1] = L;
+                };
+
+                if (params.cp_size > 1) {
+                    if (split_cnt == 1) {
+                        save_cp_stats(1, 0, params.cp_ML, M, L);
+                    }
+                    save_cp_stats(params.max_split_k, split_idx, params.cp_k_ML, M, L);
                 }
             }
         });

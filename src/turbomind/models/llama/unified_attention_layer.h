@@ -30,6 +30,7 @@
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/llama/cp_utils.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -76,9 +77,6 @@ private:
     template<class T>
     Tensor core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights);
 
-    template<class T>
-    void cp_postprocess(Tensor& attn);
-
     void qk_norm(Tensor& qkv, const WeightType& weights);
 
 private:
@@ -124,7 +122,9 @@ private:
     Tensor_<int>   barriers_;  // always zero
 
     // context parallel
-    Tensor_<float> cp_ML_;
+    Tensor_<float> cp_ML_;    // cp, (d+p), h, 2
+    Tensor_<float> cp_k_ML_;  // (d+p), h, k, 2
+    CpPostContext  cp_fn_ctx_;
 
     Event event_;
 

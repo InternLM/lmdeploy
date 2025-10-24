@@ -45,7 +45,8 @@ void invokeAttention(const typename Kernel::ParamType& params)
         return int2{sm_count, max_active_ctas};
     }();
 
-    const int tile_count      = cdiv(std::min(params.max_k_len, params.window_size), Kernel::CTA_S);
+    const int max_cp_k_len    = (params.max_k_len + params.cp_size - 1) / params.cp_size;
+    const int tile_count      = cdiv(std::min(max_cp_k_len, params.window_size), Kernel::CTA_S);
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
     typename Kernel::CtaMap cta_map{
@@ -80,12 +81,15 @@ void invokeAttention(const typename Kernel::ParamType& params)
         std::abort();
     }
 
-    if (split_cnt > 1 && Kernel::need_separate_reduce(split_cnt)) {
+    if (params.cp_fn) {
+        int split_k = Kernel::need_separate_reduce(split_cnt) ? split_cnt : 1;
+        params.cp_fn(params.cp_fn_ctx, split_k);
+    }
+    else if (split_cnt > 1 && Kernel::need_separate_reduce(split_cnt)) {
         attention::invokeReduce<Kernel::kHeadDim>(params.out,
                                                   params.partial_M,
                                                   params.partial_L,
                                                   params.partial_O,
-                                                  params.cp_ML,
                                                   params.split_cnt,
                                                   params.max_split_k,
                                                   split_cnt,

@@ -34,7 +34,6 @@
 
 #include "src/turbomind/macro.h"
 
-#include "src/turbomind/models/llama/cp_utils.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
@@ -75,6 +74,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     model_param_(model),
     engine_param_(engine),
     attn_cp_group_(ctx.comm.d_cp_group),
+    cp_fn_ctx_(ctx.comm.d_comm, ctx.comm.d_cp_group),
     d_comm_(ctx.comm.d_comm),
     lora_param_(lora),
     context_(ctx),
@@ -99,6 +99,11 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     partial_O_ = Tensor_<float>({kMaxWorkspaceTokens, local_head_num_, size_per_head_}, kDEVICE);
     split_cnt_ = Tensor_<int>({kMaxWorkspaceTokens}, kDEVICE);
     barriers_  = Tensor_<int>({kMaxWorkspaceTokens, local_head_num_}, kDEVICE);
+
+    if (engine_param_.attn_cp_size > 1) {
+        const int cp_workspace_tokens = kMaxWorkspaceTokens + engine_param_.max_forward_token_num;
+        cp_k_ML_                      = Tensor_<float>({cp_workspace_tokens, local_head_num_, 2}, kDEVICE);
+    }
 
     Clear(split_cnt_.buffer());
     Clear(barriers_.buffer());
@@ -235,36 +240,6 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 }
 
 template<class T>
-void UnifiedAttentionLayer::cp_postprocess(Tensor& attn)
-{
-    NvtxScope scope("cp");
-    const int token_num = attn.shape(0);
-    const int count     = token_num * local_head_num_ * 2;
-    d_comm_->AllGather(
-        cp_ML_.data() + count * engine_param_.attn_cp_rank, cp_ML_.data(), count, kFloat32, attn_cp_group_, stream_);
-    sync_check_cuda_error();
-
-    float inv_sqrt_dh = (float)std::log2(expf(1.));
-    if (param_.softmax_scale) {
-        inv_sqrt_dh *= param_.softmax_scale;
-    }
-    else {
-        inv_sqrt_dh /= std::sqrt((float)size_per_head_);
-    }
-
-    invokeCpReduce(attn.data<T>(),
-                   cp_ML_.data(),
-                   token_num,
-                   local_head_num_,
-                   size_per_head_,
-                   engine_param_.attn_cp_size,
-                   engine_param_.attn_cp_rank,
-                   inv_sqrt_dh,
-                   stream_);
-    sync_check_cuda_error();
-}
-
-template<class T>
 Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights)
 {
     const auto device = qkv.device();
@@ -370,8 +345,19 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.cp_size = engine_param_.attn_cp_size;
         if (params.cp_size > 1) {
             params.cp_divmod = cutlass::FastDivmod(params.cp_size);
-            const int off_ML = engine_param_.attn_cp_rank * q_count * local_head_num_ * 2;
-            params.cp_ML     = cp_ML_.data() + off_ML;
+
+            const int offset_ML = engine_param_.attn_cp_size * offset * local_head_num_ * 2;
+            params.cp_ML        = cp_ML_.data() + offset_ML + params.cp_rank * params.token_num * local_head_num_ * 2;
+            params.cp_k_ML      = cp_k_ML_.data() + (offset ? kMaxWorkspaceTokens * local_head_num_ * 2 : 0);
+            params.cp_q_offset  = offset;
+
+            // postprocess func
+            params.cp_fn     = CpPost;
+            params.cp_fn_ctx = (void*)&cp_fn_ctx_;
+
+            cp_fn_ctx_.cp_ML      = cp_ML_.data() + offset_ML;
+            cp_fn_ctx_.attn_param = (void*)&params;
+            cp_fn_ctx_.attn_type  = attn.dtype();
         }
 
         params.arch   = arch_;
@@ -420,10 +406,6 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     if (decode_num_ && prefil_num_) {
         check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
         check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
-    }
-
-    if ((decode_num_ || prefil_num_) && !isTuning() && engine_param_.attn_cp_size > 1) {
-        cp_postprocess<T>(attn);
     }
 
     if (isTuning()) {

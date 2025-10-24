@@ -24,6 +24,8 @@ struct BlockIteratorParams {
     int        block_len;
 };
 
+typedef void (*cp_post_fn)(void* context, int split_cnt);
+
 /// TODO: Rename to attention::Param
 template<typename T>
 struct AttentionParams {
@@ -84,7 +86,11 @@ struct AttentionParams {
     int                 cp_rank{0};
     int                 cp_size{1};
     cutlass::FastDivmod cp_divmod{1};
-    float*              cp_ML{nullptr};
+    int                 cp_q_offset{0};    // decode offset
+    float*              cp_ML{nullptr};    // cp, q, h, 2
+    float*              cp_k_ML{nullptr};  // q, h, k, 2
+    cp_post_fn          cp_fn{nullptr};
+    void*               cp_fn_ctx{nullptr};
 
     int          arch;
     cudaStream_t stream;

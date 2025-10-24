@@ -12,7 +12,6 @@ void invokeReduce(T*           out,
                   float*       partial_M,
                   float*       partial_L,
                   float*       partial_O,
-                  float*       cp_ML,
                   const int*   split_cnt,
                   int          partial_len,
                   int          max_split_cnt,
@@ -35,7 +34,9 @@ void invokeReduce(T*           out,
                                                                             partial_M,
                                                                             partial_L,
                                                                             partial_O,
-                                                                            cp_ML,
+                                                                            nullptr,
+                                                                            nullptr,
+                                                                            0,
                                                                             nullptr,
                                                                             split_cnt,
                                                                             partial_len,
@@ -60,7 +61,6 @@ void invokeReduce(T*           out,
                                     float*       partial_M,                                                            \
                                     float*       partial_L,                                                            \
                                     float*       partial_O,                                                            \
-                                    float*       cp_ML,                                                                \
                                     const int*   split_cnt,                                                            \
                                     int          partial_len,                                                          \
                                     int          max_split_cnt,                                                        \
