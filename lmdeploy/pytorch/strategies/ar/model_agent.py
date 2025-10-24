@@ -71,6 +71,8 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         """step."""
         sampling_inputs.num_ignore_eos = sampling_inputs.num_ignore_eos - 1
         if sampling_inputs.random_offsets is not None:
+            # random offset is used to generate random numbers for multinomial sampling
+            # so we need to increase it by 1 at each step
             sampling_inputs.random_offsets += 1
 
         all_ids = sampling_inputs.all_ids
