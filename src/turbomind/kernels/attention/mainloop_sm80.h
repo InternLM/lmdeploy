@@ -49,6 +49,15 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
     using SharedStorage = typename Impl::SharedStorage;
 
+    int cp_size_{1};
+    int cp_rank_{0};
+
+    __device__ void SetCpInfo(int cp_size, int cp_rank)
+    {
+        cp_size_ = cp_size;
+        cp_rank_ = cp_rank;
+    }
+
     template<class... Args>
     __device__ void operator()(Args&&... args)
     {
@@ -442,7 +451,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K, int window_size)
     {
         Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float& score) {
-            int w = (offset_Q + qi) - (offset_K + si);
+            int w = (offset_Q + qi) - ((offset_K + si) * cp_size_ + cp_rank_);
             if (0 <= w && w < window_size) {}
             else {
                 score -= std::numeric_limits<float>::infinity();

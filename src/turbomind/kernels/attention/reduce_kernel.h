@@ -27,6 +27,9 @@ struct Reduce {
                                float*         partial_M,
                                float*         partial_L,
                                float*         partial_O,
+                               float*         cp_ML,
+                               float*         cp_k_ML,
+                               int            cp_q_offset,
                                int            query_idx,
                                int            head_idx,
                                int            head_num,
@@ -102,7 +105,7 @@ struct Reduce {
             Array<float, K> scale;
             PRAGMA_UNROLL
             for (int k = 0; k < K; ++k) {
-                scale[k] = IsFinal ? expdiff_M[k] / block_L : expdiff_M[k];
+                scale[k] = (IsFinal && cp_ML == nullptr) ? expdiff_M[k] / block_L : expdiff_M[k];
             }
 
             if (hi < CTA_H) {
@@ -122,6 +125,17 @@ struct Reduce {
                         partial_M[idx] = block_M;
                         partial_L[idx] = block_L;
                     }
+                }
+            }
+            else {
+                if (cp_ML != nullptr && lane_id % L == 0 && hi < hi_end) {
+                    const int idx1  = ((query_idx - cp_q_offset) * head_num + head_idx + hi) * 2;
+                    cp_ML[idx1]     = block_M;
+                    cp_ML[idx1 + 1] = block_L;
+
+                    const int idx2    = idx1 * max_split_cnt;
+                    cp_k_ML[idx2]     = block_M;
+                    cp_k_ML[idx2 + 1] = block_L;
                 }
             }
         }
@@ -212,6 +226,9 @@ __global__ void reduce_kernel(typename Reduce::T* out,
                               float*              partial_M,
                               float*              partial_L,
                               float*              partial_O,
+                              float*              cp_ML,
+                              float*              cp_k_ML,
+                              int                 cp_q_offset,
                               int*                signals,
                               const int*          split_cnt_,
                               int                 max_split_cnt,
@@ -238,6 +255,9 @@ __global__ void reduce_kernel(typename Reduce::T* out,
            partial_M,
            partial_L,
            partial_O,
+           cp_ML,
+           cp_k_ML,
+           cp_q_offset,
            query_idx,
            head_idx,
            head_num,

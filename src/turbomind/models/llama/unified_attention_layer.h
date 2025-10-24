@@ -30,6 +30,7 @@
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/llama/cp_utils.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -87,6 +88,7 @@ private:
     const int local_kv_head_num_;
 
     const AttentionParam param_;
+    const EngineParam    engine_param_;
     const ModelParam     model_param_;
     const LoraParam      lora_param_;
     const Context&       context_;
@@ -98,6 +100,9 @@ private:
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
     cudaEvent_t  aux_event_;
+
+    const int                   attn_cp_group_;
+    comm::DeviceCommImpl* const d_comm_;
 
     std::array<cudaStream_t, 2> streams_;
 
@@ -115,6 +120,11 @@ private:
     Tensor_<float> partial_O_;
     Tensor_<int>   split_cnt_;
     Tensor_<int>   barriers_;  // always zero
+
+    // context parallel
+    Tensor_<float> cp_ML_;    // cp, (d+p), h, 2
+    Tensor_<float> cp_k_ML_;  // (d+p), h, k, 2
+    CpPostContext  cp_fn_ctx_;
 
     Event event_;
 
