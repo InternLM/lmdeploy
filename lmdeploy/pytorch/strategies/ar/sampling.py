@@ -65,7 +65,7 @@ class ARSamplingStrategy(SamplingStrategy):
                 param = seq.sampling_param
                 temperature[idx] = param.temperature
                 repetition_penalty[idx] = param.repetition_penalty
-                top_k[idx] = param.top_k
+                top_k[idx] = max(0, param.top_k)
                 top_p[idx] = param.top_p
                 min_p[idx] = param.min_p
                 random_offsets[idx] = seq.num_valid_ids
@@ -129,6 +129,9 @@ class ARSamplingStrategy(SamplingStrategy):
             repetition_penalty = torch.tensor(repetition_penalty)
 
         temperature = torch.tensor(temperature)
+        if (temperature == 1.0).all():
+            # skip temperature processing if all temperature are 1.0
+            temperature = None
 
         bad_words, bad_mask = __get_bad_words(bad_words)
         stop_words, stop_mask = __get_bad_words(stop_words)
@@ -144,6 +147,10 @@ class ARSamplingStrategy(SamplingStrategy):
             random_offsets = None
         else:
             top_k = torch.tensor(top_k)
+            if (top_k == max_top_k).all():
+                # we would perform max_top_k before top_k
+                # if all top_k are same, we do not need to filter topk again
+                top_k = None
             top_p, min_top_p = __get_topp(top_p)
             min_p = __get_minp(min_p)
             random_seeds = torch.tensor(random_seeds)
