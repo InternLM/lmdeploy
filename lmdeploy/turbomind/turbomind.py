@@ -213,6 +213,7 @@ class TurboMind:
 
         model_comm = self.model_comm
         tm_params = self._tm_model.tm_params
+        tm_params.clear()
 
         def _get_params(device_id, que):
             rank = self.node_id * self.gpu_count + device_id
