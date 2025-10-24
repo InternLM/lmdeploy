@@ -205,8 +205,8 @@ class Llama4TextMoe(nn.Module):
         )
         self.shared_expert = Llama4TextMLP(config, dtype=dtype, device=device, is_tp=True, all_reduce=False)
 
-        dist_ctx = dist.get_dist_manager().current_context()
-        self.tp = dist_ctx.tp
+        dist_config = dist.get_dist_manager().current_config()
+        self.tp = dist_config.tp
 
     def forward(self, hidden_states: torch.Tensor):
         """forward."""

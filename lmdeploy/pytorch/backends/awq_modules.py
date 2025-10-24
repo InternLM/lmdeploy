@@ -17,7 +17,12 @@ class LinearW4A16Impl(ABC):
         return qweight, scales, qzeros, bias
 
     @abstractmethod
-    def forward(self, x, weight: torch.Tensor, bias: Optional[torch.Tensor] = None, all_reduce: bool = False):
+    def forward(self,
+                x,
+                weight: torch.Tensor,
+                bias: Optional[torch.Tensor] = None,
+                all_reduce: bool = False,
+                group: Optional[torch.distributed.ProcessGroup] = None):
         """forward."""
         raise NotImplementedError
 

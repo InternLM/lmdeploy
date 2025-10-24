@@ -19,22 +19,41 @@ if TYPE_CHECKING:
 @dataclass
 class DPMeta:
     tp_sizes: List[int] = None
-    ep_sizes: List[int] = None
+    moe_tp_sizes: List[int] = None
+
+    @staticmethod
+    def _gather_tp_sizes(tp: int, seqlen: int, dist_ctx: dist.DistContext, layer_type: str):
+        """Gather tp size."""
+        attn_tp = dist_ctx.dist_config.attn_tp
+        if tp > 1 and tp != attn_tp:
+            dist_group = dist.get_dist_group(layer_type=layer_type)
+            gather_group = dist_group.gpu_gather_group
+            tp_sizes = [None for _ in range(gather_group.size())]
+            dist.all_gather_object(tp_sizes, seqlen, group=gather_group)
+        else:
+            tp_sizes = [seqlen]
+        return tp_sizes
 
     @classmethod
     def build(cls, seqlen: int):
         """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
+        dist_config = dist_ctx.dist_config
 
-        tp = dist_ctx.tp
-        if tp > 1:
-            tp_sizes = [None for _ in range(tp)]
-            tp_group = dist.get_tp_group('gpu')
-            dist.all_gather_object(tp_sizes, seqlen, group=tp_group)
+        mlp_tp = dist_config.mlp_tp
+        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, dist_ctx, layer_type='mlp')
+
+        moe_tp = dist_config.moe_tp
+        if moe_tp == mlp_tp:
+            moe_tp_sizes = tp_sizes
         else:
-            tp_sizes = [seqlen]
+            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, dist_ctx, layer_type='moe')
 
-        return DPMeta(tp_sizes=tp_sizes, )
+        return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
+
+    def sync_tp_size(self, tp_size: int):
+        self.tp_sizes = [tp_size] * len(self.tp_sizes)
+        self.moe_tp_sizes = [tp_size] * len(self.moe_tp_sizes)
 
 
 @dataclass
