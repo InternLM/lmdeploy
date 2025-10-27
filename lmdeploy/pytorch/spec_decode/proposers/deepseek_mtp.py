@@ -5,8 +5,8 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from ..model_inputs import ModelInputs
-from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
+from ...model_inputs import ModelInputs
+from ...strategies.ar_spec.model_agent import ARSpecExtraInputs
 from .base import SPEC_PROPOSERS, BaseSpecProposer
 
 logger = get_logger('lmdeploy')

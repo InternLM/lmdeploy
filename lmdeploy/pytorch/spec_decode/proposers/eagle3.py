@@ -5,9 +5,9 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from ..config import ModelConfig
-from ..model_inputs import ModelInputs
-from ..strategies.base.model_agent import ExtraInputs
+from ...config import ModelConfig
+from ...model_inputs import ModelInputs
+from ...strategies.base.model_agent import ExtraInputs
 from .base import SPEC_PROPOSERS
 from .deepseek_mtp import DeepseekMTP
 

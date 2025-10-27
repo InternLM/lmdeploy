@@ -41,11 +41,9 @@ class Scheduler:
         scheduler_config: SchedulerConfig,
         cache_config: CacheConfig,
         seq_meta: SequenceMeta = None,
-        num_spec_tokens: int = 0,
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
-        self.num_spec_tokens = num_spec_tokens
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         # For Disaggregation

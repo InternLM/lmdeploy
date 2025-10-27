@@ -15,7 +15,7 @@ from ..engine.logits_process import SamplingInputs
 from ..model_inputs import ModelInputs
 from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
-from .base import build_specdecode_proposer
+from .proposers.base import build_specdecode_proposer
 from .reject_sampler import RejectionSampler
 
 logger = get_logger('lmdeploy')

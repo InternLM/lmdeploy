@@ -92,35 +92,3 @@ def greedy_reject_sampler(draft_token_ids, target_token_ids, bonus_token_ids):
     last_indices = (torch.cat([keeps, equals[:, -1:]], dim=1).cumsum(dim=1) - 1)[:, -1].flatten()
     last_token_ids = output_token_ids[torch.arange(batch_size, device=draft_token_ids.device), last_indices]
     return output_token_ids, num_rejected_tokens, last_token_ids
-
-
-if __name__ == '__main__':
-    num_seq = 3
-    max_spec_len = 2
-
-    num_draft_tokens = torch.LongTensor([2, 0, 1]).cuda()
-    vocab_size = 3
-    target_probs = torch.tensor([[0.5, 0.3, 0.2], [0.3, 0.5, 0.2], [0.1, 0.7, 0.2]], dtype=torch.bfloat16).cuda()
-    draft_token_ids = torch.tensor([0, 1, 2], dtype=torch.long).cuda()
-    bonus_token_ids = torch.tensor([2, 0, 2], dtype=torch.long).cuda()
-    expected_last_token_ids = torch.tensor([2, 0, 1], dtype=torch.long).cuda()
-    expected_num_rejected_tokens = torch.tensor([0, 0, 1], dtype=torch.long).cuda()
-    expected_output_token_ids = torch.tensor([[0, 1, 2], [0, -1, -1], [1, -1, -1]], dtype=torch.long).cuda()
-
-    draft_probs = None
-    target_probs, draft_token_ids, bonus_token_ids, max_spec_len = torch.load('tmp.pt')
-    num_draft_tokens = torch.LongTensor([1, 1, 1]).cuda()
-    expected_last_token_ids = torch.tensor([374, 374, 374], dtype=torch.long).cuda()
-    expected_num_rejected_tokens = torch.tensor([0, 0, 0], dtype=torch.long).cuda()
-    expected_output_token_ids = torch.tensor([[4320, 374], [4320, 374], [4320, 374]], dtype=torch.long).cuda()
-    output_token_ids, num_rejected_tokens, last_token_ids = rejection_sample(
-        target_probs,
-        draft_token_ids,
-        bonus_token_ids,
-        num_draft_tokens,
-        max_spec_len,
-        draft_probs,
-    )
-    torch.testing.assert_close(output_token_ids, expected_output_token_ids)
-    torch.testing.assert_close(num_rejected_tokens, expected_num_rejected_tokens)
-    torch.testing.assert_close(last_token_ids, expected_last_token_ids)

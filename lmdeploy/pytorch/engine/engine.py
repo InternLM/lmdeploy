@@ -369,12 +369,9 @@ class Engine(EngineBase):
         checker.handle()
 
         # spec decode
-        num_spec_tokens = 0
         self.speculative_config = speculative_config
 
         if speculative_config is not None:
-            engine_config.prefill_interval = 16
-            num_spec_tokens = speculative_config.num_speculative_tokens
             if speculative_config.model and not os.path.exists(speculative_config.model):
                 speculative_config.model = get_model(speculative_config.model, engine_config.download_dir,
                                                      engine_config.revision)
@@ -413,10 +410,7 @@ class Engine(EngineBase):
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
         self.seq_meta = _build_seq_meta(cache_config, strategy=self.seq_strategy)
-        self.scheduler = Scheduler(scheduler_config,
-                                   cache_config,
-                                   seq_meta=self.seq_meta,
-                                   num_spec_tokens=num_spec_tokens)
+        self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
 
         # engine args
         self.model_path = model_path
@@ -774,8 +768,6 @@ class Engine(EngineBase):
         # input ids
         token_ids = [msg.token_ids for msg in messages]
 
-        # spec decode
-
         input_ids = torch.as_tensor(np.concatenate(token_ids))[None]
 
         # seqlens
@@ -852,21 +844,6 @@ class Engine(EngineBase):
                 msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
                 msg.status = MessageStatus.STOPPED
 
-    def _debug_spec_stats(self, batched_outputs: BatchedOutputs, is_decoding: bool = False):
-        """Debugging spec stats."""
-        is_debugging = True
-        if is_debugging and self.speculative_config is not None:
-            if not hasattr(self, 'spec_stats'):
-                from lmdeploy.metrics.stats import SpeculativeDecodingStats
-                self.spec_stats = SpeculativeDecodingStats(self.speculative_config.num_speculative_tokens)
-            if is_decoding:
-                for tokens in batched_outputs.next_token_ids.numpy():
-                    num_draft_tokens = self.speculative_config.num_speculative_tokens
-                    num_accepted_tokens = (tokens > -1).sum() - 1
-                    self.spec_stats.update_per_draft(num_draft_tokens, num_accepted_tokens)
-            if self.spec_stats.num_drafts > 0:
-                logger.info(self.spec_stats)
-
     @record_function('make_infer_outputs')
     def _make_infer_outputs(
         self,
@@ -878,9 +855,6 @@ class Engine(EngineBase):
         new_token_timestamp = batched_outputs.new_token_timestamp
         logits = batched_outputs.logits
         logprobs = batched_outputs.logprobs
-
-        # for debug
-        self._debug_spec_stats(batched_outputs, is_decoding=is_decoding)
 
         if logprobs is not None:
             logprobs.vals = logprobs.vals.tolist()

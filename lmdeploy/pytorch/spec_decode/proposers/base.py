@@ -7,12 +7,12 @@ from torch.profiler import record_function
 
 from lmdeploy.utils import get_logger
 
-from ..config import ModelConfig, SpecDecodeConfig
-from ..engine.cache_engine import CacheEngine
-from ..model_inputs import ModelInputs, step_ctx_manager
-from ..models.patch import build_patched_model, update_custom_module_map
-from ..strategies.base.model_agent import ExtraInputs
-from ..weight_loader.model_weight_loader import load_model_weights
+from ...config import ModelConfig, SpecDecodeConfig
+from ...engine.cache_engine import CacheEngine
+from ...model_inputs import ModelInputs, step_ctx_manager
+from ...models.patch import build_patched_model, update_custom_module_map
+from ...strategies.base.model_agent import ExtraInputs
+from ...weight_loader.model_weight_loader import load_model_weights
 
 SPEC_PROPOSERS = Registry('spec_proposers')
 
