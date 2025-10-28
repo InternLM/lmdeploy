@@ -15,9 +15,9 @@ on:
         default: 'main'
       benchmark_type:
         required: true
-        description: 'Set benchmark type. Default is "["generation", "throughput", "api_server"]"'
+        description: 'Set benchmark type. Default is "["longtext", "throughput", "api_server"]"'
         type: string
-        default: "['apiserver', 'throughput']"
+        default: "['apiserver', 'throughput', 'longtext']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -42,7 +42,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.8
+      DOCKER_TAG: cuda12.4
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
