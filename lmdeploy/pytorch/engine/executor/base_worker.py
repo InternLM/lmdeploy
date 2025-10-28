@@ -51,7 +51,7 @@ class WorkerWrapperBase:
         self._output_loop: asyncio.Task = None
 
         # frequently gc would cause latency spike
-        # default threshold (700, 100, 100)
+        # default threshold (700, 10, 10)
         gc.set_threshold(10000, 100, 100)
 
     def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):

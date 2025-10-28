@@ -345,7 +345,7 @@ class Engine(EngineBase):
         engine_config = _update_engine_config(engine_config)
 
         # frequently gc would cause latency spike
-        # default threshold (700, 100, 100)
+        # default threshold (700, 10, 10)
         # WARNING: I don't know if it is a good idea to put gc setting here.
         gc.set_threshold(10000, 100, 100)
 
