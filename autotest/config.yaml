@@ -372,7 +372,6 @@ benchmark_model:
     - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
-    - deepseek-ai/DeepSeek-V2-Lite-Chat
     - unsloth/gpt-oss-20b-BF16
     - unsloth/gpt-oss-120b-BF16
 
