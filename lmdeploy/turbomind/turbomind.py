@@ -419,17 +419,24 @@ def _get_last_hidden_state(outputs, offset: int):
     return _func
 
 
-def _get_logprobs_impl(logprob_vals: torch.Tensor,
-                       logprob_idxs: torch.Tensor,
-                       logprob_nums: torch.Tensor,
-                       output_ids: List[int],
-                       logprobs: int,
-                       out_logprobs: List[Dict[int, float]] = None):
-    length = len(output_ids)
-    offset = len(out_logprobs)
-    if length == offset:
-        return out_logprobs
-    for (pos, idx, val, n) in zip(range(offset, length), logprob_idxs[offset:length], logprob_vals[offset:length],
+def _get_logprobs_impl(logprob_vals: torch.Tensor, logprob_idxs: torch.Tensor, logprob_nums: torch.Tensor,
+                       output_ids: List[int], logprobs: int, offset: int):
+    """Get logprob of each generated token.
+
+    Args:
+        logprob_vals (torch.Tensor): shape (max_new_tokens, 1024),
+            1024 is the max_logprobs that turbomind engine can output
+        logprob_idxs (torch.Tensor): shape (max_new_tokens, 1024)
+        logprob_nums (torch.Tensor): shape (max_new_tokens,)
+        output_ids (List[int]): new generated token ids
+        logprobs (int): top n logprobs to return
+        offset (int): offset to index logprob_vals, logprob_idxs and logprob_nums.
+            It indicates where to start getting logprobs for the current generated tokens `output_ids`
+    """
+    out_logprobs = []
+    # the total generated token number until now
+    length = len(output_ids) + offset
+    for (pos, idx, val, n) in zip(range(len(output_ids)), logprob_idxs[offset:length], logprob_vals[offset:length],
                                   logprob_nums[offset:length]):
         topn = min(n.item(), logprobs)
         tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
@@ -447,15 +454,16 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor,
 
 
 def _get_logprobs(outputs, output_logprobs: int):
-    logprob_vals = outputs['logprob_vals']
-    logprob_idxs = outputs['logprob_indexes']
-    logprob_nums = outputs['logprob_nums']
-
-    logprobs = []
+    logprob_vals = outputs['logprob_vals']  # shape {max_new_tokens, 1024}
+    logprob_idxs = outputs['logprob_indexes']  # shape {max_new_tokens, 1024}
+    logprob_nums = outputs['logprob_nums']  # shape {max_new_tokens,}
+    offset = 0  # offset to index logprob_vals, logprob_idxs and logprob_nums
 
     def _func(out: EngineOutput, step: int, **kwargs):
-        _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs, logprobs)
-        out.logprobs = logprobs
+        nonlocal offset
+        out.logprobs = _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs,
+                                          offset)
+        offset += len(out.token_ids)
 
     return _func
 
@@ -467,7 +475,7 @@ def _get_metrics(metrics):
 
     is_first = True
 
-    def _func(out: EngineOutput, step: int, is_first_token: bool = False, **kwargs):
+    def _func(out: EngineOutput, step: int, **kwargs):
         nonlocal is_first
         if not is_first:
             out.req_metrics = RequestMetrics(token_timestamp=time.time())
@@ -773,8 +781,8 @@ class TurboMindInstance:
                 if seq_len == prev_len and not finish:
                     continue
 
-                output_ids += output_ids_buf[prev_len:seq_len].tolist()
-                output_len += seq_len - prev_len
+                output_ids = output_ids_buf[prev_len:seq_len].tolist()
+                output_len = seq_len - prev_len
                 output = EngineOutput(ret_status, output_ids, output_len)
 
                 for f in extra_fs:
