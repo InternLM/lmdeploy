@@ -11,7 +11,7 @@ EVAL_CONFIGS = {
         'query_per_second': 1,
         'max_out_len': 32768,
         'batch_size': 500,
-        'temperature': 0.1,
+        'temperature': 0.6,
     }
 }
 
