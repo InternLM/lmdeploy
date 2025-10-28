@@ -862,7 +862,7 @@ class AsyncEngine(LogitsMixin):
                     if output_len and outputs.token_ids[-1] in stop_ids:
                         hit_stop_token = 1
 
-                    token_ids += outputs.token_ids
+                    token_ids += outputs.token_ids[:output_len - hit_stop_token]
                     gen_len = len(token_ids) - input_len
 
                     ids_offset = state.ids_offset
