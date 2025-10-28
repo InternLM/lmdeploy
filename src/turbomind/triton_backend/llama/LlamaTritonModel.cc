@@ -523,9 +523,11 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
         comm.d_tp_group    = 0;
         comm.d_cp_group    = 0;
         if (engine_param_.attn_tp_size != comm_size_) {
-            comm.d_tp_cp_group = comm.d_comm->Split(color_tp_cp, 0, 0);
-            comm.d_tp_group    = comm.d_comm->Split(color_tp, 0, comm.d_tp_cp_group);
-            comm.d_cp_group    = comm.d_comm->Split(color_cp, 0, comm.d_tp_cp_group);
+            if (tp_cp_size != comm_size_) {
+                comm.d_tp_cp_group = comm.d_comm->Split(color_tp_cp, 0, 0);
+            }
+            comm.d_tp_group = comm.d_comm->Split(color_tp, 0, comm.d_tp_cp_group);
+            comm.d_cp_group = comm.d_comm->Split(color_cp, 0, comm.d_tp_cp_group);
         }
     }
 
