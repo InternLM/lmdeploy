@@ -37,7 +37,7 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['quant', 'tools']"
+        default: "['quant', 'tools', 'restful']"
   schedule:
     - cron:  '00 14 * * 0-4'
 
