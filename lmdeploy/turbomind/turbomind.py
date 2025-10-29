@@ -720,7 +720,12 @@ class TurboMindInstance:
             try:
                 tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
                 decode_grammar_type = gen_config.response_format['type']
-                decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
+                if decode_grammar_type == 'json_schema':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
+                elif decode_grammar_type == 'regex_schema':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]
+                elif decode_grammar_type == 'json_object':
+                    decode_grammar = '{"type" : "object", "additionalProperties": true}'
 
                 compiler = _xgr.GrammarCompiler(tokenizer_info)
 
@@ -730,9 +735,12 @@ class TurboMindInstance:
                 elif decode_grammar_type == 'regex_schema':
                     decode_grammar = str(decode_grammar)
                     grammar = compiler.compile_regex(decode_grammar)
+                elif decode_grammar_type == 'json_object':
+                    decode_grammar = str(decode_grammar)
+                    grammar = compiler.compile_json_schema(decode_grammar)
                 else:
                     assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema"]'
+                                   '["json_schema", "regex_schema", "json_object"]'
 
                 self.model_inst.set_grammar(grammar)
             except ValueError as e:
