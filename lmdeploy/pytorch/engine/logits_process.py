@@ -126,6 +126,17 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
     return logits
 
 
+def _torch_topk(x: torch.Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True):
+    if k == 1:
+        # torch.topk would not fallback to torch.max/torch.min automatically
+        if largest:
+            return torch.max(x, dim=dim, keepdim=True)
+        else:
+            return torch.min(x, dim=dim, keepdim=True)
+    else:
+        return torch.topk(x, k, dim=dim, largest=largest, sorted=sorted)
+
+
 class FusedLogitsProcessor:
     """Custom logits processor."""
 
@@ -266,7 +277,7 @@ class FusedLogitsProcessor:
             if max_topk <= 0:
                 scores, indices = logits.sort(1, descending=True)
             else:
-                scores, indices = logits.topk(max_topk, dim=1)
+                scores, indices = _torch_topk(logits, max_topk, dim=1)
             result = __random_sampling(scores, indices)
 
         if self.guided_decoding_manager and self.guided_processors:
@@ -285,7 +296,7 @@ class FusedLogitsProcessor:
         logprobs = raw_logprobs.gather(-1, indices)
         num_logprobs = self.sampling_inputs.max_num_logprobs
         if num_logprobs > 0:
-            topk_logprobs, topk_indices = raw_logprobs.topk(num_logprobs, dim=-1)
+            topk_logprobs, topk_indices = _torch_topk(raw_logprobs, num_logprobs, dim=-1)
             logprobs = torch.cat([logprobs, topk_logprobs], dim=-1)
             indices = torch.cat([indices, topk_indices], dim=-1)
 
