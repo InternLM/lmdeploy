@@ -108,8 +108,7 @@ def longtext_throughput_test(config,
             log_path, f'benchmark_longtext_throughput_{case_name}' + model.split('/')[1] + worker_id + '.log')
         cmd = ' '.join([
             command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
-            f'--num-prompts {num_prompts}', '--stream-output'
-            f'--csv {csv_path}'
+            f'--num-prompts {num_prompts}', '--stream-output', f'--csv {csv_path}'
         ])
         if concurrency:
             cmd += f' --concurrency {concurrency}'
