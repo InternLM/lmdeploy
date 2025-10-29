@@ -1838,7 +1838,7 @@ void LlamaBatch::InitializeBufferAndKVCache()
                                                 core::Context::alloc(kDEVICE),
                                                 get_free_size});
 
-    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
+    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len * param_.attn_cp_size;
     if (max_session_len < session_len_) {
         if (is_driver_) {
             TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
