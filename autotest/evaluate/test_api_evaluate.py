@@ -8,8 +8,9 @@ PROXY_PORT = 8000
 
 EVAL_CONFIGS = {
     'default': {
-        'query_per_second': 1,
+        'query_per_second': 4,
         'max_out_len': 32768,
+        'max_seq_len': 32768,
         'batch_size': 500,
         'temperature': 0.6,
     }

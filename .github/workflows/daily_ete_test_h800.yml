@@ -280,7 +280,7 @@ jobs:
         run: |
           lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_chat_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 600s
+          sleep 900s
       - name: Test lmdeploy - restful api
         if:  matrix.model == 'Intern-S1'
         timeout-minutes: 30
