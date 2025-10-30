@@ -194,9 +194,20 @@ class VisonModel(ABC):
         preps = preps[0]
 
         _input_ids = messages[0]['content'][0]['text']
-        segs = [list(g) for k, g in groupby(_input_ids, lambda x: x == self.image_token_id) if not k]
+        segs = []
+        for k, g in groupby(_input_ids, lambda x: x == self.image_token_id):
+            if not k:
+                segs.append(list(g))
+            else:
+                segs.extend([[]] * (len(list(g)) - 1))
+        if _input_ids[0] == self.image_token_id:
+            segs = [[]] + segs
+        if _input_ids[-1] == self.image_token_id:
+            segs = segs + [[]]
+
         assert self.image_token_id == preps[0]['image_token_id']
-        assert len(segs)
+        assert len(segs) == len(preps) + 1, (f'the number of image token id {self.image_token_id} is not equal '
+                                             f'to input images, {len(segs) - 1} vs {len(preps)}')
         input_ids = []
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(preps):
