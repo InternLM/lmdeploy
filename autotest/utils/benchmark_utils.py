@@ -61,9 +61,9 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
         if returncode == 0 and not os.path.isfile(csv_path):
             return False, 'result is empty'
         if returncode != 0:
-            return returncode == 0, stderr
+            return False, stderr
 
-    return returncode == 0, stderr
+    return True, 'success'
 
 
 def longtext_throughput_test(config,
