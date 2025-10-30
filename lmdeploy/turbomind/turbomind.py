@@ -760,7 +760,6 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        output_len = 0
         prev_len = step + input_len
         try:
             while True:
@@ -782,8 +781,7 @@ class TurboMindInstance:
                     continue
 
                 output_ids = output_ids_buf[prev_len:seq_len].tolist()
-                output_len = seq_len - prev_len
-                output = EngineOutput(ret_status, output_ids, output_len)
+                output = EngineOutput(ret_status, output_ids)
 
                 for f in extra_fs:
                     f(output, seq_len)
@@ -811,7 +809,7 @@ class TurboMindInstance:
             logger.info(f'[async_stream_infer] session {session_id} done')
 
     def _get_error_output(self, status):
-        return EngineOutput(status=self.errcode_map[status], token_ids=[], num_token=0)
+        return EngineOutput(status=self.errcode_map[status], token_ids=[])
 
     def _get_generation_config(self, cfg: GenerationConfig):
         c = _tm.GenerationConfig()
