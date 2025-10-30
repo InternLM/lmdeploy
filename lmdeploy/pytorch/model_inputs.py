@@ -224,7 +224,7 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
-        max_kv_seqlen = self.max_kv_seqlen
+        max_kv_seqlen = 0
 
         # for mllama
         history_cross_length = self.history_cross_length
@@ -241,6 +241,7 @@ class ModelInputs:
             max_q_seqlen = end - start
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
+            max_kv_seqlen += max_q_seqlen
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -259,7 +260,6 @@ class ModelInputs:
             )
             ret.append(inp)
             history_cross_length = cross_length
-            max_kv_seqlen += max_q_seqlen
 
             start = end
 
