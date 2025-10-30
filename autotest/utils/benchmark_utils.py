@@ -44,7 +44,7 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
     else:
         if '4bit' in model:
             command += ' --model-format awq'
-        run_config = run_config + f' --quant-policy {quant_policy}'
+        command = command + f' --quant-policy {quant_policy}'
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/throughput_batch_{batch}_1th.csv'
@@ -98,7 +98,7 @@ def longtext_throughput_test(config,
         if not _is_bf16_supported_by_device():
             command += ' --dtype float16'
     else:
-        run_config = run_config + f' --quant-policy {quant_policy}'
+        command = command + f' --quant-policy {quant_policy}'
 
     for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', None),
                                                                     (1, 65536, 10, '64k', None),
