@@ -134,7 +134,7 @@ class Engine:
     def __init__(self, model_path: str, engine_config, csv: str):
         self.pipe = pipeline(model_path, backend_config=engine_config, log_level='ERROR')
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
+        self.return_routed_experts = getattr(self.pipe.backend_config, 'enable_return_routed_experts', False)
         self.csv = csv
 
     def process_request(self, requests, profiler: Profiler, temperature, top_p, top_k, stream_output):
@@ -146,6 +146,7 @@ class Engine:
                              top_k=top_k,
                              ignore_eos=True,
                              do_sample=False,
+                             return_routed_experts=self.return_routed_experts,
                              max_new_tokens=output_len) for _, _, output_len in requests
         ]
 

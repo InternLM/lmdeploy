@@ -217,15 +217,12 @@ class ModelConfig:
         return self.head_dim
 
     @classmethod
-    def from_pretrained(
-        cls,
-        pretrained_model_name_or_path: str,
-        trust_remote_code: bool = True,
-        dtype: str = 'auto',
-        dist_config: DistConfig = None,
-        hf_overrides: Dict[str, Any] = None,
-        enable_return_routed_experts: bool = False,
-    ):
+    def from_pretrained(cls,
+                        pretrained_model_name_or_path: str,
+                        trust_remote_code: bool = True,
+                        dtype: str = 'auto',
+                        dist_config: DistConfig = None,
+                        hf_overrides: Dict[str, Any] = None):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -255,9 +252,6 @@ class ModelConfig:
             logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
             override_hf_config(model_config.hf_config, hf_overrides)
-
-        # for router replay
-        model_config.hf_config.enable_return_routed_experts = enable_return_routed_experts
 
         return model_config
 

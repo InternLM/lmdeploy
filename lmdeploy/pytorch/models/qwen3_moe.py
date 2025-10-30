@@ -14,6 +14,7 @@ from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_pr
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
 
@@ -414,6 +415,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
+
         # build model
         self.model = Qwen3MoeModel(config, dtype=dtype, device=device)
         # build lm_head
@@ -422,7 +424,9 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
-        self.enable_return_routed_experts = getattr(self.config, 'enable_return_routed_experts', False)
+        # for router replay
+        bm_ctx = get_build_model_context()
+        self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
 
     def forward(
         self,
@@ -461,8 +465,8 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
 
         input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
         if self.enable_return_routed_experts:
-            input_buffers['all_routed_experts'] = input_ids.new_full(
-                (max_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok), -1, dtype=torch.int32)
+            input_buffers['all_routed_experts'] = input_ids.new_empty(
+                (max_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok), dtype=torch.int16)
 
         return input_buffers
 
@@ -473,7 +477,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
 
         input_buffers = graph_meta.input_buffers
         if self.enable_return_routed_experts:
-            input_buffers['all_routed_experts'].fill_(-1)
             new_inputs['all_routed_experts'] = input_buffers['all_routed_experts']
         return new_inputs
 
@@ -483,7 +486,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         outputs = dict()
         outputs['hidden_states'] = graph_meta.output_buffers['hidden_states'][:, :num_tokens]
         if self.enable_return_routed_experts:
-            outputs['all_routed_experts'] = graph_meta.output_buffers['all_routed_experts'][:num_tokens, ...].clone()
+            outputs['all_routed_experts'] = graph_meta.output_buffers['all_routed_experts'][:num_tokens, ...]
         return outputs
 
     def prepare_inputs_for_generation(
@@ -509,10 +512,8 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         # expert ids
         all_routed_experts = None
         if self.enable_return_routed_experts:
-            all_routed_experts = input_ids.new_full(
-                (input_ids.size(1), self.config.num_hidden_layers, self.config.num_experts_per_tok),
-                -1,
-                dtype=torch.int32)
+            all_routed_experts = input_ids.new_empty(
+                (input_ids.size(1), self.config.num_hidden_layers, self.config.num_experts_per_tok), dtype=torch.int16)
         # inputs of forward
         return dict(
             input_ids=input_ids,

@@ -246,13 +246,11 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-            if isinstance(output, torch.Tensor):
+            if not isinstance(output, Dict):
                 output = dict(hidden_states=output)
-            assert isinstance(output, Dict)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
-            model_metas = context.model_metas
-            seq_length = context.q_seqlens[:len(inputs.seq_length)]
-            output.update(dict(model_metas=model_metas, seq_length=seq_length))
+            output['model_metas'] = context.model_metas
+            output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             return output
 
 
@@ -443,11 +441,11 @@ class BaseModelAgent:
         inputs: ModelInputs,
         return_logits: bool,
         sync_long_context: bool,
+        return_routed_experts: bool,
     ):
         """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         strategy = self.agent_strategy
-        enable_return_routed_experts = self.misc_config.enable_return_routed_experts
 
         class _OutputGather:
             """Output gather."""
@@ -457,21 +455,21 @@ class BaseModelAgent:
                 self._start = 0
                 self._output: torch.Tensor = None
                 self._device: torch.device = None
-                self._exp_output: torch.Tensor = None
+                self._routed_experts: torch.Tensor = None
 
             def gather(self, output):
                 """gather."""
                 tmp_output = output['hidden_states']
                 seq_len = tmp_output.size(-2)
 
-                if 'all_routed_experts' in output:
+                if return_routed_experts and 'all_routed_experts' in output:
                     tmp_exp_ids = output['all_routed_experts']
-                    out_exp_ids = self._exp_output
+                    out_exp_ids = self._routed_experts
                     if out_exp_ids is None:
                         out_exp_ids = tmp_exp_ids.new_empty(self._max_seq_len, *tmp_exp_ids.shape[1:], device='cpu')
                         self._device = tmp_output.device
                     out_exp_ids[self._start:self._start + seq_len, ...].copy_(tmp_exp_ids, non_blocking=True)
-                    self._exp_output = out_exp_ids
+                    self._routed_experts = out_exp_ids
                     if not return_logits:
                         self._start += seq_len
 
@@ -491,15 +489,15 @@ class BaseModelAgent:
 
             def get_output(self):
                 """Get tmp_output."""
-                if not (return_logits or enable_return_routed_experts):
+                if not (return_logits or return_routed_experts):
                     seqlen = torch.full((1, ),
                                         self._output.numel() // self._output.size(-1),
                                         device=self._output.device,
                                         dtype=self._output.dtype)
                     return strategy.slice_outputs(self._output, seqlen), None
                 else:
-                    torch.cuda.synchronize()
                     if return_logits:
+                        torch.cuda.synchronize()
                         output_hidden_states = self._output.to(self._device)
                     else:
                         seqlen = torch.full((1, ),
@@ -507,10 +505,7 @@ class BaseModelAgent:
                                             device=self._output.device,
                                             dtype=self._output.dtype)
                         output_hidden_states = strategy.slice_outputs(self._output, seqlen)
-                    all_routed_experts = None
-                    if enable_return_routed_experts:
-                        all_routed_experts = self._exp_output.to(self._device)
-                    return output_hidden_states, all_routed_experts
+                    return output_hidden_states, self._routed_experts
 
         __forward = self.async_forward
 
@@ -529,10 +524,10 @@ class BaseModelAgent:
                 output_gather.gather(tmp_out)
                 tmp_out.pop('hidden_states', None)
                 tmp_out.pop('all_routed_experts', None)
-            tmp_out['hidden_states'], expert_ids = output_gather.get_output()
+            tmp_out['hidden_states'], routed_experts = output_gather.get_output()
 
-            if enable_return_routed_experts:
-                tmp_out['all_routed_experts'] = expert_ids
+            if return_routed_experts:
+                tmp_out['all_routed_experts'] = routed_experts
             return tmp_out
 
         origin_inputs = inputs
@@ -625,6 +620,7 @@ class BaseModelAgent:
         sampling_inputs: SamplingInputs = None,
         stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
+        return_routed_experts: bool = False,
         is_dummy: bool = False,
         sync_long_context: bool = False,
         extra_inputs: ExtraInputs = None,
@@ -733,6 +729,7 @@ class BaseModelAgent:
                 inputs,
                 return_logits=return_logits,
                 sync_long_context=sync_long_context,
+                return_routed_experts=return_routed_experts and need_output,
             )
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
@@ -962,9 +959,16 @@ class BaseModelAgent:
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
-        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
-                                            dllm_config=self.misc_config.dllm_config,
-                                            strategy_factory=self.strategy_factory)
+        # for router replay
+        need_output = self.dist_ctx.dp > 1 or self.dist_ctx.rank % self.dist_ctx.tp == 0
+        enable_return_routed_experts = self.misc_config.enable_return_routed_experts and need_output
+
+        build_model_ctx = BuildModelContext(
+            disable_vision_encoder=self.misc_config.disable_vision_encoder,
+            dllm_config=self.misc_config.dllm_config,
+            strategy_factory=self.strategy_factory,
+            enable_return_routed_experts=enable_return_routed_experts,
+        )
         patched_model = build_patched_model(self.model_config,
                                             device=device,
                                             model_format=self.misc_config.model_format,

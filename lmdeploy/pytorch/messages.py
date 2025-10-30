@@ -661,8 +661,11 @@ class SchedulerSequence:
     def routed_experts(self) -> np.ndarray:
         if (not self.return_routed_experts) or self.all_routed_experts is None:
             return None
-        end = max(0, self.num_valid_ids - 1)
-        return self.all_routed_experts._expert_ids[:end]
+
+        end = max(0, self.num_all_ids - 1)
+        if end == 0:
+            return None
+        return self.all_routed_experts[:end]
 
     @property
     def num_history_ids(self):

@@ -910,6 +910,13 @@ class AsyncEngine(LogitsMixin):
                         logits = outputs.logits[-1:] if outputs.logits else None
                         last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
                         logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
+                        gen_len += 1
+
+                    # router replay
+                    routed_experts = outputs.routed_experts
+                    if routed_experts is not None and (
+                            not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
+                        routed_experts = routed_experts[:-1]
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
@@ -923,7 +930,7 @@ class AsyncEngine(LogitsMixin):
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
-                                 routed_experts=outputs.routed_experts,
+                                 routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     # Update a session's sequence only when it is in finished status
                     if outputs.status == ResponseType.FINISH:
@@ -939,7 +946,6 @@ class AsyncEngine(LogitsMixin):
                                  input_token_len=len(input_ids),
                                  generate_token_len=0,
                                  finish_reason='error',
-                                 routed_experts=outputs.routed_experts,
                                  token_ids=[])
             # update step
             if sequence_end:
