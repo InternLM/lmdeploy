@@ -27,6 +27,10 @@ def _get_kv_cache_dtype(model_config: ModelConfig):
     return kv_cache_dtype
 
 
+# 512*1 + 4*4 + 64*2 = 656
+MLA_FP8_HEAD_DIM = 656
+
+
 class CacheEngine:
     """Host and Device memory maintainer.
 
@@ -124,9 +128,7 @@ class CacheEngine:
             num_heads = num_heads // world_size
 
         if model_config.use_mla_fp8_cache:
-            # 512*1 + 4*4 + 64*2 = 656
-            # TODO: Dirty magic number
-            return (block_size, num_heads, 656)
+            return (block_size, num_heads, MLA_FP8_HEAD_DIM)
 
         if quant_policy == 4:  # pack head_dim to uint8
             assert head_size % 2 == 0, \
@@ -148,8 +150,7 @@ class CacheEngine:
         num_heads = model_config.num_key_value_heads
 
         if model_config.use_mla_fp8_cache:
-            # 512*1 + 4*4 + 64*2 = 656
-            # TODO: Dirty magic number
+            # flash mla shared key and value
             return (block_size, num_heads, 0)
 
         if local:

@@ -577,7 +577,7 @@ class FusedMoELowLatency:
 
 
 @contextlib.contextmanager
-def monk_deep_gemm():
+def mock_deep_gemm():
     from dlblas.kernels.fused_moe_v3 import use_deep_gemm
     if use_deep_gemm:
         yield
@@ -698,12 +698,12 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         _origin_fusedmoe_forward = deepep_moe.fusedmoe_forward
 
         def _patched_forward(*args, **kwargs):
-            with monk_deep_gemm():
+            with mock_deep_gemm():
                 out = _origin_forward(*args, **kwargs)
                 return out
 
         def _patched_fusedmoe_forward(*args, **kwargs):
-            with monk_deep_gemm():
+            with mock_deep_gemm():
                 out = _origin_fusedmoe_forward(*args, **kwargs)
                 return out
 
