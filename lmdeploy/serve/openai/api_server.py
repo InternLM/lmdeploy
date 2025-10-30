@@ -906,6 +906,25 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+    if (request.prompt is not None) ^ (request.input_ids is None):
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'You must specify exactly one of prompt or input_ids')
+
+    prompt = request.prompt
+    input_ids = request.input_ids
+    image_data = request.image_data
+    if image_data is not None:
+        # convert to openai format
+        image_input = []
+        if not isinstance(image_data, List):
+            image_data = [image_data]
+        for img in image_data:
+            if isinstance(img, str):
+                image_input.append(dict(type='image_url', image_url=dict(url=img)))
+            else:
+                image_input.append(dict(type='image_url', image_url=img))
+        text_input = dict(type='text', text=prompt if prompt else input_ids)
+        prompt = [dict(role='user', content=[text_input] + image_input)]
+        input_ids = None
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
@@ -925,9 +944,9 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     )
 
     result_generator = VariableInterface.async_engine.generate(
-        messages=request.prompt,
+        messages=prompt,
         session_id=request.session_id,
-        input_ids=request.input_ids,
+        input_ids=input_ids,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
