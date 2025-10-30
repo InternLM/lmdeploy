@@ -232,3 +232,13 @@ MODULE_MAP.update({
 })
 
 CUSTOM_MODULE_MAP = dict()
+
+# spec models
+# eagle llama
+MODULE_MAP.update({'EagleLlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle.EagleLlamaForCausalLM'})
+
+# eagle3 llama
+MODULE_MAP.update({'Eagle3LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle3.Eagle3LlamaForCausalLM'})
+
+# deepseek mtp
+MODULE_MAP.update({'DeepseekMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_mtp.DeepseekMTPModel'})

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import torch.multiprocessing as mp
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
 from lmdeploy.utils import get_logger
 
 from .base import MPEngine
@@ -29,20 +29,29 @@ def cancel_async_tasks(loop: asyncio.AbstractEventLoop):
 
 class ZMQMPEngine(MPEngine):
 
-    def __init__(self, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs) -> None:
+    def __init__(self,
+                 model_path: str,
+                 engine_config: PytorchEngineConfig = None,
+                 speculative_config: SpeculativeConfig = None,
+                 **kwargs) -> None:
         """Initialize mp engine."""
         from .zmq_rpc import AsyncRPCClient
         self.shared_dict = None
         self.port = None
         self.proc = None
-        self._start_mp_proc(model_path, engine_config)
+        self._start_mp_proc(model_path, engine_config, speculative_config=speculative_config)
 
         self.rpc_client = AsyncRPCClient(port=self.port)
 
         super().__init__()
         atexit.register(self.close)
 
-    def _start_mp_proc(self, model_path: str, engine_config: PytorchEngineConfig = None):
+    def _start_mp_proc(
+        self,
+        model_path: str,
+        engine_config: PytorchEngineConfig = None,
+        speculative_config: SpeculativeConfig = None,
+    ):
         """Start mp proc."""
         logger.debug('Starting engine multi-process.')
         with mp.Manager() as manager:
@@ -57,6 +66,7 @@ class ZMQMPEngine(MPEngine):
                     model_path=model_path,
                     engine_config=engine_config,
                     log_level=log_level,
+                    speculative_config=speculative_config,
                 )),
                 name='mp_engine_proc',
             )
@@ -68,11 +78,14 @@ class ZMQMPEngine(MPEngine):
             self.port = self.shared_dict['rpc_server_port']
 
     @staticmethod
-    def _mp_proc(shared_dict: dict,
-                 condition: mp.Condition,
-                 model_path: str,
-                 engine_config: PytorchEngineConfig = None,
-                 log_level: str = 'WARNING'):
+    def _mp_proc(
+        shared_dict: dict,
+        condition: mp.Condition,
+        model_path: str,
+        engine_config: PytorchEngineConfig = None,
+        log_level: str = 'WARNING',
+        speculative_config: SpeculativeConfig = None,
+    ):
         """Mp process function."""
         from lmdeploy.pytorch.engine import Engine
 
@@ -92,6 +105,7 @@ class ZMQMPEngine(MPEngine):
         engine = Engine.from_pretrained(
             model_path,
             engine_config=engine_config,
+            speculative_config=speculative_config,
         )
 
         loop = asyncio.new_event_loop()
