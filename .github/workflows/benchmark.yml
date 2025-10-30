@@ -29,6 +29,7 @@ env:
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
+  ALLURE_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/allure_report/${{ github.run_id }}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
@@ -108,7 +109,6 @@ jobs:
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
 
-
   benchmark:
     needs: download_pkgs
     if: ${{github.event_name == 'schedule' || !cancelled()}}
@@ -142,6 +142,8 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
@@ -153,14 +155,13 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-          mkdir ${{env.REPORT_DIR}}/allure-results/.pytest_cache -p
-          ln -s ${{env.REPORT_DIR}}/allure-results/.pytest_cache autotest
       - name: Run other benchmark
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test' --alluredir=${{env.REPORT_DIR}}/allure-results
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..

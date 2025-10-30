@@ -146,7 +146,7 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
+        - /mnt/121:/mnt/121
         - /mnt/bigdisk:/mnt/bigdisk
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
@@ -154,6 +154,8 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install auto_gptq matplotlib attrdict
@@ -189,6 +191,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -230,7 +233,7 @@ jobs:
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
+        - /mnt/121:/mnt/121
         - /mnt/bigdisk:/mnt/bigdisk
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
@@ -238,6 +241,8 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -303,6 +308,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -334,12 +340,16 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -399,6 +409,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -418,12 +429,15 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk:/mnt/bigdisk
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -455,6 +469,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -475,12 +490,15 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk:/mnt/bigdisk
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -506,6 +524,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           chmod -R 777 /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
           export workdir=$(pwd)
@@ -533,13 +552,15 @@ jobs:
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
-        - /mnt/bigdisk:/mnt/bigdisk
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -583,6 +604,7 @@ jobs:
       - name: Clear workspace
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir
