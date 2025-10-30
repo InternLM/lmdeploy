@@ -27,7 +27,7 @@ on:
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
+  OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   ALLURE_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/allure_report/${{ github.run_id }}
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
@@ -44,7 +44,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.4
+      DOCKER_TAG: cuda12.8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -75,7 +75,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
