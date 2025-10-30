@@ -44,6 +44,8 @@ if (BUILD_TEST)
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG        v3.8.0
     GIT_SHALLOW ON
+    GIT_PROGRESS            TRUE
+    USES_TERMINAL_DOWNLOAD  TRUE
     EXCLUDE_FROM_ALL
   )
   FetchContent_MakeAvailable(Catch2)
@@ -53,8 +55,10 @@ endif()
 FetchContent_Declare(
   repo-cutlass
   GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-  GIT_TAG        v3.9.2
-  GIT_SHALLOW ON
+  GIT_TAG                 v3.9.2
+  GIT_SHALLOW             ON
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
   EXCLUDE_FROM_ALL
 )
 
@@ -66,13 +70,38 @@ FetchContent_MakeAvailable(repo-cutlass)
 FetchContent_Declare(
   yaml-cpp
   GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-  GIT_TAG 0.8.0
+  GIT_TAG                 0.8.0
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
   PATCH_COMMAND git apply ${CMAKE_CURRENT_SOURCE_DIR}/cmake/yaml-cpp_cmake_policy.patch
-  UPDATE_DISCONNECTED 1
+  UPDATE_DISCONNECTED     1
 )
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
 FetchContent_MakeAvailable(yaml-cpp)
 
+FetchContent_Declare(
+  xgrammar
+  GIT_REPOSITORY          https://github.com/mlc-ai/xgrammar.git
+  GIT_TAG                 v0.1.25
+  GIT_SUBMODULES          "3rdparty/dlpack"
+  GIT_PROGRESS            TRUE
+  USES_TERMINAL_DOWNLOAD  TRUE
+  UPDATE_DISCONNECTED     1
+)
+
+FetchContent_GetProperties(xgrammar)
+if(NOT xgrammar_POPULATED)
+  # Fetch the content using previously declared details
+  FetchContent_Populate(xgrammar)
+
+  file(WRITE ${xgrammar_SOURCE_DIR}/config.cmake "set(XGRAMMAR_BUILD_PYTHON_BINDINGS OFF)\n")
+  if(NOT MSVC)
+    file(APPEND ${xgrammar_SOURCE_DIR}/config.cmake "set(CMAKE_CXX_FLAGS \"-Wno-error\")\n")
+  endif()
+
+  # Bring the populated content into the build
+  add_subdirectory(${xgrammar_SOURCE_DIR} ${xgrammar_BINARY_DIR})
+endif()
 
 # the environment variable
 #   ASAN_OPTIONS=protect_shadow_gap=0,intercept_tls_get_addr=0
@@ -148,28 +177,71 @@ set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl") # -Xptxas -v
 
-# TODO: build for sm_72 & sm_87 on aarch64 platform (Jetson devices)
-if (NOT CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 70-real 75-real)  # V100, 2080
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 80-real) # A100
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+  set(ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64")
+  set(ARCH "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
+  # cmake reports AMD64 on Windows, but we might be building for 32-bit.
+  if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(ARCH "x86_64")
+  else()
+    set(ARCH "x86")
+  endif()
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86")
+  set(ARCH "x86")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "i386")
+  set(ARCH "x86")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "i686")
+  set(ARCH "x86")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  set(ARCH "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+  set(ARCH "aarch64")
+# Apple A12 Bionic chipset which is added in iPhone XS/XS Max/XR uses arm64e architecture.
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64e")
+  set(ARCH "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm*")
+  set(ARCH "arm")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "mips")
+  # Just to avoid the “unknown processor” error.
+  set(ARCH "generic")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "ppc64le")
+  set(ARCH "ppc64le")
+else()
+  message(FATAL_ERROR "Unknown processor:" ${CMAKE_SYSTEM_PROCESSOR})
+endif()
+
+
+if(ARCH STREQUAL "x86_64")
+  if (NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 70-real 75-real)  # V100, 2080
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 80-real) # A100
+    endif ()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.1")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 86-real) # 3090
+    endif ()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.8")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real) # 4090
+    endif ()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.0")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 90a-real) # H100
+    endif ()
+    if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.8")
+      list(APPEND CMAKE_CUDA_ARCHITECTURES 120a-real) # 5090
+    endif ()
+    if (MSVC)
+      list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real)
+    endif ()
   endif ()
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.1")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 86-real) # 3090
-  endif ()
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.8")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real) # 4090
-  endif ()
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.0")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 90a-real) # H100
-  endif ()
-  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.8")
-    list(APPEND CMAKE_CUDA_ARCHITECTURES 120a-real) # 5090
-  endif ()
-  if (MSVC)
-    list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real)
-  endif ()
-endif ()
+elseif(ARCH STREQUAL "aarch64")
+  if (NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 72-real 87-real)  # Jetson
+  endif()
+else()
+  message(FATAL_ERROR "Unsupported Architecture:" ${ARCH})
+endif()
 
 message(STATUS "Building with CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
 
@@ -266,7 +338,9 @@ add_subdirectory(src)
 if (BUILD_PY_FFI)
   if (CALL_FROM_SETUP_PY)
     install(TARGETS _turbomind DESTINATION ${CMAKE_INSTALL_PREFIX})
+    install(TARGETS _xgrammar DESTINATION ${CMAKE_INSTALL_PREFIX})
   else()
     install(TARGETS _turbomind DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
+    install(TARGETS _xgrammar DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/lib)
   endif()
 endif ()

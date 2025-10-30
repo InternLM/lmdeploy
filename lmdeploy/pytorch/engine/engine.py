@@ -551,7 +551,7 @@ class Engine(EngineBase):
                 if len(msgs) > 0 and msgs[0].preserve_cache:
                     self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
                 else:
-                    self.scheduler.end_session(session_id)
+                    self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -836,6 +836,10 @@ class Engine(EngineBase):
         logits = batched_outputs.logits
         logprobs = batched_outputs.logprobs
 
+        if logprobs is not None:
+            logprobs.vals = logprobs.vals.tolist()
+            logprobs.indices = logprobs.indices.tolist()
+
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
         self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
@@ -863,7 +867,7 @@ class Engine(EngineBase):
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
             if num_logprobs >= 0:
-                cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
+                cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
 
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
@@ -917,6 +921,7 @@ class Engine(EngineBase):
         stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
 
         sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
+
         return dict(
             running=running,
             inputs=inputs,
@@ -957,15 +962,7 @@ class Engine(EngineBase):
         def __send_resp(out: InferOutput):
             """Send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
-            cur_logprobs = out.logprobs
-            logprobs = None
-            if cur_logprobs is not None:
-                # logprobs to dict
-                vals = cur_logprobs[0].tolist()
-                indices = cur_logprobs[1].tolist()
-                cur_logprobs = dict(zip(indices, vals))
-                logprobs = [] if out.resp.data is None else out.resp.data.get('logprobs', [])
-                logprobs = logprobs + [cur_logprobs]
+            logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids,
@@ -974,10 +971,33 @@ class Engine(EngineBase):
                                      req_metrics=out.req_metrics,
                                      logprobs=logprobs))
 
+        def __update_logprobs(step_outputs: List[InferOutput]):
+            for out in step_outputs:
+                cur_logprobs = out.logprobs
+                if cur_logprobs is None:
+                    continue
+
+                if out.resp.data is None:
+                    out.resp.data = dict()
+                out.resp.data.setdefault('logprobs', [])
+
+                # logprobs to dict
+                vals = cur_logprobs[0]
+                indices = cur_logprobs[1]
+                cur_logprobs = dict(zip(indices, vals))
+                logprobs = out.resp.data['logprobs']
+                logprobs.append(cur_logprobs)
+
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
             __log_resps(step_outputs)
-            for out in step_outputs:
+            __update_logprobs(step_outputs)
+
+            is_done = set()
+            for out in reversed(step_outputs):
+                if out.session_id in is_done:
+                    continue
+                is_done.add(out.session_id)
                 __send_resp(out)
 
         while True:
@@ -1216,6 +1236,11 @@ class Engine(EngineBase):
             self._loop_finally()
 
     def close(self):
+        if self.executor.device_type == 'cuda':
+            # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879/32
+            # W/O this, repeatedly rebuilding and destroying engines within the same process
+            # will cause more and more reserved CUDA memory.
+            torch._C._cuda_clearCublasWorkspaces()
         if self._loop_main is not None:
             self._loop_main.cancel()
         else:
@@ -1242,6 +1267,7 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
+            self.sampling_strategy.on_session_end(session_id)
             self.scheduler.end_session(session_id)
             return True
         return False

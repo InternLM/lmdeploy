@@ -70,14 +70,14 @@ class ARModelAgentStrategy(ModelAgentStrategy):
     def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
         """step."""
         sampling_inputs.num_ignore_eos = sampling_inputs.num_ignore_eos - 1
+        if sampling_inputs.random_offsets is not None:
+            # random offset is used to generate random numbers for multinomial sampling
+            # so we need to increase it by 1 at each step
+            sampling_inputs.random_offsets += 1
 
         all_ids = sampling_inputs.all_ids
         if all_ids is not None:
             sampling_inputs.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
-
-        guided_input_ids = sampling_inputs.guided_input_ids
-        if guided_input_ids is not None:
-            sampling_inputs.guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None]], 1)
 
         return sampling_inputs
 
