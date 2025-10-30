@@ -110,7 +110,7 @@ jobs:
 
 
   benchmark:
-    needs: linux-build
+    needs: download_pkgs
     if: ${{github.event_name == 'schedule' || !cancelled()}}
     runs-on: [self-hosted, linux-a100]
     strategy:
