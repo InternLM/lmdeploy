@@ -775,15 +775,13 @@ class BaseModelAgent:
             while True:
                 forward_inputs = await input_maker.get()
 
-                if forward_event is not None:
-                    forward_event.clear()
                 await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
                 input_maker.step()
 
-    async def _async_loop_inputs_preprocess(self):
+    async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
         non_blocking = True
         keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
@@ -799,6 +797,8 @@ class BaseModelAgent:
                 self.out_stream.synchronize()
             logger.debug('preprocessing forward inputs done.')
             self._in_que.put_nowait(forward_inputs)
+            if forward_event is not None:
+                forward_event.clear()
 
     @staticmethod
     def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
@@ -833,7 +833,7 @@ class BaseModelAgent:
 
         # preprocess inputs task
         logger.debug('Create task ModelAgentPreprocess.')
-        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(),
+        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(forward_event),
                                                        name='ModelAgentPreprocess')
         tasks_to_cancel.append(self._preprocess_task)
 
