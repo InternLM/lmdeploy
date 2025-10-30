@@ -117,6 +117,7 @@ jobs:
       fail-fast: false
       matrix:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
+        gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
         include:
           - n: 8
             gpu_num: gpu_num_1
