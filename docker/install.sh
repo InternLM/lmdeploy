@@ -22,9 +22,9 @@ popd >/dev/null
 if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     apt-get install -y --no-install-recommends cuda-minimal-build-11-8
 elif [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-12-4
+    apt-get install -y --no-install-recommends cuda-minimal-build-12-4 cuda-cuobjdump-12-4 cuda-nvdisasm-12-4
 elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-12-8
+    apt-get install -y --no-install-recommends cuda-minimal-build-12-8 cuda-cuobjdump-12-8 cuda-nvdisasm-12-8
 fi
 
 apt-get clean -y
