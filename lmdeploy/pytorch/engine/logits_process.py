@@ -143,12 +143,10 @@ class FusedLogitsProcessor:
     def __init__(
         self,
         sampling_inputs: SamplingInputs,
-        sampling_vocab_size: Optional[int] = None,
         logprobs_mode: Optional[str] = None,
         guided_decoding_manager: Optional[GuidedDecodingMangager] = None,
     ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
-        self.sampling_vocab_size = sampling_vocab_size
         self.logprobs_mode = logprobs_mode
         self.guided_decoding_manager = guided_decoding_manager
         if sampling_inputs.session_to_cleanup:
@@ -265,9 +263,6 @@ class FusedLogitsProcessor:
             seeds = sampling_inputs.random_seeds
             offsets = sampling_inputs.random_offsets
             return _multinomial_sampling(softmax_scores, seeds, offsets, indices)
-
-        if self.sampling_vocab_size is not None and logits.size(1) > self.sampling_vocab_size:
-            logits = logits[..., :self.sampling_vocab_size]
 
         if sampling_inputs.max_top_k == 1:
             result = logits.argmax(-1)

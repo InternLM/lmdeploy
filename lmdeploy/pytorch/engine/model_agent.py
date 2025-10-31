@@ -315,10 +315,6 @@ class BaseModelAgent:
         self.cache_config = cache_config
         # use raw tokenizer
         self.tokenizer = Tokenizer(model_path).model.model
-        try:
-            self.sampling_vocab_size = len(self.tokenizer)
-        except BaseException:
-            self.sampling_vocab_size = None
 
         self._pre_in_que = None
         self._in_que = None
@@ -552,7 +548,6 @@ class BaseModelAgent:
         with record_function('sampling_logits'):
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
-                sampling_vocab_size=self.sampling_vocab_size,
                 logprobs_mode=self.misc_config.logprobs_mode,
                 guided_decoding_manager=self.guided_decoding_manager,
             )
