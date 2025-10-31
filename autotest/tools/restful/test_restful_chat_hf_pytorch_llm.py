@@ -24,6 +24,27 @@ def getModelList(tp_num):
     } for item in get_torch_model_list(tp_num, exclude_dup=True)]
 
 
+def getPrefixCacheModelList(tp_num):
+    return [{
+        'model': item,
+        'cuda_prefix': None,
+        'tp_num': tp_num,
+        'extra': '--enable-prefix-caching'
+    } for item in get_torch_model_list(tp_num, exclude_dup=True)]
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.prefix_cache_restful
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('prepare_environment', getPrefixCacheModelList(tp_num=1), indirect=True)
+def test_restful_chat_pytorch_prefix_cache_tp1(config, common_case_config, param, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api_pytorch

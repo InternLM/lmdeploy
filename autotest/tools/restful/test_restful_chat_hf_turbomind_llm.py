@@ -29,6 +29,30 @@ def getModelList(tp_num):
     return model_list
 
 
+def getPrefixCacheModelList(tp_num):
+    model_list = []
+    for communicator in get_communicator_list():
+        model_list += [{
+            'model': item,
+            'cuda_prefix': None,
+            'tp_num': tp_num,
+            'extra': f'--communicator {communicator} --enable-prefix-caching '
+        } for item in get_turbomind_model_list(tp_num)]
+    return model_list
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.prefix_cache_restful
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('prepare_environment', getPrefixCacheModelList(tp_num=1), indirect=True)
+def test_restful_chat_turbomind_prefix_cache_tp1(config, common_case_config, param, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
