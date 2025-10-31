@@ -8,7 +8,7 @@ import torch
 from lmdeploy.messages import LogitsProcessor
 
 from ..messages import SchedulerSequence
-from .guided_process import GuidedDecodingMangager
+from .guided_process import GuidedDecodingManager
 
 
 def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
@@ -144,7 +144,7 @@ class FusedLogitsProcessor:
         self,
         sampling_inputs: SamplingInputs,
         logprobs_mode: Optional[str] = None,
-        guided_decoding_manager: Optional[GuidedDecodingMangager] = None,
+        guided_decoding_manager: Optional[GuidedDecodingManager] = None,
     ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.logprobs_mode = logprobs_mode

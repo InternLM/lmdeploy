@@ -30,7 +30,7 @@ from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCri
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
-from .guided_process import GuidedDecodingMangager
+from .guided_process import GuidedDecodingManager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -350,7 +350,7 @@ class BaseModelAgent:
         self.cache_engine = None
         self.profiler: AgentProfiler = None
         try:
-            self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
+            self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
         except ValueError as e:
             logger.warning(f'Failed to create GuidedManager for tokenizer {self.tokenizer}: {e}')
             self.guided_decoding_manager = None
