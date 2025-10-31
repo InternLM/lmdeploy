@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import List
 
+import torch
+
 
 class RopeType(Enum):
     """Rotary embedding type."""
@@ -13,6 +15,7 @@ class RopeType(Enum):
     Llama3 = auto()
     Yarn = auto()
     LongRoPEScaling = auto()
+    Fope = auto()
 
 
 @dataclass
@@ -43,11 +46,20 @@ class Llama3Parameters:
     original_max_position_embeddings: int = 8192
 
 
+@dataclass
+class FopeParameters:
+    """Fope parameters."""
+    num_inv_freq: int = None
+    num_key_value_heads: int = 1
+    fope_sep_head: bool = False
+    inv_freq: torch.Tensor = None
+
+
 class RotaryEmbeddingImpl(ABC):
     """Rotary embedding implementation api."""
 
     @abstractmethod
-    def forward(self, x, position_ids):
+    def forward(self, x, position_ids, **kwargs):
         """forward."""
         raise NotImplementedError
 
@@ -65,6 +77,7 @@ class RotaryEmbeddingBuilder(ABC):
         yarn_params: YarnParameters = None,
         longrope_params: LongRoPEScalingParameters = None,
         llama3_params: Llama3Parameters = None,
+        fope_params: FopeParameters = None,
         emb_type: RopeType = RopeType.Default,
     ):
         """build."""
