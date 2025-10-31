@@ -63,7 +63,7 @@ class GenerationConfig:
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
         logprobs (int): Number of log probabilities to return per output token.
-        response_format (Dict): Only pytorch backend support formatting
+        response_format (Dict): Generate responses according to given formatting.
         response. Examples:
             {
                 "type": "json_schema",
@@ -536,8 +536,8 @@ class EngineOutput:
 
     Args:
         status (ResponseType): the response type.
-        token_ids (List[int]): the output token ids.
-        num_token (int): the number of output tokens, which is equal to `len(token_ids)`
+        token_ids (List[int]): the newly generated token ids in each iteration.
+        num_token (int): the newly generated token number, equal to `len(token_ids)`
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in

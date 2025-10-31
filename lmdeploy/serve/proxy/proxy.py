@@ -312,7 +312,7 @@ class NodeManager:
         """Check if a request is valid."""
         if model_name in self.model_list:
             return
-        ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
+        ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model {model_name!r} does not exist.')
         return ret
 
     def handle_unavailable_model(self, model_name):
@@ -538,8 +538,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
-    - response_format (Dict | None): Only pytorch backend support formatting
-        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+    - response_format (Dict | None): To generate response according to given
+        schema. Examples: `{"type": "json_schema", "json_schema": {"name":
         "test","schema": {"properties": {"name": {"type": "string"}},
         "required": ["name"], "type": "object"}}}`
         or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
