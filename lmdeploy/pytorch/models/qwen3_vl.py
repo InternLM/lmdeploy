@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -19,27 +19,6 @@ from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3VLVisionAttention
 from .qwen3 import Qwen3DecoderLayer as Qwen3VLTextDecoderLayer
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
-
-
-def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
-                           position_ids: torch.Tensor, rotary_emb_func: Callable):
-    _mrope_position_ids = torch.zeros(3, position_ids.shape[-1], dtype=position_ids.dtype, device=position_ids.device)
-    _mrope_position_ids[:, :mrope_position_ids.shape[-1]] = mrope_position_ids
-    cos, sin = rotary_emb_func(hidden_states, _mrope_position_ids)
-    _cos = torch.zeros(cos.shape[1], cos.shape[-1], dtype=cos.dtype, device=cos.device)
-    _sin = torch.zeros_like(_cos)
-    mrope_section = mrope_section * 2
-
-    def _apply_split(src, dst):
-        start = 0
-        for i, m in enumerate(src.split(mrope_section, dim=-1)):
-            dst[:, start:start + mrope_section[i]] = m[i % 3]
-            start += mrope_section[i]
-
-    _apply_split(cos, _cos)
-    _apply_split(sin, _sin)
-
-    return _cos, _sin
 
 
 class Qwen3VLTextRotaryEmbedding(nn.Module):
