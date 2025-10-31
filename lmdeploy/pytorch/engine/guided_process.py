@@ -10,7 +10,7 @@ from transformers import PreTrainedTokenizerBase
 logger = logging.getLogger('lmdeploy')
 
 
-class GuidedDecodingMangager:
+class GuidedDecodingManager:
     processors = {}
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: Optional[int]):

@@ -30,7 +30,7 @@ from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCri
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
-from .guided_process import GuidedDecodingMangager
+from .guided_process import GuidedDecodingManager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -315,10 +315,6 @@ class BaseModelAgent:
         self.cache_config = cache_config
         # use raw tokenizer
         self.tokenizer = Tokenizer(model_path).model.model
-        try:
-            self.sampling_vocab_size = len(self.tokenizer)
-        except BaseException:
-            self.sampling_vocab_size = None
 
         self._pre_in_que = None
         self._in_que = None
@@ -354,9 +350,9 @@ class BaseModelAgent:
         self.cache_engine = None
         self.profiler: AgentProfiler = None
         try:
-            self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
+            self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
         except ValueError as e:
-            logger.warning(f'Failed to create GuidedManager for tokenizer {self.tokenizer}: {e}')
+            logger.warning(f'Failed to create GuidedManager for tokenizer {type(self.tokenizer)}: {e}')
             self.guided_decoding_manager = None
 
         # microbatch
@@ -552,7 +548,6 @@ class BaseModelAgent:
         with record_function('sampling_logits'):
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
-                sampling_vocab_size=self.sampling_vocab_size,
                 logprobs_mode=self.misc_config.logprobs_mode,
                 guided_decoding_manager=self.guided_decoding_manager,
             )
