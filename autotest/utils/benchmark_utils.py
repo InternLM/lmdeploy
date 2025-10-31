@@ -98,6 +98,8 @@ def longtext_throughput_test(config,
         if not _is_bf16_supported_by_device():
             command += ' --dtype float16'
     else:
+        if '4bit' in model:
+            command += ' --model-format awq'
         command = command + f' --quant-policy {quant_policy}'
 
     for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', None),
