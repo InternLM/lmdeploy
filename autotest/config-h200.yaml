@@ -7,7 +7,7 @@ dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/ShareGPT_V3_u
 env_tag: h200
 
 tp_config:
-    Intern-S1: 8
+    Intern-S1: 4
     Qwen3-235B-A22B: 8
     Qwen3-235B-A22B-FP8: 4
     Qwen3-30B-A3B: 2
@@ -131,6 +131,8 @@ pytorch_quatization:
     no_kvint8:
         - empty
 
+longtext_model:
+    - Qwen/Qwen3-30B-A3B
 
 benchmark_model:
     - internlm/Intern-S1
