@@ -290,10 +290,7 @@ class ModelConfig:
             assert tp % model_config.num_key_value_heads == 0
 
         # should after setting `hf_config` and `model_arch` attributes
-        print(f'?????? dtype: {dtype}')
-        print(f'model_config: {model_config}')
         model_config = _update_torch_dtype(model_config, dtype)
-        print(f'after update, model_config: {model_config}')
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):
