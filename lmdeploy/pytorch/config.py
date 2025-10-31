@@ -28,9 +28,16 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         config.dtype = torch.float16
         return config
 
-    torch_dtype = getattr(config.hf_config, 'dtype', None)
-    if torch_dtype is None:
-        torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+    if hasattr(config.hf_config, 'text_config'):
+        torch_dtype = getattr(config.hf_config.text_config, 'dtype', None)
+
+        if torch_dtype is None:
+            torch_dtype = getattr(config.hf_config.text_config, 'torch_dtype', None)
+    else:
+        torch_dtype = getattr(config.hf_config, 'dtype', None)
+
+        if torch_dtype is None:
+            torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
 
     # deal with case when torch_dtype is not string but torch.dtype
     if isinstance(torch_dtype, torch.dtype):
@@ -283,7 +290,10 @@ class ModelConfig:
             assert tp % model_config.num_key_value_heads == 0
 
         # should after setting `hf_config` and `model_arch` attributes
+        print(f'?????? dtype: {dtype}')
+        print(f'model_config: {model_config}')
         model_config = _update_torch_dtype(model_config, dtype)
+        print(f'after update, model_config: {model_config}')
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):

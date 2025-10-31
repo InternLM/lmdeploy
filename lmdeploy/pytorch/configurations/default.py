@@ -15,7 +15,14 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
     def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         head_dim = getattr(hf_config, 'head_dim', None)
-        head_dim = head_dim or hf_config.hidden_size // hf_config.num_attention_heads
+
+        if hasattr(hf_config, 'text_config') and hasattr(hf_config, 'vision_config'):
+            # for multi-modal models config with separate text and vision configs
+            hf_config = hf_config.text_config
+            head_dim = hf_config.head_dim
+        else:
+            head_dim = head_dim or hf_config.hidden_size // hf_config.num_attention_heads
+
         # head_dim should not be None
         hf_config.head_dim = head_dim
         num_attention_heads = hf_config.num_attention_heads
