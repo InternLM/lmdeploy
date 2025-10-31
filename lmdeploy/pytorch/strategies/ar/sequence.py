@@ -84,10 +84,6 @@ class SchedulerSequenceDefault(SchedulerSequence):
 
 class ARSequenceStrategy(SequenceStrategy):
 
-    def __init__(self, model_config: Any):
-        """config."""
-        self.model_config = model_config
-
     def make_sequence(self,
                       seq_id: int,
                       session: 'SchedulerSession',
@@ -105,8 +101,6 @@ class ARSequenceStrategy(SequenceStrategy):
             migration_request=migration_request,
             resp_cache=resp_cache,
             preserve_cache=preserve_cache,
-            num_experts_per_tok=self.model_config.num_experts_per_tok,
-            num_moe_layers=self.model_config.num_moe_layers,
         )
 
     def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, is_decoding: bool) -> None:

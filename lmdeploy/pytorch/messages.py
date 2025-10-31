@@ -413,29 +413,21 @@ class HistoryTokenIds:
 
 class HistoryRouterExperts:
     """History router experts."""
-    ALLOC_SIZE = 512
+    ALLOC_SIZE = 64
 
-    def __init__(self,
-                 num_layer: int = None,
-                 topk: int = None,
-                 expert_ids: np.ndarray = None,
-                 dtype: np.dtype = np.int16):
-
+    def __init__(self, expert_ids: np.ndarray = None, dtype: np.dtype = np.int16):
+        self.dtype = dtype
         if expert_ids is None:
-            assert num_layer is not None
-            assert topk is not None
-            self._expert_ids = np.empty((self.ALLOC_SIZE, num_layer, topk), dtype=dtype)
+            self._expert_ids = None
             self._num_real = 0
-            self.num_layer = num_layer
-            self.topk = topk
         else:
-            self._expert_ids = expert_ids
+            self._expert_ids = expert_ids.astype(dtype)
             self._num_real = len(expert_ids)
-            self.num_layer = expert_ids.shape[1]
-            self.topk = expert_ids.shape[2]
 
     def reserve(self, size: int):
         """Reserve cache."""
+        if self._expert_ids is None:
+            return
         num_tokens = len(self._expert_ids)
         if num_tokens >= size:
             return
@@ -444,7 +436,9 @@ class HistoryRouterExperts:
         self._expert_ids = new_expert_ids
 
     def get_real(self):
-        """Get logical blocks."""
+        """Get real data."""
+        if self._expert_ids is None:
+            return None
         return self._expert_ids[:self._num_real]
 
     def resize(self, size: int):
@@ -452,16 +446,12 @@ class HistoryRouterExperts:
         assert size <= self._num_real
         self._num_real = size
 
-    def __setitem__(self, *args, **kwargs):
-        """Set values."""
-        return self.get_real().__setitem__(*args, **kwargs)
-
-    def __getitem__(self, *args, **kwargs):
-        """Get values."""
-        return self.get_real().__getitem__(*args, **kwargs)
-
     def append(self, expert_ids: np.ndarray):
         """Append token ids."""
+        if self._expert_ids is None:
+            self._expert_ids = expert_ids.astype(self.dtype)
+            self._num_real = len(expert_ids)
+            return
         num_tokens = len(expert_ids)
         self.reserve(num_tokens + self._num_real)
         slice_start = self._num_real
@@ -475,8 +465,8 @@ class HistoryRouterExperts:
 
     def clone(self):
         """clone."""
-        ret = HistoryRouterExperts(num_layer=self.num_layer, topk=self.topk)
-        ret.append(self.get_real())
+        expert_ids = None if self._expert_ids is None else self.get_real().copy()
+        ret = HistoryRouterExperts(expert_ids=expert_ids, dtype=self.dtype)
         return ret
 
     def copy(self):
@@ -577,9 +567,7 @@ class SchedulerSequence:
     engine_events: List[EngineEvent] = field(default_factory=list)
 
     # for router replay
-    num_moe_layers: int = None
-    num_experts_per_tok: int = None
-    all_routed_experts: HistoryRouterExperts = None
+    all_routed_experts: HistoryRouterExperts = field(default_factory=HistoryRouterExperts)
 
     def __post_init__(self):
         """Post init."""
@@ -592,8 +580,6 @@ class SchedulerSequence:
         self._num_images: int = len(self.history_embeddings)
         self._num_history_cross: int = 0
         self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
-        if self.return_routed_experts:
-            self.all_routed_experts = HistoryRouterExperts(num_layer=self.num_moe_layers, topk=self.num_experts_per_tok)
 
     @property
     def block_size(self) -> int:
@@ -652,10 +638,7 @@ class SchedulerSequence:
 
     @property
     def return_routed_experts(self) -> bool:
-        ret = self.sampling_param.return_routed_experts and \
-            self.num_moe_layers is not None and \
-            self.num_experts_per_tok is not None
-        return ret
+        return self.sampling_param.return_routed_experts
 
     @property
     def routed_experts(self) -> np.ndarray:
@@ -663,9 +646,10 @@ class SchedulerSequence:
             return None
 
         end = max(0, self.num_all_ids - 1)
-        if end == 0:
+        if 0 < end <= len(self.all_routed_experts):
+            return self.all_routed_experts.get_real()[:end]
+        else:
             return None
-        return self.all_routed_experts[:end]
 
     @property
     def num_history_ids(self):

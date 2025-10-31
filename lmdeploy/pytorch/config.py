@@ -208,10 +208,6 @@ class ModelConfig:
     dllm_mask_token: int = 0
     dllm_block_length: int = None
 
-    # router replay
-    num_moe_layers: int = None
-    num_experts_per_tok: int = None
-
     def get_head_size(self):
         """Get head size."""
         return self.head_dim
