@@ -176,7 +176,7 @@ def prefixcache_throughput_test(config,
         quant_policy = run_config['quant_policy']
     model_path = '/'.join([config.get('model_path'), model])
     log_path = config.get('log_path')
-    dataset_path = config.get('dataset_path')
+    dataset_path = config.get('prefix_dataset_path')
 
     if backend == 'turbomind' and quant_policy != 0:
         benchmark_path = '/'.join(

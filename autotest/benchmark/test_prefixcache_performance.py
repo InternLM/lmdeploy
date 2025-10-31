@@ -1,8 +1,6 @@
-import os
-
 import pytest
 from utils.benchmark_utils import prefixcache_throughput_test
-from utils.config_utils import get_benchmark_model_list, get_cuda_id_by_workerid, get_cuda_prefix_by_workerid
+from utils.config_utils import get_benchmark_model_list, get_cuda_prefix_by_workerid
 
 
 @pytest.mark.gpu_num_1
@@ -10,10 +8,10 @@ from utils.config_utils import get_benchmark_model_list, get_cuda_id_by_workerid
 @pytest.mark.parametrize('run_config', get_benchmark_model_list(tp_num=1, kvint_list=[4, 8]))
 def test_prefixcache_throughput_tp1(config, run_id, run_config, worker_id):
     result, msg = prefixcache_throughput_test(config,
-                                             run_id,
-                                             run_config,
-                                             cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=1),
-                                             worker_id=worker_id)
+                                              run_id,
+                                              run_config,
+                                              cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=1),
+                                              worker_id=worker_id)
 
     assert result, msg
 
@@ -23,10 +21,10 @@ def test_prefixcache_throughput_tp1(config, run_id, run_config, worker_id):
 @pytest.mark.parametrize('run_config', get_benchmark_model_list(tp_num=2, kvint_list=[4, 8]))
 def test_prefixcache_throughput_tp2(config, run_id, run_config, worker_id):
     result, msg = prefixcache_throughput_test(config,
-                                             run_id,
-                                             run_config,
-                                             cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
-                                             worker_id=worker_id)
+                                              run_id,
+                                              run_config,
+                                              cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
+                                              worker_id=worker_id)
 
     assert result, msg
 
@@ -36,10 +34,10 @@ def test_prefixcache_throughput_tp2(config, run_id, run_config, worker_id):
 @pytest.mark.parametrize('run_config', get_benchmark_model_list(tp_num=4, kvint_list=[4, 8]))
 def test_prefixcache_throughput_tp4(config, run_id, run_config, worker_id):
     result, msg = prefixcache_throughput_test(config,
-                                             run_id,
-                                             run_config,
-                                             cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
-                                             worker_id=worker_id)
+                                              run_id,
+                                              run_config,
+                                              cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
+                                              worker_id=worker_id)
 
     assert result, msg
 
@@ -49,9 +47,9 @@ def test_prefixcache_throughput_tp4(config, run_id, run_config, worker_id):
 @pytest.mark.parametrize('run_config', get_benchmark_model_list(tp_num=4, kvint_list=[4, 8]))
 def test_prefixcache_throughput_tp8(config, run_id, run_config, worker_id):
     result, msg = prefixcache_throughput_test(config,
-                                             run_id,
-                                             run_config,
-                                             cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=8),
-                                             worker_id=worker_id)
+                                              run_id,
+                                              run_config,
+                                              cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=8),
+                                              worker_id=worker_id)
 
     assert result, msg
