@@ -133,6 +133,7 @@ pytorch_quatization:
 
 longtext_model:
     - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
 
 benchmark_model:
     - internlm/Intern-S1
