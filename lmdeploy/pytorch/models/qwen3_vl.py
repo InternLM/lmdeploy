@@ -7,14 +7,14 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 
-from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import LayerNorm, RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3VLVisionRotaryEmbedding
+from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3VLInputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3VLVisionAttention
 from .qwen3 import Qwen3DecoderLayer as Qwen3VLTextDecoderLayer
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
@@ -832,41 +832,3 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
 
 
 InputMultiModalType = List[Dict[str, Any]]
-
-
-class Qwen3VLInputProcessor(BaseModelInputProcessor):
-    """Qwen3 input processor."""
-
-    def __init__(self, config: PretrainedConfig) -> None:
-        self.config = config
-
-    def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals: List[Dict[str, Any]] = None,
-                         **kwargs) -> PreprocessInputResult:
-        """Prepare multimodal input."""
-        if input_multimodals is None or len(input_multimodals) == 0:
-            return input_ids, input_multimodals
-
-        input_imgs = []
-        for input_mm in input_multimodals:
-            pixel_values = input_mm['pixel_values']
-            image_grid_thw = input_mm['image_grid_thw']
-            offset = input_mm['offset']
-            start = offset
-            image_token_id = input_mm['image_token_id']
-            num_pad = input_mm['image_tokens']
-            if isinstance(num_pad, torch.Tensor):
-                num_pad = num_pad.item()
-
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=start,
-                                       end=start + num_pad,
-                                       meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
-            input_imgs.append(mm_data)
-
-        result = PreprocessInputResult(
-            input_ids=input_ids,
-            input_multimodals=dict(image=input_imgs),
-        )
-        return result
