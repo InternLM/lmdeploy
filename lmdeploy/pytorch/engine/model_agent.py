@@ -352,7 +352,7 @@ class BaseModelAgent:
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
         except ValueError as e:
-            logger.warning(f'Failed to create GuidedManager for tokenizer {self.tokenizer}: {e}')
+            logger.warning(f'Failed to create GuidedManager for tokenizer {type(self.tokenizer)}: {e}')
             self.guided_decoding_manager = None
 
         # microbatch
