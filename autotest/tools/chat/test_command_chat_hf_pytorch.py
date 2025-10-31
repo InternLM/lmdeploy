@@ -8,7 +8,7 @@ from utils.run_client_chat import hf_command_line_test
 
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
-@pytest.mark.prefix_cache_functional
+@pytest.mark.prefix_cache_test
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1))
 def test_hf_chat_prefix_cache_tp1(config, model, cli_case_config, worker_id):

@@ -35,7 +35,7 @@ def getPrefixCacheModelList(tp_num):
 
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.prefix_cache_restful
+@pytest.mark.prefix_cache_test
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment', getPrefixCacheModelList(tp_num=1), indirect=True)
 def test_restful_chat_pytorch_prefix_cache_tp1(config, common_case_config, param, worker_id):
