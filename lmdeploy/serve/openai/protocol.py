@@ -472,3 +472,13 @@ class GenerateReqOutput(BaseModel):
     text: str
     output_ids: List[int]
     meta_info: GenerateReqMetaOutput
+
+
+class AbortRequest(BaseModel):
+    # Whether to abort all requests
+    abort_all: bool = False
+    # The finished reason data
+    finished_reason: Optional[Dict[str, Any]] = None
+    abort_message: Optional[str] = None
+    # The session ID to abort. If `abort_all` is True, this field is ignored.
+    session_id: Optional[int] = -1

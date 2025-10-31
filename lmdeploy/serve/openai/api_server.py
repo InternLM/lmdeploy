@@ -32,7 +32,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, Di
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
+from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest, ChatCompletionResponseChoice,
                                             ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
                                             ChatCompletionTokenLogprob, ChatMessage, ChoiceLogprobs, CompletionRequest,
                                             CompletionResponse, CompletionResponseChoice,
@@ -1147,6 +1147,16 @@ async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONRespo
 
 
 """ PD Disaggregation API End """
+
+
+@router.post('/abort_request')
+async def abort_request(request: AbortRequest, raw_request: Request = None):
+    """Abort an ongoing request."""
+    if request.abort_all:
+        await VariableInterface.async_engine.stop_all_session()
+    else:
+        await VariableInterface.async_engine.stop_session(request.session_id)
+    return Response(status_code=200)
 
 
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
