@@ -144,6 +144,7 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    state_offsets: torch.LongTensor = None
 
     def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -257,6 +258,7 @@ class ModelInputs:
                 model_metas=self.model_metas,
                 cross_length=cross_length,
                 history_cross_length=history_cross_length,
+                state_offsets=self.state_offsets,
             )
             ret.append(inp)
             history_cross_length = cross_length
@@ -322,6 +324,10 @@ class StepContext:
     dp_meta: DPMeta = None
     enable_microbatch: bool = False
 
+    # states for ssm
+    state_caches: List = None
+    state_offsets: torch.LongTensor = None
+
     _outputs: Dict = field(default_factory=dict)
 
     @classmethod
@@ -330,6 +336,7 @@ class StepContext:
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build step context.
@@ -389,6 +396,8 @@ class StepContext:
             cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
+            state_caches=state_caches,
+            state_offsets=inputs.state_offsets,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -454,6 +463,7 @@ class StepContextManager:
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build context."""
@@ -461,6 +471,7 @@ class StepContextManager:
             inputs,
             model_config,
             kv_caches,
+            state_caches,
             kv_quant_policy,
         )
 
