@@ -237,6 +237,7 @@ class TurbomindEngineConfig:
     dp: int = 1
     device_num: int = None
     attn_tp_size: int = None
+    attn_cp_size: int = None
     attn_dp_size: int = None
     mlp_tp_size: int = None
     mlp_dp_size: int = None

@@ -220,6 +220,7 @@ private:
     const int      tp_rank_;
     const DataType data_type_;
     const bool     debug_;
+    const bool     is_driver_;
 
     // Refs into `Context<T>`
     cudaStream_t const stream_{};
@@ -243,6 +244,9 @@ private:
     // context decoding temp buffers
     Tensor symm_hidden_states_buf_;
     Tensor symm_logits_buf_;
+
+    // context parallel
+    Tensor_<float> symm_cp_ML_;
 
     Tensor decoder_output_buf_;
 

@@ -72,6 +72,10 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     local_kv_head_num_(model.kv_head_num / tp_size),
     param_(attn),
     model_param_(model),
+    engine_param_(engine),
+    attn_cp_group_(ctx.comm.d_cp_group),
+    cp_fn_ctx_(ctx.comm.d_comm, ctx.comm.d_cp_group),
+    d_comm_(ctx.comm.d_comm),
     lora_param_(lora),
     context_(ctx),
     stream_(ctx.stream),
@@ -95,6 +99,11 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     partial_O_ = Tensor_<float>({kMaxWorkspaceTokens, local_head_num_, size_per_head_}, kDEVICE);
     split_cnt_ = Tensor_<int>({kMaxWorkspaceTokens}, kDEVICE);
     barriers_  = Tensor_<int>({kMaxWorkspaceTokens, local_head_num_}, kDEVICE);
+
+    if (engine_param_.attn_cp_size > 1) {
+        const int cp_workspace_tokens = kMaxWorkspaceTokens + engine_param_.max_forward_token_num;
+        cp_k_ML_                      = Tensor_<float>({cp_workspace_tokens, local_head_num_, 2}, kDEVICE);
+    }
 
     Clear(split_cnt_.buffer());
     Clear(barriers_.buffer());
@@ -135,6 +144,10 @@ void UnifiedAttentionLayer::Initialize(TensorMap& args)
 
     cu_block_nums_ = args.at("cu_block_nums").buffer();
     kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
+
+    if (engine_param_.attn_cp_size > 1) {
+        cp_ML_ = args.at("cp_ML").borrow();
+    }
 
     // rotary embedding, add offest when forward
     if (rope_param_.type == RopeType::kDynamic) {
@@ -240,7 +253,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     Tensor attn{{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
-    Tensor tmp_kv{{2, (int)local_kv_head_num_, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
+    Tensor tmp_kv{{(int)local_kv_head_num_, 2, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
     auto stream_ptr = streams_.data();
 
@@ -326,6 +339,26 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.partial_O   = partial_O_.data();
         params.locks       = barriers_.data();
         params.max_split_k = std::min(std::max(1, kMaxWorkspaceTokens / params.token_num), max_kv_splits);
+
+        // context parallel
+        params.cp_rank = engine_param_.attn_cp_rank;
+        params.cp_size = engine_param_.attn_cp_size;
+        if (params.cp_size > 1) {
+            params.cp_divmod = cutlass::FastDivmod(params.cp_size);
+
+            const int offset_ML = engine_param_.attn_cp_size * offset * local_head_num_ * 2;
+            params.cp_ML        = cp_ML_.data() + offset_ML + params.cp_rank * params.token_num * local_head_num_ * 2;
+            params.cp_k_ML      = cp_k_ML_.data() + (offset ? kMaxWorkspaceTokens * local_head_num_ * 2 : 0);
+            params.cp_q_offset  = offset;
+
+            // postprocess func
+            params.cp_fn     = CpPost;
+            params.cp_fn_ctx = (void*)&cp_fn_ctx_;
+
+            cp_fn_ctx_.cp_ML      = cp_ML_.data() + offset_ML;
+            cp_fn_ctx_.attn_param = (void*)&params;
+            cp_fn_ctx_.attn_type  = attn.dtype();
+        }
 
         params.arch   = arch_;
         params.stream = stream;
