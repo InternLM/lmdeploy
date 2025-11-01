@@ -86,12 +86,16 @@ class ImageEncoder:
                 ]
             )
         """
-        result = self.model.to_pytorch(messages,
-                                       chat_template,
-                                       tokenizer,
-                                       sequence_start,
-                                       tools=tools,
-                                       enable_thinking=enable_thinking)
+        has_input_ids = self.model.has_input_ids(messages)
+        if not has_input_ids:
+            result = self.model.to_pytorch(messages,
+                                           chat_template,
+                                           tokenizer,
+                                           sequence_start,
+                                           tools=tools,
+                                           enable_thinking=enable_thinking)
+        else:
+            result = self.model.to_pytorch_with_input_ids(messages)
         # clear data
         for i, message in enumerate(messages):
             if isinstance(message['content'], List):
