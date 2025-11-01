@@ -38,6 +38,7 @@ def make_dummy_inputs(batch_size: int,
         max_kv_seqlen=max_kv_seqlen,
         sum_kv_seqlen=num_tokens,
         local_adapter_ids=local_adapter_ids,
+        is_dummy=True,
     )
 
 

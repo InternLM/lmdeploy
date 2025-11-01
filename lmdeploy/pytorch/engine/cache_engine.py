@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import json
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 import torch
 
@@ -18,6 +18,17 @@ from ..config import CacheConfig, ModelConfig
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 
 logger = get_logger('lmdeploy')
+
+
+def _get_kv_cache_dtype(model_config: ModelConfig):
+    kv_cache_dtype = model_config.dtype
+    if model_config.use_mla_fp8_cache:
+        kv_cache_dtype = torch.float8_e4m3fn
+    return kv_cache_dtype
+
+
+# 512*1 + 4*4 + 64*2 = 656
+MLA_FP8_HEAD_DIM = 656
 
 
 class CacheEngine:
@@ -50,7 +61,11 @@ class CacheEngine:
 
         self.block_size = cache_config.block_size
         self.num_layers = model_config.num_layers
-        self.kv_cache_dtype = model_config.dtype
+        self.kv_cache_dtype = _get_kv_cache_dtype(self.model_config)
+
+        if self.model_config.use_mla_fp8_cache:
+            cache_config.quant_policy = 0
+
         if cache_config.quant_policy > 0:
             if self.cache_config.device_type in ['cuda']:
                 self.kv_cache_dtype = torch.uint8
@@ -106,10 +121,15 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
+
         if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
+
+        if model_config.use_mla_fp8_cache:
+            return (block_size, num_heads, MLA_FP8_HEAD_DIM)
+
         if quant_policy == 4:  # pack head_dim to uint8
             assert head_size % 2 == 0, \
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
@@ -128,6 +148,11 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
+
+        if model_config.use_mla_fp8_cache:
+            # flash mla shared key and value
+            return (block_size, num_heads, 0)
+
         if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
@@ -207,8 +232,9 @@ class CacheEngine:
     def allocate_gpu_cache(self):
         """Allocate caches on GPU."""
         caches = self._allocate_cache(self.num_gpu_blocks, 'cuda')
-        self.full_gpu_cache = caches
-        self.local_gpu_cache = list(zip(*caches))
+        custom_caches = self.allocate_custom_cache(device='cuda')
+        self.full_gpu_cache = tuple(caches) + tuple(custom_caches)
+        self.local_gpu_cache = list(zip(*self.full_gpu_cache))
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
@@ -218,6 +244,31 @@ class CacheEngine:
         self.full_cpu_cache = caches
         self.local_cpu_cache = list(zip(*caches))
         return self.local_cpu_cache
+
+    @staticmethod
+    def get_custom_cache_shape_impl(num_layers: int, num_blocks: int, block_size: int, shape: List[int]):
+        """Get single block shape."""
+        return (num_layers, num_blocks, block_size, *shape)
+
+    @staticmethod
+    def _allocate_single_custom_cache(shape: Sequence[int], dtype: torch.dtype, device: str):
+        """Allocate custom cache."""
+        return torch.empty(shape, dtype=dtype, device=device)
+
+    def allocate_custom_cache(self, device: str):
+        """Allocate custom caches on GPU."""
+        num_layers = self.model_config.num_layers
+        custom_caches = []
+        for shape, dtype in self.model_config.cache_shapes:
+            custom_shape = self.get_custom_cache_shape_impl(
+                num_layers=num_layers,
+                num_blocks=self.num_gpu_blocks,
+                block_size=self.block_size,
+                shape=shape,
+            )
+            custom_cache = self._allocate_single_custom_cache(shape=custom_shape, dtype=dtype, device=device)
+            custom_caches.append(custom_cache)
+        return custom_caches
 
     @torch.inference_mode()
     def _swap(self, src: List[torch.Tensor], dst: List[torch.Tensor], src_to_dst: Dict[int, int]):
@@ -297,7 +348,8 @@ class CacheEngine:
             local=True,
         )
         if quant_policy == 0:
-            dtype = model_config.dtype
+            dtype = _get_kv_cache_dtype(model_config)
+
             key_block = torch.empty(key_shape, dtype=dtype, device='meta')
             value_block = torch.empty(value_shape, dtype=dtype, device='meta')
             mem_key_block = key_block.numel() * key_block.element_size()
@@ -315,6 +367,18 @@ class CacheEngine:
             raise ValueError(f'unsupported quant_policy {quant_policy}')
 
         total = num_layers * (mem_key_block + mem_value_block)
+
+        # custom caches
+        if model_config.cache_shapes:
+            for shape, dtype in model_config.cache_shapes:
+                custom_shape = cls.get_custom_cache_shape_impl(
+                    num_layers=num_layers,
+                    num_blocks=1,
+                    block_size=block_size,
+                    shape=shape,
+                )
+                custom_cache = cls._allocate_single_custom_cache(shape=custom_shape, dtype=dtype, device='meta')
+                total += custom_cache.numel() * custom_cache.element_size()
         return total
 
     """ Metheds for PD Disaggregation Begin. """
