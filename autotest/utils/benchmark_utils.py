@@ -44,7 +44,7 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
     else:
         if '4bit' in model:
             command += ' --model-format awq'
-        run_config = run_config + f' --quant-policy {quant_policy}'
+        command = command + f' --quant-policy {quant_policy}'
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/throughput_batch_{batch}_1th.csv'
@@ -61,9 +61,67 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
         if returncode == 0 and not os.path.isfile(csv_path):
             return False, 'result is empty'
         if returncode != 0:
-            return returncode == 0, stderr
+            return False, stderr
 
-    return returncode == 0, stderr
+    return True, 'success'
+
+
+def longtext_throughput_test(config,
+                             run_id,
+                             run_config,
+                             cuda_prefix: str = None,
+                             worker_id: str = '',
+                             is_smoke: bool = False):
+    model = run_config['model']
+    backend = run_config['backend']
+    tp_num = run_config['tp_num']
+    if backend == 'turbomind':
+        quant_policy = run_config['quant_policy']
+    model_path = '/'.join([config.get('model_path'), model])
+    log_path = config.get('log_path')
+    dataset_path = config.get('dataset_path')
+    if backend == 'turbomind' and quant_policy != 0:
+        benchmark_path = '/'.join([
+            config.get('benchmark_path'), run_id, model, f'benchmark-longtext-throughput-{backend}-kvint{quant_policy}'
+        ])
+    else:
+        benchmark_path = '/'.join(
+            [config.get('benchmark_path'), run_id, model, f'benchmark-longtext-throughput-{backend}'])
+
+    create_multi_level_directory(benchmark_path)
+
+    command = f'python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} --tp {tp_num}'  # noqa: F401, E501
+    command = get_command_with_extra(command, cuda_prefix)
+
+    if backend == 'pytorch':
+        command += ' --backend pytorch'
+        if not _is_bf16_supported_by_device():
+            command += ' --dtype float16'
+    else:
+        if '4bit' in model:
+            command += ' --model-format awq'
+        command = command + f' --quant-policy {quant_policy}'
+
+    for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', None),
+                                                                    (1, 65536, 10, '64k', None),
+                                                                    (198000, 1024, 3, '198k', 1)]:
+        csv_path = f'{benchmark_path}/longtext_{case_name}_1th.csv'
+        benchmark_log = os.path.join(
+            log_path, f'benchmark_longtext_throughput_{case_name}' + model.split('/')[1] + worker_id + '.log')
+        cmd = ' '.join([
+            command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
+            f'--num-prompts {num_prompts}', '--stream-output', f'--csv {csv_path}'
+        ])
+        if concurrency:
+            cmd += f' --concurrency {concurrency}'
+
+        returncode, stderr = run_testcase(cmd, benchmark_log)
+        allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
+
+        if returncode == 0 and not os.path.isfile(csv_path):
+            return False, 'result is empty'
+        if returncode != 0:
+            return returncode == 0, stderr
 
 
 def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):

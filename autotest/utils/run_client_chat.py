@@ -8,38 +8,6 @@ from utils.rule_condition_assert import assert_result
 TEMPLATE = 'autotest/template.json'
 
 
-def command_line_test(config,
-                      case,
-                      case_info,
-                      model_case,
-                      type,
-                      extra: str = None,
-                      cuda_prefix: str = None,
-                      worker_id: str = ''):
-    dst_path = config.get('dst_path')
-
-    cmd = get_command_with_extra('lmdeploy chat ' + dst_path + '/workspace_' + model_case,
-                                 config,
-                                 model_case,
-                                 cuda_prefix=cuda_prefix)
-    if type == 'turbomind':
-        if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
-            cmd += ' --model-format awq'
-        elif 'gptq' in model_case.lower():
-            cmd += ' --model-format gptq'
-    if case == 'base_testcase':
-        cmd += ' --chat-template ' + TEMPLATE
-
-    # Add device option if specified in environment
-    device = os.environ.get('DEVICE', '')
-    if device:
-        cmd += f' --device {device} '
-        if device == 'ascend':
-            cmd += '--eager-mode '
-
-    return command_test(config, [cmd], model_case, case, case_info, type == 'turbomind', worker_id=worker_id)
-
-
 def hf_command_line_test(config,
                          case,
                          case_info,
