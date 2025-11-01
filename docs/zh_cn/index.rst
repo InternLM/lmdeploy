@@ -81,6 +81,7 @@ LMDeploy 工具箱提供以下核心功能：
    quantization/w4a16.md
    quantization/w8a8.md
    quantization/kv_quant.md
+   quantization/blocked_fp8.md
 
 .. _测试基准:
 .. toctree::
