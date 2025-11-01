@@ -26,7 +26,8 @@ class GuidedDecodingManager:
         processors = {}
         for i, _format in enumerate(response_formats):
             if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
-                if _format['type'] == 'json_schema':
+                schema_type = _format['type']
+                if schema_type == 'json_schema':
                     schema = _format['json_schema']
                     if isinstance(schema, Dict):
                         for key in ['json_schema', 'schema']:
@@ -37,15 +38,17 @@ class GuidedDecodingManager:
                         raise ValueError(f'Cannot parse schema {schema}. The schema must be '
                                          'either a dictionary or a string that contains the'
                                          ' JSON Schema specification')
-                elif _format['type'] == 'regex_schema':
+                elif schema_type == 'regex_schema':
                     schema = _format.get('regex_schema', '')
+                elif schema_type == 'json_object':
+                    schema = '{"type" : "object", "additionalProperties": true}'
                 else:
-                    raise ValueError(f"unsupported format type: {_format['type']}")
+                    raise ValueError(f'unsupported format type: {schema_type}')
 
                 session_id = session_ctx[i]['session_id']
                 seq_id = session_ctx[i]['seq_id']
 
-                processors[i] = self.get_processor(session_id, seq_id, schema, _format['type'])
+                processors[i] = self.get_processor(session_id, seq_id, schema, schema_type)
 
         return processors
 
@@ -63,7 +66,9 @@ class GuidedDecodingManager:
             assert isinstance(schema, dict)
             compiled = self.compiler.compile_json_schema(schema)
         elif type == 'regex_schema':
-            compiled = self.compiler.compile_regex_grammar(schema)
+            compiled = self.compiler.compile_regex(schema)
+        elif type == 'json_object':
+            compiled = self.compiler.compile_json_schema(schema)
         else:
             assert False, f'Do not support schema type {type}'
 
