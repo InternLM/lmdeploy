@@ -444,6 +444,17 @@ class AsyncEngine(LogitsMixin):
         for stat_logger in self.stat_loggers:
             stat_logger.log()
 
+    async def stop_all_session(self):
+        """Stop all running sessions."""
+        logger.info('stop all sessions')
+        tasks = []
+        for session_id in list(self.id2inst.keys()):
+            generator = self.id2inst.get(session_id)
+            if generator:
+                tasks.append(generator.async_cancel(session_id))
+        await asyncio.gather(*tasks)
+        logger.info('all sessions stopped')
+
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         logger.info(f'stop session {session_id}')
@@ -893,6 +904,8 @@ class AsyncEngine(LogitsMixin):
 
                 if not is_error(outputs.status):
                     finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                    finish_reason = 'abort' if outputs.status == ResponseType.CANCEL else finish_reason
+
                     # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
                         # avoid returning the last response twice
