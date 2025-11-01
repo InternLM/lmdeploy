@@ -57,6 +57,9 @@ class InferOutput:
     # for logging
     req_metrics: RequestMetrics = None
 
+    # expert ids
+    routed_experts: torch.Tensor = None
+
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """Tensorlize block_offsets."""
@@ -871,13 +874,15 @@ class Engine(EngineBase):
                 cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
 
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
+            routed_experts = msg.routed_experts if msg.return_routed_experts and finish else None
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
                               cache_block_ids=cache_block_ids,
                               req_metrics=req_metrics,
-                              logprobs=cur_logprobs)
+                              logprobs=cur_logprobs,
+                              routed_experts=routed_experts)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -890,6 +895,10 @@ class Engine(EngineBase):
         def __need_logits(seqs: SeqList):
             """Need logits."""
             return any(seq.return_logits for seq in seqs)
+
+        def __need_routed_experts(seqs: SeqList):
+            """Need logits."""
+            return any(seq.return_routed_experts for seq in seqs)
 
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
@@ -918,6 +927,7 @@ class Engine(EngineBase):
         inputs = self.create_model_inputs(running, prefill)
         sampling_inputs = self.sampling_strategy.make_sampling_inputs(running)
         return_logits = __need_logits(running)
+        return_routed_experts = __need_routed_experts(running)
         extra_inputs = self.model_agent_strategy.make_extra_inputs(running)
         stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
 
@@ -935,6 +945,7 @@ class Engine(EngineBase):
             is_dummy=False,
             sync_long_context=sync_long_context,
             extra_inputs=extra_inputs,
+            return_routed_experts=return_routed_experts,
         )
 
     async def _await_forward_event(self, forward_event: asyncio.Event):
@@ -970,6 +981,7 @@ class Engine(EngineBase):
                                      logits=out.logits,
                                      cache_block_ids=out.cache_block_ids,
                                      req_metrics=out.req_metrics,
+                                     routed_experts=out.routed_experts,
                                      logprobs=logprobs))
 
         def __update_logprobs(step_outputs: List[InferOutput]):

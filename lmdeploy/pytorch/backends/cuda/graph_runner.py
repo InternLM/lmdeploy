@@ -110,21 +110,22 @@ class CUDASingleGraphRunner:
         with torch.cuda.graph(self._graph, pool=self.pool, stream=current_stream, capture_error_mode='thread_local'):
             output = self.model(**padded_kwargs)
 
-        output_buffers = dict(logits=output)
+        output_buffers = output
+        if isinstance(output, torch.Tensor):
+            output_buffers = dict(hidden_states=output)
         self.meta.output_buffers = output_buffers
+        output = self.model.get_outputs_cudagraph(self.meta, **kwargs)
         return output
 
     @record_function('forward_cudagraph')
     def forward(self, **kwargs):
         """forward."""
-        num_tokens = kwargs['input_ids'].size(-1)
         assert self._graph is not None
         self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
         self.model.update_context_cudagraph(self.meta, context)
         self._graph.replay()
-
-        output = self.meta.output_buffers['logits'][:, :num_tokens]
+        output = self.model.get_outputs_cudagraph(self.meta, **kwargs)
         return output
 
     def __del__(self):

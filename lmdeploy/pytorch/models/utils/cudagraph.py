@@ -170,3 +170,10 @@ class CudaGraphMixin:
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
+
+    def get_outputs_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, **kwargs):
+        """Get outputs from buffers."""
+        num_tokens = input_ids.size(-1)
+        outputs = dict()
+        outputs['hidden_states'] = graph_meta.output_buffers['hidden_states'][:, :num_tokens]
+        return outputs

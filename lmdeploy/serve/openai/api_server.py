@@ -922,6 +922,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         skip_special_tokens=request.skip_special_tokens,
         spaces_between_special_tokens=request.spaces_between_special_tokens,
         include_stop_str_in_output=request.include_stop_str_in_output,
+        return_routed_experts=request.return_routed_experts,
     )
 
     result_generator = VariableInterface.async_engine.generate(
@@ -945,23 +946,34 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
             return dict(type='stop')
         return dict(type='abort')
 
-    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason):
-        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(finish_reason),
+    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
+        finish_reason = create_finish_reason(finish_reason)
+        # only output router experts in last chunk
+        routed_experts = None if finish_reason is None else routed_experts
+        meta = GenerateReqMetaOutput(finish_reason=finish_reason,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
+                                     routed_experts=routed_experts,
                                      completion_tokens=res.generate_token_len)
-        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
+
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta, routed_experts=routed_experts)
         return response.model_dump_json()
 
     async def generate_stream_generator():
         async for res in result_generator:
             text = res.response or ''
             output_ids = res.token_ids
+            routed_experts = res.routed_experts
             logprobs = []
             if res.logprobs:
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                     logprobs.append((tok_logprobs[tok], tok))
-            response_json = create_generate_response_json(res, text, output_ids, logprobs, res.finish_reason)
+            response_json = create_generate_response_json(res,
+                                                          text,
+                                                          output_ids,
+                                                          logprobs,
+                                                          res.finish_reason,
+                                                          routed_experts=routed_experts)
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -988,6 +1000,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(res.finish_reason),
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
+                                     routed_experts=res.routed_experts,
                                      completion_tokens=res.generate_token_len)
         response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 

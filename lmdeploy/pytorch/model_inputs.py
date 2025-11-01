@@ -439,6 +439,7 @@ class BuildModelContext:
     disable_vision_encoder: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
+    enable_return_routed_experts: bool = False
 
 
 class StepContextManager:
