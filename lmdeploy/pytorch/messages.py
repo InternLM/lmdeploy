@@ -7,7 +7,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import EncoderResult, MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
@@ -159,6 +159,11 @@ class MessageStatus(enum.Enum):
     MIGRATION_LOCKED = enum.auto()
     MIGRATION_DONE = enum.auto()
 
+    WAITING_EPD_MIGRATION = enum.auto()
+    RUNNING_EPD_MIGRATION = enum.auto()
+    EPD_MIGRATION_LOCKED = enum.auto()
+    EPD_MIGRATION_DONE = enum.auto()
+
 
 SeqMap = Dict[int, 'SchedulerSequence']
 
@@ -257,6 +262,7 @@ class SchedulerSession:
                      multimodals: MultiModalInputs = None,
                      input_embeddings: List[InputEmbeddings] = None,
                      migration_request: Optional[MigrationRequest] = None,
+                     encoder_result: Optional[EncoderResult] = None,
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
@@ -269,6 +275,7 @@ class SchedulerSession:
                                                    sampling_param=sampling_param,
                                                    adapter_name=adapter_name,
                                                    migration_request=migration_request,
+                                                   encoder_result=encoder_result,
                                                    resp_cache=resp_cache,
                                                    preserve_cache=preserve_cache)
         seq.update_token_ids(
@@ -495,6 +502,7 @@ class SchedulerSequence:
     migration_request: Optional[MigrationRequest] = None
     resp_cache: bool = False
     preserve_cache: bool = False
+    encoder_result: Optional[EncoderResult] = None
 
     # For logging
     engine_events: List[EngineEvent] = field(default_factory=list)

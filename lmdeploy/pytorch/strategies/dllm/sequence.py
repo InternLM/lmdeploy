@@ -7,7 +7,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.pytorch import consts
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import EncoderResult, MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
 from lmdeploy.pytorch.messages import (HistoryTokenIds, InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
                                        SchedulerSession, UpdateTokenMode, _to_ndarray)
@@ -206,6 +206,7 @@ class DLLMSequenceStrategy(SequenceStrategy):
                       sampling_param: 'SamplingParam' = None,
                       adapter_name: str = None,
                       migration_request: Optional[MigrationRequest] = None,
+                      encoder_result: Optional[EncoderResult] = None,
                       resp_cache: bool = False,
                       preserve_cache: bool = False) -> 'SchedulerSequenceDLLM':
         """Make sequence."""

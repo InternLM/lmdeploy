@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import shortuuid
 from pydantic import BaseModel, ConfigDict, Field
 
+from lmdeploy.pytorch.disagg.conn.protocol import EncoderResult
+
 
 class ErrorResponse(BaseModel):
     """Error responses."""
@@ -152,6 +154,7 @@ class ChatCompletionRequest(BaseModel):
     enable_thinking: Optional[bool] = None
     return_token_ids: Optional[bool] = False
     include_stop_str_in_output: Optional[bool] = False
+    encoder_result: Optional[EncoderResult] = None
 
 
 class FunctionCall(BaseModel):
