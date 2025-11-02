@@ -46,6 +46,7 @@ python eval/gen_config.py <task_name> \
     -o /path/to/e2e_config.py
 
 # Run evaluation task
+export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 opencompass /path/to/e2e_config.py -w {oc_output_dir}
 ```
@@ -77,6 +78,7 @@ python eval/gen_config.py <task_name> --mode infer \
 
 # Run inference task
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
+export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 opencompass /path/to/infer_config.py -m infer -w {oc_output_dir}
 ```
 
@@ -104,6 +106,7 @@ python eval/gen_config.py {task_name} --mode eval \
 
 # Run evaluation task
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
+export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 opencompass /path/to/judger_config.py -m eval -w {oc_output_dir} -r {yyyymmdd_hhmmss}
 ```
 
