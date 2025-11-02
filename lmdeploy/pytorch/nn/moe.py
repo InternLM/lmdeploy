@@ -66,7 +66,7 @@ def _split_size(size: int, world_size: int, align: int):
 
 class MoEForwardDPTP:
 
-    def __init__(self, gemm_func: Callable, max_tokens_per_round: int = 8192):
+    def __init__(self, gemm_func: Callable, max_tokens_per_round: int = 4096):
         """MoE forward dp tp."""
         self.gemm_func = gemm_func
         self.dist_ctx = get_dist_manager().current_context()
@@ -92,8 +92,10 @@ class MoEForwardDPTP:
     def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: List[int]):
         """Reduce scatter."""
         hidden_states_list = list(hidden_states.split(tp_sizes, -2))
-        hidden_states_list[self.gather_rank] = out_states
+        cur_out_states = hidden_states_list[self.gather_rank]
+        out_states.copy_(cur_out_states)
         hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
+        hidden_states_list[self.rank] = out_states
         handle = dist.reduce_scatter(out_states, hidden_states_list, group=self.tp_group, async_op=True)
         return out_states, handle
 
@@ -102,8 +104,6 @@ class MoEForwardDPTP:
         """Gemm and reduce scatter."""
         handle.wait()
         cur_out = self.gemm_func(hidden_states, topk_weights, topk_ids)
-        cur_out_states = cur_out.split(tp_sizes, dim=0)[self.gather_rank]
-        output_states.copy_(cur_out_states)
         return self.reduce_scatter(cur_out, output_states, tp_sizes)
 
     def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor):
