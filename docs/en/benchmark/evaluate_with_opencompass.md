@@ -77,7 +77,7 @@ python eval/gen_config.py <task_name> --mode infer \
 
 # Run inference task
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
-opencompass /path/to/infer_config.py -w {oc_output_dir}
+opencompass /path/to/infer_config.py -m infer -w {oc_output_dir}
 ```
 
 For detailed usage instructions about `gen_config.py`, such as specifying evaluation datasets, please run `python evaluation/gen_config.py --help`.
@@ -104,7 +104,7 @@ python eval/gen_config.py {task_name} --mode eval \
 
 # Run evaluation task
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
-opencompass /path/to/judger_config.py -w {oc_output_dir} -r {yyyymmdd_hhmmss}
+opencompass /path/to/judger_config.py -m eval -w {oc_output_dir} -r {yyyymmdd_hhmmss}
 ```
 
 Important Notes:
