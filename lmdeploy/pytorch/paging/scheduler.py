@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 from lmdeploy.messages import EventType, ScheduleMetrics
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
@@ -220,6 +221,14 @@ class Scheduler:
         if (len(running) >= max_batches or num_waiting == 0):
             return running, swap_in_map, swap_out_map, copy_map
 
+        # reserve some blocks for decoding to avoid too much eviction
+        if self.cache_config.role != EngineRole.Prefill:
+            num_free_blocks = self.block_manager.get_num_free_gpu_blocks()
+            num_all_blocks = self.cache_config.num_gpu_blocks
+            free_ratio = num_free_blocks / num_all_blocks
+            if free_ratio < 0.1:
+                return running, swap_in_map, swap_out_map, copy_map
+
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
@@ -331,6 +340,7 @@ class Scheduler:
             seq (SchedulerSequence): sequence to remove
         """
         self.block_manager.free(seq)
+        self.state_manager.free(seq)
         seq.set_step(0)
         seq.session.remove_sequence(seq)
 

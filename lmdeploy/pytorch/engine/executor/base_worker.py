@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import gc
 from typing import Any, Dict, List, Optional
 
 from lmdeploy.pytorch.backends.selector import get_backend
@@ -48,6 +49,10 @@ class WorkerWrapperBase:
         logger.setLevel(log_level)
         self.out_que: asyncio.Queue = None
         self._output_loop: asyncio.Task = None
+
+        # frequently gc would cause latency spike
+        # default threshold (700, 10, 10)
+        gc.set_threshold(10000, 100, 100)
 
     def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
         """Initialize process group."""

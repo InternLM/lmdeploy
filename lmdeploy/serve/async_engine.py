@@ -854,7 +854,7 @@ class AsyncEngine(LogitsMixin):
                     if is_error(outputs.status):
                         break
 
-                    output_len = outputs.num_token
+                    output_len = len(outputs.token_ids)
                     if hit_stop_token:
                         continue
 

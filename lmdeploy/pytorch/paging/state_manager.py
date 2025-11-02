@@ -42,7 +42,7 @@ class StateManager:
 
     def is_allocated(self, seq: SchedulerSequence):
         """Check if a sequence is allocated."""
-        return seq.logical_state > 0
+        return seq.logical_state >= 0
 
     def allocate(self, seq: SchedulerSequence):
         """Allocate states for a sequence."""
@@ -52,6 +52,8 @@ class StateManager:
 
     def free(self, seq: SchedulerSequence):
         """Free states for a sequence."""
+        if seq.logical_state < 0:
+            return None
         self.allocator.free(seq.logical_state)
         seq.logical_state = -1
 
