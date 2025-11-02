@@ -156,7 +156,7 @@ models = [
         verbose=False,
     )
 ]"""
-    return '\n'.join([task_config, model_path_config, api_server_addr_config, api_server_config])
+    return '\n'.join(['\n', task_config, model_path_config, api_server_addr_config, api_server_config])
 
 
 def config_judger(task_name: str, mode: str, judger_server: str):
@@ -199,24 +199,30 @@ for item in datasets:
 models = [
     dict(abbr=TASK_TAG),
 ]"""
-        return '\n'.join([task_config, model_config, judger_server_config, judger_config])
+        return '\n'.join(['\n', task_config, model_config, judger_server_config, judger_config])
     else:  # e2e
-        return '\n'.join([judger_server_config, config_judger])
+        return '\n'.join(['\n', judger_server_config, config_judger])
 
 
 def main():
     parser = argparse.ArgumentParser(description='Generate evaluation config')
     parser.add_argument('task_name', type=str, help='Task name for evaluation')
-    parser.add_argument('--mode', type=str, choices=['e2e', 'infer', 'eval'], default='e2e', help='Evaluation mode')
-    parser.add_argument('--api-server', type=str, default='', help='API server address for inference')
-    parser.add_argument('--judger-server', type=str, default='', help='Judger server address for evaluation')
+    parser.add_argument('-m',
+                        '--mode',
+                        type=str,
+                        choices=['e2e', 'infer', 'eval'],
+                        default='e2e',
+                        help='Evaluation mode')
+    parser.add_argument('-a', '--api-server', type=str, default='', help='API server address for inference')
+    parser.add_argument('-j', '--judger-server', type=str, default='', help='Judger server address for evaluation')
     dataset_choices = ['aime2025', 'gpqa', 'ifeval', 'code', 'mmlu_pro', 'hle', 'all']
-    parser.add_argument('--datasets',
+    parser.add_argument('-d',
+                        '--datasets',
                         type=str,
                         default='all',
-                        help=f'Comma-separated list of datasets. Available options: {', '.join(dataset_choices)}. '
+                        help=f"Comma-separated list of datasets. Available options: {', '.join(dataset_choices)}. "
                         'Use "all" to include all datasets.')
-    parser.add_argument('--output-file', type=str, default='', help='Output file path (optional)')
+    parser.add_argument('-o', '--output-file', type=str, default='', help='Output file path (optional)')
 
     args = parser.parse_args()
     mode = args.mode

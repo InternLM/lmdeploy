@@ -13,7 +13,12 @@
 ```shell
 pip install lmdeploy
 pip install "opencompass[full]"
+
+# 下载 lmdeploy 源码，在后续步骤中会使用到 eval/gen_config.py
+git clone --depth=1 https://github.com/InternLM/lmdeploy.git
 ```
+
+建议将 LMDeploy 和 OpenCompass 安装在不同的 Python 虚拟环境中，以避免可能的依赖冲突。
 
 ## 端到端评测
 
@@ -34,7 +39,8 @@ lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --
 
 ```shell
 # 生成评测配置文件
-python gen_config.py <task_name> \
+cd {the/root/path/of/lmdeploy/repo}
+python eval/gen_config.py <task_name> \
     --api-server http://{api-server-ip}:10000 \
     --judger-server http://{judger-server-ip}:20000 \
     -o /path/to/e2e_config.py
@@ -44,7 +50,7 @@ export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 opencompass /path/to/e2e_config.py -w {oc_output_dir}
 ```
 
-关于 `gen_config.py` 的使用方法（如指定数据集），请参考[评测配置说明](#评测配置说明)章节。
+关于 `gen_config.py` 的详细使用方法，比如指定评测集，请通过 `python evaluation/gen_config.py --help` 查阅。
 
 评测任务完成后，结果将保存在 `{oc_output_dir}/{yyyymmdd_hhmmss}` 目录中，其中 `{yyyymmdd_hhmmss}` 为任务执行的时间戳。
 
@@ -64,7 +70,8 @@ lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 
 ```shell
 # 生成推理配置文件
-python gen_config.py <task_name> --mode infer \
+cd {the/root/path/of/lmdeploy/repo}
+python eval/gen_config.py <task_name> --mode infer \
     --api-server http://{api_server_ip}:10000 \
     -o /path/to/infer_config.py
 
@@ -73,7 +80,7 @@ export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 opencompass /path/to/infer_config.py -w {oc_output_dir}
 ```
 
-关于 `gen_config.py` 的详细用法，请参阅[评测配置说明](#评测配置说明)章节。
+关于 `gen_config.py` 的详细使用方法，比如指定评测集，请通过 `python evaluation/gen_config.py --help` 查阅。
 
 ### 评判阶段
 
@@ -90,7 +97,8 @@ lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --
 
 ```shell
 # 生成评判配置文件
-python gen_config.py {task_name} --mode eval \
+cd {the/root/path/of/lmdeploy/repo}
+python eval/gen_config.py {task_name} --mode eval \
     --judger-server http://{judger_serverip}:20000 \
     -o /path/to/judger_config.py
 
@@ -105,4 +113,4 @@ opencompass /path/to/judger_config.py -w {oc_output_dir} -r {yyyymmdd_hhmmss}
 - `-w` 参数指定的输出目录 `oc_output_dir` 需与推理阶段一致
 - `-r` 参数用于指定“之前的输出与结果”，应填入推理阶段生成的时间戳目录名，即 `{oc_output_dir}` 下的子目录名称
 
-## 评测配置说明
+关于 `gen_config.py` 的详细使用方法，比如指定评测集，请通过 `python evaluation/gen_config.py --help` 查阅。

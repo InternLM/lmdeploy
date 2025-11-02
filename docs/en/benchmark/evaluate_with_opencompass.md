@@ -13,7 +13,12 @@ If sufficient computational resources are available, please refer to the [End-to
 ```shell
 pip install lmdeploy
 pip install "opencompass[full]"
+
+# Download the lmdeploy source code, which will be used in subsequent steps to access eval/gen_config.py
+git clone --depth=1 https://github.com/InternLM/lmdeploy.git
 ```
+
+It is recommended to install LMDeploy and OpenCompass in separate Python virtual environments to avoid potential dependency conflicts.
 
 ## End-to-End Evaluation
 
@@ -34,7 +39,8 @@ lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --
 
 ```shell
 # Generate evaluation configuration
-python gen_config.py <task_name> \
+cd {the/root/path/of/lmdeploy/repo}
+python eval/gen_config.py <task_name> \
     --api-server http://{api-server-ip}:10000 \
     --judger-server http://{judger-server-ip}:20000 \
     -o /path/to/e2e_config.py
@@ -44,7 +50,7 @@ export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 opencompass /path/to/e2e_config.py -w {oc_output_dir}
 ```
 
-For detailed usage of `gen_config.py` (such as specifying datasets), please refer to the [Evaluation Configuration Guide](#evaluation-configuration-guide) section.
+For detailed usage instructions about `gen_config.py`, such as specifying evaluation datasets, please run `python evaluation/gen_config.py --help`.
 
 After evaluation completion, results are saved in `{oc_output_dir}/{yyyymmdd_hhmmss}`, where `{yyyymmdd_hhmmss}` represents the task timestamp.
 
@@ -64,7 +70,8 @@ lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 
 ```shell
 # Generate inference configuration
-python gen_config.py <task_name> --mode infer \
+cd {the/root/path/of/lmdeploy/repo}
+python eval/gen_config.py <task_name> --mode infer \
     --api-server http://{api_server_ip}:10000 \
     -o /path/to/infer_config.py
 
@@ -73,7 +80,7 @@ export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 opencompass /path/to/infer_config.py -w {oc_output_dir}
 ```
 
-For detailed usage of `gen_config.py`, please refer to the [Evaluation Configuration Guide](#evaluation-configuration-guide) section.
+For detailed usage instructions about `gen_config.py`, such as specifying evaluation datasets, please run `python evaluation/gen_config.py --help`.
 
 ### Evaluation Stage
 
@@ -90,7 +97,8 @@ lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --
 
 ```shell
 # Generate evaluation configuration
-python gen_config.py {task_name} --mode eval \
+cd {the/root/path/of/lmdeploy/repo}
+python eval/gen_config.py {task_name} --mode eval \
     --judger-server http://{judger_serverip}:20000 \
     -o /path/to/judger_config.py
 
@@ -105,4 +113,4 @@ Important Notes:
 - The `oc_output_dir` specified with `-w` must match the directory used in the inference stage
 - The `-r` parameter indicates "previous outputs & results" and should specify the timestamp directory generated during the inference stage (the subdirectory under `{oc_output_dir}`)
 
-## Evaluation Configuration Guide
+For detailed usage instructions about `gen_config.py`, such as specifying evaluation datasets, please run `python evaluation/gen_config.py --help`.
