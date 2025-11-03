@@ -20,7 +20,7 @@ from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
-from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig, SpecDecodeConfig
 from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -149,6 +149,26 @@ def _build_misc_config(engine_config: PytorchEngineConfig):
     return misc_config
 
 
+def _build_specdecode_config(target_model, speculative_config: SpeculativeConfig, engine_config: PytorchEngineConfig,
+                             cache_config: CacheConfig):
+    """Build spec decode config."""
+    specdecode_config = None
+    if speculative_config is not None:
+        draft_model = speculative_config.model
+        if draft_model and not os.path.exists(speculative_config.model):
+            draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)
+
+        specdecode_config = SpecDecodeConfig.from_config(
+            method=speculative_config.method,
+            num_speculative_tokens=speculative_config.num_speculative_tokens,
+            model=draft_model,
+            target_model=target_model,
+            target_cache_cfg=cache_config,
+            dtype=engine_config.dtype,
+        )
+    return specdecode_config
+
+
 def _build_seq_meta(cache_config: CacheConfig, strategy: Any):
     from lmdeploy.pytorch.messages import SequenceMeta
 
@@ -242,7 +262,7 @@ class InputsMakerAsync(InputsMakerBase):
         super().__init__(engine)
         self.scheduler = self.engine.scheduler
         self.forward_inputs = None
-        self.spec_decoding = engine.speculative_config is not None
+        self.spec_decoding = engine.specdecode_config is not None
 
         self.dp = self.engine.dist_config.dp
         self.role = self.engine.cache_config.role
@@ -368,20 +388,15 @@ class Engine(EngineBase):
                                 logger=logger)
         checker.handle()
 
-        # spec decode
-        self.speculative_config = speculative_config
-
-        if speculative_config is not None:
-            if speculative_config.model and not os.path.exists(speculative_config.model):
-                speculative_config.model = get_model(speculative_config.model, engine_config.download_dir,
-                                                     engine_config.revision)
-
         # build configs
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
         misc_config = _build_misc_config(engine_config)
+
+        # spec decode
+        self.specdecode_config = _build_specdecode_config(model_path, speculative_config, engine_config, cache_config)
 
         # build model agent
         self.executor = build_executor(
@@ -394,12 +409,13 @@ class Engine(EngineBase):
             device_type=engine_config.device_type,
             distributed_executor_backend=engine_config.distributed_executor_backend,
             dtype=engine_config.dtype,
-            speculative_config=speculative_config,
+            specdecode_config=self.specdecode_config,
         )
         self.executor.init()
 
         # strategies
-        self.strategy_factory = build_strategy_factory(self.model_config, self.executor.misc_config, speculative_config)
+        self.strategy_factory = build_strategy_factory(self.model_config, self.executor.misc_config,
+                                                       self.specdecode_config)
         self.sampling_strategy = self.strategy_factory.build_sampling_strategy()
         self.model_agent_strategy = self.strategy_factory.build_model_agent_strategy()
         self.engine_strategy = self.strategy_factory.build_engine_strategy(cache_config=cache_config,
@@ -890,8 +906,8 @@ class Engine(EngineBase):
                 cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
             # get spec stats info
             spec_info = None
-            if self.speculative_config is not None and is_decoding and self.engine_config.enable_metrics:
-                num_draft_tokens = self.speculative_config.num_speculative_tokens
+            if self.specdecode_config is not None and is_decoding and self.engine_config.enable_metrics:
+                num_draft_tokens = self.specdecode_config.num_speculative_tokens
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
@@ -913,7 +929,7 @@ class Engine(EngineBase):
 
         def __need_logits(seqs: SeqList):
             """Need logits."""
-            if self.speculative_config is not None:
+            if self.specdecode_config is not None:
                 return True
             return any(seq.return_logits for seq in seqs)
 

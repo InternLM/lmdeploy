@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
+from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 
@@ -222,7 +222,7 @@ class ModelConfig:
         dist_config: DistConfig = None,
         hf_overrides: Dict[str, Any] = None,
         is_draft_model: bool = False,
-        speculative_config=None,
+        spec_method: str = None,
     ):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
@@ -250,7 +250,7 @@ class ModelConfig:
             dtype=dtype,
             dist_config=dist_config,
             is_draft_model=is_draft_model,
-            speculative_config=speculative_config,
+            spec_method=spec_method,
         )
 
         if hf_overrides is not None:
@@ -271,7 +271,7 @@ class ModelConfig:
         dtype: str = 'auto',
         dist_config: DistConfig = None,
         is_draft_model: bool = False,
-        speculative_config=None,
+        spec_method: str = None,
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -286,7 +286,7 @@ class ModelConfig:
                                                     model_path,
                                                     tp=tp,
                                                     is_draft_model=is_draft_model,
-                                                    speculative_config=speculative_config)
+                                                    spec_method=spec_method)
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
@@ -385,19 +385,19 @@ class SpecDecodeConfig:
     @classmethod
     def from_config(
         cls,
-        spec_cfg: SpeculativeConfig,
-        target_model: str,
-        target_model_cfg: ModelConfig,
+        method: str,
+        num_speculative_tokens: int,
+        model: str,
         target_cache_cfg: CacheConfig,
+        target_model: str = None,
+        dtype: str = 'auto',
     ):
-        method = spec_cfg.method
-        dtype = target_model_cfg.dtype
-        model = spec_cfg.model or target_model
+        model = model or target_model
         model_config = ModelConfig.from_pretrained(model,
                                                    trust_remote_code=True,
                                                    dtype=dtype,
                                                    is_draft_model=True,
-                                                   speculative_config=spec_cfg)
+                                                   spec_method=method)
         cache_config = None
         # include medusa
         no_caches = ['medusa']
@@ -415,6 +415,6 @@ class SpecDecodeConfig:
             method=method,
             cache_config=cache_config,
             model_config=model_config,
-            num_speculative_tokens=spec_cfg.num_speculative_tokens,
+            num_speculative_tokens=num_speculative_tokens,
         )
         return obj

@@ -726,10 +726,10 @@ class BaseModelAgent:
         sync_long_context = False if dp == 1 else sync_long_context
         is_decoding = inputs.is_decoding
 
-        logger.info(f'<ForwardTask> rank[{rank}]: '
-                    f'batch_size={inputs.seq_length.size(0)} '
-                    f'num_tokens={inputs.input_ids.size(-1)} '
-                    f'is_decoding={inputs.is_decoding}')
+        logger.debug(f'<ForwardTask> rank[{rank}]: '
+                     f'batch_size={inputs.seq_length.size(0)} '
+                     f'num_tokens={inputs.input_ids.size(-1)} '
+                     f'is_decoding={inputs.is_decoding}')
 
         # is_all_dummy would be updated in __prepare_dp
         is_all_dummy = False
@@ -744,7 +744,6 @@ class BaseModelAgent:
             return
 
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-
         for idx in range(loop_count):
             # inference
             logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')

@@ -82,6 +82,7 @@ class Eagle3LlamaModel(nn.Module):
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
+        self.dtype = dtype
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.embed_tokens = nn.Embedding(config.vocab_size,
@@ -118,7 +119,7 @@ class Eagle3LlamaModel(nn.Module):
         # token embedding
         if inputs_embeds is None:
             assert input_ids is not None
-            inputs_embeds = self.embed_tokens(input_ids)
+            inputs_embeds = self.embed_tokens(input_ids).to(self.dtype)
         previous_hidden_states = previous_hidden_states.to(inputs_embeds)
         if previous_hidden_states.shape[-1] != inputs_embeds.shape[-1]:
             # previous_hidden_states if from target model

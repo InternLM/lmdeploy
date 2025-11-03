@@ -2,7 +2,6 @@
 from logging import Logger
 from typing import Dict
 
-from lmdeploy.messages import SpeculativeConfig
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.utils import get_logger
@@ -64,7 +63,7 @@ def build_executor(
     device_type: str = 'cuda',
     distributed_executor_backend: str = None,
     dtype: str = 'auto',
-    speculative_config: SpeculativeConfig = None,
+    specdecode_config: SpecDecodeConfig = None,
 ) -> ExecutorBase:
     """Build model agent executor."""
     logger = get_logger('lmdeploy')
@@ -78,16 +77,8 @@ def build_executor(
         hf_overrides=misc_config.hf_overrides,
         dist_config=dist_config,
         is_draft_model=False,
-        speculative_config=speculative_config,
+        spec_method=None if specdecode_config is None else specdecode_config.method,
     )
-    specdecode_config = None
-    if speculative_config is not None:
-        specdecode_config = SpecDecodeConfig.from_config(
-            spec_cfg=speculative_config,
-            target_model=model_path,
-            target_model_cfg=model_config,
-            target_cache_cfg=cache_config,
-        )
 
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)

@@ -13,7 +13,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type in ['deepseek_v3', 'deepseek_v2']
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None, is_draft_model: bool = False, speculative_config=None, **kwargs):
+    def build(cls, hf_config, model_path: str = None, is_draft_model: bool = False, spec_method: str = None, **kwargs):
         """build."""
         head_dim = (hf_config.kv_lora_rank + hf_config.qk_rope_head_dim)
         k_head_dim = head_dim
@@ -28,15 +28,17 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         num_layers = hf_config.num_hidden_layers
         model_paradigm = 'ar'
 
+        if spec_method is not None:
+            assert spec_method == 'deepseek_mtp'
+
         # draft model cfg
-        if is_draft_model and speculative_config is not None:
-            assert speculative_config.method == 'deepseek_mtp'
+        if is_draft_model:
             num_layers = hf_config.num_nextn_predict_layers
             hf_config.architectures[0] = 'DeepseekMTPModel'
             # remove for correct mapping when building the patched model
             del hf_config.auto_map
 
-        if is_draft_model or speculative_config is not None:
+        if is_draft_model or spec_method is not None:
             model_paradigm = 'ar_spec'
 
         return ModelConfig(
