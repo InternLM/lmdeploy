@@ -87,6 +87,8 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |             Qwen3              |   0.6B - 235B   | LLM  |    Yes    |   Yes   |  Yes\*  |  -   | Yes\* |
 |            QWen2-VL            |     2B, 7B      | MLLM |    Yes    |   Yes   |   No    |  No  |  Yes  |
 |           QWen2.5-VL           |    3B - 72B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|            QWen3-VL            |    2B - 32B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
+|          QWen3-VL-MOE          |    30B, 235B    | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-MoE          |       16B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V2           |    16B, 236B    | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V2.5          |      236B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |

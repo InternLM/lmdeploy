@@ -153,11 +153,11 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl.Qwen3VLForConditionalGeneration',
 })
 
-# # qwen3_vl_moe
-# MODULE_MAP.update({
-#     'Qwen3VLMoeForConditionalGeneration':
-#     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
-# })
+# qwen3_vl_moe
+MODULE_MAP.update({
+    'Qwen3VLMoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
+})
 
 # starcoder2
 MODULE_MAP.update({
