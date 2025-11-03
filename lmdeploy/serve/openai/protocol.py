@@ -333,7 +333,7 @@ class CompletionResponseStreamChoice(BaseModel):
     text: str
     logprobs: Optional[LogProbs] = None
     gen_tokens: Optional[List[int]] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class CompletionStreamResponse(BaseModel):
