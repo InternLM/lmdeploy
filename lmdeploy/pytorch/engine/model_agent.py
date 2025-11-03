@@ -690,6 +690,9 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
             return
 
+        if not is_decoding:
+            # init state cache for first time prefill
+            self.state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         for idx in range(loop_count):
             # inference

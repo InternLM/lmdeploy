@@ -412,3 +412,20 @@ class StateCacheEngine:
     def state_caches(self):
         """State caches."""
         return self._state_caches
+
+    def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
+        """Initialize state caches.
+
+        idx: indices of caches to be initialized.
+        mask: mask to indicate which idx to be initialized.
+        """
+        num_caches = self.cache_config.num_state_caches
+        if num_caches == 0:
+            return
+
+        # get mask of all caches so we can perform inplace mask fill
+        cache_masks = torch.zeros((num_caches, ), dtype=torch.bool, device=idx.device)
+        cache_masks.index_copy_(0, idx, mask)
+        for cache in self._state_caches:
+            reshaped_mask = cache_masks.view((-1, ) + (1, ) * (cache.dim() - 1))
+            cache.masked_fill_(reshaped_mask, 0)

@@ -135,7 +135,7 @@ class ExecutorBase:
             # estimate runtime mem size
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocal_size * 2)
             num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
-            if int(num_available) // cache_block_size >= 16:
+            if cache_block_size == 0 or int(num_available) // cache_block_size >= 16:
                 break
             max_prefill_token_num = max_prefill_token_num // 2
         return runtime_cache_size, max_prefill_token_num
