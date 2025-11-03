@@ -33,7 +33,7 @@ private:
     const int attn_dp_rank_;
     const int mlp_tp_size_;
 
-    const int attn_tp_cp_group_;
+    const int attn_tp_group_;
 
     const EngineParam engine_param_;
 

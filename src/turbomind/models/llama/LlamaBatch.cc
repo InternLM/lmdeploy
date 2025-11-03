@@ -994,12 +994,12 @@ void LlamaBatch::ComputeAndOutputLogits(const Tensor& hidden_states, int first, 
     if (symm_logits_buf_.shape(0) < token_num) {
         if (tp_size_ > 1) {
             check_cuda_error(cudaStreamSynchronize(stream_));
-            comm_.h_tp_cp_group->Sync();
+            comm_.h_tp_group->Sync();
         }
         symm_logits_buf_ = {{token_num, vocab_size_padded}, data_type_, symm_alloc_};
         if (tp_size_ > 1) {
             check_cuda_error(cudaStreamSynchronize(stream_));
-            comm_.h_tp_cp_group->Sync();
+            comm_.h_tp_group->Sync();
         }
     }
 
@@ -1236,7 +1236,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
         }
         if (need_sync) {
             // Release updates on request output buffers to all ranks (`Interrupt` will use it)
-            comm_.h_tp_cp_group->Sync();
+            comm_.h_tp_group->Sync();
         }
     }
 
@@ -1374,14 +1374,14 @@ void LlamaBatch::InternalThreadEntry()
 
         if (state_->size == g.finished_count) {
             // Batch is empty, use blocking sync to avoid spinning
-            comm_.h_tp_cp_group->Sync(true);
+            comm_.h_tp_group->Sync(true);
         }
 
         NvtxScope scope("mainloop");
 
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
-        Broadcast(comm_.h_tp_cp_group, req, 0);
+        Broadcast(comm_.h_tp_group, req, 0);
 
         if (req->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");
@@ -1422,7 +1422,7 @@ void LlamaBatch::InternalThreadEntry()
                 // Finished requests and corresponding output tensors will be released when notified
                 // wait for all ranks to ensure no rank (except for output thread) will access related
                 // resources
-                comm_.h_tp_cp_group->Sync();
+                comm_.h_tp_group->Sync();
             }
 
             if (is_driver_) {
@@ -1825,7 +1825,7 @@ void LlamaBatch::InitializeBufferAndKVCache()
     const auto get_free_size = [&] {  //
         size_t free{}, total{};
         check_cuda_error(cudaMemGetInfo(&free, &total));
-        return AllReduce(model_->comm_->h_tp_cp_group, free, comm::RedOp::kMin);
+        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
     };
 
     sequence_manager_.reset(new SequenceManager{model_->layer_num_,
