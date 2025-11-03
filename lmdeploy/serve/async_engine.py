@@ -448,12 +448,14 @@ class AsyncEngine(LogitsMixin):
         """Stop all running sessions."""
         logger.info('stop all sessions')
         tasks = []
+        session_ids = []
         for session_id in list(self.id2inst.keys()):
             generator = self.id2inst.get(session_id)
             if generator:
+                session_ids.append(session_id)
                 tasks.append(generator.async_cancel(session_id))
         await asyncio.gather(*tasks)
-        logger.info('all sessions stopped')
+        logger.info(f'all {len(session_ids)} sessions stopped')
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
