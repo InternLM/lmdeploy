@@ -46,7 +46,7 @@ def getPrefixCacheModelList(tp_num):
 @pytest.mark.prefix_cache_test
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment', getPrefixCacheModelList(tp_num=1), indirect=True)
-def test_restful_chat_turbomind_prefix_cache_tp1(config, common_case_config, param, worker_id):
+def test_restful_chat_turbomind_prefix_cache_tp1(config, common_case_config, worker_id):
     if get_workerid(worker_id) is None:
         run_all_step(config, common_case_config)
     else:

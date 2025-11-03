@@ -12,7 +12,7 @@ from utils.run_client_chat import hf_command_line_test
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
 def test_hf_chat_prefix_cache_tp1(config, model, cli_case_config, worker_id):
-    usercase = 'prefix_cache_testcase'
+    usercase = 'chat_testcase'
 
     # 1. enable Prefix Caching
     extra_with_cache = '--enable-prefix-caching'
@@ -28,6 +28,8 @@ def test_hf_chat_prefix_cache_tp1(config, model, cli_case_config, worker_id):
     if chat_log_with_cache is not None:
         allure.attach.file(chat_log_with_cache, attachment_type=allure.attachment_type.TEXT)
 
+    assert result_with_cache, f'Test with cache failed: {msg_with_cache}'
+
     # 2. disable Prefix Caching
     result_without_cache, chat_log_without_cache, msg_without_cache = hf_command_line_test(
         config,
@@ -40,7 +42,6 @@ def test_hf_chat_prefix_cache_tp1(config, model, cli_case_config, worker_id):
     if chat_log_without_cache is not None:
         allure.attach.file(chat_log_without_cache, attachment_type=allure.attachment_type.TEXT)
 
-    assert result_with_cache, f'Test with cache failed: {msg_with_cache}'
     assert result_without_cache, f'Test without cache failed: {msg_without_cache}'
 
 
