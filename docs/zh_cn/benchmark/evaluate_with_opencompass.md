@@ -31,7 +31,6 @@ lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 2. **部署评测模型（Judger）**
 
 ```shell
-export HF_HOME=/nvme4/huggingface_hub
 lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2
 ```
 
@@ -46,6 +45,7 @@ python eval/gen_config.py <task_name> \
     -o /path/to/e2e_config.py
 
 # 执行评测任务
+## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 opencompass /path/to/e2e_config.py -w {oc_output_dir}
@@ -77,6 +77,7 @@ python eval/gen_config.py <task_name> --mode infer \
     -o /path/to/infer_config.py
 
 # 执行推理任务
+## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 opencompass /path/to/infer_config.py -m infer -w {oc_output_dir}
@@ -91,7 +92,6 @@ opencompass /path/to/infer_config.py -m infer -w {oc_output_dir}
 1. **部署评测模型（Judger）**
 
 ```shell
-export HF_HOME=/nvme4/huggingface_hub
 lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2
 ```
 
@@ -105,6 +105,7 @@ python eval/gen_config.py {task_name} --mode eval \
     -o /path/to/judger_config.py
 
 # 执行评判任务
+## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 opencompass /path/to/judger_config.py -m eval -w {oc_output_dir} -r {yyyymmdd_hhmmss}

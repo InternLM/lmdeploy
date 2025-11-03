@@ -117,29 +117,30 @@ datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')),
     return '\n'.join([config_dataset, selected_datasets])
 
 
+def get_model_name_from_server(server: str) -> str:
+    from openai import OpenAI
+    try:
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{server}/v1')
+        model_name = client.models.list().data[0].id
+        return model_name
+    except Exception as e:
+        raise RuntimeError(f'Failed to get model name from server {server}: {e}')
+
+
 def config_api_server(task_name: str, mode: str, api_server: str):
     if mode not in ['infer', 'e2e']:
         raise ValueError(f'In mode {mode}, api_server should not be configured')
     if not api_server:
         raise ValueError('api_server must be provided')
 
-    def _config_model_path():
-        from openai import OpenAI
-        client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{api_server}/v1')
-        model_name = client.models.list().data[0].id
-        return f"MODEL_PATH='{model_name}'"
-
-    task_config = f"TASK_TAG='{task_name}'"
-    model_path_config = _config_model_path()
-    api_server_addr_config = f"API_SERVER_ADDR='{api_server}/v1'"
-    api_server_config = """
+    api_server_config = f"""
 models = [
     dict(
-        abbr=TASK_TAG,
+        abbr='{task_name}',
         key="dummy",
-        openai_api_base=API_SERVER_ADDR,
+        openai_api_base='{api_server}/v1',
         type=OpenAISDK,
-        path=MODEL_PATH,
+        path='{get_model_name_from_server(api_server)}',
         temperature=0.6,
         meta_template=dict(
             round=[
@@ -156,7 +157,7 @@ models = [
         verbose=False,
     )
 ]"""
-    return '\n'.join(['\n', task_config, model_path_config, api_server_addr_config, api_server_config])
+    return api_server_config
 
 
 def config_judger(task_name: str, mode: str, judger_server: str):
@@ -164,15 +165,14 @@ def config_judger(task_name: str, mode: str, judger_server: str):
         raise ValueError(f'In mode {mode}, judger_server should not be configured')
     if not judger_server:
         raise ValueError('judger_server must be provided')
-
-    judger_server_config = f"JUDGE_API_BASE='{judger_server}/v1'"
-    judger_config = """
+    model_name = get_model_name_from_server(judger_server)
+    judger_config = f"""
 judge_cfg = dict(
     abbr='CompassVerifier',
     type=OpenAISDK,
-    path='opencompass/CompassVerifier-32B',
+    path='{model_name}',
     key='YOUR_API_KEY',
-    openai_api_base=JUDGE_API_BASE,
+    openai_api_base='{judger_server}/v1',
     meta_template=dict(
         round=[
             dict(role='HUMAN', api_role='HUMAN'),
@@ -194,14 +194,13 @@ for item in datasets:
 """
 
     if mode == 'eval':
-        task_config = f"TASK_TAG='{task_name}'"
-        model_config = """
+        model_config = f"""
 models = [
-    dict(abbr=TASK_TAG),
+    dict(abbr='{task_name}'),
 ]"""
-        return '\n'.join(['\n', task_config, model_config, judger_server_config, judger_config])
+        return '\n'.join([model_config, judger_config])
     else:  # e2e
-        return '\n'.join(['\n', judger_server_config, config_judger])
+        return judger_config
 
 
 def main():
