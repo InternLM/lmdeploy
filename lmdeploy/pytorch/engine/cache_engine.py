@@ -419,9 +419,13 @@ class StateCacheEngine:
         idx: indices of caches to be initialized.
         mask: mask to indicate which idx to be initialized.
         """
-        num_caches = self.cache_config.num_state_caches
-        if num_caches == 0:
+        if idx is None:
             return
+
+        if len(self._state_caches) <= 0:
+            return
+
+        num_caches = self.cache_config.num_state_caches
 
         # get mask of all caches so we can perform inplace mask fill
         cache_masks = torch.zeros((num_caches, ), dtype=torch.bool, device=idx.device)
