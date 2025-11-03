@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
+import gc
 import logging
 import os
 import time
@@ -367,6 +368,11 @@ class Engine(EngineBase):
     ) -> None:
         # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
+
+        # frequently gc would cause latency spike
+        # default threshold (700, 10, 10)
+        # WARNING: I don't know if it is a good idea to put gc setting here.
+        gc.set_threshold(10000, 100, 100)
 
         # dist args
         self.tp = engine_config.tp

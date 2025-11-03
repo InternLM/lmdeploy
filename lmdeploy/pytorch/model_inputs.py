@@ -154,7 +154,7 @@ class ModelInputs:
             step_seqlens = self.seq_length
         self.history_lengths += step_seqlens
         self.max_kv_seqlen += self.max_q_seqlen
-        self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
+        self.sum_kv_seqlen += self.max_q_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -226,7 +226,7 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
-        max_kv_seqlen = self.max_kv_seqlen
+        max_kv_seqlen = self.max_kv_seqlen - self.max_q_seqlen
 
         # for mllama
         history_cross_length = self.history_cross_length
@@ -243,6 +243,8 @@ class ModelInputs:
             max_q_seqlen = end - start
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
+            max_kv_seqlen += max_q_seqlen
+
             target_hidden_states = self.target_hidden_states[:, start:
                                                              end] if self.target_hidden_states is not None else None
             target_position_ids = self.target_position_ids[:,
@@ -265,7 +267,6 @@ class ModelInputs:
                               target_position_ids=target_position_ids)
             ret.append(inp)
             history_cross_length = cross_length
-            max_kv_seqlen += max_q_seqlen
 
             start = end
 

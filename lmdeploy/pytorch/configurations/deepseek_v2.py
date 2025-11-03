@@ -10,7 +10,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type in ['deepseek_v3', 'deepseek_v2']
+        return hf_config.model_type in ['deepseek_v3', 'deepseek_v2', 'kimi_k2']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, is_draft_model: bool = False, spec_method: str = None, **kwargs):

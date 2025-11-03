@@ -591,7 +591,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         tool_calls = None
         reasoning_content = None
         if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
-            try:  # TODO add json_schema guidance to turbomind
+            try:
                 tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
                 text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
                 if isinstance(tool_calls, List) and len(tool_calls):

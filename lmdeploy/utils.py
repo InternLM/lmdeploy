@@ -24,7 +24,7 @@ class _ASNI_COLOR:
 
 # copy from: https://github.com/termcolor/termcolor
 @functools.cache
-def can_colorize(*, no_color: bool | None = None, force_color: bool | None = None) -> bool:
+def can_colorize(*, no_color: Optional[bool] = None, force_color: Optional[bool] = None) -> bool:
     """Check env vars and for tty/dumb terminal."""
     import io
     if no_color is not None and no_color:

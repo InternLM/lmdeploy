@@ -163,7 +163,7 @@ class Engine:
 
             state = DetokenizeState(len(input_ids))
 
-            prev_len = 0
+            n_token = 0
             token_ids = input_ids.copy()
 
             generator = model_inst.async_stream_infer(session_id,
@@ -178,15 +178,13 @@ class Engine:
                                                       stream_output=stream_output)
             try:
                 async for outputs in generator:
-                    n_token = outputs.num_token
-                    if n_token > prev_len:
-                        token_ids += outputs.token_ids[prev_len - n_token:]
-                        if not skip_detokenize:
-                            _, state = self.tokenizer.detokenize_incrementally(token_ids, state)
-                        sess.tick(n_token)
-                        prev_len = n_token
-                        if n_token > cancel_after:
-                            break
+                    n_token += len(outputs.token_ids)
+                    token_ids += outputs.token_ids
+                    if not skip_detokenize:
+                        _, state = self.tokenizer.detokenize_incrementally(token_ids, state)
+                    sess.tick(n_token)
+                    if n_token > cancel_after:
+                        break
                 sess.finish(Session.SUCCESS)
             finally:
                 await generator.aclose()

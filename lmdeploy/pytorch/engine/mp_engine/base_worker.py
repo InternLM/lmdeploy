@@ -138,7 +138,7 @@ class EngineOutputGather:
 
     def get(self, stream_id):
         if stream_id not in self._output:
-            self._output[stream_id] = EngineOutput(status=None, token_ids=[], num_token=0, logprobs=[])
+            self._output[stream_id] = EngineOutput(status=None, token_ids=[], logprobs=[])
         return self._output[stream_id]
 
     def add(self, stream_id, result):
@@ -154,5 +154,4 @@ class EngineOutputGather:
         output = self._output.pop(stream_id)
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
-        result.num_token = len(output.token_ids)
         return result
