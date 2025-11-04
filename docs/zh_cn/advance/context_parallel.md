@@ -6,6 +6,7 @@
 2. 降低推理的最大 batch 数量，减少吞吐量。
 
 为了解决这个问题，TurboMind 推理后端支持设置 `attn_dp_size`，避免了创建 kv-heads 的副本，但是这会引入数据的不均衡性。为了消除数据的不均衡，TurboMind 支持了序列并行，支持将 kv_cache 交错存储到不同的 cp_rank 上，例如
+
 ```
 cp_rank=2, prompt_len=5, generation_len=4
 kv_cache stored on cp_rank0: 0, 2, 4, 6, 8

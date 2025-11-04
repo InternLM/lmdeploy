@@ -61,8 +61,9 @@ __global__ void ReduceK(float2* cp_ML,
         block_M = fmaxf(block_M, __shfl_xor_sync(uint32_t(-1), block_M, mask));
     }
 
-    float expdiff_M = exp2f((frag_M - block_M) * exp_scale);
-    float block_L   = expdiff_M * frag_L;
+    float expdiff_M =
+        (frag_M == -std::numeric_limits<float>::infinity()) ? 0.0f : exp2f((frag_M - block_M) * exp_scale);
+    float block_L = expdiff_M * frag_L;
 
     PRAGMA_UNROLL
     for (int mask = WARP_SIZE / 2; mask >= 1; mask /= 2) {

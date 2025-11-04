@@ -377,18 +377,18 @@ struct AttentionUniversal {
         const int context_len = params.cu_k_len[batch_idx + 1] - params.cu_k_len[batch_idx];
         const int history_len = context_len - input_len;
 
-        auto get_cp_len = [&](int length) -> int {
+        auto get_cp_len = [&](int length, int rank) -> int {
             int cp_quo, cp_rem;
             params.cp_divmod(cp_quo, cp_rem, length);
-            return (cp_quo + (cp_rem > params.cp_rank ? 1 : 0));
+            return (cp_quo + (cp_rem > rank ? 1 : 0));
         };
 
         const int last_K = history_len + min(query_idx + CTA_Q, input_len);
         const int last_K_tile =
-            (get_cp_len(last_K) - 1) / CTA_S + 1;  // past-the-end index to past-the-end tile index conversion
+            (get_cp_len(last_K, 0) - 1) / CTA_S + 1;  // past-the-end index to past-the-end tile index conversion
 
         const int first_K      = max(history_len + query_idx - (params.window_size - 1), 0);
-        const int first_K_tile = get_cp_len(first_K) / CTA_S;
+        const int first_K_tile = get_cp_len(first_K, 0) / CTA_S;
 
         const int tile_count = last_K_tile - first_K_tile;
 
@@ -430,7 +430,7 @@ struct AttentionUniversal {
         const int offset_K = (first_K_tile + iter_end - 1) * CTA_S;
 
         // This is for avoiding OOB access only
-        const int max_K = min(get_cp_len(context_len), (first_K_tile + iter_end) * CTA_S);
+        const int max_K = min(get_cp_len(context_len, params.cp_rank), (first_K_tile + iter_end) * CTA_S);
 
         int tile_iter = iter_end - iter_begin;
 
