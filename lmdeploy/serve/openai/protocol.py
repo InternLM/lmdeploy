@@ -439,11 +439,17 @@ class UpdateParamsRequest(BaseModel):
     finished: bool = False
 
 
+# str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
+ImageDataInputItem = Union[str, Dict]
+ImageDataFormat = Union[ImageDataInputItem, List[ImageDataInputItem]]
+
+
 # /generate input
 class GenerateReqInput(BaseModel):
     session_id: Optional[int] = -1
     prompt: Optional[str] = None
     input_ids: Optional[List[int]] = None
+    image_data: Optional[ImageDataFormat] = None
     return_logprob: Optional[bool] = None
     max_tokens: int = 128
     stop: Optional[Union[str, List[str]]] = None
