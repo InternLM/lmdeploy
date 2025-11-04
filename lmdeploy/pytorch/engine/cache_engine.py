@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import json
+import math
+from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
@@ -18,6 +20,23 @@ from ..config import CacheConfig, ModelConfig
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 
 logger = get_logger('lmdeploy')
+
+
+def round_up(x: int, alignment: int) -> int:
+    """Round up x to the nearest multiple of alignment."""
+    return ((x + alignment - 1) // alignment) * alignment
+
+
+@dataclass
+class CacheDesc:
+    """Cache description."""
+    shape: List[int]
+    dtype: torch.dtype
+    alignment: int = 256
+
+    def __post_init__(self):
+        self.size = math.prod(self.shape) * self.dtype.itemsize
+        self.aligned_size = round_up(self.size, self.alignment)
 
 
 class CacheEngine:
@@ -391,22 +410,48 @@ class StateCacheEngine:
 
     def __init__(self, cache_config: CacheConfig):
         self.cache_config = cache_config
-        self._state_caches = self._allocate_caches(num_caches=cache_config.num_state_caches,
-                                                   state_shapes=cache_config.states_shapes,
-                                                   device='cuda')
+        self.mem_pool, self._state_caches = self.allocate_caches(num_caches=cache_config.num_state_caches,
+                                                                 state_shapes=cache_config.states_shapes,
+                                                                 device='cuda')
 
     @staticmethod
-    def _allocate_caches(num_caches: int, state_shapes: List[Tuple[Tuple[int], torch.dtype]], device: torch.device):
+    def allocate_caches(num_caches: int, state_shapes: List[Tuple[Tuple[int], torch.dtype]], device: torch.device):
         """Allocate cache implement."""
+
+        if len(state_shapes) == 0 or num_caches == 0:
+            return torch.empty((0, 0), dtype=torch.uint8, device=device), []
+
+        cache_descs = [CacheDesc(shape, dtype) for shape, dtype in state_shapes]
+
+        # get mempool size
+        mem_pool_size = 0
+        for desc in cache_descs:
+            mem_pool_size += desc.aligned_size
+
+        # create pool
+        mem_pool = torch.zeros((num_caches, mem_pool_size), dtype=torch.uint8, device=device)
+
+        # slice caches
         caches = []
-        for shape, dtype in state_shapes:
-            cache = torch.zeros(
-                size=(num_caches, *shape),
-                dtype=dtype,
-                device=device,
-            )
+        remain_pool = mem_pool
+        for desc in cache_descs:
+            cache = remain_pool[:, :desc.size].view(desc.dtype).view((num_caches, *desc.shape))
+            remain_pool = remain_pool[:, desc.aligned_size:]
             caches.append(cache)
-        return caches
+        return mem_pool, caches
+
+    @staticmethod
+    def get_cache_state_size(state_shapes: List[Tuple[Tuple[int], torch.dtype]]) -> int:
+        """Get the required cache size of the state cache.
+
+        Args:
+            state_shapes (List[Tuple[Tuple[int], torch.dtype]]): The shapes and dtypes of the states.
+
+        Return:
+            int: Required memory size in bytes.
+        """
+        mem_pool, _ = StateCacheEngine.allocate_caches(num_caches=1, state_shapes=state_shapes, device='meta')
+        return mem_pool.numel() * mem_pool.element_size()
 
     @property
     def state_caches(self):
@@ -430,6 +475,5 @@ class StateCacheEngine:
         # get mask of all caches so we can perform inplace mask fill
         cache_masks = torch.zeros((num_caches, ), dtype=torch.bool, device=idx.device)
         cache_masks.index_copy_(0, idx, mask)
-        for cache in self._state_caches:
-            reshaped_mask = cache_masks.view((-1, ) + (1, ) * (cache.dim() - 1))
-            cache.masked_fill_(reshaped_mask, 0)
+        reshaped_mask = cache_masks.view((-1, ) + (1, ) * (self.mem_pool.dim() - 1))
+        self.mem_pool.masked_fill_(reshaped_mask, 0)

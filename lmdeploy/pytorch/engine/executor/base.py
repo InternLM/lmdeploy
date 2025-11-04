@@ -159,7 +159,7 @@ class ExecutorBase:
         if len(cache_config.states_shapes) == 0:
             return 0
 
-        import math
+        from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
 
         num_state_caches = cache_config.num_state_caches
         if num_state_caches is None:
@@ -168,10 +168,8 @@ class ExecutorBase:
             num_state_caches = int(cache_config.max_batches + 8)
             cache_config.num_state_caches = num_state_caches
 
-        mems = 0
-        for shape, dtype in cache_config.states_shapes:
-            dtype_size = dtype.itemsize
-            mems += math.prod(shape) * num_state_caches * dtype_size
+        mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
+        mems *= num_state_caches
 
         if cache_config.enable_prefix_caching:
             cache_config.enable_prefix_caching = False
