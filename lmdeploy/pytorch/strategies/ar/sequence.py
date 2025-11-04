@@ -119,8 +119,8 @@ class ARSequenceStrategy(SequenceStrategy):
         else:
             num_tokens = [msg.num_token_ids for msg in running]
 
-        if batched_outputs.extra_outputs.all_routed_experts is not None:
-            all_routed_experts = batched_outputs.extra_outputs.all_routed_experts.split(num_tokens, dim=0)
+        if batched_outputs.all_routed_experts is not None:
+            all_routed_experts = batched_outputs.all_routed_experts.split(num_tokens, dim=0)
             all_routed_experts = [experts.numpy() for experts in all_routed_experts]
         update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
         for token, msg, stop, model_meta, routed_experts in zip(next_token_ids, running, stopped, model_metas,

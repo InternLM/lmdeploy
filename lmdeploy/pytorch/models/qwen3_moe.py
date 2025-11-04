@@ -486,7 +486,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         outputs = dict()
         outputs['hidden_states'] = graph_meta.output_buffers['hidden_states'][:, :num_tokens]
         if self.enable_return_routed_experts:
-            outputs['all_routed_experts'] = graph_meta.output_buffers['all_routed_experts'][:num_tokens, ...]
+            outputs['all_routed_experts'] = graph_meta.output_buffers['all_routed_experts'][:num_tokens, ...].clone()
         return outputs
 
     def prepare_inputs_for_generation(

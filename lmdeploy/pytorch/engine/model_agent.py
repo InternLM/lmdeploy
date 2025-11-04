@@ -72,6 +72,7 @@ class BatchedOutputs:
     logprobs: Optional[BatchedLogProbs] = None
     new_token_timestamp: int = 0
     extra_outputs: Optional[ExtraOutputs] = None
+    all_routed_experts: Optional[torch.Tensor] = None
 
     def to_cpu(self):
         """To cpu."""
@@ -755,7 +756,7 @@ class BaseModelAgent:
                 next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
                                                                                  extra_inputs)
                 # for router replay
-                extra_inputs.all_routed_experts = output.get('all_routed_experts', None)
+                all_routed_experts = output.get('all_routed_experts', None)
 
                 with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
@@ -776,6 +777,7 @@ class BaseModelAgent:
                                        stop_pos=stop_pos,
                                        model_metas=model_metas,
                                        logprobs=logprobs,
+                                       all_routed_experts=all_routed_experts,
                                        extra_outputs=extra_outputs))
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
