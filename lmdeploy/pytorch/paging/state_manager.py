@@ -16,8 +16,7 @@ class StateAllocator:
         """allocate."""
         if self.get_num_free() == 0:
             raise RuntimeError('No free states.')
-        num_used = self.num_states - self._free_count
-        alloc_id = self._free_states[num_used]
+        alloc_id = self._free_states[-self._free_count]
         self._free_count -= 1
         return alloc_id
 
@@ -25,9 +24,8 @@ class StateAllocator:
         """free."""
         if self._free_count >= self.num_states:
             raise RuntimeError('All states are free.')
-        num_used = self.num_states - self._free_count
-        self._free_states[num_used] = state_id
         self._free_count += 1
+        self._free_states[-self._free_count] = state_id
 
     def get_num_free(self):
         return self._free_count
@@ -52,7 +50,7 @@ class StateManager:
 
     def free(self, seq: SchedulerSequence):
         """Free states for a sequence."""
-        if seq.logical_state < 0:
+        if not self.is_allocated(seq):
             return None
         self.allocator.free(seq.logical_state)
         seq.logical_state = -1
