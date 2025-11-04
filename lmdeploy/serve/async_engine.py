@@ -834,7 +834,6 @@ class AsyncEngine(LogitsMixin):
             input_len = len(input_ids)
             output_len, gen_len = 0, 0
             state = DetokenizeState(len(input_ids))
-            start_ids_offset = state.ids_offset
             response = ''
             finish_reason = None
             async with self.safe_run(inst,
@@ -846,7 +845,6 @@ class AsyncEngine(LogitsMixin):
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
-                prev_len = 0
                 hit_stop_token = 0
                 req_state = RequestState(prompt_tokens=input_len)  # per-requst state
                 async for outputs in gen:
@@ -856,23 +854,16 @@ class AsyncEngine(LogitsMixin):
                     if is_error(outputs.status):
                         break
 
-                    output_len = outputs.num_token
-
-                    if hit_stop_token or prev_len == output_len:
+                    output_len = len(outputs.token_ids)
+                    if hit_stop_token:
                         continue
 
                     # This assumes the engine will stop when stop token is hit
                     if output_len and outputs.token_ids[-1] in stop_ids:
                         hit_stop_token = 1
-                        # one token and it's been skipped
-                        if output_len == prev_len + 1:
-                            continue
 
-                    mask = slice(prev_len - output_len, output_len - hit_stop_token)
-                    token_ids += outputs.token_ids[mask]
+                    token_ids += outputs.token_ids[:output_len - hit_stop_token]
                     gen_len = len(token_ids) - input_len
-
-                    prev_len = output_len
 
                     ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
@@ -889,21 +880,13 @@ class AsyncEngine(LogitsMixin):
                                  finish_reason,
                                  token_ids=res,
                                  cache_block_ids=outputs.cache_block_ids)
-
                     if outputs.logprobs is not None:
-                        log_offset = ids_offset - start_ids_offset
-                        out.logprobs = outputs.logprobs[log_offset:]
-                        if hit_stop_token:
-                            out.logprobs = out.logprobs[:-hit_stop_token]
+                        out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
                     if outputs.last_hidden_state is not None:
-                        out.last_hidden_state = outputs.last_hidden_state
-                        if hit_stop_token:
-                            out.last_hidden_state = out.last_hidden_state[:-hit_stop_token]
+                        out.last_hidden_state = (outputs.last_hidden_state[:-hit_stop_token]
+                                                 if hit_stop_token else outputs.last_hidden_state)
                     if outputs.logits is not None:
-                        out.logits = outputs.logits
-                        if hit_stop_token:
-                            out.logits = out.logits[:-hit_stop_token]
-
+                        out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
                 metrics_processor.increment_finished_requests()

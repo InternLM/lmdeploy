@@ -8,7 +8,7 @@ import torch
 from lmdeploy.messages import LogitsProcessor
 
 from ..messages import SchedulerSequence
-from .guided_process import GuidedDecodingMangager
+from .guided_process import GuidedDecodingManager
 
 
 def _process_temperature_(scores: torch.Tensor, temperature: torch.Tensor):
@@ -126,18 +126,27 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
     return logits
 
 
+def _torch_topk(x: torch.Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True):
+    if k == 1:
+        # torch.topk would not fallback to torch.max/torch.min automatically
+        if largest:
+            return torch.max(x, dim=dim, keepdim=True)
+        else:
+            return torch.min(x, dim=dim, keepdim=True)
+    else:
+        return torch.topk(x, k, dim=dim, largest=largest, sorted=sorted)
+
+
 class FusedLogitsProcessor:
     """Custom logits processor."""
 
     def __init__(
         self,
         sampling_inputs: SamplingInputs,
-        sampling_vocab_size: Optional[int] = None,
         logprobs_mode: Optional[str] = None,
-        guided_decoding_manager: Optional[GuidedDecodingMangager] = None,
+        guided_decoding_manager: Optional[GuidedDecodingManager] = None,
     ):
         self.sampling_inputs: SamplingInputs = sampling_inputs
-        self.sampling_vocab_size = sampling_vocab_size
         self.logprobs_mode = logprobs_mode
         self.guided_decoding_manager = guided_decoding_manager
         if sampling_inputs.session_to_cleanup:
@@ -236,7 +245,7 @@ class FusedLogitsProcessor:
             if max_topk <= 0:
                 max_topk = scores.size(1)
                 if top_k is not None:
-                    top_k = torch.where(top_k <= 0, top_k.new_tensor(max_topk), top_k)
+                    top_k = torch.masked_fill(top_k, top_k <= 0, max_topk)
 
             if top_k is not None:
                 scores = _filter_topk_sorted_(scores, top_k)
@@ -255,9 +264,6 @@ class FusedLogitsProcessor:
             offsets = sampling_inputs.random_offsets
             return _multinomial_sampling(softmax_scores, seeds, offsets, indices)
 
-        if self.sampling_vocab_size is not None and logits.size(1) > self.sampling_vocab_size:
-            logits = logits[..., :self.sampling_vocab_size]
-
         if sampling_inputs.max_top_k == 1:
             result = logits.argmax(-1)
         else:
@@ -266,7 +272,7 @@ class FusedLogitsProcessor:
             if max_topk <= 0:
                 scores, indices = logits.sort(1, descending=True)
             else:
-                scores, indices = logits.topk(max_topk, dim=1)
+                scores, indices = _torch_topk(logits, max_topk, dim=1)
             result = __random_sampling(scores, indices)
 
         if self.guided_decoding_manager and self.guided_processors:
@@ -285,7 +291,7 @@ class FusedLogitsProcessor:
         logprobs = raw_logprobs.gather(-1, indices)
         num_logprobs = self.sampling_inputs.max_num_logprobs
         if num_logprobs > 0:
-            topk_logprobs, topk_indices = raw_logprobs.topk(num_logprobs, dim=-1)
+            topk_logprobs, topk_indices = _torch_topk(raw_logprobs, num_logprobs, dim=-1)
             logprobs = torch.cat([logprobs, topk_logprobs], dim=-1)
             indices = torch.cat([indices, topk_indices], dim=-1)
 

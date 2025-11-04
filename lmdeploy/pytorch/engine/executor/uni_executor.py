@@ -90,6 +90,8 @@ class UniExecutor(ExecutorBase):
     async def forward_async(self, inputs):
         """Start forward."""
         self.model_agent.set_forward_inputs(inputs)
+        # switch to task: ModelAgent._async_loop_inputs_preprocess
+        await asyncio.sleep(0)
 
     async def get_output_async(self, dp_rank: int = 0):
         """Get output async."""

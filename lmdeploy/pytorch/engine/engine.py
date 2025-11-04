@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
+import gc
 import logging
 import os
 import time
@@ -342,6 +343,11 @@ class Engine(EngineBase):
                  trust_remote_code: bool = True) -> None:
         # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
+
+        # frequently gc would cause latency spike
+        # default threshold (700, 10, 10)
+        # WARNING: I don't know if it is a good idea to put gc setting here.
+        gc.set_threshold(10000, 100, 100)
 
         # dist args
         self.tp = engine_config.tp
@@ -831,6 +837,10 @@ class Engine(EngineBase):
         logits = batched_outputs.logits
         logprobs = batched_outputs.logprobs
 
+        if logprobs is not None:
+            logprobs.vals = logprobs.vals.tolist()
+            logprobs.indices = logprobs.indices.tolist()
+
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
         self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
@@ -858,7 +868,7 @@ class Engine(EngineBase):
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
             if num_logprobs >= 0:
-                cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
+                cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
 
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
@@ -953,15 +963,7 @@ class Engine(EngineBase):
         def __send_resp(out: InferOutput):
             """Send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
-            cur_logprobs = out.logprobs
-            logprobs = None
-            if cur_logprobs is not None:
-                # logprobs to dict
-                vals = cur_logprobs[0].tolist()
-                indices = cur_logprobs[1].tolist()
-                cur_logprobs = dict(zip(indices, vals))
-                logprobs = [] if out.resp.data is None else out.resp.data.get('logprobs', [])
-                logprobs = logprobs + [cur_logprobs]
+            logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids,
@@ -970,10 +972,33 @@ class Engine(EngineBase):
                                      req_metrics=out.req_metrics,
                                      logprobs=logprobs))
 
+        def __update_logprobs(step_outputs: List[InferOutput]):
+            for out in step_outputs:
+                cur_logprobs = out.logprobs
+                if cur_logprobs is None:
+                    continue
+
+                if out.resp.data is None:
+                    out.resp.data = dict()
+                out.resp.data.setdefault('logprobs', [])
+
+                # logprobs to dict
+                vals = cur_logprobs[0]
+                indices = cur_logprobs[1]
+                cur_logprobs = dict(zip(indices, vals))
+                logprobs = out.resp.data['logprobs']
+                logprobs.append(cur_logprobs)
+
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
             __log_resps(step_outputs)
-            for out in step_outputs:
+            __update_logprobs(step_outputs)
+
+            is_done = set()
+            for out in reversed(step_outputs):
+                if out.session_id in is_done:
+                    continue
+                is_done.add(out.session_id)
                 __send_resp(out)
 
         while True:
