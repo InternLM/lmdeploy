@@ -164,8 +164,7 @@ class ExecutorBase:
         vocal_size = self.model_config.vocab_size
 
         tp = self.dist_config.attn_config.tp
-        cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, tp,
-                                                            cache_config.quant_policy)
+        cache_block_size = CacheEngine.get_cache_block_size(cache_config, model_config, tp)
         runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mem, cache_block_size, vocal_size)
         if cache_config.max_prefill_token_num != max_prefill_token_num:
             if max_prefill_token_num <= 0:
