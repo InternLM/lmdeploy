@@ -153,7 +153,7 @@ class ModelInputs:
             step_seqlens = self.seq_length
         self.history_lengths += step_seqlens
         self.max_kv_seqlen += self.max_q_seqlen
-        self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
+        self.sum_kv_seqlen += self.max_q_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -243,6 +243,7 @@ class ModelInputs:
             max_kv_seqlen += max_q_seqlen
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
+            max_kv_seqlen += max_q_seqlen
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),

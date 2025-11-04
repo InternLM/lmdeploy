@@ -30,7 +30,7 @@ from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCri
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
-from .guided_process import GuidedDecodingMangager
+from .guided_process import GuidedDecodingManager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -316,10 +316,6 @@ class BaseModelAgent:
         self.cache_config = cache_config
         # use raw tokenizer
         self.tokenizer = Tokenizer(model_path).model.model
-        try:
-            self.sampling_vocab_size = len(self.tokenizer)
-        except BaseException:
-            self.sampling_vocab_size = None
 
         self._pre_in_que = None
         self._in_que = None
@@ -355,9 +351,9 @@ class BaseModelAgent:
         self.cache_engine = None
         self.profiler: AgentProfiler = None
         try:
-            self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
+            self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
         except ValueError as e:
-            logger.warning(f'Failed to create GuidedManager for tokenizer {self.tokenizer}: {e}')
+            logger.warning(f'Failed to create GuidedManager for tokenizer {type(self.tokenizer)}: {e}')
             self.guided_decoding_manager = None
 
         # microbatch
@@ -553,7 +549,6 @@ class BaseModelAgent:
         with record_function('sampling_logits'):
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
-                sampling_vocab_size=self.sampling_vocab_size,
                 logprobs_mode=self.misc_config.logprobs_mode,
                 guided_decoding_manager=self.guided_decoding_manager,
             )
@@ -776,15 +771,13 @@ class BaseModelAgent:
             while True:
                 forward_inputs = await input_maker.get()
 
-                if forward_event is not None:
-                    forward_event.clear()
                 await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
                 input_maker.step()
 
-    async def _async_loop_inputs_preprocess(self):
+    async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
         non_blocking = True
         keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
@@ -800,6 +793,8 @@ class BaseModelAgent:
                 self.out_stream.synchronize()
             logger.debug('preprocessing forward inputs done.')
             self._in_que.put_nowait(forward_inputs)
+            if forward_event is not None:
+                forward_event.clear()
 
     @staticmethod
     def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
@@ -834,7 +829,7 @@ class BaseModelAgent:
 
         # preprocess inputs task
         logger.debug('Create task ModelAgentPreprocess.')
-        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(),
+        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(forward_event),
                                                        name='ModelAgentPreprocess')
         tasks_to_cancel.append(self._preprocess_task)
 
