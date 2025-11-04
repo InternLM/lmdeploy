@@ -682,11 +682,9 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
                            context: StepContext = None):
         """Update model meta."""
         if context.is_decoding:
-            metas = self._update_model_meta_decoding(context)
+            return self._update_model_meta_decoding(context)
         else:
-            metas = self._update_model_meta_prefilling(context)
-        context.model_metas = metas
-        return metas
+            return self._update_model_meta_prefilling(context)
 
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
