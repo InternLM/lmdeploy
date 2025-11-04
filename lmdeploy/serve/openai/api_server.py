@@ -65,6 +65,7 @@ class VariableInterface:
     # following is for tool parsers
     tool_parser: Optional[ToolParser] = None
     allow_terminate_by_client: bool = False
+    enable_abort_handling: bool = False
 
 
 router = APIRouter()
@@ -1152,6 +1153,11 @@ async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONRespo
 @router.post('/abort_request')
 async def abort_request(request: AbortRequest, raw_request: Request = None):
     """Abort an ongoing request."""
+    if not VariableInterface.enable_abort_handling:
+        return Response(
+            status_code=501,
+            content='This server does not support abort requests. Enable with --enable-abort-handling flag.')
+
     if request.abort_all:
         await VariableInterface.async_engine.stop_all_session()
     else:
@@ -1323,6 +1329,7 @@ def serve(model_path: str,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
           allow_terminate_by_client: bool = False,
+          enable_abort_handling: bool = False,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1381,6 +1388,7 @@ def serve(model_path: str,
     logger.setLevel(log_level)
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
+    VariableInterface.enable_abort_handling = enable_abort_handling
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')
