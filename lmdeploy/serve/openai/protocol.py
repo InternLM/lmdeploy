@@ -256,7 +256,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -314,7 +314,7 @@ class CompletionResponseChoice(BaseModel):
     text: str
     logprobs: Optional[LogProbs] = None
     gen_tokens: Optional[List[int]] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class CompletionResponse(BaseModel):
@@ -333,7 +333,7 @@ class CompletionResponseStreamChoice(BaseModel):
     text: str
     logprobs: Optional[LogProbs] = None
     gen_tokens: Optional[List[int]] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class CompletionStreamResponse(BaseModel):
@@ -430,7 +430,7 @@ class GenerateResponse(BaseModel):
     tokens: int
     input_tokens: int
     history_tokens: int
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class UpdateParamsRequest(BaseModel):
@@ -478,3 +478,13 @@ class GenerateReqOutput(BaseModel):
     text: str
     output_ids: List[int]
     meta_info: GenerateReqMetaOutput
+
+
+class AbortRequest(BaseModel):
+    # Whether to abort all requests
+    abort_all: bool = False
+    # The finished reason data
+    finished_reason: Optional[Dict[str, Any]] = None
+    abort_message: Optional[str] = None
+    # The session ID to abort. If `abort_all` is True, this field is ignored.
+    session_id: Optional[int] = -1
