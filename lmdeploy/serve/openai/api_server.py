@@ -955,18 +955,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         do_preprocess=False,
     )
 
-    def create_finish_reason(finish_reason):
-        # TODO: add detail info
-        if not finish_reason:
-            return None
-        if finish_reason == 'length':
-            return dict(type='length')
-        if finish_reason == 'stop':
-            return dict(type='stop')
-        return dict(type='abort')
-
     def create_generate_response_json(res, text, output_ids, logprobs, finish_reason):
-        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(finish_reason),
+        meta = GenerateReqMetaOutput(finish_reason=dict(type=finish_reason) if finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
                                      completion_tokens=res.generate_token_len)
@@ -1005,7 +995,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                     logprobs.append((tok_logprobs[tok], tok))
         nonlocal response
-        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(res.finish_reason),
+        meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
                                      completion_tokens=res.generate_token_len)
