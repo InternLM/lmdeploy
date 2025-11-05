@@ -19,6 +19,7 @@ project(TurboMind LANGUAGES CXX CUDA)
 if (MSVC)
     # use standard conformant preprocessor
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus")
 endif ()
 
