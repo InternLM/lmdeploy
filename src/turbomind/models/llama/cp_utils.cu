@@ -23,11 +23,10 @@ template<typename T, int WarpCnt, int N, int M, int HeadDim>
 __global__ void ReduceOutput(T*                  out,  //
                              float*              partial_O,
                              float*              cp_ML,  // q, h, k, 2
-                             cutlass::FastDivmod h_divmod,
+                             cutlass::FastDivmod num_heads,
                              int*                split_cnt_,
                              int                 max_split_cnt,
                              int                 total,
-                             int                 num_heads,
                              int                 stride_k,
                              int                 offset_k,
                              float               exp_scale)
@@ -40,7 +39,7 @@ __global__ void ReduceOutput(T*                  out,  //
     // warp_id, q, h
     const int qh = blockIdx.x * M + warp_id % M;
     int       q, h;
-    h_divmod(q, h, qh);
+    q = num_heads.divmod(h, qh);
 
     if (q * num_heads + h >= total) {
         return;
@@ -156,7 +155,7 @@ void invokeReduceOutput(CpPostContext* ctx, AttentionParams<T>* params, int spli
     int stride_k = 1;
     int offset_k = 1;
 
-    cutlass::FastDivmod h_divmod = cutlass::FastDivmod(params->num_heads);
+    cutlass::FastDivmod num_heads = cutlass::FastDivmod(params->num_heads);
 
     auto invoke = [&](auto n, auto head_dim) {
         constexpr int WarpCnt = 4;
@@ -170,11 +169,10 @@ void invokeReduceOutput(CpPostContext* ctx, AttentionParams<T>* params, int spli
             params->out + params->cp_q_offset * params->num_heads * params->size_per_head,
             params->partial_O,
             ctx->cp_ML + params->cp_rank * params->token_num * params->num_heads * params->max_split_k * 2,
-            h_divmod,
+            num_heads,
             split_cnt > 1 ? params->split_cnt : nullptr,
             params->max_split_k,
             total,
-            params->num_heads,
             stride_k,
             offset_k * n,
             params->inv_sqrt_dh);
