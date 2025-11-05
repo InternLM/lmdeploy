@@ -1,6 +1,6 @@
 # DOCKER_BUILDKIT=1 docker build --build-arg ASCEND_DEVICE=ascend_a3 \
 #     --build-arg DLINFER_TAG=main --build-arg LMDEPLOY_TAG=main --network=host \
-#     -t lmdeploy_dlinfer:a3 -f  Dockerfile.ascend_a3 .
+#     -t lmdeploy_dlinfer:a3 -f  Dockerfile_ascend_a3 .
 ARG ASCEND_DEVICE_TYPE=ascend_a3
 ARG ASCEND_HUB=swr.cn-south-1.myhuaweicloud.com/ascendhub
 
