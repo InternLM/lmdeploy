@@ -18,7 +18,7 @@ kv_cache stored on cp_rank1: 1, 3, 5, 7
 Taking Intern-S1 / Qwen3-235B-A22B as an example, their `num_key_value_heads` is 4. If you want to deploy with `TP=8` and avoid duplication of kv_cache, you can deploy in the following way:
 
 ```
-lmdeploy serve api_server internlm/Intern-S1 --tp 8 --attn-cp-size 2
+lmdeploy serve api_server internlm/Intern-S1 --tp 8 --cp 2
 
-lmdeploy serve api_server Qwen/Qwen3-235B-A22B --tp 8 --attn-cp-size 2
+lmdeploy serve api_server Qwen/Qwen3-235B-A22B --tp 8 --cp 2
 ```

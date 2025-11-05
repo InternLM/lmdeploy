@@ -18,7 +18,7 @@ kv_cache stored on cp_rank1: 1, 3, 5, 7
 以 `Intern-S1` / `Qwen3-235B-A22B` 为例，他们的 `num_key_value_heads` 为 4，若要用 `TP=8` 的方式部署，并避免 kv_cache 的拷贝，可以用如下的方式部署
 
 ```
-lmdeploy serve api_server internlm/Intern-S1 --tp 8 --attn-cp-size 2
+lmdeploy serve api_server internlm/Intern-S1 --tp 8 --cp 2
 
-lmdeploy serve api_server Qwen/Qwen3-235B-A22B --tp 8 --attn-cp-size 2
+lmdeploy serve api_server Qwen/Qwen3-235B-A22B --tp 8 --cp 2
 ```
