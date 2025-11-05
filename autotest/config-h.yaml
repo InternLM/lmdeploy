@@ -17,6 +17,7 @@ tp_config:
     gpt-oss-120b-BF16: 4
     gpt-oss-20b-BF16: 2
     DeepSeek-V3.1: 8
+    Qwen3-30B-A3B-Base: 2
 
 turbomind_chat_model:
     - internlm/Intern-S1
@@ -68,9 +69,8 @@ turbomind_base_model:
     - openai/gpt-oss-20b
 
 pytorch_base_model:
-    - internlm/Intern-S1-mini
-    - Qwen/Qwen3-4B-FP8
-    - unsloth/gpt-oss-20b-BF16
+    - Qwen/Qwen3-8B-Base
+    - Qwen/Qwen3-30B-A3B-Base
 
 turbomind_quatization:
     no_awq:

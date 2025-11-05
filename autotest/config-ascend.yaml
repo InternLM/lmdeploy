@@ -18,27 +18,12 @@ tp_config:
 
 
 
-turbomind_chat_model:
-    - Qwen/Qwen3-30B-A3B
-    - Qwen/Qwen3-235B-A22B
-    - Qwen/Qwen3-32B
-    - Qwen/Qwen3-8B
-    - Qwen/Qwen3-0.6B
-
-
 pytorch_chat_model:
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-8B
     - Qwen/Qwen3-0.6B
-
-turbomind_vl_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
-    - OpenGVLab/InternVL3_5-2B
-    - OpenGVLab/InternVL3_5-8B
-    - OpenGVLab/InternVL3_5-38B
 
 pytorch_vl_model:
     - internlm/Intern-S1
@@ -48,49 +33,9 @@ pytorch_vl_model:
     - OpenGVLab/InternVL3_5-38B
 
 
-turbomind_base_model:
-    - Qwen/Qwen3-0.6B
-
 pytorch_base_model:
     - Qwen/Qwen3-0.6B
 
-turbomind_quatization:
-    no_awq:
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-8B
-        - Qwen/Qwen3-0.6B
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
-        - OpenGVLab/InternVL3_5-2B
-        - OpenGVLab/InternVL3_5-8B
-        - OpenGVLab/InternVL3_5-38B
-
-    gptq:
-        - Empty
-    no_kvint4:
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-8B
-        - Qwen/Qwen3-0.6B
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
-        - OpenGVLab/InternVL3_5-2B
-        - OpenGVLab/InternVL3_5-8B
-        - OpenGVLab/InternVL3_5-38B
-    no_kvint8:
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-8B
-        - Qwen/Qwen3-0.6B
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
-        - OpenGVLab/InternVL3_5-2B
-        - OpenGVLab/InternVL3_5-8B
-        - OpenGVLab/InternVL3_5-38B
 
 pytorch_quatization:
     awq:
