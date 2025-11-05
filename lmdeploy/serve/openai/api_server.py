@@ -38,9 +38,9 @@ from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest,
                                             CompletionResponse, CompletionResponseChoice,
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-                                            GenerateReqInput, GenerateReqMetaOutput, GenerateReqOutput, GenerateRequest,
-                                            LogProbs, ModelCard, ModelList, ModelPermission, PoolingRequest,
-                                            PoolingResponse, TopLogprob, UpdateParamsRequest, UsageInfo)
+                                            GenerateReqInput, GenerateReqMetaOutput, GenerateReqOutput, LogProbs,
+                                            ModelCard, ModelList, ModelPermission, PoolingRequest, PoolingResponse,
+                                            TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -132,17 +132,28 @@ async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
         return create_error_response(HTTPStatus.NOT_FOUND, f'The model {request.model!r} does not exist.')
-    if hasattr(request, 'n') and request.n <= 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n {request.n!r} must be a positive int.')
-    if hasattr(request, 'top_p') and not (request.top_p > 0 and request.top_p <= 1):
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p {request.top_p!r} must be in (0, 1].')
-    if hasattr(request, 'top_k') and request.top_k < 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The top_k {request.top_k!r} cannot be a negative integer.')
-    if hasattr(request, 'temperature') and not (request.temperature <= 2 and request.temperature >= 0):
-        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The temperature {request.temperature!r} must be in [0, 2]')
-    return
+
+    # Import the appropriate check function based on request type
+    if isinstance(request, ChatCompletionRequest):
+        from .serving_chat_completion import check_request
+        check_func = check_request
+    elif isinstance(request, CompletionRequest):
+        from .serving_completion import check_request
+        check_func = check_request
+    elif isinstance(request, GenerateReqInput):
+        from .serving_generate import check_request
+        check_func = check_request
+    else:
+        # Define an async function that always returns success
+        async def always_success(req):
+            return (0, 'OK')
+
+        check_func = always_success
+
+    error_msg = await check_func(request, VariableInterface.async_engine.backend_config)
+    if error_msg:
+        return create_error_response(HTTPStatus.BAD_REQUEST, error_msg)
+    return None
 
 
 def _create_completion_logprobs(tokenizer: Tokenizer,
@@ -907,8 +918,6 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
-    if (request.prompt is not None) ^ (request.input_ids is None):
-        return create_error_response(HTTPStatus.BAD_REQUEST, 'You must specify exactly one of prompt or input_ids')
 
     prompt = request.prompt
     input_ids = request.input_ids
@@ -1175,7 +1184,7 @@ async def abort_request(request: AbortRequest, raw_request: Request = None):
 
 
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
-async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = None):
+async def chat_interactive_v1(request, raw_request: Request = None):
     return create_error_response(
         HTTPStatus.BAD_REQUEST, 'v1/chat/interactive is deprecated, please launch server with --enable-prefix-cache '
         'and use /v1/chat/completions instead.')
