@@ -505,7 +505,7 @@ struct AttentionUniversal {
 
         const bool separate_reduce = need_separate_reduce(cta_map.split_count());
 
-        if (separate_reduce && iter_end == tile_count && head_idx == 0) {
+        if ((separate_reduce || (params.cp_size > 1 && split_cnt > 1)) && iter_end == tile_count && head_idx == 0) {
             // Store actual split count, only used by separate reduction kernel
             for (int ti = threadIdx.x; ti < CTA_Q; ti += kWarpCount * WARP_SIZE) {
                 if (qi_begin + ti < qi_end) {
@@ -519,7 +519,7 @@ struct AttentionUniversal {
         }
         else {
             StorePartial(frag_O, frag_M, frag_L, split_cnt, qi_begin, qi_end, head_idx, split_idx, params, storage);
-            if (!separate_reduce && split_cnt > 1) {
+            if (!separate_reduce && params.cp_size == 1) {
                 Reduce(qi_begin, head_idx, split_idx, iter_end == tile_count, params, cta_map, smem_buf);
             }
         }
@@ -550,9 +550,6 @@ struct AttentionUniversal {
                       params.partial_M,
                       params.partial_L,
                       params.partial_O,
-                      params.cp_ML,
-                      params.cp_k_ML,
-                      params.cp_q_offset,
                       qi_begin,
                       head_idx,
                       params.num_heads,
@@ -628,7 +625,7 @@ struct AttentionUniversal {
                 if (split_cnt > 1) {  // decode
                     Store(&params.partial_O[get_index(hi, qi) * kHeadDim + di], vec);
                 }
-                if (params.cp_size > 1 && split_cnt == 1) {
+                if (params.cp_size > 1 && split_cnt == 1) {  // prefill
                     const int index = ((qi_begin + qi) * params.num_heads + (head_idx + hi)) * kHeadDim + di;
                     Store(&params.out[index], cast<T>(vec));
                 }
@@ -643,18 +640,12 @@ struct AttentionUniversal {
                     params.partial_L[index] = L;
                 }
 
-                auto save_cp_stats = [&](int max_split_k, int split_idx, float* ml, float M, float L) {
-                    const int q       = qi_begin + qi - params.cp_q_offset;
-                    const int index   = (q * params.num_heads + (head_idx + hi)) * max_split_k + split_idx;
-                    ml[index * 2]     = M;
-                    ml[index * 2 + 1] = L;
-                };
-
                 if (params.cp_size > 1) {
-                    if (split_cnt == 1) {
-                        save_cp_stats(1, 0, params.cp_ML, M, L);
-                    }
-                    save_cp_stats(params.max_split_k, split_idx, params.cp_k_ML, M, L);
+                    const int q     = qi_begin + qi - params.cp_q_offset;
+                    const int index = (q * params.num_heads + (head_idx + hi)) * params.max_split_k + split_idx;
+
+                    params.cp_ML[index * 2]     = M;
+                    params.cp_ML[index * 2 + 1] = L;
                 }
             }
         });

@@ -100,11 +100,6 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     split_cnt_ = Tensor_<int>({kMaxWorkspaceTokens}, kDEVICE);
     barriers_  = Tensor_<int>({kMaxWorkspaceTokens, local_head_num_}, kDEVICE);
 
-    if (engine_param_.attn_cp_size > 1) {
-        const int cp_workspace_tokens = kMaxWorkspaceTokens + engine_param_.max_forward_token_num;
-        cp_k_ML_                      = Tensor_<float>({cp_workspace_tokens, local_head_num_, 2}, kDEVICE);
-    }
-
     Clear(split_cnt_.buffer());
     Clear(barriers_.buffer());
 
@@ -346,16 +341,18 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         if (params.cp_size > 1) {
             params.cp_divmod = cutlass::FastDivmod(params.cp_size);
 
-            const int offset_ML = engine_param_.attn_cp_size * offset * local_head_num_ * 2;
-            params.cp_ML        = cp_ML_.data() + offset_ML + params.cp_rank * params.token_num * local_head_num_ * 2;
-            params.cp_k_ML      = cp_k_ML_.data() + (offset ? kMaxWorkspaceTokens * local_head_num_ * 2 : 0);
-            params.cp_q_offset  = offset;
+            const int offset_stage =
+                engine_param_.attn_cp_size * (offset ? kMaxWorkspaceTokens * local_head_num_ * 2 : 0);
+            const int offset_rank = params.cp_rank * params.token_num * local_head_num_ * params.max_split_k * 2;
+
+            params.cp_ML       = cp_ML_.data() + offset_stage + offset_rank;  // (cp, q, h, k, 2)
+            params.cp_q_offset = offset;
 
             // postprocess func
             params.cp_fn     = CpPost;
             params.cp_fn_ctx = (void*)&cp_fn_ctx_;
 
-            cp_fn_ctx_.cp_ML      = cp_ML_.data() + offset_ML;
+            cp_fn_ctx_.cp_ML      = cp_ML_.data() + offset_stage;
             cp_fn_ctx_.attn_param = (void*)&params;
             cp_fn_ctx_.attn_type  = attn.dtype();
         }

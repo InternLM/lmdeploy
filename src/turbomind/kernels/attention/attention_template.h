@@ -82,8 +82,7 @@ void invokeAttention(const typename Kernel::ParamType& params)
     }
 
     if (params.cp_fn) {
-        int split_k = Kernel::need_separate_reduce(split_cnt) ? split_cnt : 1;
-        params.cp_fn(params.cp_fn_ctx, split_k);
+        params.cp_fn(params.cp_fn_ctx, split_cnt);
     }
     else if (split_cnt > 1 && Kernel::need_separate_reduce(split_cnt)) {
         attention::invokeReduce<Kernel::kHeadDim>(params.out,

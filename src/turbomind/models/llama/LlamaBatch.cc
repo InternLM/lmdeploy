@@ -829,7 +829,9 @@ void LlamaBatch::AllocSymmBuffers()
     symm_logits_buf_        = {{max_batch_size_, vocab_size_padded}, data_type_, symm_alloc_};
 
     if (param_.attn_cp_size > 1) {
-        symm_cp_ML_ = {{param_.attn_cp_size, max_forward_token_num_, (int)model_->local_head_num_, 2}, symm_alloc_};
+        // prefill(cp, q, h, 1, 2), decode(cp, q, h, k, 2)
+        const int cp_workspace_tokens = UnifiedAttentionLayer::kMaxWorkspaceTokens + max_forward_token_num_;
+        symm_cp_ML_ = {{param_.attn_cp_size, cp_workspace_tokens, (int)model_->local_head_num_, 2}, symm_alloc_};
     }
 }
 

@@ -122,8 +122,7 @@ private:
     Tensor_<int>   barriers_;  // always zero
 
     // context parallel
-    Tensor_<float> cp_ML_;    // cp, (d+p), h, 2
-    Tensor_<float> cp_k_ML_;  // (d+p), h, k, 2
+    Tensor_<float> cp_ML_;  // cp, (d+p), h, k, 2
     CpPostContext  cp_fn_ctx_;
 
     Event event_;
