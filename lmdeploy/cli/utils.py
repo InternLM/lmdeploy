@@ -189,11 +189,11 @@ class ArgumentHelper:
                                    help='expert parallelism. dp is required when pytorch engine is used.')
 
     @staticmethod
-    def attn_cp_size(parser):
-        """Add argument attn_cp_size to parser."""
+    def cp(parser):
+        """Add argument cp to parser."""
 
         return parser.add_argument(
-            '--attn-cp-size',
+            '--cp',
             type=int,
             default=1,
             help='context parallelism size in attention for turbomind backend. Should divide tp.')

@@ -235,6 +235,7 @@ class TurbomindEngineConfig:
     model_format: Optional[str] = None
     tp: int = 1
     dp: int = 1
+    cp: int = 1
     device_num: int = None
     attn_tp_size: int = None
     attn_cp_size: int = None
