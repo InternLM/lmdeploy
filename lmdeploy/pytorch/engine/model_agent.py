@@ -396,6 +396,10 @@ class BaseModelAgent:
 
     def warmup(self):
         """warmup."""
+        from lmdeploy.pytorch.envs import skip_warmup
+        if skip_warmup:
+            return
+
         with self.all_context():
             max_batches = self.cache_config.max_batches
             num_tokens = max_batches
