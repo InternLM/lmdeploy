@@ -33,7 +33,6 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
     d_comm_(ctx.comm.d_comm),
-    engine_param_(engine),
     tune_layer_num_(model.tune_layer_num)
 {
     attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, engine, lora, attn_tp_size_, ctx);

@@ -101,9 +101,6 @@ private:
     cudaEvent_t  qkv_event_;
     cudaEvent_t  aux_event_;
 
-    const int                   attn_cp_group_;
-    comm::DeviceCommImpl* const d_comm_;
-
     std::array<cudaStream_t, 2> streams_;
 
     RNG rng_;
