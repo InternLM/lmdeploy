@@ -28,7 +28,7 @@ from ..models.patch import BuildModelContext, add_adapters, build_patched_model,
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from ..utils import get_gpu_memory
-from ..weight_loader.model_weight_loader import load_model_weights, ModelWeightLoader
+from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
 from .cache_engine import CacheEngine
 from .guided_process import GuidedDecodingManager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
