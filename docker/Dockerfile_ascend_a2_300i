@@ -10,7 +10,7 @@ FROM ${ASCEND_HUB}/cann:8.1.rc1-310p-ubuntu22.04-py3.10 AS ascend_300i_base
 FROM ${ASCEND_DEVICE_TYPE}_base AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update -y && \
-    apt install -y libjemalloc-dev && \
+    apt install -y libjemalloc-dev git && \
     apt clean && rm -rf /var/lib/apt/lists/*
 
 ENV HCCL_CONNECT_TIMEOUT=7200 \
