@@ -290,12 +290,18 @@ class HuggingFaceTokenizer:
         # This is the first iteration for this sequence
         new_tokens = tokenizer.convert_ids_to_tokens(all_input_ids[ids_offset:],
                                                      skip_special_tokens=skip_special_tokens)
+        # `convert_ids_to_tokens` returns None if the token ids is out of range
+        new_tokens = new_tokens or ''
+        new_tokens = [x for x in new_tokens if x is not None] if None in new_tokens else new_tokens
         if prev_tokens is None:
             # Please notice that in VLLM, indexes are detokenized one by one
             # while in LMDeploy, every turn, the detokenized indexes length
             # can be different.
             prev_tokens = tokenizer.convert_ids_to_tokens(all_input_ids[:ids_offset],
                                                           skip_special_tokens=skip_special_tokens)
+            # `convert_ids_to_tokens` returns None if the token ids is out of range
+            prev_tokens = prev_tokens or ''
+            prev_tokens = [x for x in prev_tokens if x is not None] if None in prev_tokens else new_tokens
             read_offset = len(prev_tokens)
             if skip_special_tokens and new_tokens and new_tokens[0] in tokenizer.all_special_ids:
                 read_offset = read_offset + 1  # skip special token
