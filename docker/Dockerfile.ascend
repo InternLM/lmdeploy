@@ -1,28 +1,28 @@
-# Run the following command in the root directory of lmdeploy to build the image:
-# DOCKER_BUILDKIT=1 docker build --network=host -t lmdeploy_dlinfer:a2 -f  docker/Dockerfile.ascend .
-ARG ASCEND_DEVICE=ascend_a2
+# DOCKER_BUILDKIT=1 docker build --build-arg ASCEND_DEVICE_TYPE=ascend_a2 \
+#     --build-arg DLINFER_TAG=main --build-arg LMDEPLOY_TAG=main --network=host \
+#     -t lmdeploy_dlinfer:a2 -f  docker/Dockerfile.ascend .
+ARG ASCEND_DEVICE_TYPE=ascend_a2
 ARG ASCEND_HUB=swr.cn-south-1.myhuaweicloud.com/ascendhub
 
 FROM ${ASCEND_HUB}/cann:8.1.rc1-910b-ubuntu22.04-py3.10 AS ascend_a2_base
-
 FROM ${ASCEND_HUB}/cann:8.1.rc1-310p-ubuntu22.04-py3.10 AS ascend_300i_base
 
-FROM ${ASCEND_DEVICE}_base AS builder
-ENV LMDEPLOY_TARGET_DEVICE=ascend
-WORKDIR /opt/lmdeploy
-COPY . .
+FROM ${ASCEND_DEVICE_TYPE}_base AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt update -y && \
+    apt install -y libjemalloc-dev && \
+    apt clean && rm -rf /var/lib/apt/lists/*
+
+ENV HCCL_CONNECT_TIMEOUT=7200 \
+    PYTORCH_NPU_ALLOC_CONF="expandable_segments:True" \
+    HCCL_OP_EXPANSION_MODE="AIV" \
+    LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so:$LD_PRELOAD
+
+ARG DLINFER_TAG=main
+ARG LMDEPLOY_TAG=main
 RUN --mount=type=cache,target=/root/.cache \
-    pip config set global.index-url https://mirrors.aliyun.com/pypi/simple && \
-    pip config set global.trusted-host mirrors.aliyun.com && \
-    pip install --no-cache-dir -U pip build && \
-    python -m build -w -o /wheels -v .
-
-FROM ${ASCEND_DEVICE}_base AS final
-
-RUN --mount=type=cache,target=/root/.cache \
-    pip config set global.index-url  https://mirrors.aliyun.com/pypi/simple  && \
-    pip config set global.trusted-host  mirrors.aliyun.com  && \
-    pip install --no-cache-dir torch==2.3.1 torch-npu==2.3.1 torchvision==0.18.1
-
-RUN --mount=type=cache,target=/wheels,from=builder,source=/wheels \
-    pip install --no-cache-dir /wheels/*.whl
+    pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn && \
+    pip install --no-cache-dir torch==2.8.0 torch-npu==2.8.0rc1 torchvision==0.23.0 && \
+    TORCH_DEVICE_BACKEND_AUTOLOAD=0 DEVICE=ascend pip install git+https://github.com/DeepLink-org/dlinfer.git@${DLINFER_TAG} && \
+    LMDEPLOY_TARGET_DEVICE=ascend pip install git+https://github.com/InternLM/lmdeploy.git@${LMDEPLOY_TAG}
