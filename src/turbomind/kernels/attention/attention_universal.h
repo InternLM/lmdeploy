@@ -257,7 +257,7 @@ struct AttentionUniversal {
             const int ti = history_len;
 
             int cp_quo, cp_rem;
-            params.cp_divmod(cp_quo, cp_rem, ti);
+            cp_quo = params.cp_size.divmod(cp_rem, ti);
 
             Array<T, 2> param_K[1];
             Array<T, 2> param_V[1];
@@ -379,7 +379,7 @@ struct AttentionUniversal {
 
         auto get_cp_len = [&](int length, int rank) -> int {
             int cp_quo, cp_rem;
-            params.cp_divmod(cp_quo, cp_rem, length);
+            cp_quo = params.cp_size.divmod(cp_rem, length);
             return (cp_quo + (cp_rem > rank ? 1 : 0));
         };
 

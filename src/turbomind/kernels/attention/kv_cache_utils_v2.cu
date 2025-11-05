@@ -31,7 +31,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                                                     int64_t         stride_s,
                                                     int             layer_id,
                                                     int             cp_rank,
-                                                    FastDivmod      cp_divmod,
+                                                    FastDivmod      cp_size,
                                                     BlockLayout     block_layout)
 {
 
@@ -166,7 +166,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
     for (int s = 0; s < ITER_S; ++s) {
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
         const int ti = history_len + qi;                         // timestep
-        cp_divmod(cp_quo, cp_rem, ti);
+        cp_quo       = cp_size.divmod(cp_rem, ti);
         if (qi < q_len && cp_rem == cp_rank) {
             block_head.with((char**)blocks, cp_quo, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
@@ -206,7 +206,7 @@ void invokeProcessKV_v2(char**                 blocks,
                         int                    block_seq_len,
                         int                    layer_id,
                         int                    cp_rank,
-                        FastDivmod             cp_divmod,
+                        FastDivmod             cp_size,
                         int                    max_q_len,
                         int                    head_num,
                         int                    head_dim,
@@ -243,7 +243,7 @@ void invokeProcessKV_v2(char**                 blocks,
                                                                               stride_s,
                                                                               layer_id,
                                                                               cp_rank,
-                                                                              cp_divmod,
+                                                                              cp_size,
                                                                               block_layout);
     };
 
@@ -288,7 +288,7 @@ void invokeProcessKV_v2(char**                 blocks,
                                      int                    block_seq_len,                                             \
                                      int                    layer_id,                                                  \
                                      int                    cp_rank,                                                   \
-                                     FastDivmod             cp_divmod,                                                 \
+                                     FastDivmod             cp_size,                                                   \
                                      int                    max_q_len,                                                 \
                                      int                    head_num,                                                  \
                                      int                    head_dim,                                                  \
@@ -314,7 +314,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
                                                     int64_t         stride_s,
                                                     int             layer_id,
                                                     int             cp_rank,
-                                                    FastDivmod      cp_divmod,
+                                                    FastDivmod      cp_size,
                                                     BlockLayout     block_layout)
 {
     constexpr int kVecSize = sizeof(uint4) / sizeof(T);
@@ -361,7 +361,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int si = offset.y + s * Map::kDeltaS + token_idx;
-        cp_divmod(cp_quo, cp_rem, si);
+        cp_quo       = cp_size.divmod(cp_rem, si);
         if (si < seq_len && cp_rem == cp_rank) {
             block_head.with((char**)blocks, cp_quo, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
@@ -409,7 +409,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
         for (int c = 0; c < ITER_C; ++c) {
             const int si = offset.y + s * Map::kDeltaS + token_idx;
             const int di = offset.x + c * Map::kDeltaC;
-            cp_divmod(cp_quo, cp_rem, si);
+            cp_quo       = cp_size.divmod(cp_rem, si);
             if (si < seq_len && cp_rem == cp_rank) {
                 const int64_t index =
                     (batch_idx * stride_b + ti_beg * stride_c + cp_quo * stride_s + head_idx * stride_h) * HeadDim + di;
@@ -434,7 +434,7 @@ void invokeFlattenKV_v2(T*                     k,
                         int                    block_seq_len,
                         int                    layer_id,
                         int                    cp_rank,
-                        FastDivmod             cp_divmod,
+                        FastDivmod             cp_size,
                         int                    max_seq_len,
                         int                    head_num,
                         int                    head_dim,
@@ -468,7 +468,7 @@ void invokeFlattenKV_v2(T*                     k,
                                                                             stride_s,
                                                                             layer_id,
                                                                             cp_rank,
-                                                                            cp_divmod,
+                                                                            cp_size,
                                                                             block_layout);
     };
 
@@ -510,7 +510,7 @@ void invokeFlattenKV_v2(T*                     k,
                                      int                    block_seq_len,                                             \
                                      int                    layer_id,                                                  \
                                      int                    cp_rank,                                                   \
-                                     FastDivmod             cp_divmod,                                                 \
+                                     FastDivmod             cp_size,                                                   \
                                      int                    max_seq_len,                                               \
                                      int                    head_num,                                                  \
                                      int                    head_dim,                                                  \

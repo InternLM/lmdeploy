@@ -84,11 +84,9 @@ struct AttentionParams {
 
     // context parallel
     int                 cp_rank{0};
-    int                 cp_size{1};
-    cutlass::FastDivmod cp_divmod{1};
-    int                 cp_q_offset{0};    // decode offset
-    float*              cp_ML{nullptr};    // cp, q, h, 2
-    float*              cp_k_ML{nullptr};  // q, h, k, 2
+    cutlass::FastDivmod cp_size{1};
+    int                 cp_q_offset{0};  // decode offset
+    float*              cp_ML{nullptr};  // cp, q, h, k, 2
     cp_post_fn          cp_fn{nullptr};
     void*               cp_fn_ctx{nullptr};
 

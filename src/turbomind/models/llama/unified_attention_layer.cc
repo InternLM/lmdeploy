@@ -339,7 +339,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.cp_rank = engine_param_.attn_cp_rank;
         params.cp_size = engine_param_.attn_cp_size;
         if (params.cp_size > 1) {
-            params.cp_divmod = cutlass::FastDivmod(params.cp_size);
+            params.cp_size = cutlass::FastDivmod(params.cp_size);
 
             const int offset_stage =
                 engine_param_.attn_cp_size * (offset ? kMaxWorkspaceTokens * local_head_num_ * 2 : 0);
