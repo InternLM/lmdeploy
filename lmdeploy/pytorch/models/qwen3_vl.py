@@ -162,11 +162,13 @@ class Qwen3VLTextModel(nn.Module):
 
             # add visual features to the hidden states of first several layers
             if deepstack_visual_embeds is not None and idx in range(len(deepstack_visual_embeds)):
+                hidden_states = hidden_states + residual
                 hidden_states = self._deepstack_process(
                     hidden_states,
                     visual_pos_masks,
                     deepstack_visual_embeds[idx],
                 )
+                residual = None
 
         # norm
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -232,19 +234,16 @@ class Qwen3VLVisionMLP(nn.Module):
             is_tp=True,
         )
 
-        # silu and mul
-        if config.hidden_act in ['gelu', 'gelu_fast', 'quick_gelu', 'gelu_python']:
-            self.act = nn.GELU()
-        else:
-            self.act = ACT2FN[config.hidden_act]
+        # gelu_pytorch_tanh
+        self.act = ACT2FN[config.hidden_act]
 
         # down
         self.linear_fc2 = build_rowwise_linear(intermediate_size,
                                                hidden_dim,
                                                bias=True,
-                                               quant_config=quantization_config,
                                                dtype=dtype,
                                                device=device,
+                                               quant_config=quantization_config,
                                                is_tp=True)
 
     def forward(self, x):
@@ -270,21 +269,16 @@ class Qwen3VLVisionBlock(nn.Module):
         self.mlp = Qwen3VLVisionMLP(config, dtype=dtype, device=device)
 
     def forward(self,
-                hidden_states,
-                cu_seqlens,
-                rotary_pos_emb,
-                residual: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.norm1(hidden_states)
-        else:
-            hidden_states, residual = self.norm1(hidden_states, residual)
-
-        hidden_states = self.attn(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-
-        hidden_states, residual = self.norm2(hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
-        return hidden_states, residual
+                hidden_states: torch.Tensor,
+                cu_seqlens: torch.Tensor,
+                rotary_pos_emb: Optional[torch.Tensor] = None) -> torch.Tensor:
+        hidden_states = hidden_states + self.attn(
+            self.norm1(hidden_states),
+            cu_seqlens=cu_seqlens,
+            rotary_pos_emb=rotary_pos_emb,
+        )
+        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
+        return hidden_states
 
 
 class Qwen3VLVisionPatchMerger(nn.Module):
@@ -297,10 +291,10 @@ class Qwen3VLVisionPatchMerger(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size * (config.spatial_merge_size**2)
         self.use_postshuffle_norm = use_postshuffle_norm
-        self.norm = nn.LayerNorm(self.hidden_size if use_postshuffle_norm else config.hidden_size,
-                                 eps=1e-6,
-                                 dtype=dtype,
-                                 device=device)
+        self.norm = LayerNorm(self.hidden_size if use_postshuffle_norm else config.hidden_size,
+                              eps=1e-6,
+                              dtype=dtype,
+                              device=device)
         self.linear_fc1 = build_colwise_linear(
             self.hidden_size,
             self.hidden_size,
@@ -456,21 +450,17 @@ class Qwen3VLVisionModel(nn.Module):
         hidden_states = hidden_states + pos_embeds
         cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
 
-        residual = None
         deepstack_feature_lists = []
         for layer_num, blk in enumerate(self.blocks):
-            hidden_states, residual = blk(hidden_states,
-                                          cu_seqlens=cu_seqlens,
-                                          rotary_pos_emb=rotary_pos_emb,
-                                          residual=residual)
+            hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
             if layer_num in self.deepstack_visual_indexes:
-                deepstack_feature = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_num)](
-                    (hidden_states + residual))
+                deepstack_merge_idx = self.deepstack_visual_indexes.index(layer_num)
+                deepstack_feature = self.deepstack_merger_list[deepstack_merge_idx](hidden_states)
                 deepstack_feature_lists.append(deepstack_feature)
 
-        hidden_states = hidden_states + residual
+        hidden_states = self.merger(hidden_states)
 
-        return self.merger(hidden_states), deepstack_feature_lists
+        return hidden_states, deepstack_feature_lists
 
 
 class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
@@ -517,37 +507,6 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
                                             dtype=dtype,
                                             device=device)
 
-    def _prepare_multimodal_inputs(self, input_ids: torch.Tensor, pixel_values: torch.Tensor, image_mask: torch.Tensor,
-                                   grid_thw: torch.Tensor, vis_cu_seqlens: torch.Tensor, vis_pos_emb: torch.Tensor,
-                                   pos_embeds: torch.Tensor):
-        """Prepare multimodal inputs for language model."""
-        inputs_embeds = self.get_input_embeddings()(input_ids)
-        if pixel_values is None:
-            return inputs_embeds, None, None
-
-        dtype = inputs_embeds.dtype
-        pixel_values = pixel_values.to(dtype)
-        vis_pos_emb = (vis_pos_emb[0].to(dtype), vis_pos_emb[1].to(dtype))
-
-        # get image embeds and deepstack visual embeds
-        image_embeds, deepstack_visual_embeds = self.visual(pixel_values,
-                                                            cu_seqlens=vis_cu_seqlens,
-                                                            rotary_pos_emb=vis_pos_emb,
-                                                            pos_embeds=pos_embeds)
-
-        # split image embeds per sample
-        split_sizes = (grid_thw.prod(-1) // self.visual.spatial_merge_size**2).tolist()
-        image_embeds = torch.split(image_embeds, split_sizes)
-        image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
-
-        # mask and scatter to create final input embeddings
-        expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
-        final_inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
-
-        visual_pos_masks = expanded_image_mask[..., 0]
-
-        return final_inputs_embeds, visual_pos_masks, deepstack_visual_embeds
-
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -569,8 +528,29 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         visual_pos_masks = None
         deepstack_visual_embeds = None
         if inputs_embeds is None:
-            inputs_embeds, visual_pos_masks, deepstack_visual_embeds = self._prepare_multimodal_inputs(
-                input_ids, pixel_values, image_mask, grid_thw, vis_cu_seqlens, vis_pos_emb, pos_embeds)
+            inputs_embeds = self.get_input_embeddings()(input_ids)
+
+            if pixel_values is not None:
+                dtype = inputs_embeds.dtype
+                pixel_values = pixel_values.to(dtype)
+                vis_pos_emb = (vis_pos_emb[0].to(dtype), vis_pos_emb[1].to(dtype))
+
+                # get image embeds and deepstack visual embeds
+                image_embeds, deepstack_visual_embeds = self.visual(pixel_values,
+                                                                    cu_seqlens=vis_cu_seqlens,
+                                                                    rotary_pos_emb=vis_pos_emb,
+                                                                    pos_embeds=pos_embeds)
+
+                # split image embeds per sample
+                split_sizes = (grid_thw.prod(-1) // self.visual.spatial_merge_size**2).tolist()
+                image_embeds = torch.split(image_embeds, split_sizes)
+                image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
+
+                # mask and scatter to create final input embeddings
+                expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
+
+                visual_pos_masks = expanded_image_mask[..., 0]
 
         hidden_states = self.language_model(
             input_ids=input_ids,
