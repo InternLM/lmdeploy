@@ -111,7 +111,7 @@ class RayMPEngine(MPEngine):
 
     def _create_worker(self, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs):
         """Create a Ray worker."""
-        bundle_id = 0
+        bundle_id = 0 if len(_envs.ray_external_pg_bundles) == 0 else _envs.ray_external_pg_bundles[0]
         scheduling_strategy = PlacementGroupSchedulingStrategy(
             placement_group=self.placement_group,
             placement_group_capture_child_tasks=True,
