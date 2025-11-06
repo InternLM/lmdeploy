@@ -35,7 +35,6 @@ turbomind_chat_model:
     - Qwen/Qwen3-32B-FP8
     - openai/gpt-oss-120b
     - openai/gpt-oss-20b
-    - deepseek/DeepSeek-V3.1
 
 pytorch_chat_model:
     - internlm/Intern-S1
@@ -149,7 +148,6 @@ benchmark_model:
     - openai/gpt-oss-20b
     - unsloth/gpt-oss-20b-BF16
     - unsloth/gpt-oss-120b-BF16
-
 
 evaluate_model:
     - Qwen/Qwen3-0.6B-FP8

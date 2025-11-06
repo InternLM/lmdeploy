@@ -16,8 +16,6 @@ tp_config:
     InternVL3_5-8B: 2
     InternVL3_5-38B: 4
 
-
-
 pytorch_chat_model:
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B
@@ -32,10 +30,8 @@ pytorch_vl_model:
     - OpenGVLab/InternVL3_5-8B
     - OpenGVLab/InternVL3_5-38B
 
-
 pytorch_base_model:
     - Qwen/Qwen3-0.6B
-
 
 pytorch_quatization:
     awq:
