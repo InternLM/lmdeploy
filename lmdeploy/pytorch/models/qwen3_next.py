@@ -73,6 +73,11 @@ class CausalConv1dFunc:
             assert weight.size(1) == 1
             weight = weight[:, 0]
 
+        # fill conv state
+        batch_size = conv_state.size(0)
+        conv_idx = conv_idx[:, None].expand(-1, x.size(1), -1)
+        torch.gather(x.expand(batch_size, -1, -1), -1, conv_idx, out=conv_state)
+
         out = self.causal_conv1d_fn(
             x,
             weight,
@@ -82,10 +87,6 @@ class CausalConv1dFunc:
             activation=self.activation,
         )
 
-        # fill conv state
-        batch_size = conv_state.size(0)
-        conv_idx = conv_idx[:, None].expand(-1, out.size(1), -1)
-        torch.gather(out.expand(batch_size, -1, -1), -1, conv_idx, out=conv_state)
         out = out.transpose(-2, -1)
 
         # store conv_state
@@ -189,7 +190,9 @@ class CausalConv1d(nn.Module):
         tp, rank = get_tp_world_rank()
         self.tp = tp
         self.rank = rank
+        in_channels = in_channels // tp
         out_channels = out_channels // tp
+        groups = groups // tp
         assert len(split) == 3
         self.split = split
 
