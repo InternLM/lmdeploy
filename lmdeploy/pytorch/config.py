@@ -28,17 +28,9 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         config.dtype = torch.float16
         return config
 
-    language_hf_config = config.hf_config
-
-    # for multi-modal models, get the language model config to determine dtype
-    if hasattr(config.hf_config, 'text_config'):
-        language_hf_config = config.hf_config.text_config
-    elif hasattr(config.hf_config, 'llm_config'):
-        language_hf_config = config.hf_config.llm_config
-
-    torch_dtype = getattr(language_hf_config, 'dtype', None)
+    torch_dtype = getattr(config.llm_config, 'dtype', None)
     if torch_dtype is None:
-        torch_dtype = getattr(language_hf_config, 'torch_dtype', None)
+        torch_dtype = getattr(config.llm_config, 'torch_dtype', None)
 
     # deal with case when torch_dtype is not string but torch.dtype
     if isinstance(torch_dtype, torch.dtype):
