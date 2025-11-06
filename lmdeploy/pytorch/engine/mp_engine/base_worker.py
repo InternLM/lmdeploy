@@ -20,7 +20,8 @@ class EngineInstancePool:
     def __init__(self, engine):
         from lmdeploy.pytorch.engine import Engine
         self.engine: Engine = engine
-        self.num_instance = self.engine.engine_config.max_batch_size
+        # enlarge `num_instance`, otherwise an sequence cannot be stopped in time
+        self.num_instance = self.engine.engine_config.max_batch_size * 2
         self.pool = None
 
     def create_instance_pool(self, num_instance: int):
