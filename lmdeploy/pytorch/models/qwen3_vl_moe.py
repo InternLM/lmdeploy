@@ -7,40 +7,21 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContextManager
-from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .qwen3_moe import Qwen3MoeDecoderLayer as Qwen3VLMoeTextDecoderLayer
+from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLForConditionalGeneration
 from .qwen3_vl import Qwen3VLTextRotaryEmbedding as Qwen3VLMoeTextRotaryEmbedding
 
 
-class Qwen3VLMoeTextModel(nn.Module):
-    """Text part of Qwen3VLMoe.
+class Qwen3VLMoeTextModel(Qwen3MoeModel):
+    """Text part of Qwen3VL.
 
     not a pure text-only model, as DeepStack integrates visual features into the early hidden states.
     """
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__()
-        self.padding_idx = config.pad_token_id
-        self.vocab_size = config.vocab_size
-        self.mrope_section = config.rope_scaling['mrope_section']
-
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
-
-        # build all decode layers
-        self.layers = nn.ModuleList([
-            Qwen3VLMoeTextDecoderLayer(config, layer_idx, dtype=dtype, device=device)
-            for layer_idx in range(config.num_hidden_layers)
-        ])
-
-        # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        super().__init__(config=config, dtype=dtype, device=device)
 
         # build rotary embedding
         # TODO: zhouxinyu, add triton kernel for interleaved mrope
@@ -96,11 +77,13 @@ class Qwen3VLMoeTextModel(nn.Module):
 
             # add visual features to the hidden states of first several layers
             if deepstack_visual_embeds is not None and idx in range(len(deepstack_visual_embeds)):
+                hidden_states = hidden_states + residual
                 hidden_states = self._deepstack_process(
                     hidden_states,
                     visual_pos_masks,
                     deepstack_visual_embeds[idx],
                 )
+                residual = None
 
         # norm
         hidden_states, _ = self.norm(hidden_states, residual)
@@ -114,10 +97,6 @@ class Qwen3VLMoeTextModel(nn.Module):
         local_this = hidden_states[visual_pos_masks, :].clone() + visual_embeds
         hidden_states[visual_pos_masks, :] = local_this
         return hidden_states
-
-    def get_input_embeddings(self):
-        """Get input embeddings."""
-        return self.embed_tokens
 
 
 class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):

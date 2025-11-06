@@ -9,14 +9,14 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_u
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import LayerNorm, RMSNorm
+from lmdeploy.pytorch.nn import LayerNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .qwen2_5_vl import Qwen2_5_VisionRotaryEmbedding as Qwen3VLVisionRotaryEmbedding
 from .qwen2_5_vl import Qwen2_5_VLInputProcessor as Qwen3VLInputProcessor
 from .qwen2_5_vl import Qwen2_5_VLVisionAttention as Qwen3VLVisionAttention
-from .qwen3 import Qwen3DecoderLayer as Qwen3VLTextDecoderLayer
+from .qwen3 import Qwen3model
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
 
@@ -81,32 +81,14 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
-class Qwen3VLTextModel(nn.Module):
+class Qwen3VLTextModel(Qwen3model):
     """Text part of Qwen3VL.
 
     not a pure text-only model, as DeepStack integrates visual features into the early hidden states.
     """
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__()
-        self.padding_idx = config.pad_token_id
-        self.vocab_size = config.vocab_size
-        self.mrope_section = config.rope_scaling['mrope_section']
-
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
-
-        # build all decode layers
-        self.layers = nn.ModuleList([
-            Qwen3VLTextDecoderLayer(config, layer_idx, dtype=dtype, device=device)
-            for layer_idx in range(config.num_hidden_layers)
-        ])
-
-        # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        super().__init__(config=config, dtype=dtype, device=device)
 
         # build rotary embedding
         # TODO: zhouxinyu, add triton kernel for interleaved mrope
@@ -182,10 +164,6 @@ class Qwen3VLTextModel(nn.Module):
         local_this = hidden_states[visual_pos_masks, :].clone() + visual_embeds
         hidden_states[visual_pos_masks, :] = local_this
         return hidden_states
-
-    def get_input_embeddings(self):
-        """Get input embeddings."""
-        return self.embed_tokens
 
 
 class Qwen3VLVisionPatchEmbed(nn.Module):
