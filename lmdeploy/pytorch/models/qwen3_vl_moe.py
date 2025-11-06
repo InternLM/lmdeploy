@@ -58,6 +58,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         if mrope_position_ids is None:
             cos, sin = self.rotary_emb(hidden_states, position_ids)
         else:
+            mrope_position_ids = mrope_position_ids.unsqueeze(1)
             cos, sin = self.rotary_emb(hidden_states, mrope_position_ids)
 
         cos, sin = cos[0], sin[0]
@@ -94,8 +95,9 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
                            visual_embeds: torch.Tensor):
         visual_pos_masks = visual_pos_masks.to(hidden_states.device)
         visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
-        local_this = hidden_states[visual_pos_masks, :].clone() + visual_embeds
-        hidden_states[visual_pos_masks, :] = local_this
+        local = torch.zeros_like(hidden_states)
+        local.masked_scatter_(visual_pos_masks, visual_embeds)
+        hidden_states += local
         return hidden_states
 
 

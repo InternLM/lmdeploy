@@ -162,8 +162,9 @@ class Qwen3VLTextModel(Qwen3model):
                            visual_embeds: torch.Tensor):
         visual_pos_masks = visual_pos_masks.to(hidden_states.device)
         visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
-        local_this = hidden_states[visual_pos_masks, :].clone() + visual_embeds
-        hidden_states[visual_pos_masks, :] = local_this
+        local = torch.zeros_like(hidden_states)
+        local.masked_scatter_(visual_pos_masks, visual_embeds)
+        hidden_states += local
         return hidden_states
 
 
@@ -529,7 +530,7 @@ class Qwen3VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
                 expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
 
-                visual_pos_masks = expanded_image_mask[..., 0]
+                visual_pos_masks = expanded_image_mask
 
         hidden_states = self.language_model(
             input_ids=input_ids,
