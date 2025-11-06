@@ -93,7 +93,7 @@ with read_base():
     from opencompass.configs.datasets.gpqa.gpqa_cascade_eval_academic import gpqa_datasets
     from opencompass.configs.datasets.IFEval.IFEval_gen_353ae7 import ifeval_datasets
     from opencompass.configs.datasets.livecodebench.livecodebench_v6_academic import LCBCodeGeneration_dataset
-    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_cot_gen_08c1de import mmlu_pro_datasets
+    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_0shot_nocot_genericllmeval_gen_08c1de import mmlu_pro_datasets
     from opencompass.configs.datasets.HLE.hle_llmverify_academic import hle_datasets
 
     # Summary Groups
