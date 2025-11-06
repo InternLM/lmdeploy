@@ -125,6 +125,7 @@ class Qwen3VLTextModel(Qwen3model):
         if mrope_position_ids is None:
             cos, sin = self.rotary_emb(hidden_states, position_ids)
         else:
+            mrope_position_ids = mrope_position_ids.unsqueeze(1)
             cos, sin = self.rotary_emb(hidden_states, mrope_position_ids)
 
         cos, sin = cos[0], sin[0]
