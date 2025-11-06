@@ -455,6 +455,16 @@ class ArgumentHelper:
                                    help='Enable server to be terminated by request from client')
 
     @staticmethod
+    def enable_abort_handling(parser):
+        """Add --enable-abort-handling argument to configure server abort
+        request processing."""
+
+        return parser.add_argument('--enable-abort-handling',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable server to handle client abort requests')
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
