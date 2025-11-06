@@ -12,14 +12,13 @@ async def check_request(request: GenerateReqInput, engine_config: 'TurbomindEngi
         raise TypeError(f'Invalid request type, expected GenerateReqInput, got {type(request)}')
 
     # Check logprobs settings
-    logprobs_mode = None
     try:
         logprobs_mode = engine_config.logprobs_mode
+        return_logprob = request.return_logprob
+        if logprobs_mode is None and return_logprob:
+            return 'return_logprob requested but not enabled logprobs_mode in engine configuration.'
     except AttributeError:
         pass
-    return_logprob = request.return_logprob
-    if logprobs_mode is None and return_logprob:
-        return 'return_logprob requested but not enabled logprobs_mode in engine configuration.'
 
     if (request.prompt is not None) ^ (request.input_ids is None):
         return 'You must specify exactly one of prompt or input_ids'

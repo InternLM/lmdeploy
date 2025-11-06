@@ -13,15 +13,14 @@ async def check_request(request: ChatCompletionRequest,
         raise TypeError(f'Invalid request type, expected ChatCompletionRequest, got {type(request)}')
 
     # Check logprobs settings
-    logprobs_mode = None
     try:
         logprobs_mode = engine_config.logprobs_mode
+        logprobs = request.logprobs
+        top_logprobs = request.top_logprobs
+        if logprobs_mode is None and (logprobs is not None or top_logprobs is not None):
+            return 'Logprobs or top_logprobs requested but not enabled logprobs_mode in engine configuration.'
     except AttributeError:
         pass
-    logprobs = request.logprobs
-    top_logprobs = request.top_logprobs
-    if logprobs_mode is None and (logprobs is not None or top_logprobs is not None):
-        return 'Logprobs or top_logprobs requested but not enabled logprobs_mode in engine configuration.'
 
     # check sampling settings
     if request.n <= 0:
