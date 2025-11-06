@@ -152,7 +152,9 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            seq_len,
                            1,
                            block_seq_len,
-                           0,
+                           0,  // layer_id
+                           0,  // cp_rank
+                           1,  // cp_size
                            seq_len,
                            head_num,
                            head_dim,
@@ -176,7 +178,9 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            seq_len,
                            1,
                            block_seq_len,
-                           0,
+                           0,  // layer_id
+                           0,  // cp_rank
+                           1,  // cp_size
                            seq_len,
                            head_num,
                            head_dim,
@@ -565,7 +569,9 @@ int test_attention()
                        kContextLen,
                        1,
                        kBlockSz,
-                       0,
+                       0,  // layer_id
+                       0,  // cp_rank
+                       1,  // cp_size
                        kContextLen,
                        KvHeadNum,
                        kHeadDim,
