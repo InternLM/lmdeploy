@@ -101,6 +101,10 @@ class ExecutorBase:
         """Release resources."""
         raise NotImplementedError('Not Implemented.')
 
+    def serialize(self, obj):
+        """Serialize obj."""
+        return obj
+
     async def forward_async(self, inputs):
         """Start forward."""
         raise NotImplementedError('Not Implemented')
