@@ -48,7 +48,7 @@ ReqList = List[Request]
 
 
 def _run_until_complete(future: Awaitable):
-    """Run untile complete."""
+    """Run until complete."""
     try:
         event_loop = asyncio.get_event_loop()
     except Exception:

@@ -38,6 +38,15 @@ class PDConnectionMessage(BaseModel):
     nvlink_config: Optional[DistServeNVLinkConfig] = None
 
 
+class EPDConnectionMessage(BaseModel):
+    e_url: str
+    pd_url: str
+    protocol: MigrationProtocol = MigrationProtocol.RDMA
+    tcp_config: Optional[DistServeTCPConfig] = None
+    rdma_config: Optional[DistServeRDMAConfig] = None
+    nvlink_config: Optional[DistServeNVLinkConfig] = None
+
+
 class DistServeRegisterMRMessage(BaseModel):
     protocol: MigrationProtocol
 

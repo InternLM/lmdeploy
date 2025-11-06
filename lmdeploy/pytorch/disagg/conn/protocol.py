@@ -77,6 +77,17 @@ class DistServeConnectionResponse(BaseModel):
     status: DistServeConnectionStatus
 
 
+class EncoderResult(BaseModel):
+
+    token_ids: List[int]
+    image_mask: List[int]
+
+    protocol: MigrationProtocol
+    remote_engine_id: str
+    remote_session_id: int
+    remote_block_ids: List[int]
+
+
 class MigrationRequest(BaseModel):
     protocol: MigrationProtocol
 
