@@ -73,6 +73,7 @@ class SubCliServe:
         ArgumentHelper.max_log_len(parser)
         ArgumentHelper.disable_fastapi_docs(parser)
         ArgumentHelper.allow_terminate_by_client(parser)
+        ArgumentHelper.enable_abort_handling(parser)
         # chat template args
         ArgumentHelper.chat_template(parser)
 
@@ -268,6 +269,7 @@ class SubCliServe:
                            allow_methods=args.allow_methods,
                            allow_headers=args.allow_headers,
                            allow_terminate_by_client=args.allow_terminate_by_client,
+                           enable_abort_handling=args.enable_abort_handling,
                            log_level=args.log_level.upper(),
                            api_keys=args.api_keys,
                            ssl=args.ssl,
@@ -295,6 +297,7 @@ class SubCliServe:
                           allow_methods=args.allow_methods,
                           allow_headers=args.allow_headers,
                           allow_terminate_by_client=args.allow_terminate_by_client,
+                          enable_abort_handling=args.enable_abort_handling,
                           log_level=args.log_level.upper(),
                           api_keys=args.api_keys,
                           ssl=args.ssl,

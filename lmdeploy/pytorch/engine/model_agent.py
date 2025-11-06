@@ -28,9 +28,9 @@ from ..models.patch import BuildModelContext, add_adapters, build_patched_model,
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from ..utils import get_gpu_memory
-from ..weight_loader.model_weight_loader import load_model_weights
+from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
 from .cache_engine import CacheEngine
-from .guided_process import GuidedDecodingMangager
+from .guided_process import GuidedDecodingManager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -237,7 +237,6 @@ def model_forward(
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
-            model_metas = None
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
@@ -250,7 +249,9 @@ def model_forward(
             if not isinstance(output, Dict):
                 output = dict(hidden_states=output)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
-            output['model_metas'] = context.model_metas
+            if context.model_metas is not None and context.model_metas[0] is not None:
+                model_metas = context.model_metas
+            output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             return output
 
@@ -316,10 +317,6 @@ class BaseModelAgent:
         self.cache_config = cache_config
         # use raw tokenizer
         self.tokenizer = Tokenizer(model_path).model.model
-        try:
-            self.sampling_vocab_size = len(self.tokenizer)
-        except BaseException:
-            self.sampling_vocab_size = None
 
         self._pre_in_que = None
         self._in_que = None
@@ -355,9 +352,9 @@ class BaseModelAgent:
         self.cache_engine = None
         self.profiler: AgentProfiler = None
         try:
-            self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
+            self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
         except ValueError as e:
-            logger.warning(f'Failed to create GuidedManager for tokenizer {self.tokenizer}: {e}')
+            logger.warning(f'Failed to create GuidedManager for tokenizer {type(self.tokenizer)}: {e}')
             self.guided_decoding_manager = None
 
         # microbatch
@@ -580,7 +577,6 @@ class BaseModelAgent:
         with record_function('sampling_logits'):
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
-                sampling_vocab_size=self.sampling_vocab_size,
                 logprobs_mode=self.misc_config.logprobs_mode,
                 guided_decoding_manager=self.guided_decoding_manager,
             )
@@ -1064,12 +1060,14 @@ class BaseModelAgent:
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_rank]
+            model = self.patched_model.get_model()
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
             weights = [(k, _construct(v)) for k, v in weights]
-            self.patched_model.get_model().load_weights(weights)
+            weights = ModelWeightLoader._rename_weights_iterator(weights, model)
+            model.load_weights(weights)
 
             if request.finished:
-                for _, mod in self.patched_model.get_model().named_modules():
+                for _, mod in model.named_modules():
                     if not hasattr(mod, 'update_weights'):
                         continue
                     mod.update_weights()

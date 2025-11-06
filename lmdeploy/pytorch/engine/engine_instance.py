@@ -126,7 +126,7 @@ class EngineInstance(EngineInstanceBase):
             int: The number of the output tokens.
         """
         if len(input_ids) > self.max_input_len:
-            yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+            yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [])
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
@@ -160,7 +160,6 @@ class EngineInstance(EngineInstanceBase):
                 logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
                                    token_ids[output_offset:],
-                                   num_ids,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
                                    routed_experts=routed_experts,
@@ -174,7 +173,6 @@ class EngineInstance(EngineInstanceBase):
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
                                    token_ids[output_offset:],
-                                   num_ids,
                                    logits=logits,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
@@ -183,7 +181,7 @@ class EngineInstance(EngineInstanceBase):
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')
-                yield EngineOutput(resp.type, [], 0)
+                yield EngineOutput(resp.type, [])
                 break
 
     async def async_infer(self,
