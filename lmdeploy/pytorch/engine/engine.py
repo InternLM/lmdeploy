@@ -535,7 +535,7 @@ class Engine(EngineBase):
                 for seq in session.sequences.values():
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None:
-                        _resp.type = ResponseType.FINISH
+                        _resp.type = ResponseType.CANCEL
                         self.req_manager.response(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:

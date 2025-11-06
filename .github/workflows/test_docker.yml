@@ -65,8 +65,6 @@ jobs:
     permissions:
       pull-requests: write
     runs-on: ubuntu-22.04-arm
-    env:
-      PYTHON_VERSION: '3.10'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -93,7 +91,7 @@ jobs:
           git config --local --unset "http.https://github.com/.extraheader"
       - name: Build Docker image
         run: |
-          docker build . -t lmdeploy:ascend -f docker/Dockerfile.ascend --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+          docker build . -t lmdeploy:ascend -f docker/Dockerfile_ascend_a3
 #      - name: Test image with lmdeploy check_env
 #        run: |
 #          docker images

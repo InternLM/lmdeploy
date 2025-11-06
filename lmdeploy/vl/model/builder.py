@@ -55,7 +55,7 @@ def load_vl_model(model_path: str,
     max_memory = None
     if not with_llm:
         tp = getattr(backend_config, 'tp', 1)
-        max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
+        max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)} if backend == 'turbomind' else None
 
     _, hf_config = get_model_arch(model_path)
     kwargs = dict(model_path=model_path, with_llm=with_llm, max_memory=max_memory, hf_config=hf_config, backend=backend)

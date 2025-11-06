@@ -41,7 +41,7 @@ repos:
     rev: v2.1.0
     hooks:
       - id: codespell
-        args: ["--skip=third_party/*,*.ipynb,*.proto,src/turbomind/*,docker/Dockerfile.ascend,docs/en/get_started/ascend/get_started.md,docs/zh_cn/get_started/ascend/get_started.md"]
+        args: ["--skip=third_party/*,*.ipynb,*.proto,src/turbomind/*,docker/Dockerfile_ascend*,docs/en/get_started/ascend/get_started.md,docs/zh_cn/get_started/ascend/get_started.md"]
 
 
   - repo: https://github.com/myint/docformatter

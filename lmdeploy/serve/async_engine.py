@@ -444,12 +444,26 @@ class AsyncEngine(LogitsMixin):
         for stat_logger in self.stat_loggers:
             stat_logger.log()
 
+    async def stop_all_session(self):
+        """Stop all running sessions."""
+        logger.info('stop all sessions')
+        tasks = []
+        session_ids = []
+        for session_id in list(self.id2inst.keys()):
+            generator = self.id2inst.get(session_id)
+            if generator:
+                session_ids.append(session_id)
+                tasks.append(generator.async_cancel(session_id))
+        await asyncio.gather(*tasks)
+        logger.info(f'all {len(session_ids)} sessions stopped')
+
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         logger.info(f'stop session {session_id}')
         generator = self.id2inst.get(session_id)
         if generator:
             await generator.async_cancel(session_id)
+            logger.info(f'session {session_id} stopped')
         # else it's not running at all
 
     async def end_session(self, session_id: int):
@@ -854,8 +868,8 @@ class AsyncEngine(LogitsMixin):
                     if is_error(outputs.status):
                         break
 
-                    output_len = outputs.num_token
-                    if hit_stop_token:
+                    output_len = len(outputs.token_ids)
+                    if hit_stop_token or output_len == 0:
                         continue
 
                     # This assumes the engine will stop when stop token is hit
@@ -892,7 +906,11 @@ class AsyncEngine(LogitsMixin):
                 metrics_processor.increment_finished_requests()
 
                 if not is_error(outputs.status):
-                    finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                    if outputs.status == ResponseType.CANCEL:
+                        finish_reason = 'abort'
+                    else:
+                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+
                     # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
                         # avoid returning the last response twice
@@ -926,7 +944,7 @@ class AsyncEngine(LogitsMixin):
                             output_len = gen_len
                         self.id2step[session_id] += input_len + output_len
                 else:
-                    logger.error(f'session {session_id} finished, '
+                    logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')
                     yield GenOut(response=f'internal error happened, status code {outputs.status}',
                                  history_token_len=self.id2step[session_id],
