@@ -24,7 +24,7 @@ struct BlockIteratorParams {
     int        block_len;
 };
 
-typedef void (*cp_post_fn)(void* context, int split_cnt);
+typedef void (*cp_post_fn)(void* context);
 
 /// TODO: Rename to attention::Param
 template<typename T>
@@ -78,15 +78,12 @@ struct AttentionParams {
     int    max_split_k;
     int*   split_cnt;
     float* partial_O;
-    float* partial_M;
-    float* partial_L;
-    int*   locks;
+    float* partial_ML;
 
     // context parallel
     int                 cp_rank{0};
     cutlass::FastDivmod cp_size{1};
-    int                 cp_q_offset{0};  // decode offset
-    float*              cp_ML{nullptr};  // cp, q, h, k, 2
+    int                 offset_q{0};  // decode offset
     cp_post_fn          cp_fn{nullptr};
     void*               cp_fn_ctx{nullptr};
 

@@ -317,18 +317,14 @@ int test_attention()
     thrust::universal_vector<int>   cu_seqlens(kBatchSize + 1);
     thrust::universal_vector<int>   cu_kv_lens(kBatchSize + 1);
 
-    thrust::device_vector<float> partial_M(kTokenNum * kHeadNum * kMaxSplitK);
-    thrust::device_vector<float> partial_L(kTokenNum * kHeadNum * kMaxSplitK);
+    thrust::device_vector<float> partial_ML(kTokenNum * kHeadNum * kMaxSplitK * 2);
     thrust::device_vector<float> partial_O(kTokenNum * kHeadNum * kMaxSplitK * kHeadDim);
     thrust::device_vector<int>   split_cnt(kTokenNum);
-    thrust::device_vector<int>   semaphores(kTokenNum * kHeadNum * kMaxSplitK);
 
     thrust::universal_vector<float> qk_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
     thrust::universal_vector<T>     pr_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
 
     thrust::universal_vector<T> sinks(kHeadNum);
-
-    thrust::fill(semaphores.begin(), semaphores.end(), 0);
 
     rng.GenerateNormal(qkv.data().get(), qkv.size(), 1.f, 0.f);
 
@@ -447,11 +443,9 @@ int test_attention()
     float scale_factor = -std::log2f(kRoPEBase) / kRoPEDim;
     params.rope_param  = RopeKernelParam{RopeType::kDefault, nullptr, kRoPEDim, scale_factor, 1.f};
 
-    params.split_cnt = split_cnt.data().get();
-    params.partial_L = partial_L.data().get();
-    params.partial_M = partial_M.data().get();
-    params.partial_O = partial_O.data().get();
-    params.locks     = semaphores.data().get();
+    params.split_cnt  = split_cnt.data().get();
+    params.partial_ML = partial_ML.data().get();
+    params.partial_O  = partial_O.data().get();
 
     params.max_split_k = kMaxSplitK;
     params.arch        = getSMVersion();

@@ -823,16 +823,19 @@ void LlamaBatch::AllocSymmBuffers()
     const ssize_t vocab_size_padded = model_->vocab_size_padded_;
 
     // Native comm fuses allreduce & rmsnorm in token granularity
-    TM_CHECK(max_forward_token_num_ % tp_size_ == 0);
+    TM_CHECK(max_forward_token_num_ % tp_size_ == 0) << max_forward_token_num_ << " vs " << tp_size_;
 
     symm_hidden_states_buf_ = {{max_forward_token_num_ * param_.attn_dp_size, hidden_units}, data_type_, symm_alloc_};
     symm_logits_buf_        = {{max_batch_size_, vocab_size_padded}, data_type_, symm_alloc_};
 
-    if (param_.attn_cp_size > 1) {
-        // prefill(cp, q, h, 1, 2), decode(cp, q, h, k, 2)
-        const int cp_workspace_tokens = UnifiedAttentionLayer::kMaxWorkspaceTokens + max_forward_token_num_;
-        symm_cp_ML_ = {{param_.attn_cp_size, cp_workspace_tokens, (int)model_->local_head_num_, 2}, symm_alloc_};
-    }
+    // for context parallel, we use symm_alloc_ and both prefill and decode stage have reduce process
+    // w/o context parallel, we use common alloc and only decode stage has reduce process
+    // perhaps it would be more appropriate to put this buffer in the unified_attention_layer.
+    Allocator     alloc          = param_.attn_cp_size > 1 ? symm_alloc_ : core::Context::alloc(kDEVICE);
+    const ssize_t attn_ws_tokens = param_.attn_cp_size > 1 ?
+                                       UnifiedAttentionLayer::kMaxWorkspaceTokens + max_forward_token_num_ :
+                                       UnifiedAttentionLayer::kMaxWorkspaceTokens;
+    symm_partial_ML_             = {{param_.attn_cp_size, attn_ws_tokens, (int)model_->local_head_num_, 2}, alloc};
 }
 
 void LlamaBatch::FreeSymmBuffers()
@@ -840,7 +843,7 @@ void LlamaBatch::FreeSymmBuffers()
     symm_hidden_states_buf_ = {};
     symm_logits_buf_        = {};
 
-    symm_cp_ML_ = {};
+    symm_partial_ML_ = {};
 }
 
 LlamaBatch::~LlamaBatch()
@@ -1581,7 +1584,7 @@ bool LlamaBatch::Forward(GenerationState& g)
                         state_->h_context_length.slice(first, mini_batch_size),
                         rope_theta_.slice(first, mini_batch_size),
                         &mrope,
-                        symm_cp_ML_,
+                        symm_partial_ML_,
                         finished_buf_.slice(first, mini_batch_size),
                         Buffer(local_token_nums.data(), local_token_nums.size(), kCPU),
                         lora_mask_buf_,
@@ -1774,7 +1777,7 @@ void LlamaBatch::Warmup()
                             Buffer{&input_length, 1, kCPU},
                             rope_theta_.slice(0, bsz),
                             nullptr,  // mrope
-                            symm_cp_ML_,
+                            symm_partial_ML_,
                             finished_buf_.slice(0, bsz),
                             Buffer{local_token_nums.data(), (int)local_token_nums.size(), kCPU},
                             Buffer{},

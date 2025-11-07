@@ -112,15 +112,12 @@ private:
     int decode_num_;
     int prefil_num_;
 
-    Tensor_<float> partial_M_;
-    Tensor_<float> partial_L_;
+    Tensor_<float> partial_ML_;
     Tensor_<float> partial_O_;
     Tensor_<int>   split_cnt_;
-    Tensor_<int>   barriers_;  // always zero
 
     // context parallel
-    Tensor_<float> cp_ML_;  // cp, (d+p), h, k, 2
-    CpPostContext  cp_fn_ctx_;
+    CpPostContext cp_fn_ctx_;
 
     Event event_;
 

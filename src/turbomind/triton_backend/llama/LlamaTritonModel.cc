@@ -387,7 +387,7 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     engine_param_.devices = engine_reader["devices"].as<std::vector<int>>();
 
     {
-        auto tp                             = engine_param_.attn_tp_size;
+        auto tp                             = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + tp - 1) / tp * tp;
     }
 

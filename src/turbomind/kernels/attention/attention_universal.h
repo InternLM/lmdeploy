@@ -3,7 +3,6 @@
 #pragma once
 
 #include "quantization.h"
-#include "src/turbomind/kernels/attention/reduce_kernel.h"
 #include "src/turbomind/kernels/attention/rotary_embedding.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/layout.h"
@@ -45,8 +44,6 @@ struct AttentionUniversal {
     static constexpr int CTA_H = Impl::CTA_H;
     static constexpr int CTA_Q = Impl::CTA_Q;
     static constexpr int CTA_S = Impl::CTA_S;
-
-    using ReduceOp = attention::Reduce<T, CTA_H, 32, kHeadDim, kWarpCount>;
 
     using SharedStorage = typename Mainloop::SharedStorage;
 
@@ -505,11 +502,11 @@ struct AttentionUniversal {
 
         const bool separate_reduce = need_separate_reduce(cta_map.split_count());
 
-        if ((separate_reduce || (params.cp_size > 1 && split_cnt > 1)) && iter_end == tile_count && head_idx == 0) {
+        if (split_cnt > 1 && iter_end == tile_count && head_idx == 0) {
             // Store actual split count, only used by separate reduction kernel
             for (int ti = threadIdx.x; ti < CTA_Q; ti += kWarpCount * WARP_SIZE) {
                 if (qi_begin + ti < qi_end) {
-                    params.split_cnt[qi_begin + ti] = split_idx ? split_idx + 1 : 0;
+                    params.split_cnt[qi_begin + ti] = split_idx ? split_idx + 1 : (params.cp_size > 1 ? 1 : 0);
                 }
             }
         }
@@ -519,52 +516,6 @@ struct AttentionUniversal {
         }
         else {
             StorePartial(frag_O, frag_M, frag_L, split_cnt, qi_begin, qi_end, head_idx, split_idx, params, storage);
-            if (!separate_reduce && params.cp_size == 1) {
-                Reduce(qi_begin, head_idx, split_idx, iter_end == tile_count, params, cta_map, smem_buf);
-            }
-        }
-    }
-
-    __device__ void Reduce(int              qi_begin,
-                           int              head_idx,
-                           int              split_idx,
-                           bool             is_last,
-                           const ParamType& params,
-                           const CtaMap&    cta_map,
-                           char*            smem_buf)
-    {
-        // Note: `head_idx` is cta_map.head_idx() * CTA_H
-        const auto index = (cta_map.batch_idx() * params.num_heads + cta_map.head_idx()) * params.max_split_k;
-        const auto locks = params.locks + index;
-
-        if (!is_last) {  // all but last split
-            sem_post(&locks[split_idx], 1, threadIdx.x == 0);
-        }
-        else {  // only the last split
-            const int split_count = split_idx + 1;
-
-            sem_wait_many(&locks[threadIdx.x], split_count - 1, threadIdx.x < split_count - 1);
-
-            ReduceOp reduce_op;
-            reduce_op(params.out,
-                      params.partial_M,
-                      params.partial_L,
-                      params.partial_O,
-                      qi_begin,
-                      head_idx,
-                      params.num_heads,
-                      hi_end_,
-                      split_idx + 1,
-                      params.max_split_k,
-                      params.inv_sqrt_dh,
-                      1,
-                      0,
-                      *(typename ReduceOp::SharedStorage*)smem_buf,
-                      std::true_type{});
-
-            if (threadIdx.x < split_idx) {
-                locks[threadIdx.x] = 0;
-            }
         }
     }
 
@@ -616,37 +567,21 @@ struct AttentionUniversal {
     {
         auto get_index = [&](int hi, int qi) {
             // [B, H, k, D]
-            return (qi_begin + qi) * params.num_heads * params.max_split_k + (head_idx + hi) * params.max_split_k
-                   + split_idx;
+            return (qi_begin + qi - params.offset_q) * params.num_heads * params.max_split_k
+                   + (head_idx + hi) * params.max_split_k + split_idx;
         };
 
         Impl::StoreO<false>(frag_O, frag_L, storage, [&](int hi, int qi, int di, const auto& vec) {
             if (qi_begin + qi < qi_end && check_h(hi)) {
-                if (split_cnt > 1) {  // decode
-                    Store(&params.partial_O[get_index(hi, qi) * kHeadDim + di], vec);
-                }
-                if (params.cp_size > 1 && split_cnt == 1) {  // prefill
-                    const int index = ((qi_begin + qi) * params.num_heads + (head_idx + hi)) * kHeadDim + di;
-                    Store(&params.out[index], cast<T>(vec));
-                }
+                Store(&params.partial_O[get_index(hi, qi) * kHeadDim + di], vec);
             }
         });
 
         Impl::ForeachML(frag_M, frag_L, [&](int hi, int qi, int ri, float M, float L) {
             const int index = get_index(hi, qi);
             if (qi_begin + qi < qi_end && ri == 0 && check_h(hi)) {
-                if (split_cnt > 1) {  // decode
-                    params.partial_M[index] = M;
-                    params.partial_L[index] = L;
-                }
-
-                if (params.cp_size > 1) {
-                    const int q     = qi_begin + qi - params.cp_q_offset;
-                    const int index = (q * params.num_heads + (head_idx + hi)) * params.max_split_k + split_idx;
-
-                    params.cp_ML[index * 2]     = M;
-                    params.cp_ML[index * 2 + 1] = L;
-                }
+                params.partial_ML[index * 2]     = M;
+                params.partial_ML[index * 2 + 1] = L;
             }
         });
     }

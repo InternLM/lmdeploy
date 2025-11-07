@@ -12,8 +12,7 @@ namespace turbomind {
 template<class Kernel>
 void invokeAttention(const typename Kernel::ParamType& params)
 {
-    static const size_t kSmemSize =
-        std::max(sizeof(typename Kernel::SharedStorage), sizeof(typename Kernel::ReduceOp::SharedStorage));
+    static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
     if constexpr (1) {
 
@@ -82,20 +81,22 @@ void invokeAttention(const typename Kernel::ParamType& params)
     }
 
     if (params.cp_fn) {
-        params.cp_fn(params.cp_fn_ctx, split_cnt);
+        params.cp_fn(params.cp_fn_ctx);
     }
-    else if (split_cnt > 1 && Kernel::need_separate_reduce(split_cnt)) {
-        attention::invokeReduce<Kernel::kHeadDim>(params.out,
-                                                  params.partial_M,
-                                                  params.partial_L,
-                                                  params.partial_O,
-                                                  params.split_cnt,
-                                                  params.max_split_k,
-                                                  split_cnt,
-                                                  params.token_num,
-                                                  params.num_heads,
-                                                  params.inv_sqrt_dh,
-                                                  params.stream);
+
+    if (split_cnt > 1 || params.cp_size > 1) {
+        attention::invokeReduceV2<Kernel::kHeadDim>(params.out + params.offset_q * params.num_heads * Kernel::kHeadDim,
+                                                    params.partial_ML,
+                                                    params.partial_O,
+                                                    split_cnt > 1 ? params.split_cnt : nullptr,
+                                                    params.max_split_k,
+                                                    split_cnt,
+                                                    params.cp_size,
+                                                    params.cp_rank,
+                                                    params.token_num,
+                                                    params.num_heads,
+                                                    params.inv_sqrt_dh,
+                                                    params.stream);
     }
 }
 
