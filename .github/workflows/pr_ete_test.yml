@@ -77,6 +77,8 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
+          mkdir allure-results
+          echo "starttime=$(date +%s)" > allure-results/status.txt
       - name: Test lmdeploy
         run: |
           CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=allure-results --clean-alluredir
@@ -88,6 +90,7 @@ jobs:
           export report_dir="$REPORT_DIR/$date_today"
           echo "Save report to $report_dir"
           mv allure-results $report_dir
+          echo "status=done" >> $report_dir/status.txt
       - name: Clear workfile
         if: always()
         run: |

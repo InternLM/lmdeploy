@@ -122,7 +122,9 @@ class MetricsProcessor():
                 outputs, req_state, iteration_stats = update_data
 
                 # update request state according the engine events
-                req_state.update_from_events(outputs.req_metrics.engine_events)
+                if outputs and outputs.req_metrics:
+                    # when users visit "/abort_request" endpoint, `req_metrics` might be None
+                    req_state.update_from_events(outputs.req_metrics.engine_events)
 
                 # update iteration stats based on outputs and request state.
                 # some attributes of req_state will also be updated, e.g., lastest_token_time

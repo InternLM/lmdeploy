@@ -200,12 +200,6 @@ void LlamaTritonModel::handleMissingParams()
                        (int)model_param_.vocab_size);
     }
 
-    if (model_param_.tokenizer_size == 0) {
-        model_param_.tokenizer_size = model_param_.vocab_size;
-        TM_LOG_WARNING("[LlamaTritonModel] `tokenizer_size` is not set, default to `vocab_size` (%d).",
-                       (int)model_param_.vocab_size);
-    }
-
     if (!attn_param_.max_position_embeddings) {
         attn_param_.max_position_embeddings = 2048;
         TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
@@ -322,7 +316,6 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     model_param_.layer_num          = model_reader["num_layer"].as<int>();
     model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
     model_param_.embedding_size     = model_reader["embedding_size"].as<int>();
-    model_param_.tokenizer_size     = model_reader["tokenizer_size"].as<int>(0);
     model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
     model_param_.tune_layer_num     = model_reader["tune_layer_num"].as<int>(1);
     model_param_.mla.q_lora_rank    = model_reader["q_lora_rank"].as<int>();

@@ -24,7 +24,7 @@ class _ASNI_COLOR:
 
 # copy from: https://github.com/termcolor/termcolor
 @functools.cache
-def can_colorize(*, no_color: bool | None = None, force_color: bool | None = None) -> bool:
+def can_colorize(*, no_color: Optional[bool] = None, force_color: Optional[bool] = None) -> bool:
     """Check env vars and for tty/dumb terminal."""
     import io
     if no_color is not None and no_color:
@@ -458,7 +458,6 @@ def serialize_state_dict(state_dict: dict) -> str:
     from multiprocessing.reduction import ForkingPickler
 
     from torch.multiprocessing.reductions import reduce_tensor
-    assert all(v.device.type == 'cuda' for v in state_dict.values())
     data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
     buf = BytesIO()
     ForkingPickler(buf).dump(data)

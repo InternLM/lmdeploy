@@ -1,6 +1,5 @@
 model_path: /nvme/qa_test_models
 resource_path: /nvme/qa_test_models/resource
-dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
 eval_log_path: /nvme/qa_test_models/evaluation_report
 benchmark_path: /nvme/qa_test_models/benchmark-reports
@@ -354,8 +353,11 @@ pytorch_quatization:
 longtext_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
-    - internlm/internlm2_5-7b-chat-1m
-    - internlm/internlm3-8b-instruct
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
 
 benchmark_model:
     - internlm/Intern-S1
@@ -372,7 +374,6 @@ benchmark_model:
     - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
-    - deepseek-ai/DeepSeek-V2-Lite-Chat
     - unsloth/gpt-oss-20b-BF16
     - unsloth/gpt-oss-120b-BF16
 

@@ -135,7 +135,7 @@ class ExecutorBase:
             # estimate runtime mem size
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocal_size * 2)
             num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
-            if int(num_available) // cache_block_size >= 16:
+            if cache_block_size == 0 or int(num_available) // cache_block_size >= 16:
                 break
             max_prefill_token_num = max_prefill_token_num // 2
         return runtime_cache_size, max_prefill_token_num
@@ -153,16 +153,48 @@ class ExecutorBase:
                 f'Update `block_size={self.cache_config.block_size}` for large `head_dim={self.model_config.k_head_dim}`.'  # noqa
             )
 
+    def _get_state_cache_mem(self):
+        """Get state cache mem usage."""
+        cache_config = self.cache_config
+        if len(cache_config.states_shapes) == 0:
+            return 0
+
+        from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
+
+        num_state_caches = cache_config.num_state_caches
+        if num_state_caches is None:
+            # add more caches for eviction
+            # TODO: Share memory between state cache and pageable cache
+            num_state_caches = int(cache_config.max_batches + 8)
+            cache_config.num_state_caches = num_state_caches
+
+        mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
+        mems *= num_state_caches
+
+        if cache_config.enable_prefix_caching:
+            cache_config.enable_prefix_caching = False
+            logger.warning('Prefix caching has not been support for state space model.')
+
+        return mems
+
     def update_configs(self):
         """Update cache config."""
         self._adjust_block_size()
         cache_config = self.cache_config
         model_config = self.model_config
+        cache_config.states_shapes = model_config.states_shapes
+
+        # get free mems
         free_mems = self.gather_free_mem()
         free_mem = min(free_mems)
         logger.debug(f'minimal free gpu memory: {free_mem >> 20} mb')
-        vocal_size = self.model_config.vocab_size
 
+        # get state cache size
+        state_cache_mem = self._get_state_cache_mem()
+        free_mem = free_mem - state_cache_mem
+        assert free_mem > 0, 'No enough gpu memory for state cache. Please reduce max_batch_size.'
+
+        vocal_size = self.model_config.vocab_size
         tp = self.dist_config.attn_config.tp
         cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, tp,
                                                             cache_config.quant_policy)

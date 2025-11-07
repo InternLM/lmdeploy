@@ -131,6 +131,9 @@ with set_envs():
     os.getenv('DG_JIT_DEBUG', '0')
     os.getenv('DG_JIT_PRINT_COMPILER_COMMAND', '0')
 
+    # model agent
+    skip_warmup = env_to_bool('LMD_SKIP_WARMUP', False)
+
 
 def get_all_envs():
     """Get all environment variables."""

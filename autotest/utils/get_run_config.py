@@ -199,7 +199,8 @@ class AscendDeviceHandler(DeviceHandler):
         if len(available_ascend) < tp_num:
             raise RuntimeError('Not enough Ascend devices available')
 
-        ascend_prefix = 'ASCEND_RT_VISIBLE_DEVICES=' + ','.join(random.sample(available_ascend, tp_num))
+        selected_devices = sorted(random.sample(available_ascend, tp_num), key=int)
+        ascend_prefix = 'ASCEND_RT_VISIBLE_DEVICES=' + ','.join(selected_devices)
         self.clear_cache()
         return ascend_prefix
 

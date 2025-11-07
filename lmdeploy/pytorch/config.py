@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from dataclasses import dataclass
-from typing import Any, Dict, List, Literal
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Literal, Tuple
 
 import torch
 
@@ -28,9 +28,9 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         config.dtype = torch.float16
         return config
 
-    torch_dtype = getattr(config.hf_config, 'dtype', None)
+    torch_dtype = getattr(config.llm_config, 'dtype', None)
     if torch_dtype is None:
-        torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+        torch_dtype = getattr(config.llm_config, 'torch_dtype', None)
 
     # deal with case when torch_dtype is not string but torch.dtype
     if isinstance(torch_dtype, torch.dtype):
@@ -86,6 +86,8 @@ class CacheConfig:
     enable_prefix_caching: bool = False
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
+    num_state_caches: int = None
+    states_shapes: List[Tuple] = field(default_factory=list)
 
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
@@ -183,6 +185,10 @@ def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
         _override_hf_config(hf_config, k, v)
 
 
+def _default_check_env(device: str):
+    pass
+
+
 @dataclass
 class ModelConfig:
     """Config of model."""
@@ -207,6 +213,13 @@ class ModelConfig:
     model_paradigm: str = 'ar'
     dllm_mask_token: int = 0
     dllm_block_length: int = None
+
+    # added for qwen3_next
+    # could used for any SSM model.
+    states_shapes: List[Tuple[Tuple[int], torch.dtype]] = field(default_factory=list)
+
+    # check env for model-device combination
+    check_env_func: Callable = _default_check_env
 
     def get_head_size(self):
         """Get head size."""

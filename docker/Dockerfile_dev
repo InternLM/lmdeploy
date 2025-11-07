@@ -1,0 +1,37 @@
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
+
+# environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    PATH=/opt/py3/bin:/root/.local/bin:${PATH} \
+    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+
+# Install dependencies and create python virtual environment
+RUN --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/root/.cache \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+        tzdata wget curl openssh-server ssh sudo git-core \
+        libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 \
+        libibverbs-dev rdma-core libmlx5-1 libssl-dev pkg-config \
+        vim rapidjson-dev libgoogle-glog-dev gdb cmake build-essential \
+        python3-dev ninja-build htop tree jq unzip && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
+    # install UV
+    wget -qO- https://astral.sh/uv/install.sh | sh && \
+    # create Python virtual environment
+    uv venv -p python3.12 --seed /opt/py3
+
+# Should be in the lmdeploy root directory when building docker image
+COPY . /opt/lmdeploy
+
+WORKDIR /opt/lmdeploy
+
+# install lmdeploy and its dependencies
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -r requirements_cuda.txt --extra-index-url https://download.pytorch.org/whl/cu128 && \
+    uv pip install -e .
+
+RUN uv cache clean

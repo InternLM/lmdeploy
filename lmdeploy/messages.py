@@ -261,7 +261,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
 
     def __post_init__(self):
         """Check input validation."""
@@ -374,7 +374,7 @@ class PytorchEngineConfig:
     enable_mp_engine: bool = False
     mp_engine_backend: str = 'mp'
     model_format: str = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
@@ -528,12 +528,11 @@ class RequestMetrics:
 
 @dataclass
 class EngineOutput:
-    """Engine output for turbomind/pytorch engine.
+    """Engine output from turbomind/pytorch engine.
 
     Args:
         status (ResponseType): the response type.
         token_ids (List[int]): the newly generated token ids in each iteration.
-        num_token (int): the newly generated token number, equal to `len(token_ids)`
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in
@@ -542,7 +541,6 @@ class EngineOutput:
     """
     status: ResponseType
     token_ids: List[int]
-    num_token: int
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
