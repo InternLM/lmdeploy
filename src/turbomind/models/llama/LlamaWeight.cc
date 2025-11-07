@@ -133,17 +133,17 @@ void LlamaWeight::to_device(const core::Device& device)
 
     auto tensor_ptr_map = get_parameters();
     for (auto& [name, tensor_ptr] : tensor_ptr_map) {
-        if (pinned_weights_.find(name) == pinned_weights_.end()) {
-            pinned_weights_[name] = empty_like(*tensor_ptr, kCPUpinned);
-        }
-        auto& pinned = pinned_weights_.at(name);
         if (device.type == kCPU) {
-            Copy(*tensor_ptr, pinned);
-            *tensor_ptr = pinned;
+            if (pinned_weights_.find(name) == pinned_weights_.end()) {
+                pinned_weights_[name] = empty_like(*tensor_ptr, kCPUpinned);
+                Copy(*tensor_ptr, pinned_weights_[name]);
+            }
+            *tensor_ptr = {};
         }
         else {
-            *tensor_ptr = empty_like(*tensor_ptr, kDEVICE);
-            Copy(pinned, *tensor_ptr);
+            TM_CHECK(pinned_weights_.find(name) != pinned_weights_.end());
+            *tensor_ptr = empty_like(pinned_weights_[name], kDEVICE);
+            Copy(pinned_weights_[name], *tensor_ptr);
         }
     }
     core::Context::stream().Sync();
