@@ -1052,7 +1052,8 @@ class BaseModelAgent:
         self.cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
-        self.patched_model.get_model().to(device=device)
+        self.patched_model.get_model().to(device=device, non_blocking=True)
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     @torch.inference_mode()
