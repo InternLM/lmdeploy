@@ -463,8 +463,9 @@ def serialize_state_dict(state_dict: dict) -> str:
 
     # flattened_tensor
     if 'metadata' in state_dict and 'flattened_tensor' in state_dict:
-        data = dict(metadata=state_dict['metadata'])
-        data['flattened_tensor'] = reduce_tensor(state_dict['flattened_tensor'])
+        data = state_dict
+        if isinstance(data['flattened_tensor'], torch.Tensor):
+            data['flattened_tensor'] = reduce_tensor(state_dict['flattened_tensor'])
     else:
         assert all(v.device.type == 'cuda' for v in state_dict.values())
         data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
@@ -516,22 +517,28 @@ class FlattenedTensorBucket:
             metadata: Pre-computed metadata (for reconstruction)
         """
         if named_tensors is not None:
-            metadata_li = [None] * len(named_tensors)
-            flattened_tensor_li = [None] * len(named_tensors)
-            current_idx = 0
-            for idx, (name, tensor) in enumerate(named_tensors):
-                flattened_tensor_li[idx] = tensor.flatten()
-                numel = tensor.numel()
-                metadata_li[idx] = FlattenedTensorMetadata(name=name,
-                                                           shape=tensor.shape,
-                                                           dtype=tensor.dtype,
-                                                           start_idx=current_idx,
-                                                           end_idx=current_idx + numel,
-                                                           numel=numel)
-                current_idx += numel
+            num_tensors = len(named_tensors)
+            self.metadata = [None] * num_tensors
+            self.flattened_tensor = [None] * num_tensors
+            if num_tensors > 0:
+                if num_tensors > 1:
+                    dtypes = [t.dtype for _, t in named_tensors]
+                    if not all([d == dtypes[0] for d in dtypes[1:]]):
+                        raise ValueError(f'All tensors should have same dtype, but given {dtypes}')
 
-            self.metadata = metadata_li
-            self.flattened_tensor = torch.cat(flattened_tensor_li, dim=0)
+                current_idx = 0
+                for idx, (name, tensor) in enumerate(named_tensors):
+                    self.flattened_tensor[idx] = tensor.flatten()
+                    numel = tensor.numel()
+                    self.metadata[idx] = FlattenedTensorMetadata(name=name,
+                                                                 shape=tensor.shape,
+                                                                 dtype=tensor.dtype,
+                                                                 start_idx=current_idx,
+                                                                 end_idx=current_idx + numel,
+                                                                 numel=numel)
+                    current_idx += numel
+
+                self.flattened_tensor = torch.cat(self.flattened_tensor, dim=0)
         else:
             if flattened_tensor is None or metadata is None:
                 raise ValueError('Must provide either named_tensors or both flattened_tensor and metadata')

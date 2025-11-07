@@ -1036,11 +1036,16 @@ class BaseModelAgent:
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
             if request.load_format == 'flattened_bucket':
                 metadata: List[FlattenedTensorMetadata] = weights['metadata']
-                flattened_tensor: torch.Tensor = _construct(weights['flattened_tensor'])
-                bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
-                weights = bucket.reconstruct_tensors()
+                if metadata:
+                    flattened_tensor: torch.Tensor = _construct(weights['flattened_tensor'])
+                    bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+                    weights = bucket.reconstruct_tensors()
+                else:
+                    # empty data
+                    weights = []
             else:
                 weights = [(k, _construct(v)) for k, v in weights]
+
             weights = ModelWeightLoader._rename_weights_iterator(weights, model)
             model.load_weights(weights)
 
