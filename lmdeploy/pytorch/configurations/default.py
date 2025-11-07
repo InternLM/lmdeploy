@@ -37,6 +37,8 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
             eos_token_id=hf_config.eos_token_id,
             sliding_window=sliding_window,
             head_dim=head_dim,
+            k_head_dim=head_dim,
+            v_head_dim=head_dim,
             vocab_size=hf_config.vocab_size,
             llm_config=hf_config,
         )

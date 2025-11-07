@@ -506,19 +506,27 @@ def _kernel_meta_sm8x(BLOCK_DMODEL: int, BLOCK_H: int):
 
 def _kernel_meta_sm9x(BLOCK_DMODEL: int, BLOCK_H: int):
     """Kernel meta default."""
-    return _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
+    num_warps = 4
+    if BLOCK_DMODEL * BLOCK_H > 4096:
+        num_stages = 2
+    else:
+        num_stages = 3
+    return num_warps, num_stages
 
 
-def _get_split_k(device_idx: int, head_grid: int, batch_size: int):
+def _get_split_k(device_idx: int, head_grid: int, batch_size: int, num_warps: int):
     """Get split k."""
     props = get_device_props(device_idx)
     num_sm = props['multi_processor_count']
     # estimated occupancy 12.5%
     warps_per_sm = props['warps_per_sm'] // 8
+    cta_per_sm = triton.cdiv(warps_per_sm, num_warps)
+    cta_per_device = num_sm * cta_per_sm
 
-    SPLIT_K = triton.cdiv(num_sm * warps_per_sm // head_grid, triton.next_power_of_2(batch_size))
+    SPLIT_K = triton.cdiv(cta_per_device // head_grid, triton.next_power_of_2(batch_size))
     SPLIT_K = 1 << (SPLIT_K.bit_length() - 1)
-    SPLIT_K = max(min(SPLIT_K, 64), 4)
+    max_split = 1 << (num_sm.bit_length() - 1)
+    SPLIT_K = max(min(SPLIT_K, max_split), 4)
     return SPLIT_K
 
 
@@ -616,7 +624,14 @@ def paged_attention_fwd(
     TILES_PER_GROUP = triton.cdiv(HEADS_PER_REQ, BLOCK_H)
     grid_1 = TILES_PER_GROUP * num_kv_heads
 
-    SPLIT_K = _get_split_k(q.device.index, grid_1, batch)
+    if _nv_cap[0] < 8:
+        num_warps, num_stages = _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
+    elif _nv_cap[0] < 9:
+        num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DMODEL, BLOCK_H)
+    else:
+        num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
+
+    SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
 
     if quant_policy != 4:
         acc = q.new_empty(num_tokens, head, SPLIT_K, Lv + 2, dtype=torch.float32)
@@ -628,13 +643,6 @@ def paged_attention_fwd(
         SPLIT_K,
         batch,
     )
-
-    if _nv_cap[0] < 8:
-        num_warps, num_stages = _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
-    elif _nv_cap[0] < 9:
-        num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DMODEL, BLOCK_H)
-    else:
-        num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
 
     if quant_policy > 0:
         _fwd_grouped_split_quant_kernel[grid](q,

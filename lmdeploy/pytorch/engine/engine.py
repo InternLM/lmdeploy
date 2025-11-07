@@ -807,6 +807,11 @@ class Engine(EngineBase):
         vision_model_inputs = self._create_vision_model_inputs(messages, model_inputs)
         model_inputs.vision_inputs = vision_model_inputs
 
+        # ssm
+        if len(self.cache_config.states_shapes) > 0:
+            state_offsets = torch.tensor([msg.logical_state for msg in messages])
+            model_inputs.state_offsets = state_offsets
+
         return model_inputs
 
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
