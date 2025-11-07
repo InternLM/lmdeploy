@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 from lmdeploy.messages import EventType, ScheduleMetrics
-from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
@@ -198,16 +197,6 @@ class Scheduler:
         running: SeqList = []
         token_count = 0
 
-        def _get_free_ratio():
-            num_free_blocks = self.block_manager.get_num_free_gpu_blocks()
-            num_all_blocks = self.cache_config.num_gpu_blocks
-            free_ratio = num_free_blocks / num_all_blocks
-            return free_ratio
-
-        def __evict_block_trie():
-            num_req = int(self.cache_config.num_gpu_blocks * 0.1) - self.block_manager.get_num_free_gpu_blocks() + 1
-            self.block_trie.evict(num_req)
-
         def _to_running(seq: SchedulerSequence):
             """To running."""
             seq.status = MessageStatus.RUNNING
@@ -230,15 +219,6 @@ class Scheduler:
         num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
         if (len(running) >= max_batches or num_waiting == 0):
             return running, swap_in_map, swap_out_map, copy_map
-
-        # reserve some blocks for decoding to avoid too much eviction
-        if self.cache_config.role != EngineRole.Prefill:
-            free_ratio = _get_free_ratio()
-            if free_ratio < 0.1:
-                __evict_block_trie()
-                free_ratio = _get_free_ratio()
-                if free_ratio < 0.1:
-                    return running, swap_in_map, swap_out_map, copy_map
 
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
