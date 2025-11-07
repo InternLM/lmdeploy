@@ -65,7 +65,7 @@ static NcclApis& nccl_apis()
     static auto value = [] {
         int version{};
         ncclGetVersion(&version);
-        auto     handle = dlopen(nullptr, RTLD_LAZY);
+        auto     handle = dlopen("libnccl.so.2", RTLD_LAZY);
         NcclApis apis{};
         if (!handle) {
             return apis;
@@ -222,11 +222,10 @@ public:
 
     int Split(int color, int key, int group) override
     {
-        // auto split_fn = TM_CHECK_NOTNULL(nccl_apis().ncclCommSplit);
+        auto split_fn = TM_CHECK_NOTNULL(nccl_apis().ncclCommSplit);
 
         ncclComm_t comm{};
-        // NCCLCHECK(split_fn(groups_.at(group), color, key, &comm, nullptr));
-        NCCLCHECK(ncclCommSplit(groups_.at(group), color, key, &comm, nullptr));
+        NCCLCHECK(split_fn(groups_.at(group), color, key, &comm, nullptr));
 
         int index = groups_.size();
         groups_.push_back(comm);
