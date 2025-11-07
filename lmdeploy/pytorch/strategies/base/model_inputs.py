@@ -26,6 +26,7 @@ def make_dummy_inputs(batch_size: int,
     block_offsets = torch.full((batch_size, 1), dummy_block_id, dtype=torch.long, device=device)
     num_ignored_history = torch.zeros((batch_size, ), dtype=torch.long, device=device)
     local_adapter_ids = torch.zeros((batch_size, ), dtype=torch.long, device=device)
+    state_offsets = torch.full((batch_size, ), -1, dtype=torch.long, device=device)
 
     return ModelInputs(
         input_ids=input_ids,
@@ -39,6 +40,7 @@ def make_dummy_inputs(batch_size: int,
         sum_kv_seqlen=num_tokens,
         local_adapter_ids=local_adapter_ids,
         is_dummy=True,
+        state_offsets=state_offsets,
     )
 
 
