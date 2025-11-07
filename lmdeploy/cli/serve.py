@@ -110,7 +110,7 @@ class SubCliServe:
         quant_policy = ArgumentHelper.quant_policy(pt_group)
         model_format = ArgumentHelper.model_format(pt_group)
         hf_overrides = ArgumentHelper.hf_overrides(pt_group)
-        disable_metrics = not ArgumentHelper.disable_metrics(pt_group)
+        disable_metrics = ArgumentHelper.disable_metrics(pt_group)
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)

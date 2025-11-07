@@ -626,7 +626,7 @@ class ArgumentHelper:
         return parser.add_argument('--disable-vision-encoder',
                                    action='store_true',
                                    default=False,
-                                   help='enable metrics system')
+                                   help='disable multimodal encoder')
 
     @staticmethod
     def logprobs_mode(parser):
