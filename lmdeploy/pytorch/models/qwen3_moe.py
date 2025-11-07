@@ -480,13 +480,13 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             new_inputs['all_routed_experts'] = input_buffers['all_routed_experts']
         return new_inputs
 
-    def get_outputs_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: torch.Tensor, **kwargs):
+    def get_outputs_cudagraph(self, output_buffers: Dict[str, torch.Tensor], input_ids: torch.Tensor, **kwargs):
         """Get outputs from buffers."""
         num_tokens = input_ids.size(-1)
         outputs = dict()
-        outputs['hidden_states'] = graph_meta.output_buffers['hidden_states'][:, :num_tokens]
+        outputs['hidden_states'] = output_buffers['hidden_states'][:, :num_tokens]
         if self.enable_return_routed_experts:
-            outputs['all_routed_experts'] = graph_meta.output_buffers['all_routed_experts'][:num_tokens, ...].clone()
+            outputs['all_routed_experts'] = output_buffers['all_routed_experts'][:num_tokens, ...].clone()
         return outputs
 
     def prepare_inputs_for_generation(

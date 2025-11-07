@@ -13,6 +13,7 @@ from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager, SequenceMeta
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
+from .state_manager import StateManager
 
 logger = get_logger('lmdeploy')
 
@@ -51,6 +52,8 @@ class Scheduler:
 
         self.block_manager = build_block_manager(cache_config)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
+        self.state_manager = StateManager(self.cache_config.num_state_caches)
+        self.is_ssm = len(self.cache_config.states_shapes) > 0
 
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
@@ -195,6 +198,16 @@ class Scheduler:
         running: SeqList = []
         token_count = 0
 
+        def _get_free_ratio():
+            num_free_blocks = self.block_manager.get_num_free_gpu_blocks()
+            num_all_blocks = self.cache_config.num_gpu_blocks
+            free_ratio = num_free_blocks / num_all_blocks
+            return free_ratio
+
+        def __evict_block_trie():
+            num_req = int(self.cache_config.num_gpu_blocks * 0.1) - self.block_manager.get_num_free_gpu_blocks() + 1
+            self.block_trie.evict(num_req)
+
         def _to_running(seq: SchedulerSequence):
             """To running."""
             seq.status = MessageStatus.RUNNING
@@ -220,11 +233,12 @@ class Scheduler:
 
         # reserve some blocks for decoding to avoid too much eviction
         if self.cache_config.role != EngineRole.Prefill:
-            num_free_blocks = self.block_manager.get_num_free_gpu_blocks()
-            num_all_blocks = self.cache_config.num_gpu_blocks
-            free_ratio = num_free_blocks / num_all_blocks
+            free_ratio = _get_free_ratio()
             if free_ratio < 0.1:
-                return running, swap_in_map, swap_out_map, copy_map
+                __evict_block_trie()
+                free_ratio = _get_free_ratio()
+                if free_ratio < 0.1:
+                    return running, swap_in_map, swap_out_map, copy_map
 
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
@@ -240,6 +254,8 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq, prealloc_size)
+            if self.is_ssm:
+                self.state_manager.allocate(seq)
             _to_running(seq)
 
             seq.record_event(EventType.SCHEDULED)
@@ -335,6 +351,7 @@ class Scheduler:
             seq (SchedulerSequence): sequence to remove
         """
         self.block_manager.free(seq)
+        self.state_manager.free(seq)
         seq.set_step(0)
         seq.session.remove_sequence(seq)
 
