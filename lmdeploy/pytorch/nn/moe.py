@@ -84,10 +84,10 @@ class MoEForwardDPTP:
     def all_gather(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
                    tp_sizes: List[int]):
         """All gather."""
-        hidden_states, _ = dist.gather_by_tp_sizes(hidden_states, tp_sizes, group=self.gather_group, async_op=True)
-        topk_weights, _ = dist.gather_by_tp_sizes(topk_weights, tp_sizes, group=self.gather_group, async_op=True)
-        topk_ids, handle = dist.gather_by_tp_sizes(topk_ids, tp_sizes, group=self.gather_group, async_op=True)
-        return hidden_states, topk_weights, topk_ids, handle
+        hidden_states, h0 = dist.gather_by_tp_sizes(hidden_states, tp_sizes, group=self.gather_group, async_op=True)
+        topk_weights, h1 = dist.gather_by_tp_sizes(topk_weights, tp_sizes, group=self.gather_group, async_op=True)
+        topk_ids, h2 = dist.gather_by_tp_sizes(topk_ids, tp_sizes, group=self.gather_group, async_op=True)
+        return hidden_states, topk_weights, topk_ids, (h0, h1, h2)
 
     def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: List[int]):
         """Reduce scatter."""
@@ -100,9 +100,10 @@ class MoEForwardDPTP:
         return out_states, handle
 
     def _gemm_and_reduce_scatter(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
-                                 output_states: torch.Tensor, tp_sizes: List[int], handle: dist.Work):
+                                 output_states: torch.Tensor, tp_sizes: List[int], handles: List[dist.Work]):
         """Gemm and reduce scatter."""
-        handle.wait()
+        for handle in handles:
+            handle.wait()
         cur_out = self.gemm_func(hidden_states, topk_weights, topk_ids)
         return self.reduce_scatter(cur_out, output_states, tp_sizes)
 
@@ -129,13 +130,13 @@ class MoEForwardDPTP:
             cur_output, output_states = __slice_tensor(output_states, slice_size)
 
             # all gather
-            cur_hidden_states, cur_topk_weights, cur_topk_ids, handle = self.all_gather(
+            cur_hidden_states, cur_topk_weights, cur_topk_ids, handles = self.all_gather(
                 cur_hidden_states, cur_topk_weights, cur_topk_ids, cur_tp_sizes)
             return dict(hidden_states=cur_hidden_states,
                         topk_weights=cur_topk_weights,
                         topk_ids=cur_topk_ids,
                         output_states=cur_output,
-                        handle=handle,
+                        handles=handles,
                         tp_sizes=cur_tp_sizes)
 
         step_ctx = get_step_ctx_manager().current_context()
@@ -149,15 +150,19 @@ class MoEForwardDPTP:
         # pre
         cur_inputs = __slice_and_gather()
 
+        out_handles = []
         # main loop
         while tp_sizes.sum() > 0:
             next_inputs = __slice_and_gather()
-            self._gemm_and_reduce_scatter(**cur_inputs)
+            _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
+            out_handles.append(handle)
             cur_inputs = next_inputs
 
         # post
         _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
-        handle.wait()
+        out_handles.append(handle)
+        for handle in out_handles:
+            handle.wait()
         return return_states
 
 

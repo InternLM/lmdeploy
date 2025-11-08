@@ -28,8 +28,11 @@ class DPMeta:
         if tp > 1 and tp != attn_tp:
             dist_group = dist.get_dist_group(layer_type=layer_type)
             gather_group = dist_group.gpu_gather_group
-            tp_sizes = [None for _ in range(gather_group.size())]
-            dist.all_gather_object(tp_sizes, seqlen, group=gather_group)
+            rank = gather_group.rank()
+            tp_size_tensor = torch.zeros(gather_group.size(), dtype=torch.int32, device='cuda')
+            tp_size_tensor[rank].fill_(seqlen)
+            dist.all_gather_into_tensor(tp_size_tensor, tp_size_tensor[rank], group=gather_group)
+            tp_sizes = tp_size_tensor.tolist()
         else:
             tp_sizes = [seqlen]
         return tp_sizes
