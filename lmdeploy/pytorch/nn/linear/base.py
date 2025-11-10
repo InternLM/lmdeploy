@@ -86,16 +86,20 @@ class LinearForwardDPTP:
 
         # pre
         cur_inputs = __slice_and_gather()
+        handles = []
 
         # main loop
         while tp_sizes.sum() > 0:
             next_inputs = __slice_and_gather()
-            self._gemm_and_reduce_scatter(**cur_inputs)
+            _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
+            handles.append(handle)
             cur_inputs = next_inputs
 
         # post
         _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
-        handle.wait()
+        handles.append(handle)
+        for handle in handles:
+            handle.wait()
         return return_states
 
 
