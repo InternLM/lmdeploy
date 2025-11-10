@@ -262,7 +262,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
 
     def __post_init__(self):
         """Check input validation."""
@@ -375,7 +375,7 @@ class PytorchEngineConfig:
     enable_mp_engine: bool = False
     mp_engine_backend: str = 'mp'
     model_format: str = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None

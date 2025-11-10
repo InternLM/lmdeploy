@@ -1127,6 +1127,12 @@ async def wakeup(raw_request: Request = None):
     return Response(status_code=200)
 
 
+@router.get('/is_sleeping', dependencies=[Depends(check_api_key)])
+async def is_sleeping(raw_request: Request = None):
+    is_sleeping = VariableInterface.async_engine.is_sleeping
+    return JSONResponse(content={'is_sleeping': is_sleeping})
+
+
 """ PD Disaggregation API Begin """
 
 
