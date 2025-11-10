@@ -332,6 +332,8 @@ class AsyncEngine(LogitsMixin):
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config
+        self.is_sleeping = backend_config.empty_init
+        self.sleeping_tags: set[str] = set() if not backend_config.empty_init else {'weights', 'kv_cache'}
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
@@ -491,6 +493,8 @@ class AsyncEngine(LogitsMixin):
                 discard both the model weights and the kv cache.
         """
         self.engine.sleep(level)
+        self.sleeping_tags = {'weights', 'kv_cache'}
+        self.is_sleeping = True
 
     def wakeup(self, tags: Optional[List[str]] = None):
         """Wake up the model.
@@ -502,11 +506,17 @@ class AsyncEngine(LogitsMixin):
                 wake_up should be called with all tags (or None) before the
                 engine is used again.
         """
+        tags = tags or list(self.sleeping_tags)
+        if any(tag not in self.sleeping_tags for tag in tags):
+            logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
+            return
         self.engine.wakeup(tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instance
-        if self.backend == 'turbomind' and (tags is None or 'kv_cache' in tags):
+        if self.backend == 'turbomind' and 'kv_cache' in tags:
             self.instances = [self.engine.create_instance() for _ in range(self.instance_num)]
             self.free_insts = None
+        self.sleeping_tags = self.sleeping_tags - set(tags)
+        self.is_sleeping = bool(self.sleeping_tags)
 
     def _get_limiter(self):
         if not self.limiter:

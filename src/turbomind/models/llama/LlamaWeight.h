@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
@@ -74,6 +76,8 @@ private:
 
     DataType data_type_;
     DataType weight_type_;
+
+    std::unordered_map<std::string, Tensor> pinned_weights_;
 
     int tp_size_;  // this will follow attn tp param
     int tp_rank_;

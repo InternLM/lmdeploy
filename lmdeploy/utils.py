@@ -467,7 +467,6 @@ def serialize_state_dict(state_dict: dict) -> str:
         if isinstance(data['flattened_tensor'], torch.Tensor):
             data['flattened_tensor'] = reduce_tensor(state_dict['flattened_tensor'])
     else:
-        assert all(v.device.type == 'cuda' for v in state_dict.values())
         data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
 
     buf = BytesIO()
