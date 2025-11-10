@@ -436,6 +436,7 @@ class GenerateResponse(BaseModel):
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
     serialized_named_tensors: Union[str, List[str], Dict]
+    load_format: Optional[str] = None  # 'flattened_bucket' or None
     finished: bool = False
 
 
