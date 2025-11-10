@@ -29,8 +29,8 @@ from ..spec_decode import SpecModelAgent
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from ..utils import get_gpu_memory
-from ..weight_loader.model_weight_loader import load_model_weights
-from .cache_engine import CacheEngine
+from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
+from .cache_engine import CacheEngine, StateCacheEngine
 from .guided_process import GuidedDecodingManager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
@@ -223,6 +223,7 @@ def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
+    state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
     output_position_ids: bool = False,
 ):
@@ -235,11 +236,11 @@ def model_forward(
             inputs=inputs,
             model_config=cache_engine.model_config,
             kv_caches=cache_engine.gpu_cache,
+            state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
 
         with ctx_mgr.context(context):
-            model_metas = None
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
@@ -252,6 +253,8 @@ def model_forward(
             if not isinstance(output, dict):
                 output = dict(hidden_states=output)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
+            if context.model_metas is not None and context.model_metas[0] is not None:
+                model_metas = context.model_metas
             output.update(dict(model_metas=model_metas, seq_length=context.q_seqlens[:len(inputs.seq_length)]))
             if output_position_ids:
                 output.update(dict(position_ids=context.position_ids))
@@ -354,6 +357,7 @@ class BaseModelAgent:
         self.tp_rank = tp_rank
         self.patched_model = None
         self.cache_engine = None
+        self.state_cache_engine = None
         self.profiler: AgentProfiler = None
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
@@ -416,7 +420,10 @@ class BaseModelAgent:
 
     def warmup(self):
         """warmup."""
-        # TODO: disable for now, do not remove the comments.
+        from lmdeploy.pytorch.envs import skip_warmup
+        if skip_warmup:
+            return
+
         with self.all_context(), torch.cuda.stream(self.stream), torch.inference_mode():
             max_batches = self.cache_config.max_batches
 
@@ -738,6 +745,10 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
             return
 
+        if not is_decoding:
+            # init state cache for first time prefill
+            # I don't know if this is necessary...
+            self.state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         for idx in range(loop_count):
             # inference
@@ -1035,6 +1046,8 @@ class BaseModelAgent:
                                             tp_rank=self.tp_rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
+            self.state_cache_engine = StateCacheEngine(self.cache_config)
+
             if self.spec_agent is not None:
                 self.spec_agent.build_cache_engine(self.cache_stream)
 
@@ -1043,6 +1056,7 @@ class BaseModelAgent:
             self.patched_model,
             inputs,
             self.cache_engine,
+            state_cache_engine=self.state_cache_engine,
             stream=self.stream,
             output_position_ids=self.spec_agent is not None,
         )
@@ -1094,12 +1108,14 @@ class BaseModelAgent:
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_rank]
+            model = self.patched_model.get_model()
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
             weights = [(k, _construct(v)) for k, v in weights]
-            self.patched_model.get_model().load_weights(weights)
+            weights = ModelWeightLoader._rename_weights_iterator(weights, model)
+            model.load_weights(weights)
 
             if request.finished:
-                for _, mod in self.patched_model.get_model().named_modules():
+                for _, mod in model.named_modules():
                     if not hasattr(mod, 'update_weights'):
                         continue
                     mod.update_weights()
@@ -1112,7 +1128,8 @@ class BaseModelAgent:
         self.cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
-        self.patched_model.get_model().to(device=device)
+        self.patched_model.get_model().to(device=device, non_blocking=True)
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     @torch.inference_mode()

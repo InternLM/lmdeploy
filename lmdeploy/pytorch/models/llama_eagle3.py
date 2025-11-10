@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -262,12 +262,12 @@ class Eagle3LlamaForCausalLM(nn.Module, CudaGraphMixin):
 
         return new_inputs
 
-    def get_outputs_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: torch.Tensor, **kwargs):
+    def get_outputs_cudagraph(self, output_buffers: Dict[str, torch.Tensor], input_ids: torch.Tensor, **kwargs):
         """Get outputs from buffers."""
         num_tokens = input_ids.size(-1)
         outputs = dict()
-        outputs['hidden_states'] = graph_meta.output_buffers['hidden_states'][:, :num_tokens]
-        outputs['hidden_states_prenorm'] = graph_meta.output_buffers['hidden_states_prenorm'][:, :num_tokens]
+        outputs['hidden_states'] = output_buffers['hidden_states'][:, :num_tokens]
+        outputs['hidden_states_prenorm'] = output_buffers['hidden_states_prenorm'][:, :num_tokens]
         return outputs
 
     def get_input_embeddings(self):

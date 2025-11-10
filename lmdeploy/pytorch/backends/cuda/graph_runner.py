@@ -91,6 +91,16 @@ class CUDASingleGraphRunner:
         self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
 
+    def make_output_buffers(self, output):
+        """Make output buffers."""
+        output_buffers = dict(logits=output)
+        return output_buffers
+
+    def slice_output(self, output_buffers: Dict[str, Any], inputs: Dict[str, Any]):
+        """Slice output."""
+        num_tokens = inputs['input_ids'].size(-1)
+        return output_buffers['logits'][:, :num_tokens]
+
     @record_function('capture_cudagraph')
     def capture(self, **kwargs):
         """Capture graph."""
@@ -102,17 +112,18 @@ class CUDASingleGraphRunner:
         current_stream = torch.cuda.current_stream()
 
         # warmup
-        self.model(**padded_kwargs)
+        warmup_output = self.model(**padded_kwargs)
+        warmup_buffers = self.model.make_output_buffers(warmup_output)
 
         self._graph = torch.cuda.CUDAGraph()
         # unsafe kernel call in other thread might invalid the capture
         # so we set thread_safe capture mode here.
         with torch.cuda.graph(self._graph, pool=self.pool, stream=current_stream, capture_error_mode='thread_local'):
             output = self.model(**padded_kwargs)
-        output_buffers = output
-        if isinstance(output, torch.Tensor):
-            output_buffers = dict(hidden_states=output)
+
+        output_buffers = self.model.make_output_buffers(output)
         self.meta.output_buffers = output_buffers
+        output = self.model.get_outputs_cudagraph(warmup_buffers, **kwargs)
         return output
 
     @record_function('forward_cudagraph')
@@ -123,8 +134,8 @@ class CUDASingleGraphRunner:
         context = self.ctx_mgr.current_context()
         self.model.update_context_cudagraph(self.meta, context)
         self._graph.replay()
-
-        output = self.model.get_outputs_cudagraph(self.meta, **kwargs)
+        output_buffers = self.meta.output_buffers
+        output = self.model.get_outputs_cudagraph(output_buffers, **kwargs)
         return output
 
     def __del__(self):
@@ -229,12 +240,14 @@ class CUDAGraphRunner(GraphRunner):
                 device=self.device,
                 decode_query_len=decode_query_len,
             )
-            runner.capture(**kwargs)
+            output = runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
+            # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
+            return output
         else:
             runner = self._runner_map[graph_key]
-        output = runner.forward(**kwargs)
-        return output
+            output = runner.forward(**kwargs)
+            return output
 
     @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(

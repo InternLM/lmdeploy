@@ -147,6 +147,18 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_5_vl.Qwen2_5_VLForConditionalGeneration',
 })
 
+# qwen3_vl
+MODULE_MAP.update({
+    'Qwen3VLForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl.Qwen3VLForConditionalGeneration',
+})
+
+# qwen3_vl_moe
+MODULE_MAP.update({
+    'Qwen3VLMoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
+})
+
 # starcoder2
 MODULE_MAP.update({
     'Starcoder2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.starcoder2.Starcoder2ForCausalLM',
@@ -223,6 +235,11 @@ MODULE_MAP.update({'Qwen2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_
 # gpt-oss
 MODULE_MAP.update({
     'GptOssForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gpt_oss.GptOssForCausalLM',
+})
+
+# qwen3 next model
+MODULE_MAP.update({
+    'Qwen3NextForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_next.Qwen3NextForCausalLM',
 })
 
 # SDAR

@@ -579,7 +579,7 @@ class Engine(EngineBase):
                 for seq in session.sequences.values():
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None:
-                        _resp.type = ResponseType.FINISH
+                        _resp.type = ResponseType.CANCEL
                         self.req_manager.response(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
@@ -847,6 +847,12 @@ class Engine(EngineBase):
         # vision inputs
         vision_model_inputs = self._create_vision_model_inputs(messages, model_inputs)
         model_inputs.vision_inputs = vision_model_inputs
+
+        # ssm
+        if len(self.cache_config.states_shapes) > 0:
+            state_offsets = torch.tensor([msg.logical_state for msg in messages])
+            model_inputs.state_offsets = state_offsets
+
         return model_inputs
 
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
@@ -939,6 +945,23 @@ class Engine(EngineBase):
                 return True
             return any(seq.return_logits for seq in seqs)
 
+        def __need_schedule_again(prefill: bool, scheduler_output):
+            """Need schedule again."""
+            # only reschedule when prefill
+            if not prefill:
+                return False
+            # schedule decoding if no valid prefill reqs.
+            if len(scheduler_output.running) > 0:
+                return False
+            # disable decoding for prefill role
+            if (self.engine_config.role == EngineRole.Prefill):
+                return False
+            # disable decoding if no running reqs.
+            if not self.scheduler.has_running():
+                logger.warning('No running sequences for decoding scheduling after prefill scheduling.')
+                return False
+            return True
+
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
@@ -948,8 +971,7 @@ class Engine(EngineBase):
         if enable_empty and len(scheduler_output.running) == 0:
             return None
 
-        # schedule decoding if no valid prefill reqs.
-        if prefill and len(scheduler_output.running) == 0 and self.engine_config.role != EngineRole.Prefill:
+        if __need_schedule_again(prefill, scheduler_output):
             prefill = False
             prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)

@@ -33,7 +33,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, Di
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
+from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest, ChatCompletionResponseChoice,
                                             ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
                                             ChatCompletionTokenLogprob, ChatMessage, ChoiceLogprobs, CompletionRequest,
                                             CompletionResponse, CompletionResponseChoice,
@@ -66,6 +66,7 @@ class VariableInterface:
     # following is for tool parsers
     tool_parser: Optional[ToolParser] = None
     allow_terminate_by_client: bool = False
+    enable_abort_handling: bool = False
 
 
 router = APIRouter()
@@ -907,6 +908,25 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+    if (request.prompt is not None) ^ (request.input_ids is None):
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'You must specify exactly one of prompt or input_ids')
+
+    prompt = request.prompt
+    input_ids = request.input_ids
+    image_data = request.image_data
+    if image_data is not None:
+        # convert to openai format
+        image_input = []
+        if not isinstance(image_data, List):
+            image_data = [image_data]
+        for img in image_data:
+            if isinstance(img, str):
+                image_input.append(dict(type='image_url', image_url=dict(url=img)))
+            else:
+                image_input.append(dict(type='image_url', image_url=img))
+        text_input = dict(type='text', text=prompt if prompt else input_ids)
+        prompt = [dict(role='user', content=[text_input] + image_input)]
+        input_ids = None
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
@@ -926,9 +946,9 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     )
 
     result_generator = VariableInterface.async_engine.generate(
-        messages=request.prompt,
+        messages=prompt,
         session_id=request.session_id,
-        input_ids=request.input_ids,
+        input_ids=input_ids,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
@@ -936,18 +956,8 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         do_preprocess=False,
     )
 
-    def create_finish_reason(finish_reason):
-        # TODO: add detail info
-        if not finish_reason:
-            return None
-        if finish_reason == 'length':
-            return dict(type='length')
-        if finish_reason == 'stop':
-            return dict(type='stop')
-        return dict(type='abort')
-
     def create_generate_response_json(res, text, output_ids, logprobs, finish_reason):
-        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(finish_reason),
+        meta = GenerateReqMetaOutput(finish_reason=dict(type=finish_reason) if finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
                                      completion_tokens=res.generate_token_len)
@@ -986,7 +996,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                     logprobs.append((tok_logprobs[tok], tok))
         nonlocal response
-        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(res.finish_reason),
+        meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
                                      completion_tokens=res.generate_token_len)
@@ -1106,6 +1116,12 @@ async def wakeup(raw_request: Request = None):
     return Response(status_code=200)
 
 
+@router.get('/is_sleeping', dependencies=[Depends(check_api_key)])
+async def is_sleeping(raw_request: Request = None):
+    is_sleeping = VariableInterface.async_engine.is_sleeping
+    return JSONResponse(content={'is_sleeping': is_sleeping})
+
+
 """ PD Disaggregation API Begin """
 
 
@@ -1148,6 +1164,21 @@ async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONRespo
 
 
 """ PD Disaggregation API End """
+
+
+@router.post('/abort_request')
+async def abort_request(request: AbortRequest, raw_request: Request = None):
+    """Abort an ongoing request."""
+    if not VariableInterface.enable_abort_handling:
+        return Response(
+            status_code=501,
+            content='This server does not support abort requests. Enable with --enable-abort-handling flag.')
+
+    if request.abort_all:
+        await VariableInterface.async_engine.stop_all_session()
+    else:
+        await VariableInterface.async_engine.stop_session(request.session_id)
+    return Response(status_code=200)
 
 
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
@@ -1314,6 +1345,7 @@ def serve(model_path: str,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
           allow_terminate_by_client: bool = False,
+          enable_abort_handling: bool = False,
           speculative_config: Optional[SpeculativeConfig] = None,
           **kwargs):
     """An example to perform model inference through the command line
@@ -1373,6 +1405,7 @@ def serve(model_path: str,
     logger.setLevel(log_level)
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
+    VariableInterface.enable_abort_handling = enable_abort_handling
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')

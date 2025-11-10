@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 from lmdeploy.messages import EventType, ScheduleMetrics
-from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager, SequenceMeta
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
+from .state_manager import StateManager
 
 logger = get_logger('lmdeploy')
 
@@ -52,6 +52,8 @@ class Scheduler:
 
         self.block_manager = build_block_manager(cache_config)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
+        self.state_manager = StateManager(self.cache_config.num_state_caches)
+        self.is_ssm = len(self.cache_config.states_shapes) > 0
 
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
@@ -219,14 +221,6 @@ class Scheduler:
         if (len(running) >= max_batches or num_waiting == 0):
             return running, swap_in_map, swap_out_map, copy_map
 
-        # reserve some blocks for decoding to avoid too much eviction
-        if self.cache_config.role != EngineRole.Prefill:
-            num_free_blocks = self.block_manager.get_num_free_gpu_blocks()
-            num_all_blocks = self.cache_config.num_gpu_blocks
-            free_ratio = num_free_blocks / num_all_blocks
-            if free_ratio < 0.1:
-                return running, swap_in_map, swap_out_map, copy_map
-
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
@@ -241,6 +235,8 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq, prealloc_size)
+            if self.is_ssm:
+                self.state_manager.allocate(seq)
             _to_running(seq)
 
             seq.record_event(EventType.SCHEDULED)
@@ -336,6 +332,7 @@ class Scheduler:
             seq (SchedulerSequence): sequence to remove
         """
         self.block_manager.free(seq)
+        self.state_manager.free(seq)
         seq.set_step(0)
         seq.session.remove_sequence(seq)
 

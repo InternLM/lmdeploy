@@ -1,0 +1,74 @@
+model_path: /mnt/vc-intern-delivery/qa-llm-cicd/qa_test_models
+resource_path: /mnt/vc-intern-delivery/qa-llm-cicd/resource
+log_path: /mnt/vc-intern-delivery/qa-llm-cicd/log
+eval_log_path: /mnt/vc-intern-delivery/qa-llm-cicd/evaluation_report
+benchmark_path: /mnt/vc-intern-delivery/qa-llm-cicd/benchmark-reports
+dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+env_tag: ascend
+
+tp_config:
+    Qwen3-30B-A3B: 4
+    Qwen3-235B-A22B: 16
+    Qwen3-32B: 4
+    Qwen3-8B: 2
+    Intern-S1: 16
+    Intern-S1-mini: 2
+    InternVL3_5-8B: 2
+    InternVL3_5-38B: 4
+
+pytorch_chat_model:
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-8B
+    - Qwen/Qwen3-0.6B
+
+pytorch_vl_model:
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
+    - OpenGVLab/InternVL3_5-2B
+    - OpenGVLab/InternVL3_5-8B
+    - OpenGVLab/InternVL3_5-38B
+
+pytorch_base_model:
+    - Qwen/Qwen3-0.6B
+
+pytorch_quatization:
+    awq:
+        - Empty
+    w8a8:
+        - Empty
+    no_kvint4:
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-0.6B
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-2B
+        - OpenGVLab/InternVL3_5-8B
+        - OpenGVLab/InternVL3_5-38B
+    no_kvint8:
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-0.6B
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-2B
+        - OpenGVLab/InternVL3_5-8B
+        - OpenGVLab/InternVL3_5-38B
+
+longtext_model:
+    - Qwen/Qwen3-30B-A3B
+
+benchmark_model:
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-8B
+    - Qwen/Qwen3-0.6B
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini

@@ -200,6 +200,9 @@ class IterationStats:
             outputs (EngineOutput): The output from the engine containing information about the current iteration.
             req_state (RequestState): The state of the request, including timestamps and token counts.
         """
+        if outputs.req_metrics is None:
+            # when users visit "/abort_request" endpoint, `req_metrics` might be None
+            return
         new_generation_tokens = len(outputs.token_ids)
         if new_generation_tokens == 0:
             return
@@ -220,7 +223,6 @@ class IterationStats:
         if outputs.status != ResponseType.SUCCESS:
             req_state.finish_reason = outputs.status
             req_state.finish_time = self.iteration_timestamp
-            req_state.generation_tokens = outputs.num_token
 
 
 # modify from vllm

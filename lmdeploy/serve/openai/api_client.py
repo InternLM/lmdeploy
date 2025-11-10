@@ -13,7 +13,7 @@ def get_model_list(api_url: str, headers: dict = None):
     logger = get_logger('lmdeploy')
     if not response.ok:
         logger.error(f'Failed to get the model list: {api_url}'
-                     'returns {response.status_code}')
+                     f' returns {response.status_code}')
         return None
     elif not hasattr(response, 'text'):
         logger.warning('Failed to get the model list.')

@@ -144,6 +144,7 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    state_offsets: torch.LongTensor = None
     target_hidden_states: torch.Tensor = None
     target_position_ids: torch.Tensor = None
 
@@ -244,27 +245,29 @@ class ModelInputs:
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
             max_kv_seqlen += max_q_seqlen
-
             target_hidden_states = self.target_hidden_states[:, start:
                                                              end] if self.target_hidden_states is not None else None
             target_position_ids = self.target_position_ids[:,
                                                            start:end] if self.target_position_ids is not None else None
-            inp = ModelInputs(input_ids=self.input_ids[:, start:end],
-                              seq_length=input_ids.new_tensor([end - start]),
-                              block_offsets=self.block_offsets,
-                              history_lengths=self.history_lengths + start,
-                              is_decoding=self.is_decoding,
-                              num_ignored_history=self.num_ignored_history,
-                              max_q_seqlen=max_q_seqlen,
-                              max_kv_seqlen=max_kv_seqlen,
-                              sum_kv_seqlen=max_kv_seqlen,
-                              local_adapter_ids=self.local_adapter_ids,
-                              vision_inputs=vision_inputs,
-                              model_metas=self.model_metas,
-                              cross_length=cross_length,
-                              history_cross_length=history_cross_length,
-                              target_hidden_states=target_hidden_states,
-                              target_position_ids=target_position_ids)
+            inp = ModelInputs(
+                input_ids=self.input_ids[:, start:end],
+                seq_length=input_ids.new_tensor([end - start]),
+                block_offsets=self.block_offsets,
+                history_lengths=self.history_lengths + start,
+                is_decoding=self.is_decoding,
+                num_ignored_history=self.num_ignored_history,
+                max_q_seqlen=max_q_seqlen,
+                max_kv_seqlen=max_kv_seqlen,
+                sum_kv_seqlen=max_kv_seqlen,
+                local_adapter_ids=self.local_adapter_ids,
+                vision_inputs=vision_inputs,
+                model_metas=self.model_metas,
+                cross_length=cross_length,
+                history_cross_length=history_cross_length,
+                state_offsets=self.state_offsets,
+                target_hidden_states=target_hidden_states,
+                target_position_ids=target_position_ids,
+            )
             ret.append(inp)
             history_cross_length = cross_length
 
@@ -332,6 +335,10 @@ class StepContext:
     # for draft model
     target_hidden_states: torch.Tensor = None
 
+    # states for ssm
+    state_caches: List = None
+    state_offsets: torch.LongTensor = None
+
     _outputs: Dict = field(default_factory=dict)
 
     @classmethod
@@ -340,6 +347,7 @@ class StepContext:
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build step context.
@@ -399,6 +407,8 @@ class StepContext:
             cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
+            state_caches=state_caches,
+            state_offsets=inputs.state_offsets,
             target_hidden_states=inputs.target_hidden_states,
         )
 
@@ -470,6 +480,7 @@ class StepContextManager:
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build context."""
@@ -477,6 +488,7 @@ class StepContextManager:
             inputs,
             model_config,
             kv_caches,
+            state_caches,
             kv_quant_policy,
         )
 

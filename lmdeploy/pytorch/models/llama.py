@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -12,7 +12,7 @@ from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, 
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.cudagraph import CudaGraphMixin
 
 
 class LlamaAttention(nn.Module):
@@ -303,6 +303,7 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
+        self.dtype = dtype
         # build LLamaModel
         self.model = LlamaModel(config, dtype=dtype, device=device)
         # build lm_head
@@ -338,19 +339,20 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
 
     def get_logits(self, hidden_states: torch.Tensor):
         """Compute logits of the model output."""
+        hidden_states = hidden_states.to(dtype=self.dtype)
         return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
-    def get_outputs_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: torch.Tensor, **kwargs):
+    def get_outputs_cudagraph(self, output_buffers: Dict[str, torch.Tensor], input_ids: torch.Tensor, **kwargs):
         """Get outputs from buffers."""
         num_tokens = input_ids.size(-1)
         outputs = dict()
-        outputs['hidden_states'] = graph_meta.output_buffers['hidden_states'][:, :num_tokens]
-        if 'aux_hidden_states' in graph_meta.output_buffers:
-            outputs['aux_hidden_states'] = graph_meta.output_buffers['aux_hidden_states'][:, :num_tokens]
+        outputs['hidden_states'] = output_buffers['hidden_states'][:, :num_tokens]
+        if 'aux_hidden_states' in output_buffers:
+            outputs['aux_hidden_states'] = output_buffers['aux_hidden_states'][:, :num_tokens]
         return outputs
 
     def prepare_inputs_for_generation(
