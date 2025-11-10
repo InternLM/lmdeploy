@@ -145,7 +145,7 @@ def check_request(request) -> Optional[JSONResponse]:
         check_func = check_request
     else:
         # Define an async function that always returns success
-        def always_success(req):
+        def always_success(req, backend_config):
             return ''
 
         check_func = always_success
