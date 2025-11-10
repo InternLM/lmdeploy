@@ -7,8 +7,7 @@ if TYPE_CHECKING:
     from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 
 
-async def check_request(request: ChatCompletionRequest,
-                        engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
+def check_request(request: ChatCompletionRequest, engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
     if not isinstance(request, ChatCompletionRequest):
         raise TypeError(f'Invalid request type, expected ChatCompletionRequest, got {type(request)}')
 

@@ -128,7 +128,7 @@ def create_error_response(status: HTTPStatus, message: str, error_type='invalid_
                         status_code=status.value)
 
 
-async def check_request(request) -> Optional[JSONResponse]:
+def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
         return create_error_response(HTTPStatus.NOT_FOUND, f'The model {request.model!r} does not exist.')
@@ -145,12 +145,12 @@ async def check_request(request) -> Optional[JSONResponse]:
         check_func = check_request
     else:
         # Define an async function that always returns success
-        async def always_success(req):
-            return (0, 'OK')
+        def always_success(req):
+            return ''
 
         check_func = always_success
 
-    error_msg = await check_func(request, VariableInterface.async_engine.backend_config)
+    error_msg = check_func(request, VariableInterface.async_engine.backend_config)
     if error_msg:
         return create_error_response(HTTPStatus.BAD_REQUEST, error_msg)
     return None
@@ -374,7 +374,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
+    error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
@@ -724,7 +724,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
+    error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
@@ -913,7 +913,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
+    error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:

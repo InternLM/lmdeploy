@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 
 
-async def check_request(request: GenerateReqInput, engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
+def check_request(request: GenerateReqInput, engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
     if not isinstance(request, GenerateReqInput):
         raise TypeError(f'Invalid request type, expected GenerateReqInput, got {type(request)}')
 
