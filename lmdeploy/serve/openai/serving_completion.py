@@ -12,14 +12,13 @@ def check_request(request: CompletionRequest, engine_config: 'TurbomindEngineCon
         raise TypeError(f'Invalid request type, expected CompletionRequest, got {type(request)}')
 
     # Check logprobs settings
-    logprobs_mode = None
     try:
         logprobs_mode = engine_config.logprobs_mode
+        logprobs = request.logprobs
+        if logprobs_mode is None and logprobs:
+            return 'logprobs requested but not enabled logprobs_mode in engine configuration.'
     except AttributeError:
         pass
-    logprobs = request.logprobs
-    if logprobs_mode is None and logprobs:
-        return 'logprobs requested but not enabled logprobs_mode in engine configuration.'
 
     # check sampling settings
     if request.n <= 0:
