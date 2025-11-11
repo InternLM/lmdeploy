@@ -12,7 +12,7 @@
 namespace turbomind::attention {
 
 template<int HeadDim, class T>
-void invokeReduceV2(T*           out,
+void invokeReduceV3(T*           out,
                     float*       partial_ML,
                     float*       partial_O,
                     const int*   split_cnt,

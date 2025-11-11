@@ -84,7 +84,7 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
     }
 
     if (split_cnt > 1 || params.cp_size > 1) {
-        attention::invokeReduceV2<Kernel::kHeadDim>(params.out,
+        attention::invokeReduceV3<Kernel::kHeadDim>(params.out,
                                                     params.partial_ML,
                                                     params.partial_O,
                                                     split_cnt > 1 ? params.split_cnt : nullptr,
