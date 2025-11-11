@@ -2,7 +2,9 @@
 
 mkdir -p /wheels /nccl
 
-if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    pip install nvidia-nccl-cu13
+elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     pip install nvidia-nccl-cu12
 else
     NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70 -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_90,code=compute_90"
