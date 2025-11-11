@@ -5,7 +5,6 @@ fastapi
 fire
 mmengine-lite
 numpy
-nvidia-ml-py
 openai
 openai_harmony
 partial_json_parser
