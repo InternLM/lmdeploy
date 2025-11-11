@@ -3,7 +3,7 @@ ARG IMAGE_TYPE=final
 ARG CUDA_VERSION=cu12
 
 FROM nvidia/cuda:13.0.2-devel-ubuntu22.04 AS cu13
-ENV CUDA_VERSION_SHORT=cu13
+ENV CUDA_VERSION_SHORT=cu130
 
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
 ENV CUDA_VERSION_SHORT=cu128
@@ -48,7 +48,7 @@ RUN --mount=type=cache,target=/root/.cache \
 
 # Runtime image
 FROM nvidia/cuda:13.0.2-base-ubuntu22.04 AS cu13-base
-ENV CUDA_VERSION_SHORT=cu13
+ENV CUDA_VERSION_SHORT=cu130
 
 FROM nvidia/cuda:12.8.1-base-ubuntu22.04 AS cu12.8-base
 ENV CUDA_VERSION_SHORT=cu128
