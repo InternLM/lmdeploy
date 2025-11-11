@@ -13,7 +13,7 @@ pillow
 prometheus_client
 protobuf
 pydantic>2.0.0
-pynvml
+nvidia-ml-py
 pyzmq
 ray
 safetensors
