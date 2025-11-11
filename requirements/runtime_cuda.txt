@@ -5,6 +5,7 @@ fastapi
 fire
 mmengine-lite
 numpy
+nvidia-ml-py
 openai
 openai_harmony
 partial_json_parser
@@ -13,7 +14,6 @@ pillow
 prometheus_client
 protobuf
 pydantic>2.0.0
-nvidia-ml-py
 pyzmq
 ray
 safetensors
