@@ -222,15 +222,15 @@ void invokeReduceV3(T*           out,
 {
     constexpr int CTA_K = 32;  // warp size
 
+    constexpr int    kWarpCnt  = 4;
+    constexpr size_t kSmemSize = sizeof(float) * (kWarpCnt * HeadDim + kWarpCnt * 2 + CTA_K);
+    static_assert(kSmemSize < (48 << 10), "shared memory usage exceeds 48KB per block");
+
     partial_ML -= cp_rank * query_num * head_num * partial_len * 2;  // begin address of cp_rank0
 
     auto invoke = [&](auto cp, auto is_first, int stride_k) {
-        constexpr int kWarpCnt = 4;
-        const dim3    block    = kWarpCnt * WARP_SIZE;
-        const dim3    grid     = ReduceCtaMap::get_grid_shape(query_num, head_num, max_split_cnt, CTA_K);
-
-        static constexpr size_t kSmemSize = sizeof(float) * (kWarpCnt * HeadDim + kWarpCnt * 2 + CTA_K);
-        static_assert(kSmemSize < (48 << 10));
+        const dim3 block = kWarpCnt * WARP_SIZE;
+        const dim3 grid  = ReduceCtaMap::get_grid_shape(query_num, head_num, max_split_cnt, CTA_K);
 
         reduce<cp, CTA_K, HeadDim, kWarpCnt, is_first><<<grid, block, kSmemSize, stream>>>(  //
             out,
