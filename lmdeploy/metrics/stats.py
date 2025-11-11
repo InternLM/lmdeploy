@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
+import numpy as np
+
 from lmdeploy.messages import EngineEvent, EngineOutput, ResponseType, ScheduleMetrics
 
 
@@ -221,3 +223,58 @@ class IterationStats:
         if outputs.status != ResponseType.SUCCESS:
             req_state.finish_reason = outputs.status
             req_state.finish_time = self.iteration_timestamp
+
+
+# modify from vllm
+@dataclass
+class SpeculativeDecodingStats:
+    """Speculative decoding stats."""
+
+    num_spec_tokens: int
+    num_drafts: int = 0
+    num_draft_tokens: int = 0
+    num_accepted_tokens: int = 0
+    num_accepted_tokens_per_pos: np.ndarray = None
+
+    def __post_init__(self):
+        assert self.num_spec_tokens > 0
+        self.num_accepted_tokens_per_pos = np.zeros(self.num_spec_tokens)
+
+    def update_from_output(self, outputs: EngineOutput):
+        """Update from engine output."""
+        if spec_info := getattr(outputs.req_metrics, 'spec_info', None):
+            self.num_drafts += 1
+            self.num_draft_tokens += spec_info['num_draft_tokens']
+            self.num_accepted_tokens += spec_info['num_accepted_tokens']
+            self.num_accepted_tokens_per_pos[:spec_info['num_accepted_tokens']] += 1
+
+    def update_per_draft(self, num_draft_tokens: int, num_accepted_tokens: int):
+        """Update with per draft stats."""
+        if num_draft_tokens > 0:
+            self.num_drafts += 1
+            self.num_draft_tokens += num_draft_tokens
+            self.num_accepted_tokens += num_accepted_tokens
+            self.num_accepted_tokens_per_pos[:num_accepted_tokens] += 1
+
+    def __repr__(self):
+        """Return a human-readable string representation."""
+        draft_acceptance_rate = (self.num_accepted_tokens / self.num_draft_tokens *
+                                 100 if self.num_draft_tokens > 0 else float('nan'))
+
+        # Conventionally, mean acceptance length includes the bonus token
+        mean_acceptance_length = 1 + (self.num_accepted_tokens /
+                                      self.num_drafts) if self.num_drafts > 0 else float('nan')
+
+        acceptance_rates = self.num_accepted_tokens_per_pos / self.num_drafts if self.num_drafts > 0 else [
+            float('nan')
+        ] * self.num_accepted_tokens
+        rates_str = ', '.join(f'{p:.3f}' for p in acceptance_rates)
+
+        return ('SpeculativeDecodingStats('
+                f'num_spec_tokens={self.num_spec_tokens}, '
+                f'num_drafts={self.num_drafts}, '
+                f'num_draft_tokens={self.num_draft_tokens}, '
+                f'num_accepted_tokens={self.num_accepted_tokens}, '
+                f'draft_acceptance_rate={draft_acceptance_rate:.2f}%, '
+                f'mean_acceptance_length={mean_acceptance_length:.2f}, '
+                f'per_position_acceptance_rate={rates_str})')

@@ -1,4 +1,5 @@
 accelerate>=0.29.3
+cloudpickle
 dlinfer-ascend>=0.1.3
 einops
 fastapi

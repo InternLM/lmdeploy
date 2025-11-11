@@ -119,7 +119,7 @@ class MetricsProcessor():
             try:
                 # fetch
                 update_data = await self.metrics_queue.get()
-                outputs, req_state, iteration_stats = update_data
+                outputs, req_state, iteration_stats, specdecode_stats = update_data
 
                 # update request state according the engine events
                 if outputs and outputs.req_metrics:
@@ -130,9 +130,15 @@ class MetricsProcessor():
                 # some attributes of req_state will also be updated, e.g., lastest_token_time
                 iteration_stats.update_from_output(outputs, req_state)
 
+                # spec decode
+                if specdecode_stats is not None:
+                    specdecode_stats.update_from_output(outputs)
+
                 # record iteration stats
                 for stat_logger in self.stat_loggers:
                     stat_logger.record_iteration(iteration_stats)
+                    if specdecode_stats is not None:
+                        stat_logger.record_specdecode(specdecode_stats)
 
                 if outputs.status == ResponseType.FINISH:
                     # record finished request stats
@@ -155,7 +161,6 @@ class MetricsProcessor():
     def queue_update(self, update_data: tuple):
         if not is_metrics_enabled() or self.metrics_queue is None:
             return
-
         self.metrics_queue.put_nowait(update_data)
 
     def increment_total_requests(self):

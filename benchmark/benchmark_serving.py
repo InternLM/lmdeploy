@@ -13,14 +13,15 @@ def get_launching_server_cmd(model_path, backend, server_config):
     elif backend == 'sglang':
         cmd = ['python3', '-m', 'sglang.launch_server', '--model-path', model_path]
     elif backend == 'vllm':
-        cmd = ['vllm', 'serve', '--model', model_path]
+        cmd = ['vllm', 'serve', model_path]
     else:
         raise ValueError(f'unknown backend: {backend}')
     for key, value in server_config.items():
         # Convert snake_case to kebab-case for command line args
         key = key.replace('_', '-')
         cmd.append(f'--{key}')
-        cmd.append(str(value))
+        if str(value):
+            cmd.append(str(value))
     # Special handling for proxy server case
     if server_config.get('proxy_url') and server_config.get('dp'):
         cmd.append('--allow-terminate-by-client')
@@ -66,9 +67,9 @@ def get_server_ip_port(backend: str, server_config: Dict) -> Tuple[str, int]:
             server_ip = server_config.get('server_ip', '0.0.0.0')
             server_port = server_config.get('server_port', 23333)
     elif backend == 'sglang':
-        return (server_config.get('server_ip', '0.0.0.0'), server_config.get('server_port', 30000))
+        return (server_config.get('server_ip', '0.0.0.0'), server_config.get('port', 30000))
     elif backend == 'vllm':
-        return (server_config.get('server_ip', '0.0.0.0'), server_config.get('server_port', 8000))
+        return (server_config.get('server_ip', '0.0.0.0'), server_config.get('port', 8000))
     else:
         raise ValueError(f'unknown backend: {backend}')
     return server_ip, server_port
@@ -131,7 +132,7 @@ def benchmark(model_path: str, backend: str, server_config: Dict, data_config: D
 
     try:
 
-        print(f"Starting api_server: {' '.join(server_cmd)}")
+        print(f"Starting api_server: {' '.join(server_cmd)}", flush=True)
         proc = subprocess.Popen(server_cmd)
         # Wait for the server to be ready
         wait_server_ready(server_ip, server_port)

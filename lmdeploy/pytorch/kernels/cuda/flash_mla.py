@@ -42,4 +42,4 @@ def flash_mla_fwd(
         softmax_scale,
         causal,
     )
-    return out.squeeze(1)
+    return out.flatten(0, 1)
