@@ -45,3 +45,13 @@ chat_testcase:
             - 乌市
             - xinjiang
             - 新疆
+code_testcase:
+    - 使用python编写一个int数组的冒泡排序代码:
+        - contain:
+            - def
+            - bubble
+            - 冒泡
+    - 快速排序呢:
+        - contain:
+            - def
+            - quick
