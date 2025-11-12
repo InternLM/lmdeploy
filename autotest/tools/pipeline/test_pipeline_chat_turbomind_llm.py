@@ -9,7 +9,7 @@ from utils.pipeline_chat import run_pipeline_chat_test
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.prefix_cache_test
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1, exclude_dup=True))
+@pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
 def test_pipeline_chat_turbomind_prefix_cache_tp1(config, common_case_config, model, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id)
