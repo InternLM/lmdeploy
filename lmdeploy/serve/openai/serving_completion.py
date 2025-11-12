@@ -16,7 +16,7 @@ def check_request(request: CompletionRequest, engine_config: 'TurbomindEngineCon
         logprobs_mode = engine_config.logprobs_mode
         logprobs = request.logprobs
         if logprobs_mode is None and logprobs:
-            return 'logprobs requested but not enabled logprobs_mode in engine configuration.'
+            return f'logprobs({logprobs}) requested but not enabled logprobs_mode in engine configuration.'
     except AttributeError:
         pass
 

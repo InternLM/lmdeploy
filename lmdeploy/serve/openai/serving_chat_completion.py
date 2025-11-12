@@ -16,8 +16,9 @@ def check_request(request: ChatCompletionRequest, engine_config: 'TurbomindEngin
         logprobs_mode = engine_config.logprobs_mode
         logprobs = request.logprobs
         top_logprobs = request.top_logprobs
-        if logprobs_mode is None and (logprobs is not None or top_logprobs is not None):
-            return 'Logprobs or top_logprobs requested but not enabled logprobs_mode in engine configuration.'
+        if logprobs_mode is None and (logprobs or top_logprobs):
+            return f'Logprobs({logprobs})/top_logprobs({top_logprobs}) requested '
+            'but not enabled logprobs_mode in engine configuration'
     except AttributeError:
         pass
 
