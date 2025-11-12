@@ -880,7 +880,8 @@ class Engine(EngineBase):
 
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             routed_experts = msg.routed_experts if msg.return_routed_experts and finish else None
-            if routed_experts is not None:
+            if routed_experts is not None and self.engine_config.enable_mp_engine:
+                # only serialize for api server
                 routed_experts = self.executor.serialize(routed_experts)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
