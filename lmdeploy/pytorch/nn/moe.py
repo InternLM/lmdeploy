@@ -66,7 +66,7 @@ def _split_size(size: int, world_size: int, align: int):
 
 class MoEForwardDPTP:
 
-    def __init__(self, gemm_func: Callable, max_tokens_per_round: int = 4096):
+    def __init__(self, gemm_func: Callable, max_tokens_per_round: int = 8192):
         """MoE forward dp tp."""
         self.gemm_func = gemm_func
         self.dist_ctx = get_dist_manager().current_context()

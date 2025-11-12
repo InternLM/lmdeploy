@@ -438,6 +438,7 @@ def gather_by_tp_sizes(x: torch.Tensor,
                        group: Optional[dist.ProcessGroup] = None,
                        async_op: bool = False):
     """Gather input."""
+    assert all(size >= 0 for size in tp_sizes), f'Invalid tp sizes: {tp_sizes}'
     shape = (*x.shape[:-2], sum(tp_sizes), *x.shape[-1:])
     new_x = x.new_empty(shape)
     split_new_x = list(new_x.split(tp_sizes, -2))

@@ -452,6 +452,8 @@ class BaseModelAgent:
         sync_long_context: bool,
     ):
         """Model forward."""
+        dist_config = get_dist_manager().current_config()
+        dp = dist_config.dp
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         strategy = self.agent_strategy
 
@@ -493,17 +495,17 @@ class BaseModelAgent:
                 torch.cuda.synchronize()
                 return self._output.to(self._device)
 
-        __forward = self.async_forward
+        async def __forward(inputs):
+            """Warp forward."""
+            if sync_long_context and dp > 1:
+                inputs.build_dp_meta()
+            return await self.async_forward(inputs)
 
         async def __long_context_single_forward(new_inputs, max_seqlen: int):
             """One large sequence."""
-            dist_config = get_dist_manager().current_config()
-            dp = dist_config.dp
             model_metas = new_inputs[0].model_metas
             output_gather = _OutputGather(max_seqlen)
             for inp in new_inputs:
-                if dp > 1:
-                    inp.build_dp_meta()
                 inp.model_metas = model_metas
                 tmp_out = await __forward(inp)
                 model_metas = tmp_out.get('model_metas')
@@ -632,7 +634,7 @@ class BaseModelAgent:
             logger.debug(f'padding_batch_size={padding_batch_size}')
         else:
             all_sync_flags = gathered_meta[:, 3].bool()
-            sync_long_context = all_sync_flags.any()
+            sync_long_context = all_sync_flags.any().item()
             logger.debug(f'sync_long_context={sync_long_context}')
 
         # update if enable_microbatch

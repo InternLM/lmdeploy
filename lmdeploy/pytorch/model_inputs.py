@@ -33,6 +33,7 @@ class DPMeta:
             tp_size_tensor[rank].fill_(seqlen)
             dist.all_gather_into_tensor(tp_size_tensor, tp_size_tensor[rank], group=gather_group)
             tp_sizes = tp_size_tensor.tolist()
+            assert all(size >= 0 for size in tp_sizes), (f'seqlen: {seqlen}, Invalid tp sizes: {tp_sizes}')
         else:
             tp_sizes = [seqlen]
         return tp_sizes
