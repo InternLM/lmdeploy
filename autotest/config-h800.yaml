@@ -16,6 +16,7 @@ tp_config:
     gpt-oss-120b: 2
     gpt-oss-120b-BF16: 4
     gpt-oss-20b-BF16: 2
+    Qwen2.5-32B-Instruct: 2
 
 turbomind_chat_model:
     - internlm/Intern-S1
