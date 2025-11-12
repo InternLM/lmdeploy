@@ -445,6 +445,7 @@ class Response:
         token_ids: (List[int]): the output token ids.
         logprobs: (List[Dict[int, float]]): the top logprobs for each output
             position.
+        step_map: (List[int]): the decoding step for each token in DLLM mode.
         index (int): it refers to the position index of the input request
             batch
     """
@@ -456,6 +457,7 @@ class Response:
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
+    step_map: List[int] = None
     index: int = 0
 
     def __repr__(self):
@@ -464,7 +466,7 @@ class Response:
             'last_hidden_state=None' if self.last_hidden_state is None else
             f'last_hidden_state.shape={self.last_hidden_state.shape}\nlast_hidden_state={self.last_hidden_state}')
         s = (f'text={self.text}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
-             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}')
+             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\nstep_map={self.step_map}\n{logits}\n{hidden_state}')
         return s
 
 
@@ -536,6 +538,7 @@ class EngineOutput:
         cache_block_ids (List[int]): send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
         req_metrics (RequestMetrics): request metrics information
+        step_map (List[int]): the decoding step for each token in DLLM mode
     """
     status: ResponseType
     token_ids: List[int]
@@ -544,6 +547,7 @@ class EngineOutput:
     last_hidden_state: torch.Tensor = None
     cache_block_ids: Optional[List[int]] = None
     req_metrics: Optional[RequestMetrics] = None
+    step_map: Optional[List[int]] = None
 
 
 @dataclass

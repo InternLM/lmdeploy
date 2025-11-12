@@ -13,6 +13,7 @@ from queue import Queue
 from threading import Thread
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
+import torch
 import tqdm
 
 from lmdeploy import Tokenizer
@@ -97,6 +98,9 @@ class GenOut:
 
     # for disaggregation
     cache_block_ids: List[int] = None
+    
+    # for DLLM
+    step_map: List[int] = None
 
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
@@ -108,6 +112,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     logprobs=out.logprobs,
                     last_hidden_state=out.last_hidden_state,
                     logits=out.logits,
+                    step_map=out.step_map,
                     index=index)
 
 
@@ -125,6 +130,9 @@ def _append_response(dst: Response, src: Response):
     if src.logprobs:
         dst.logprobs = dst.logprobs or []
         dst.logprobs += src.logprobs
+    if src.step_map:
+        dst.step_map = dst.step_map or []
+        dst.step_map += src.step_map
     return dst
 
 
@@ -359,6 +367,7 @@ class AsyncEngine(LogitsMixin):
         self.free_insts = None
         self.instances.clear()
         self.engine.close()
+        torch._C._cuda_clearCublasWorkspaces()
 
     def __enter__(self):
         return self
@@ -682,9 +691,11 @@ class AsyncEngine(LogitsMixin):
         # Change multimodal data to openai text messages, i.e.,
         # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
         # [{'role': 'user', 'content': 'hi']
-        # Also ensure all messages have 'content' field (set to None if missing, e.g., assistant with tool_calls)
-        if isinstance(prompt, list):
-            prompt = [_merge_message_content(msg) for msg in prompt]
+        if isinstance(prompt, list) and any(isinstance(msg['content'], list) for msg in prompt):
+            prompt = [
+                msg if isinstance(msg['content'], str) else dict(role=msg['role'], content=msg['content'][0]['text'])
+                for msg in prompt
+            ]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
@@ -888,6 +899,11 @@ class AsyncEngine(LogitsMixin):
 
                     token_ids += outputs.token_ids[:output_len - hit_stop_token]
                     gen_len = len(token_ids) - input_len
+                    
+                    # 提取本次增量的 step_map
+                    step_map_increment = None
+                    if hasattr(outputs, 'step_map') and outputs.step_map is not None:
+                        step_map_increment = outputs.step_map[mask]
 
                     ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
@@ -903,7 +919,9 @@ class AsyncEngine(LogitsMixin):
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
-                                 cache_block_ids=outputs.cache_block_ids)
+                                 cache_block_ids=outputs.cache_block_ids,
+                                 step_map=step_map_increment)
+
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
                     if outputs.last_hidden_state is not None:
@@ -937,6 +955,10 @@ class AsyncEngine(LogitsMixin):
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, output_tokens {gen_len}')
+                    
+                    # 最后的 finish 输出不需要返回 step_map（已经在流式输出中累加了）
+                    final_step_map = None
+                    
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),
@@ -946,6 +968,7 @@ class AsyncEngine(LogitsMixin):
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
+                                 step_map=final_step_map,
                                  cache_block_ids=outputs.cache_block_ids)
                     # Update a session's sequence only when it is in finished status
                     if outputs.status == ResponseType.FINISH:
