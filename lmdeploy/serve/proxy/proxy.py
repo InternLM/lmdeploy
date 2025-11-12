@@ -388,8 +388,9 @@ class NodeManager:
             node_url (str): the node url.
             start (int): the start time point. time.time()
         """
-        self.nodes[node_url].unfinished -= 1
-        self.nodes[node_url].latency.append(time.time() - start)
+        if node_url in self.nodes:
+            self.nodes[node_url].unfinished -= 1
+            self.nodes[node_url].latency.append(time.time() - start)
 
     def create_background_tasks(self, url: str, start: int):
         """To create a background task.

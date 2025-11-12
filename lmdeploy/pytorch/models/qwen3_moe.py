@@ -52,7 +52,7 @@ class Qwen3MoeAttention(nn.Module):
             head_dim,
             num_kv_heads=num_key_value_heads,
             v_head_size=head_dim,
-            sliding_window=config.sliding_window,
+            sliding_window=getattr(config, 'sliding_window', None),
         )
 
         # o_proj

@@ -893,6 +893,23 @@ class Engine(EngineBase):
             """Need logits."""
             return any(seq.return_logits for seq in seqs)
 
+        def __need_schedule_again(prefill: bool, scheduler_output):
+            """Need schedule again."""
+            # only reschedule when prefill
+            if not prefill:
+                return False
+            # schedule decoding if no valid prefill reqs.
+            if len(scheduler_output.running) > 0:
+                return False
+            # disable decoding for prefill role
+            if (self.engine_config.role == EngineRole.Prefill):
+                return False
+            # disable decoding if no running reqs.
+            if not self.scheduler.has_running():
+                logger.warning('No running sequences for decoding scheduling after prefill scheduling.')
+                return False
+            return True
+
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
@@ -902,8 +919,7 @@ class Engine(EngineBase):
         if enable_empty and len(scheduler_output.running) == 0:
             return None
 
-        # schedule decoding if no valid prefill reqs.
-        if prefill and len(scheduler_output.running) == 0 and self.engine_config.role != EngineRole.Prefill:
+        if __need_schedule_again(prefill, scheduler_output):
             prefill = False
             prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)

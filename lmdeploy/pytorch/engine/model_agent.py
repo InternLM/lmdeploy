@@ -17,7 +17,7 @@ from torch.profiler import ProfilerActivity, profile, record_function
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig
@@ -1032,7 +1032,18 @@ class BaseModelAgent:
                 serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
             model = self.patched_model.get_model()
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
-            weights = [(k, _construct(v)) for k, v in weights]
+            if request.load_format == 'flattened_bucket':
+                metadata: List[FlattenedTensorMetadata] = weights['metadata']
+                if metadata:
+                    flattened_tensor: torch.Tensor = _construct(weights['flattened_tensor'])
+                    bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+                    weights = bucket.reconstruct_tensors()
+                else:
+                    # empty data
+                    weights = []
+            else:
+                weights = [(k, _construct(v)) for k, v in weights]
+
             weights = ModelWeightLoader._rename_weights_iterator(weights, model)
             model.load_weights(weights)
 
@@ -1050,7 +1061,8 @@ class BaseModelAgent:
         self.cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
-        self.patched_model.get_model().to(device=device)
+        self.patched_model.get_model().to(device=device, non_blocking=True)
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     @torch.inference_mode()
