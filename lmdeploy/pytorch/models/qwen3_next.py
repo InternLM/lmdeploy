@@ -668,7 +668,10 @@ class Qwen3NextSparseMoeBlock(nn.Module):
             is_tp=False,
         )
 
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.softmax_topk = SoftmaxTopK(
+            self.top_k,
+            n_groups=getattr(config, 'router_n_groups', -1),
+        )
 
         self.experts = build_fused_moe(
             self.hidden_dim,
