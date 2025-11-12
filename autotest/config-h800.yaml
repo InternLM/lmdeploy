@@ -1,6 +1,5 @@
 model_path: /nvme/qa_test_models
 resource_path: /nvme/qa_test_models/resource
-dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
 eval_log_path: /nvme/qa_test_models/evaluation_report
 benchmark_path: /nvme/qa_test_models/benchmark-reports

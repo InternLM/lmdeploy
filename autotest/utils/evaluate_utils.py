@@ -174,7 +174,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
             print(f"Running command: {' '.join(cmd)}")
             print(f'Work directory: {work_dir}')
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=72000)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=259200)
 
             stdout_output = result.stdout
             stderr_output = result.stderr
@@ -245,7 +245,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
 
     except subprocess.TimeoutExpired:
         timeout_msg = (f'Evaluation timed out for {model_name} '
-                       f'after 7200 seconds')
+                       f'after 259200 seconds')
         if work_dir and test_type == 'eval':
             write_to_summary(summary_model_name, tp_num, False, timeout_msg, worker_id, backend_type, communicator,
                              work_dir)

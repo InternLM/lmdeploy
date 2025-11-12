@@ -73,6 +73,7 @@ class SubCliServe:
         ArgumentHelper.max_log_len(parser)
         ArgumentHelper.disable_fastapi_docs(parser)
         ArgumentHelper.allow_terminate_by_client(parser)
+        ArgumentHelper.enable_abort_handling(parser)
         # chat template args
         ArgumentHelper.chat_template(parser)
 
@@ -109,7 +110,7 @@ class SubCliServe:
         quant_policy = ArgumentHelper.quant_policy(pt_group)
         model_format = ArgumentHelper.model_format(pt_group)
         hf_overrides = ArgumentHelper.hf_overrides(pt_group)
-        enable_metrics = ArgumentHelper.enable_metrics(pt_group)
+        disable_metrics = ArgumentHelper.disable_metrics(pt_group)
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
@@ -134,7 +135,7 @@ class SubCliServe:
         tb_group._group_actions.append(quant_policy)
         tb_group._group_actions.append(model_format)
         tb_group._group_actions.append(hf_overrides)
-        tb_group._group_actions.append(enable_metrics)
+        tb_group._group_actions.append(disable_metrics)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
@@ -216,7 +217,7 @@ class SubCliServe:
                 max_prefill_token_num=args.max_prefill_token_num,
                 enable_microbatch=args.enable_microbatch,
                 enable_eplb=args.enable_eplb,
-                enable_metrics=args.enable_metrics,
+                enable_metrics=not args.disable_metrics,
                 role=EngineRole[args.role],
                 migration_backend=MigrationBackend[args.migration_backend],
                 model_format=args.model_format,
@@ -244,7 +245,7 @@ class SubCliServe:
                                                    num_tokens_per_iter=args.num_tokens_per_iter,
                                                    max_prefill_iters=args.max_prefill_iters,
                                                    communicator=args.communicator,
-                                                   enable_metrics=args.enable_metrics,
+                                                   enable_metrics=not args.disable_metrics,
                                                    hf_overrides=args.hf_overrides)
         chat_template_config = get_chat_template(args.chat_template, args.model_path)
 
@@ -266,6 +267,7 @@ class SubCliServe:
                            allow_methods=args.allow_methods,
                            allow_headers=args.allow_headers,
                            allow_terminate_by_client=args.allow_terminate_by_client,
+                           enable_abort_handling=args.enable_abort_handling,
                            log_level=args.log_level.upper(),
                            api_keys=args.api_keys,
                            ssl=args.ssl,
@@ -293,6 +295,7 @@ class SubCliServe:
                           allow_methods=args.allow_methods,
                           allow_headers=args.allow_headers,
                           allow_terminate_by_client=args.allow_terminate_by_client,
+                          enable_abort_handling=args.enable_abort_handling,
                           log_level=args.log_level.upper(),
                           api_keys=args.api_keys,
                           ssl=args.ssl,

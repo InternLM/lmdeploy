@@ -73,8 +73,9 @@ judge_cfg = dict(
     temperature=0.001,
     tokenizer_path=JUDGE_MODEL_PATH,
     verbose=True,
-    max_out_len=16384,
-    max_seq_len=49152,
+    max_out_len=8192,
+    max_seq_len=32768,
+    mode='mid',
 )
 
 for item in datasets:

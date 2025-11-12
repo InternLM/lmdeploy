@@ -17,7 +17,7 @@ from torch.profiler import ProfilerActivity, profile, record_function
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig
@@ -28,9 +28,9 @@ from ..models.patch import BuildModelContext, add_adapters, build_patched_model,
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from ..utils import get_gpu_memory
-from ..weight_loader.model_weight_loader import load_model_weights
-from .cache_engine import CacheEngine
-from .guided_process import GuidedDecodingMangager
+from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
+from .cache_engine import CacheEngine, StateCacheEngine
+from .guided_process import GuidedDecodingManager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -222,6 +222,7 @@ def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
+    state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
 ):
     """Perform model forward."""
@@ -233,6 +234,7 @@ def model_forward(
             inputs=inputs,
             model_config=cache_engine.model_config,
             kv_caches=cache_engine.gpu_cache,
+            state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
@@ -248,7 +250,8 @@ def model_forward(
             output = model(**input_dict)
 
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
-            model_metas = context.model_metas
+            if context.model_metas is not None and context.model_metas[0] is not None:
+                model_metas = context.model_metas
             seq_length = context.q_seqlens[:len(inputs.seq_length)]
 
     return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
@@ -315,10 +318,6 @@ class BaseModelAgent:
         self.cache_config = cache_config
         # use raw tokenizer
         self.tokenizer = Tokenizer(model_path).model.model
-        try:
-            self.sampling_vocab_size = len(self.tokenizer)
-        except BaseException:
-            self.sampling_vocab_size = None
 
         self._pre_in_que = None
         self._in_que = None
@@ -352,11 +351,12 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.state_cache_engine = None
         self.profiler: AgentProfiler = None
         try:
-            self.guided_decoding_manager = GuidedDecodingMangager(self.tokenizer, self.sampling_vocab_size)
+            self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
         except ValueError as e:
-            logger.warning(f'Failed to create GuidedManager for tokenizer {self.tokenizer}: {e}')
+            logger.warning(f'Failed to create GuidedManager for tokenizer {type(self.tokenizer)}: {e}')
             self.guided_decoding_manager = None
 
         # microbatch
@@ -397,7 +397,10 @@ class BaseModelAgent:
 
     def warmup(self):
         """warmup."""
-        # TODO: disable for now, do not remove the comments.
+        from lmdeploy.pytorch.envs import skip_warmup
+        if skip_warmup:
+            return
+
         with self.all_context():
             max_batches = self.cache_config.max_batches
             num_tokens = max_batches
@@ -552,7 +555,6 @@ class BaseModelAgent:
         with record_function('sampling_logits'):
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
-                sampling_vocab_size=self.sampling_vocab_size,
                 logprobs_mode=self.misc_config.logprobs_mode,
                 guided_decoding_manager=self.guided_decoding_manager,
             )
@@ -693,6 +695,10 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
             return
 
+        if not is_decoding:
+            # init state cache for first time prefill
+            # I don't know if this is necessary...
+            self.state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         for idx in range(loop_count):
             # inference
@@ -775,15 +781,13 @@ class BaseModelAgent:
             while True:
                 forward_inputs = await input_maker.get()
 
-                if forward_event is not None:
-                    forward_event.clear()
                 await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
                 input_maker.step()
 
-    async def _async_loop_inputs_preprocess(self):
+    async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
         non_blocking = True
         keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
@@ -799,6 +803,8 @@ class BaseModelAgent:
                 self.out_stream.synchronize()
             logger.debug('preprocessing forward inputs done.')
             self._in_que.put_nowait(forward_inputs)
+            if forward_event is not None:
+                forward_event.clear()
 
     @staticmethod
     def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
@@ -833,7 +839,7 @@ class BaseModelAgent:
 
         # preprocess inputs task
         logger.debug('Create task ModelAgentPreprocess.')
-        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(),
+        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(forward_event),
                                                        name='ModelAgentPreprocess')
         tasks_to_cancel.append(self._preprocess_task)
 
@@ -972,12 +978,14 @@ class BaseModelAgent:
                                             tp_rank=self.tp_rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
+            self.state_cache_engine = StateCacheEngine(self.cache_config)
 
     def _forward_impl(self, inputs: ModelInputs):
         output = model_forward(
             self.patched_model,
             inputs,
             self.cache_engine,
+            state_cache_engine=self.state_cache_engine,
             stream=self.stream,
         )
         return output
@@ -1024,12 +1032,25 @@ class BaseModelAgent:
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_rank]
+            model = self.patched_model.get_model()
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
-            weights = [(k, _construct(v)) for k, v in weights]
-            self.patched_model.get_model().load_weights(weights)
+            if request.load_format == 'flattened_bucket':
+                metadata: List[FlattenedTensorMetadata] = weights['metadata']
+                if metadata:
+                    flattened_tensor: torch.Tensor = _construct(weights['flattened_tensor'])
+                    bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+                    weights = bucket.reconstruct_tensors()
+                else:
+                    # empty data
+                    weights = []
+            else:
+                weights = [(k, _construct(v)) for k, v in weights]
+
+            weights = ModelWeightLoader._rename_weights_iterator(weights, model)
+            model.load_weights(weights)
 
             if request.finished:
-                for _, mod in self.patched_model.get_model().named_modules():
+                for _, mod in model.named_modules():
                     if not hasattr(mod, 'update_weights'):
                         continue
                     mod.update_weights()
@@ -1042,7 +1063,8 @@ class BaseModelAgent:
         self.cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
-        self.patched_model.get_model().to(device=device)
+        self.patched_model.get_model().to(device=device, non_blocking=True)
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     @torch.inference_mode()

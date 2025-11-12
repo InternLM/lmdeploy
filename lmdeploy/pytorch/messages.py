@@ -483,6 +483,7 @@ class SchedulerSequence:
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
+    logical_state: int = -1
     adapter_name: str = None
     arrive_time: float = 0.0
     output_start_pos: int = 0
