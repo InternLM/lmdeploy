@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
+import gc
 import logging
 import os
 import time
@@ -343,6 +344,11 @@ class Engine(EngineBase):
         # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
 
+        # frequently gc would cause latency spike
+        # default threshold (700, 10, 10)
+        # WARNING: I don't know if it is a good idea to put gc setting here.
+        gc.set_threshold(10000, 100, 100)
+
         # dist args
         self.tp = engine_config.tp
         self.dp = engine_config.dp
@@ -534,7 +540,7 @@ class Engine(EngineBase):
                 for seq in session.sequences.values():
                     _resp: Response = getattr(seq, 'resp', None)
                     if _resp is not None:
-                        _resp.type = ResponseType.FINISH
+                        _resp.type = ResponseType.CANCEL
                         self.req_manager.response(_resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
@@ -551,7 +557,7 @@ class Engine(EngineBase):
                 if len(msgs) > 0 and msgs[0].preserve_cache:
                     self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
                 else:
-                    self.scheduler.end_session(session_id)
+                    self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -801,6 +807,11 @@ class Engine(EngineBase):
         vision_model_inputs = self._create_vision_model_inputs(messages, model_inputs)
         model_inputs.vision_inputs = vision_model_inputs
 
+        # ssm
+        if len(self.cache_config.states_shapes) > 0:
+            state_offsets = torch.tensor([msg.logical_state for msg in messages])
+            model_inputs.state_offsets = state_offsets
+
         return model_inputs
 
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
@@ -831,6 +842,10 @@ class Engine(EngineBase):
         logits = batched_outputs.logits
         logprobs = batched_outputs.logprobs
 
+        if logprobs is not None:
+            logprobs.vals = logprobs.vals.tolist()
+            logprobs.indices = logprobs.indices.tolist()
+
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
         self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
@@ -858,7 +873,7 @@ class Engine(EngineBase):
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
             if num_logprobs >= 0:
-                cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
+                cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
 
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
             out = InferOutput(session_id=session_id,
@@ -881,6 +896,23 @@ class Engine(EngineBase):
             """Need logits."""
             return any(seq.return_logits for seq in seqs)
 
+        def __need_schedule_again(prefill: bool, scheduler_output):
+            """Need schedule again."""
+            # only reschedule when prefill
+            if not prefill:
+                return False
+            # schedule decoding if no valid prefill reqs.
+            if len(scheduler_output.running) > 0:
+                return False
+            # disable decoding for prefill role
+            if (self.engine_config.role == EngineRole.Prefill):
+                return False
+            # disable decoding if no running reqs.
+            if not self.scheduler.has_running():
+                logger.warning('No running sequences for decoding scheduling after prefill scheduling.')
+                return False
+            return True
+
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
@@ -890,8 +922,7 @@ class Engine(EngineBase):
         if enable_empty and len(scheduler_output.running) == 0:
             return None
 
-        # schedule decoding if no valid prefill reqs.
-        if prefill and len(scheduler_output.running) == 0 and self.engine_config.role != EngineRole.Prefill:
+        if __need_schedule_again(prefill, scheduler_output):
             prefill = False
             prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
@@ -912,6 +943,7 @@ class Engine(EngineBase):
         stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
 
         sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
+
         return dict(
             running=running,
             inputs=inputs,
@@ -952,15 +984,7 @@ class Engine(EngineBase):
         def __send_resp(out: InferOutput):
             """Send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
-            cur_logprobs = out.logprobs
-            logprobs = None
-            if cur_logprobs is not None:
-                # logprobs to dict
-                vals = cur_logprobs[0].tolist()
-                indices = cur_logprobs[1].tolist()
-                cur_logprobs = dict(zip(indices, vals))
-                logprobs = [] if out.resp.data is None else out.resp.data.get('logprobs', [])
-                logprobs = logprobs + [cur_logprobs]
+            logprobs = None if out.resp.data is None else out.resp.data.get('logprobs', None)
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids,
@@ -969,10 +993,33 @@ class Engine(EngineBase):
                                      req_metrics=out.req_metrics,
                                      logprobs=logprobs))
 
+        def __update_logprobs(step_outputs: List[InferOutput]):
+            for out in step_outputs:
+                cur_logprobs = out.logprobs
+                if cur_logprobs is None:
+                    continue
+
+                if out.resp.data is None:
+                    out.resp.data = dict()
+                out.resp.data.setdefault('logprobs', [])
+
+                # logprobs to dict
+                vals = cur_logprobs[0]
+                indices = cur_logprobs[1]
+                cur_logprobs = dict(zip(indices, vals))
+                logprobs = out.resp.data['logprobs']
+                logprobs.append(cur_logprobs)
+
         def __send_resps(step_outputs: List[InferOutput]):
             """Send response callback."""
             __log_resps(step_outputs)
-            for out in step_outputs:
+            __update_logprobs(step_outputs)
+
+            is_done = set()
+            for out in reversed(step_outputs):
+                if out.session_id in is_done:
+                    continue
+                is_done.add(out.session_id)
                 __send_resp(out)
 
         while True:
@@ -1211,6 +1258,11 @@ class Engine(EngineBase):
             self._loop_finally()
 
     def close(self):
+        if self.executor.device_type == 'cuda':
+            # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879/32
+            # W/O this, repeatedly rebuilding and destroying engines within the same process
+            # will cause more and more reserved CUDA memory.
+            torch._C._cuda_clearCublasWorkspaces()
         if self._loop_main is not None:
             self._loop_main.cancel()
         else:
@@ -1237,6 +1289,7 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
+            self.sampling_strategy.on_session_end(session_id)
             self.scheduler.end_session(session_id)
             return True
         return False

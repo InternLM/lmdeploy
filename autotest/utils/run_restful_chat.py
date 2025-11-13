@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import subprocess
@@ -5,6 +6,7 @@ from time import sleep, time
 
 import allure
 import psutil
+import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import _is_bf16_supported_by_device, get_cuda_prefix_by_workerid, get_workerid
@@ -16,6 +18,7 @@ from lmdeploy.serve.openai.api_client import APIClient
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
+PROXY_PORT = 8000
 
 
 def start_restful_api(config, param, model, model_path, backend_type, worker_id):
@@ -31,7 +34,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     # temp remove testcase because of issue 3434
     if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
-        if 'turbomind' in backend_type and extra is not None and 'communicator native' in extra and tp_num > 1:
+        if 'turbomind' in backend_type and extra is not None and 'cuda-ipc' in extra and tp_num > 1:
             return
 
     if 'modelscope' in param.keys():
@@ -52,8 +55,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     else:
         port = DEFAULT_PORT + worker_num
 
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --session-len 8096 --server-port ' +
-                                 str(port),
+    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --server-port ' + str(port),
                                  config,
                                  model,
                                  need_tp=True,
@@ -84,7 +86,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         cmd += ' --cache-max-entry-count 0.5'
 
-    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '_' + timestamp + '.log')
 
     print('reproduce command restful: ' + cmd)
 
@@ -96,8 +99,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     start_timeout = 300
-    if not _is_bf16_supported_by_device():
-        start_timeout = 600
+    if not _is_bf16_supported_by_device() or tp_num >= 4:
+        start_timeout = 720
 
     sleep(5)
     for i in range(start_timeout):
@@ -176,7 +179,11 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        response = client.chat.completions.create(model=model_name, messages=messages, temperature=0.01, top_p=0.8)
+        response = client.chat.completions.create(model=model_name,
+                                                  messages=messages,
+                                                  temperature=0.01,
+                                                  top_p=0.8,
+                                                  max_completion_tokens=1024)
 
         output_content = response.choices[0].message.content
         file.writelines('output:' + output_content + '\n')
@@ -679,3 +686,90 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
 
     file.close()
     allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+
+
+def proxy_health_check(url):
+    """Check if proxy server is healthy."""
+    try:
+        # For proxy server, we check if it responds to the /v1/models endpoint
+        import requests
+        response = requests.get(f'{url}/v1/models', timeout=5)
+        if response.status_code == 200:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def start_proxy_server(config, worker_id):
+    """Start the proxy server for testing with enhanced error handling and
+    logging."""
+    log_path = config.get('eval_log_path')
+    if log_path is None:
+        log_path = '/nvme/qa_test_models/evaluation_report'
+    os.makedirs(log_path, exist_ok=True)
+
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    proxy_log = os.path.join(log_path, f'proxy_server_{worker_id}_{timestamp}.log')
+
+    worker_num = get_workerid(worker_id)
+    if worker_num is None:
+        port = PROXY_PORT
+    else:
+        port = PROXY_PORT + worker_num
+
+    proxy_url = f'http://127.0.0.1:{port}'  # noqa: E231, E261
+    try:
+        response = requests.get(f'{proxy_url}/nodes/status', timeout=5)
+        if response.status_code == 200:
+            print(f'Terminating existing nodes on proxy {proxy_url}')
+            requests.get(f'{proxy_url}/nodes/terminate_all', timeout=10)
+            sleep(5)
+    except requests.exceptions.RequestException:
+        pass
+
+    cmd = (f'lmdeploy serve proxy --server-name 127.0.0.1 --server-port {port} '
+           f'--routing-strategy min_expected_latency --serving-strategy Hybrid')
+
+    print(f'Starting proxy server with command: {cmd}')
+    print(f'Proxy log will be saved to: {proxy_log}')
+
+    proxy_file = open(proxy_log, 'w')
+    proxy_process = subprocess.Popen([cmd],
+                                     stdout=proxy_file,
+                                     stderr=proxy_file,
+                                     shell=True,
+                                     text=True,
+                                     encoding='utf-8')
+    pid = proxy_process.pid
+
+    start_time = int(time())
+    timeout = 300
+
+    sleep(5)
+    for i in range(timeout):
+        sleep(1)
+        if proxy_health_check(f'http://127.0.0.1:{port}'):  # noqa: E231, E261
+            break
+
+        try:
+            # Check if process is still running
+            return_code = proxy_process.wait(timeout=1)  # Small timeout to check status
+            if return_code != 0:
+                with open(proxy_log, 'r') as f:
+                    content = f.read()
+                    print(content)
+                return 0, proxy_process
+        except subprocess.TimeoutExpired:
+            continue
+
+        end_time = int(time())
+        total_time = end_time - start_time
+        if total_time >= timeout:
+            break
+
+    proxy_file.close()
+    allure.attach.file(proxy_log, attachment_type=allure.attachment_type.TEXT)
+
+    print(f'Proxy server started successfully with PID: {pid}')
+    return pid, proxy_process

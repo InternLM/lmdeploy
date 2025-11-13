@@ -1,7 +1,7 @@
 model_path: /nvme/qa_test_models
 resource_path: /nvme/qa_test_models/resource
-dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
+eval_log_path: /nvme/qa_test_models/evaluation_report
 benchmark_path: /nvme/qa_test_models/benchmark-reports
 dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 env_tag: h800
@@ -9,7 +9,7 @@ env_tag: h800
 tp_config:
     Intern-S1: 8
     Qwen3-235B-A22B: 8
-    Qwen3-235B-A22B-FP8: 8
+    Qwen3-235B-A22B-FP8: 4
     Qwen3-30B-A3B: 2
     Qwen3-32B: 2
     gpt-oss-120b: 2
@@ -88,6 +88,32 @@ turbomind_quatization:
     gptq:
         - empty
     no_kvint4:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - Qwen/Qwen3-0.6B-FP8
+        - Qwen/Qwen3-1.7B-FP8
+        - Qwen/Qwen3-4B-FP8
+        - Qwen/Qwen3-8B-FP8
+        - Qwen/Qwen3-14B-FP8
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-30B-A3B-FP8
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-32B-FP8
+        - openai/gpt-oss-120b
+        - openai/gpt-oss-20b
+    no_kvint8:
+        - empty
+
+pytorch_quatization:
+    awq:
+        - empty
+    w8a8:
+        - empty
+    no_kvint4:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
         - Qwen/Qwen3-4B-FP8
@@ -102,22 +128,21 @@ turbomind_quatization:
     no_kvint8:
         - empty
 
-pytorch_quatization:
-    awq:
-        - empty
-    w8a8:
-        - empty
-    no_kvint4:
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-235B-A22B-FP8
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-30B-A3B-FP8
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-32B-FP8
-    no_kvint8:
-        - empty
+
+evaluate_model:
+    - internlm/Intern-S1-mini
+    - Qwen/Qwen3-0.6B-FP8
+    - Qwen/Qwen3-1.7B-FP8
+    - Qwen/Qwen3-4B-FP8
+    - Qwen/Qwen3-8B-FP8
+    - Qwen/Qwen3-14B-FP8
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-32B-FP8
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-30B-A3B-FP8
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-235B-A22B-FP8
+    - openai/gpt-oss-120b
+    - openai/gpt-oss-20b
+    - unsloth/gpt-oss-120b-BF16
+    - unsloth/gpt-oss-20b-BF16

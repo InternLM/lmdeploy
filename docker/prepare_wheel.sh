@@ -17,7 +17,6 @@ if [[ ${PYTHON_VERSION} = "3.13" ]]; then
 
     pip install setuptools_rust
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/google/sentencepiece.git@v0.2.0#subdirectory=python"
-    pip wheel -v --no-build-isolation --no-deps -w /wheels --use-deprecated=legacy-resolver outlines_core==0.1.26
 fi
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
@@ -26,7 +25,7 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
         DEEP_GEMM_VERSION=03d0be3
         FLASH_MLA_VERSION=9edee0c
     else
-        DEEP_GEMM_VERSION=1876566
+        DEEP_GEMM_VERSION=79f48ee
         FLASH_MLA_VERSION=c759027
     fi
 

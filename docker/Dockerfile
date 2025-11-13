@@ -66,6 +66,5 @@ RUN --mount=type=cache,target=/root/.cache \
 # explicitly set ptxas path for triton
 ENV PATH=/opt/py3/bin:$PATH
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
-ENV NCCL_LAUNCH_MODE=GROUP
 ENV LD_LIBRARY_PATH=/nccl/lib:$LD_LIBRARY_PATH
 FROM ${IMAGE_TYPE}

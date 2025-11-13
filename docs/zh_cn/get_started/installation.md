@@ -23,7 +23,7 @@ pip install lmdeploy
 默认的预构建包是在 **CUDA 12** 上编译的。如果需要 CUDA 11+ (>=11.3)，你可以使用以下命令安装 lmdeploy：
 
 ```shell
-export LMDEPLOY_VERSION=0.10.0
+export LMDEPLOY_VERSION=0.10.2
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
@@ -51,7 +51,7 @@ DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 如果您希望使用特定版本，而不是 LMDeploy 的 `main` 分支，可以在命令行中指定：
 
 ```shell
-pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.10.0.zip
+pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.10.2.zip
 ```
 
 如果您希望构建支持昇腾、寒武纪或沐熙的 LMDeploy，请使用相应的 `LMDEPLOY_TARGET_DEVICE` 环境变量进行安装。

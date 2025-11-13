@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cudaver: [11.8, 12.4]
+        cudaver: [12.4, 12.8]
     name: cuda-${{ matrix.cudaver }}
     runs-on: ubuntu-latest
     steps:

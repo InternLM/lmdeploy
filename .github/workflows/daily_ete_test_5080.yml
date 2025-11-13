@@ -37,7 +37,7 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['quant', 'tools']"
+        default: "['quant', 'tools', 'restful']"
   schedule:
     - cron:  '00 14 * * 0-4'
 
@@ -125,6 +125,10 @@ jobs:
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Mark as start
+        run: |
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
 
   test_quantization:
     needs: download_pkgs
@@ -147,6 +151,8 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install auto_gptq matplotlib
@@ -186,6 +192,7 @@ jobs:
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
+
   test_tools:
     if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, 5080-r1]
@@ -220,6 +227,8 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -263,6 +272,7 @@ jobs:
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
+
   test_restful:
     if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, 5080-r1]
@@ -284,6 +294,8 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -300,16 +312,9 @@ jobs:
           rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Start restful api turbomind
-        if: matrix.backend == 'turbomind'
+      - name: Start restful api
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch
-        if: matrix.backend == 'pytorch'
-        run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct --backend pytorch > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/meta-llama/Llama-3.2-3B-Instruct --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api
@@ -321,22 +326,15 @@ jobs:
         if: always()
         run: |
           kill -15 "$restful_pid"
-      - name: Start restful api turbomind - base
-        if: matrix.backend == 'turbomind'
+      - name: Start restful api - base
         run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct > restful.log  2>&1  &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 120s
-      - name: Start restful api pytorch - base
-        if: matrix.backend == 'pytorch'
-        run: |
-          lmdeploy serve api_server /nvme/qa_test_models/internlm/internlm3-8b-instruct --backend pytorch > restful.log  2>&1  &
+          lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-4B --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_base.log  2>&1  &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
           sleep 180s
       - name: Test lmdeploy - restful api - base
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -m 'not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()
@@ -351,8 +349,9 @@ jobs:
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
+
   get_coverage_report:
-    if: ${{!cancelled() && success()}}
+    if: ${{!cancelled()}}
     runs-on: [self-hosted, 5080-r1]
     needs: [test_tools, test_restful]
     timeout-minutes: 5
@@ -362,12 +361,14 @@ jobs:
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/3090:/mnt/3090
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report

@@ -17,7 +17,7 @@ from torch.profiler import ProfilerActivity, profile, record_function
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig
@@ -28,8 +28,9 @@ from ..models.patch import BuildModelContext, add_adapters, build_patched_model,
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from ..utils import get_gpu_memory
-from ..weight_loader.model_weight_loader import load_model_weights
-from .cache_engine import CacheEngine
+from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
+from .cache_engine import CacheEngine, StateCacheEngine
+from .guided_process import GuidedDecodingManager
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -221,6 +222,7 @@ def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
+    state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
 ):
     """Perform model forward."""
@@ -232,6 +234,7 @@ def model_forward(
             inputs=inputs,
             model_config=cache_engine.model_config,
             kv_caches=cache_engine.gpu_cache,
+            state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
@@ -247,7 +250,8 @@ def model_forward(
             output = model(**input_dict)
 
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
-            model_metas = context.model_metas
+            if context.model_metas is not None and context.model_metas[0] is not None:
+                model_metas = context.model_metas
             seq_length = context.q_seqlens[:len(inputs.seq_length)]
 
     return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
@@ -314,10 +318,6 @@ class BaseModelAgent:
         self.cache_config = cache_config
         # use raw tokenizer
         self.tokenizer = Tokenizer(model_path).model.model
-        try:
-            self.sampling_vocab_size = len(self.tokenizer)
-        except BaseException:
-            self.sampling_vocab_size = None
 
         self._pre_in_que = None
         self._in_que = None
@@ -351,7 +351,13 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.state_cache_engine = None
         self.profiler: AgentProfiler = None
+        try:
+            self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
+        except ValueError as e:
+            logger.warning(f'Failed to create GuidedManager for tokenizer {type(self.tokenizer)}: {e}')
+            self.guided_decoding_manager = None
 
         # microbatch
         self.enable_microbatch = self.dist_ctx.dist_config.enable_microbatch
@@ -391,16 +397,22 @@ class BaseModelAgent:
 
     def warmup(self):
         """warmup."""
-        # TODO: disable for now, do not remove the comments.
+        from lmdeploy.pytorch.envs import skip_warmup
+        if skip_warmup:
+            return
+
         with self.all_context():
             max_batches = self.cache_config.max_batches
             num_tokens = max_batches
-
+            dist_ctx = get_dist_manager().current_context()
+            dp = dist_ctx.dp
             # warmup prefill
             inputs = self.inputs_strategy.make_dummy(max_batches,
                                                      is_decoding=False,
                                                      device='cuda',
                                                      vocab_size=self.model_config.vocab_size)
+            if dp > 1:
+                inputs.build_dp_meta()
             self._forward_impl(inputs)
 
             # warmup decoding(with cuda graph)
@@ -411,6 +423,8 @@ class BaseModelAgent:
                                                          is_decoding=True,
                                                          device='cuda',
                                                          vocab_size=self.model_config.vocab_size)
+                if dp > 1:
+                    inputs.build_dp_meta()
                 self._forward_impl(inputs)
 
     def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
@@ -433,6 +447,7 @@ class BaseModelAgent:
     ):
         """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
+        strategy = self.agent_strategy
 
         class _OutputGather:
             """Output gather."""
@@ -464,7 +479,11 @@ class BaseModelAgent:
             def get_output(self):
                 """Get tmp_output."""
                 if not return_logits:
-                    return self._output[:, -1:]
+                    seqlen = torch.full((1, ),
+                                        self._output.numel() // self._output.size(-1),
+                                        device=self._output.device,
+                                        dtype=self._output.dtype)
+                    return strategy.slice_outputs(self._output, seqlen)
                 torch.cuda.synchronize()
                 return self._output.to(self._device)
 
@@ -534,10 +553,11 @@ class BaseModelAgent:
         # record function does not support async function
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
-            logits_processor = FusedLogitsProcessor(sampling_inputs,
-                                                    self.tokenizer,
-                                                    sampling_vocab_size=self.sampling_vocab_size,
-                                                    logprobs_mode=self.misc_config.logprobs_mode)
+            logits_processor = FusedLogitsProcessor(
+                sampling_inputs,
+                logprobs_mode=self.misc_config.logprobs_mode,
+                guided_decoding_manager=self.guided_decoding_manager,
+            )
             origin_logits = logits
             logits, raw_logprobs = await logits_processor(origin_logits)
             next_token_ids = logits_processor.sampling(logits)
@@ -557,17 +577,14 @@ class BaseModelAgent:
         self._out_que.put_nowait((output, event))
 
     @contextmanager
-    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None, enable: bool = True):
+    def _broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ExtraInputs, enable: bool = True):
         if not enable:
             yield
             return
 
-        if dist_ctx is None:
-            dist_ctx = get_dist_manager().current_context()
-        tp_gpu_group = dist_ctx.tp_gpu_group
-        handle = dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
-        yield
-        handle.wait()
+        dist_ctx = self.dist_ctx
+        with self.agent_strategy.broadcast_next_token(next_token_ids, extra_inputs, dist_ctx) as handle:
+            yield handle
 
     async def _async_step_background(
         self,
@@ -678,6 +695,10 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
             return
 
+        if not is_decoding:
+            # init state cache for first time prefill
+            # I don't know if this is necessary...
+            self.state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         for idx in range(loop_count):
             # inference
@@ -693,6 +714,7 @@ class BaseModelAgent:
             seq_length = output.get('seq_length', inputs.seq_length)
             last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
             extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, seq_length)
+            model_metas = output.get('model_metas')
 
             # output empty for dummy inputs
             if is_dummy:
@@ -706,46 +728,39 @@ class BaseModelAgent:
                 # sampling
                 next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
 
-                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
-                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
+                # post sampling
+                next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
+                                                                                 extra_inputs)
 
-                    # post sampling
-                    next_token_ids, extra_inputs = self.agent_strategy.post_sampling(
-                        inputs, last_logits, next_token_ids, extra_inputs)
+                with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
+                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
 
                     # stopping criteria
                     stopped, stop_pos, stopping_criteria = stopping_criteria.step(next_token_ids,
                                                                                   sampling_inputs.stop_words,
                                                                                   inputs=inputs,
                                                                                   extra_inputs=extra_inputs)
+
+                    # send output
+                    logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
+                    extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+                    self._push_output(
+                        BatchedOutputs(next_token_ids=next_token_ids,
+                                       logits=logits if return_logits else None,
+                                       stopped=stopped,
+                                       stop_pos=stop_pos,
+                                       model_metas=model_metas,
+                                       logprobs=logprobs,
+                                       extra_outputs=extra_outputs))
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
-                with torch.inference_mode():
-                    next_token_ids = inputs.input_ids.new_zeros(last_logits.size(0))
-                logprobs = None
+                next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(
+                    inputs, last_logits, extra_inputs)
 
                 # broadcast next token for TP > 1
-                with self._broadcast_next_token(next_token_ids, dist_ctx, enable=need_broadcast_next):
+                with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
-
-                # post sampling
-                next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
-                                                                                 extra_inputs)
-
-            # send output
-            model_metas = output.get('model_metas')
-            if need_output:
-                logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
-                extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
-                self._push_output(
-                    BatchedOutputs(next_token_ids=next_token_ids,
-                                   logits=logits if return_logits else None,
-                                   stopped=stopped,
-                                   stop_pos=stop_pos,
-                                   model_metas=model_metas,
-                                   logprobs=logprobs,
-                                   extra_outputs=extra_outputs))
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
@@ -766,15 +781,13 @@ class BaseModelAgent:
             while True:
                 forward_inputs = await input_maker.get()
 
-                if forward_event is not None:
-                    forward_event.clear()
                 await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
                 input_maker.step()
 
-    async def _async_loop_inputs_preprocess(self):
+    async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
         non_blocking = True
         keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
@@ -790,6 +803,8 @@ class BaseModelAgent:
                 self.out_stream.synchronize()
             logger.debug('preprocessing forward inputs done.')
             self._in_que.put_nowait(forward_inputs)
+            if forward_event is not None:
+                forward_event.clear()
 
     @staticmethod
     def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
@@ -824,7 +839,7 @@ class BaseModelAgent:
 
         # preprocess inputs task
         logger.debug('Create task ModelAgentPreprocess.')
-        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(),
+        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(forward_event),
                                                        name='ModelAgentPreprocess')
         tasks_to_cancel.append(self._preprocess_task)
 
@@ -855,6 +870,9 @@ class BaseModelAgent:
             if not self._preprocess_task.done():
                 self._preprocess_task.cancel()
 
+        if self.guided_decoding_manager:
+            self.guided_decoding_manager.clear()
+
     async def stop_async(self):
         """Stop task."""
         if self.dist_ctx.dp > 1:
@@ -882,6 +900,9 @@ class BaseModelAgent:
                     await self._preprocess_task
                 except asyncio.CancelledError:
                     logger.debug('ModelAgent preprocess task cancelled.')
+
+        if self.guided_decoding_manager:
+            self.guided_decoding_manager.clear()
 
     def set_forward_inputs(self, inputs):
         """Set forward inputs."""
@@ -957,12 +978,14 @@ class BaseModelAgent:
                                             tp_rank=self.tp_rank,
                                             world_size=tp,
                                             cache_stream=self.cache_stream)
+            self.state_cache_engine = StateCacheEngine(self.cache_config)
 
     def _forward_impl(self, inputs: ModelInputs):
         output = model_forward(
             self.patched_model,
             inputs,
             self.cache_engine,
+            state_cache_engine=self.state_cache_engine,
             stream=self.stream,
         )
         return output
@@ -1009,12 +1032,25 @@ class BaseModelAgent:
             serialized_data = request.serialized_named_tensors
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_rank]
+            model = self.patched_model.get_model()
             weights = ForkingPickler.loads(base64.b64decode(serialized_data))
-            weights = [(k, _construct(v)) for k, v in weights]
-            self.patched_model.get_model().load_weights(weights)
+            if request.load_format == 'flattened_bucket':
+                metadata: List[FlattenedTensorMetadata] = weights['metadata']
+                if metadata:
+                    flattened_tensor: torch.Tensor = _construct(weights['flattened_tensor'])
+                    bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
+                    weights = bucket.reconstruct_tensors()
+                else:
+                    # empty data
+                    weights = []
+            else:
+                weights = [(k, _construct(v)) for k, v in weights]
+
+            weights = ModelWeightLoader._rename_weights_iterator(weights, model)
+            model.load_weights(weights)
 
             if request.finished:
-                for _, mod in self.patched_model.get_model().named_modules():
+                for _, mod in model.named_modules():
                     if not hasattr(mod, 'update_weights'):
                         continue
                     mod.update_weights()
@@ -1027,7 +1063,8 @@ class BaseModelAgent:
         self.cache_engine = None
         self.reset_graph_runner()
         device = 'cpu' if level == 1 else 'meta'
-        self.patched_model.get_model().to(device=device)
+        self.patched_model.get_model().to(device=device, non_blocking=True)
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     @torch.inference_mode()

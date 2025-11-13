@@ -494,8 +494,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         self.compile_vit = False
 
-        self.flash_mode = getattr(config, 'flash_mode', False)
-        if self.flash_mode:
+        self.flash_mode = getattr(config, 'flash_mode', None)
+        if self.flash_mode is not None:
             self.flash_relative_threshold = config.flash_relative_threshold
             self.flash_absolute_threshold = config.flash_absolute_threshold
 
@@ -694,8 +694,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         vit_embeds_64, vit_embeds_256, gate_result = self.extract_feature_flash(pixel_values, lengths)
 
         relative_threshold_value = torch.quantile(gate_result[:, 0].to(torch.float32), self.flash_relative_threshold)
-        gate_result = (gate_result[:, 0] >= relative_threshold_value) & (gate_result[:, 0]
-                                                                         > self.flash_absolute_threshold)
+        gate_result = (gate_result[:, 0] > relative_threshold_value) & (gate_result[:, 0]
+                                                                        >= self.flash_absolute_threshold)
 
         selected_embeds = [
             vit_embeds_64[i] if gate_result[i] else vit_embeds_256[i] for i in range(gate_result.size(0))
@@ -721,28 +721,35 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         crt_ctx = self.ctx_mgr.current_context()
         assert crt_ctx is not None, 'Current context cannot be None.'
 
-        # create model metas with new seqlens
-        model_metas = [dict(new_seqlen=seqlen) for seqlen in new_seqlens]
+        # update model metas
+        prev_lens = [0] * len(context.model_metas)
+        has_model_metas = context.model_metas is not None and context.model_metas[0] is not None
+        if has_model_metas:
+            prev_lens = [meta.get('new_seqlen', 0) for meta in context.model_metas]
+
+            for idx, meta in enumerate(context.model_metas):
+                meta.update({'new_seqlen': prev_lens[idx] + new_seqlens[idx]})
+        else:
+            context.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_seqlens]
 
         # create new model inputs and context, to get updated position_ids and attn_metadata
         device = input_ids.device
         total_msgs = len(new_seqlens)
-        new_seqlens = torch.tensor(new_seqlens, device=device, dtype=torch.long)
+        kv_seqlens = torch.tensor([meta['new_seqlen'] for meta in context.model_metas], dtype=torch.long)
         new_model_inputs = ModelInputs(input_ids=input_ids,
-                                       seq_length=new_seqlens,
-                                       history_lengths=torch.zeros(total_msgs, device=device, dtype=torch.long),
+                                       seq_length=torch.tensor(new_seqlens, device=device, dtype=torch.long),
+                                       history_lengths=torch.tensor(prev_lens, device=device, dtype=torch.long),
                                        block_offsets=crt_ctx.block_offsets,
                                        is_decoding=False,
                                        num_ignored_history=torch.zeros(total_msgs, device=device, dtype=torch.long),
-                                       max_q_seqlen=new_seqlens.max().item(),
-                                       max_kv_seqlen=new_seqlens.max().item(),
-                                       sum_kv_seqlen=new_seqlens.sum().item(),
-                                       model_metas=model_metas)
+                                       max_q_seqlen=kv_seqlens.max().item(),
+                                       max_kv_seqlen=kv_seqlens.max().item(),
+                                       sum_kv_seqlen=kv_seqlens.sum().item(),
+                                       model_metas=context.model_metas)
         new_ctx = self.ctx_mgr.build_context(new_model_inputs, crt_ctx.model_config)
 
-        # update attributes of current context, in order to return values inside model agent
-        context.model_metas = model_metas
-        context.q_seqlens = new_seqlens
+        # update attributes of the context in model agent
+        context.q_seqlens = new_ctx.q_seqlens
 
         return new_ctx.position_ids, new_ctx.attn_metadata
 
@@ -762,18 +769,18 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         **kwargs,
     ):
         if inputs_embeds is None and pixel_values is not None:
-            if not self.flash_mode:
-                # extract feature
-                self._mark_dynamic_once(pixel_values, [0])
-                vit_embeds = self.extract_feature(pixel_values)
-                lang_embeds = self.language_model.get_input_embeddings()(input_ids)
-            else:
+            if self.flash_mode:
                 # extract feature and compress visual tokens
                 vit_embeds, lang_embeds, input_ids, image_mask, new_seqlens = self.extract_and_compress(
                     pixel_values, input_ids, image_token_id)
 
                 # update forward inputs
                 position_ids, attn_metadata = self.update_forward_inputs(input_ids, new_seqlens, context)
+            else:
+                # extract feature
+                self._mark_dynamic_once(pixel_values, [0])
+                vit_embeds = self.extract_feature(pixel_values)
+                lang_embeds = self.language_model.get_input_embeddings()(input_ids)
 
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
 
@@ -815,23 +822,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         vision_embeddings = context.input_embeddings
         vision_embedding_indexing = None
 
-        if context.is_decoding and context.model_metas is not None and context.model_metas[0] is not None:
-            # NOTE, zhouxinyu, we need to consider the increasing batch in the decoding stage
-            # currently implementation will keep the batch size same as the prefill stage
-
-            # model meta from the previous step, therefore +1 for the current decoding step
-            new_kv_seqlens = [(meta['new_seqlen'] + 1) for meta in context.model_metas]
-
-            # update model metas for the next step
-            context.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_kv_seqlens]
-
-            # update position ids, attn_metadata
-            new_kv_seqlens = torch.tensor(new_kv_seqlens, device=input_ids.device, dtype=torch.long)
-            position_ids = new_kv_seqlens
-            attn_metadata.kv_seqlens = new_kv_seqlens
-            attn_metadata.cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(new_kv_seqlens, dim=0, dtype=torch.int32),
-                                                                 (1, 0))
-
         # vision inputs
         pixel_values = None
         image_mask = None
@@ -858,6 +848,51 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
             inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
+
+        has_model_metas = context.model_metas is not None and context.model_metas[0] is not None
+        if context.is_decoding:
+            if has_model_metas:
+                # NOTE, zhouxinyu, we need to consider the increasing batch in the decoding stage
+                # currently implementation will keep the batch size same as the prefill stage
+
+                # model meta from the previous step, therefore +1 for the current decoding step
+                new_kv_seqlens = [(meta['new_seqlen'] + 1) for meta in context.model_metas]
+
+                # update model metas for the next step
+                context.model_metas = [dict(new_seqlen=seqlen) for seqlen in new_kv_seqlens]
+
+                # update position ids, attn_metadata
+                new_kv_seqlens = torch.tensor(new_kv_seqlens, device=input_ids.device, dtype=torch.long)
+                position_ids = new_kv_seqlens - 1
+                attn_metadata.kv_seqlens = new_kv_seqlens
+                attn_metadata.cu_seqlens_k = torch.nn.functional.pad(
+                    torch.cumsum(new_kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
+        else:
+            # in the case of long context, messages may be split into multiple segments and perform prefill sequentially
+            # 1. this will only be done when flash_mode is on
+            # 2. if it is a text segment, we update model metas before forward
+            # 3. if it is an image segment, we update model metas later, after vision forward / compression
+            is_text_segment = (inputs_embeds is None) and (pixel_values is None)
+
+            if self.flash_mode and is_text_segment:
+                crt_ctx = self.ctx_mgr.current_context()
+                seq_lengths = crt_ctx.q_seqlens
+
+                if has_model_metas:
+                    prev_lens = [meta.get('new_seqlen', 0) for meta in context.model_metas]
+
+                    for idx, meta in enumerate(context.model_metas):
+                        meta.update({'new_seqlen': prev_lens[idx] + seq_lengths[idx].item()})
+
+                    # update position ids, attn_metadata
+                    prev_lens = torch.tensor(prev_lens, device=input_ids.device, dtype=torch.long)
+                    ranges = torch.arange(0, input_ids.shape[1], device=input_ids.device)
+                    position_ids = prev_lens[:, None] + ranges[None, :]
+                    position_ids = position_ids
+                    attn_metadata.kv_seqlens = prev_lens + seq_lengths
+                else:
+                    # init model metas
+                    context.model_metas = [{'new_seqlen': seqlen} for seqlen in seq_lengths.tolist()]
 
         if self.is_mono and vision_embedding_indexing is not None:
             all_indices = torch.arange(input_ids.shape[1]).to(input_ids)

@@ -44,7 +44,7 @@ on:
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
+  OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
@@ -64,7 +64,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.4
+      DOCKER_TAG: cuda12.8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -96,7 +96,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -125,6 +125,10 @@ jobs:
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Mark as start
+        run: |
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
 
   test_quantization:
     needs: download_pkgs
@@ -136,13 +140,14 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /mnt/bigdisk:/mnt/bigdisk
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
@@ -150,6 +155,8 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install auto_gptq matplotlib attrdict
@@ -185,6 +192,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -219,14 +227,15 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /mnt/bigdisk:/mnt/bigdisk
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
@@ -234,6 +243,8 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -299,6 +310,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -324,18 +336,22 @@ jobs:
             model: Intern-S1
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -359,7 +375,7 @@ jobs:
         run: |
           lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_chat_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 600s
+          sleep 900s
       - name: Test lmdeploy - restful api
         if:  matrix.model == 'internlm2_5-20b-chat'
         timeout-minutes: 30
@@ -395,6 +411,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -408,18 +425,21 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk:/mnt/bigdisk
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -451,6 +471,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -465,18 +486,21 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/bigdisk:/mnt/bigdisk
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -502,6 +526,7 @@ jobs:
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           chmod -R 777 /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
           export workdir=$(pwd)
@@ -510,90 +535,13 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
-  test_evaluation:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
-    runs-on: [self-hosted, linux-a100]
-    needs: test_quantization
-    timeout-minutes: 120 # 2hours
-    strategy:
-      fail-fast: false
-      matrix:
-        evaluate_type: ['chat', 'base']
-    container:
-      image: openmmlab/lmdeploy:latest-cu12
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/resources:/root/resources
-        - /nvme/github-actions/opencompass-data:/root/opencompass-data
-        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
-        - /mnt/bigdisk:/mnt/bigdisk
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    steps:
-      - name: Copy repository and Artifacts
-        run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy - dependency
-        run: |
-          python3 -m pip install sentence_transformers==2.2.2 --no-deps
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
-          rm -rf ${{env.DEEPSEEK_VL}}/build
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
-      - name: Install opencompass
-        run: |
-          git clone --depth=1 https://github.com/open-compass/opencompass.git
-          cd opencompass
-          python3 -m pip install .
-          echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
-      - name: Check env
-        run: |
-          python3 -m pip list
-          lmdeploy check_env
-          rm -rf allure-results
-          # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
-          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Setup paths for evaluation
-        run: |
-          ln -s /root/opencompass-data ./data
-          python3 .github/scripts/action_tools.py create_model_links /nvme/qa_test_models .
-      - name: Evaluate models
-        if: matrix.evaluate_type == 'chat'
-        run: |
-          export LMDEPLOY_DIR=$(pwd)
-
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_7b_chat_batch1_4bits, turbomind_internlm3_8b_instruct, pytorch_internlm3_8b_instruct, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_5_7b_instruct, pytorch_qwen2_5_7b_instruct, turbomind_llama2_7b_chat, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it, pytorch_gemma_2_27b_it]" "[*race_datasets, *gsm8k_datasets, *ifeval_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
-      - name: Evaluate base models
-        if: matrix.evaluate_type == 'base'
-        run: |
-          export LMDEPLOY_DIR=$(pwd)
-
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b, turbomind_qwen2_5_14b, turbomind_internlm2_5_7b_batch1]" "[*race_datasets, *gsm8k_datasets, *gpqa_datasets, *winogrande_datasets]" /root/evaluation-reports/${{ github.run_id }} base true
-      - name: Clear workspace
-        if: always()
-        run: |
-          export workdir=$(pwd)
-          cd ..
-          rm -rf $workdir
-          mkdir $workdir
-          chmod -R 777 $workdir
-
-
   get_benchmark_result:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     needs: [test_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -618,7 +566,7 @@ jobs:
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -630,6 +578,7 @@ jobs:
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
@@ -651,7 +600,7 @@ jobs:
 
   notify_to_feishu:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
-    needs: [get_benchmark_result, get_coverage_report, test_evaluation]
+    needs: [get_benchmark_result, get_coverage_report]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
     steps:

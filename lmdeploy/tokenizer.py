@@ -290,12 +290,18 @@ class HuggingFaceTokenizer:
         # This is the first iteration for this sequence
         new_tokens = tokenizer.convert_ids_to_tokens(all_input_ids[ids_offset:],
                                                      skip_special_tokens=skip_special_tokens)
+        # `convert_ids_to_tokens` returns None for out-of-range token_id
+        new_tokens = new_tokens or []
+        new_tokens = [x for x in new_tokens if x is not None] if None in new_tokens else new_tokens
         if prev_tokens is None:
             # Please notice that in VLLM, indexes are detokenized one by one
             # while in LMDeploy, every turn, the detokenized indexes length
             # can be different.
             prev_tokens = tokenizer.convert_ids_to_tokens(all_input_ids[:ids_offset],
                                                           skip_special_tokens=skip_special_tokens)
+            # `convert_ids_to_tokens` returns None for out-of-range token_id
+            prev_tokens = prev_tokens or []
+            prev_tokens = [x for x in prev_tokens if x is not None] if None in prev_tokens else prev_tokens
             read_offset = len(prev_tokens)
             if skip_special_tokens and new_tokens and new_tokens[0] in tokenizer.all_special_ids:
                 read_offset = read_offset + 1  # skip special token
@@ -384,14 +390,10 @@ class GptOssTokenizer(HuggingFaceTokenizer):
 
     def __init__(self, model_dir: str):
         super(GptOssTokenizer, self).__init__(model_dir)
-        try:
-            import openai_harmony  # noqa: F401
-            from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
-            encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
-            self.role = Role.ASSISTANT
-            self.parser = partial(StreamableParser, encoding, role=Role.ASSISTANT)
-        except ImportError:
-            raise ImportError('Please install openai_harmony by `pip install openai_harmony`')
+        from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        self.role = Role.ASSISTANT
+        self.parser = partial(StreamableParser, encoding, role=Role.ASSISTANT)
 
     def detokenize_incrementally(self,
                                  all_input_ids: Sequence[int],

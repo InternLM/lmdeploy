@@ -32,6 +32,7 @@ target_link_libraries(LlamaTritonBackend PUBLIC
         core
         memory_utils
         CUDA::cublasLt
-        yaml-cpp::yaml-cpp)
+        yaml-cpp::yaml-cpp
+        xgrammar)
 
 target_compile_features(LlamaTritonBackend PRIVATE cxx_std_14)

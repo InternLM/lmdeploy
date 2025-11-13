@@ -5,7 +5,7 @@ import time
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import shortuuid
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ErrorResponse(BaseModel):
@@ -90,10 +90,12 @@ class JsonSchema(BaseModel):
     name: str
     # description is not used since it depends on model
     description: Optional[str] = None
+    # `schema` is a reserved field in Pydantic BaseModel
     # use alias since pydantic does not support the OpenAI key `schema`
     json_schema: Optional[Dict[str, Any]] = Field(default=None, alias='schema', examples=[None])
     # strict is not used
     strict: Optional[bool] = False
+    model_config = ConfigDict(serialize_by_alias=True)
 
 
 class ResponseFormat(BaseModel):
@@ -254,7 +256,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -312,7 +314,7 @@ class CompletionResponseChoice(BaseModel):
     text: str
     logprobs: Optional[LogProbs] = None
     gen_tokens: Optional[List[int]] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class CompletionResponse(BaseModel):
@@ -331,7 +333,7 @@ class CompletionResponseStreamChoice(BaseModel):
     text: str
     logprobs: Optional[LogProbs] = None
     gen_tokens: Optional[List[int]] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class CompletionStreamResponse(BaseModel):
@@ -399,39 +401,68 @@ class EncodeResponse(BaseModel):
     length: Union[int, List[int]]
 
 
-class GenerateRequest(BaseModel):
-    """Generate request."""
-    prompt: Union[str, List[Dict[str, Any]]]
-    image_url: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
-    session_id: int = -1
-    interactive_mode: bool = False
-    stream: bool = False
-    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
-    request_output_len: Optional[int] = Field(default=None, examples=[None])  # noqa
-    top_p: float = 0.8
-    top_k: int = 40
-    temperature: float = 0.8
-    repetition_penalty: float = 1.0
-    ignore_eos: bool = False
-    skip_special_tokens: Optional[bool] = True
-    spaces_between_special_tokens: Optional[bool] = True
-    cancel: Optional[bool] = False  # cancel a responding request
-    adapter_name: Optional[str] = Field(default=None, examples=[None])
-    seed: Optional[int] = None
-    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
-    min_p: float = 0.0
-
-
 class GenerateResponse(BaseModel):
     """Generate response."""
     text: str
     tokens: int
     input_tokens: int
     history_tokens: int
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error', 'abort']] = None
 
 
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
     serialized_named_tensors: Union[str, List[str], Dict]
+    load_format: Optional[str] = None  # 'flattened_bucket' or None
     finished: bool = False
+
+
+# str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
+ImageDataInputItem = Union[str, Dict]
+ImageDataFormat = Union[ImageDataInputItem, List[ImageDataInputItem]]
+
+
+# /generate input
+class GenerateReqInput(BaseModel):
+    session_id: Optional[int] = -1
+    prompt: Optional[str] = None
+    input_ids: Optional[List[int]] = None
+    image_data: Optional[ImageDataFormat] = None
+    return_logprob: Optional[bool] = None
+    max_tokens: int = 128
+    stop: Optional[Union[str, List[str]]] = None
+    stop_token_ids: Optional[List[int]] = None
+    stream: Optional[bool] = False
+    temperature: float = 1.0
+    repetition_penalty: Optional[float] = 1.0
+    ignore_eos: Optional[bool] = False
+    top_p: float = 1.0
+    top_k: int = 0
+    min_p: float = 0.0
+    skip_special_tokens: Optional[bool] = True
+    spaces_between_special_tokens: Optional[bool] = True
+    include_stop_str_in_output: Optional[bool] = False
+
+
+class GenerateReqMetaOutput(BaseModel):
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    finish_reason: Optional[Dict[str, Any]] = None
+    output_token_logprobs: Optional[List[tuple[float, int]]] = None  # (logprob, token_id)
+
+
+# /generate output
+class GenerateReqOutput(BaseModel):
+    text: str
+    output_ids: List[int]
+    meta_info: GenerateReqMetaOutput
+
+
+class AbortRequest(BaseModel):
+    # Whether to abort all requests
+    abort_all: bool = False
+    # The finished reason data
+    finished_reason: Optional[Dict[str, Any]] = None
+    abort_message: Optional[str] = None
+    # The session ID to abort. If `abort_all` is True, this field is ignored.
+    session_id: Optional[int] = -1

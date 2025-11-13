@@ -198,7 +198,10 @@ class IterationStats:
             outputs (EngineOutput): The output from the engine containing information about the current iteration.
             req_state (RequestState): The state of the request, including timestamps and token counts.
         """
-        new_generation_tokens = outputs.num_token - req_state.generation_tokens
+        if outputs.req_metrics is None:
+            # when users visit "/abort_request" endpoint, `req_metrics` might be None
+            return
+        new_generation_tokens = len(outputs.token_ids)
         if new_generation_tokens == 0:
             return
         self.new_generation_tokens = new_generation_tokens
@@ -213,9 +216,8 @@ class IterationStats:
         # update the latest token generation time
         req_state.lastest_token_time = outputs.req_metrics.token_timestamp
         # update the number of generated tokens
-        req_state.generation_tokens = outputs.num_token
+        req_state.generation_tokens += new_generation_tokens
 
         if outputs.status != ResponseType.SUCCESS:
             req_state.finish_reason = outputs.status
             req_state.finish_time = self.iteration_timestamp
-            req_state.generation_tokens = outputs.num_token

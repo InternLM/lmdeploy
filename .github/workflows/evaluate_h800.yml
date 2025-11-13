@@ -1,0 +1,166 @@
+name: evaluate_h800
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is InternLM/lmdeploy'
+        type: string
+        default: 'InternLM/lmdeploy'
+      repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      base_models:
+        required: true
+        description: 'Tested TurboMind models list. eg. [turbomind_qwen3_0_6b_base, turbomind_qwen3_8b_base, turbomind_qwen3_30b_A3B_base, pytorch_qwen3_0_6b_base, pytorch_qwen3_8b_base, pytorch_qwen3_30b_A3B_base]'
+        type: string
+        default: '[turbomind_qwen3_0_6b_base, turbomind_qwen3_8b_base, turbomind_qwen3_30b_A3B_base, pytorch_qwen3_0_6b_base, pytorch_qwen3_8b_base, pytorch_qwen3_30b_A3B_base]'
+      baes_datasets:
+        required: true
+        description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
+        type: string
+        default: '[*race_datasets, *gsm8k_datasets, *gpqa_datasets, *winogrande_datasets]'
+      oc_repo_org:
+        required: false
+        description: 'Tested repository organization name. Default is open-compass/opencompass'
+        type: string
+        default: 'open-compass/opencompass'
+      oc_repo_ref:
+        required: false
+        description: 'Set branch or tag or commit id. Default is "main"'
+        type: string
+        default: 'main'
+      offline_mode:
+        required: true
+        description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
+        type: boolean
+        default: false
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
+
+jobs:
+  linux-build:
+    if: ${{github.event_name == 'schedule' || (!cancelled() && !inputs.offline_mode)}}
+    strategy:
+      matrix:
+        pyver: [py310]
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: ${{ matrix.pyver }}
+      PLAT_NAME: manylinux2014_x86_64
+      DOCKER_TAG: cuda12.8
+      OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Build
+        run: |
+          echo ${PYTHON_VERSION}
+          echo ${PLAT_NAME}
+          echo ${DOCKER_TAG}
+          echo ${OUTPUT_FOLDER}
+          echo ${GITHUB_RUN_ID}
+          # remove -it
+          sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
+          bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          path: builder/manywheel/${{ env.OUTPUT_FOLDER }}
+          retention-days: 1
+          name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
+
+  evaluate:
+    needs: linux-build
+    if: ${{github.event_name == 'schedule' || !cancelled()}}
+    runs-on: [self-hosted, h800-r1]
+    timeout-minutes: 4320 # 72hours
+    strategy:
+      fail-fast: false
+      matrix:
+        evaluate_type: ['base']
+    container:
+      image: m.daocloud.io/docker.io/openmmlab/lmdeploy:latest-cu12.8
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/github-actions/resources:/root/resources
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme1/qa_test_models:/nvme1/qa_test_models
+        - /nvme2/share:/nvme2/share
+        - /mnt/137_nvme2:/mnt/137_nvme2
+        - /mnt/137_nvme3:/mnt/137_nvme3
+        - /mnt/137_nvme4:/mnt/137_nvme4
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Setup systems
+        run: |
+          export TIME_STAMP="$(date +'%Y%m%d-%H%M%S')"
+          echo "TIME_STAMP=$TIME_STAMP" >> $GITHUB_ENV
+      - name: Clone repository
+        uses: actions/checkout@v2
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository - offline
+        if: ${{inputs.offline_mode}}
+        run: cp -r /root/models/offline_pkg/lmdeploy/. .
+      - name: Download Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        uses: actions/download-artifact@v4
+        with:
+          name: my-artifact-${{ github.run_id }}-py310
+      - name: Install lmdeploy - dependency
+        run: |
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
+      - name: Install lmdeploy
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: |
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt
+      - name: Install lmdeploy - offline
+        if: ${{inputs.offline_mode}}
+        run: |
+          python3 -m pip install /root/models/offline_pkg/py310/lmdeploy-*.whl --no-deps
+          python3 -m pip install -r requirements/test.txt
+      - name: Install opencompass
+        run: |
+          git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
+          cd opencompass
+          git checkout ${{ github.event.inputs.oc_repo_ref}}
+          python3 -m pip install .
+          echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
+      - name: Check env
+        run: |
+          python3 -m pip list
+          lmdeploy check_env
+      - name: Setup paths for evaluation
+        run: |
+          ln -s /nvme/qa_test_models/opencompass-data ./data
+          python3 .github/scripts/action_tools.py create_model_links /nvme/qa_test_models .
+      - name: Evaluate base models
+        if: matrix.evaluate_type == 'base'
+        run: |
+          echo ${{github.event.inputs.base_models}}
+          echo ${{github.event.inputs.baes_datasets}}
+          export LMDEPLOY_DIR=$(pwd)
+          python3 .github/scripts/action_tools.py evaluate "${{github.event.inputs.base_models}}" "${{github.event.inputs.baes_datasets}}" /root/evaluation-reports/${{ github.run_id }} base
+      - name: Clear workspace
+        if: always()
+        run: |
+          export workdir=$(pwd)
+          cd ..
+          rm -rf $workdir
+          mkdir $workdir
+          chmod -R 777 $workdir

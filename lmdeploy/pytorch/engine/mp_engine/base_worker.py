@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, List, Optional
 
+from lmdeploy.messages import EngineOutput
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
 from lmdeploy.utils import get_logger
@@ -19,7 +20,8 @@ class EngineInstancePool:
     def __init__(self, engine):
         from lmdeploy.pytorch.engine import Engine
         self.engine: Engine = engine
-        self.num_instance = self.engine.engine_config.max_batch_size
+        # enlarge `num_instance`, otherwise an sequence cannot be stopped in time
+        self.num_instance = self.engine.engine_config.max_batch_size * 2
         self.pool = None
 
     def create_instance_pool(self, num_instance: int):
@@ -127,3 +129,30 @@ class EngineWorkerBase:
         """Send stream inference request."""
         async for result in self.instance_pool.async_stream_infer(*args, **kwargs):
             yield result
+
+
+class EngineOutputGather:
+    """Helper class to gather incremental engine output."""
+
+    def __init__(self):
+        self._output = dict()
+
+    def get(self, stream_id):
+        if stream_id not in self._output:
+            self._output[stream_id] = EngineOutput(status=None, token_ids=[], logprobs=[])
+        return self._output[stream_id]
+
+    def add(self, stream_id, result):
+        if not isinstance(result, EngineOutput):
+            return
+        output = self.get(stream_id)
+        output.token_ids.extend(result.token_ids or [])
+        output.logprobs.extend(result.logprobs or [])
+
+    def pop(self, stream_id, result):
+        if not isinstance(result, EngineOutput):
+            return result
+        output = self._output.pop(stream_id)
+        result.token_ids = output.token_ids or []
+        result.logprobs = output.logprobs or None
+        return result

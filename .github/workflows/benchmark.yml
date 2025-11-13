@@ -15,9 +15,9 @@ on:
         default: 'main'
       benchmark_type:
         required: true
-        description: 'Set benchmark type. Default is "["generation", "throughput", "api_server"]"'
+        description: 'Set benchmark type. Default is "["longtext", "throughput", "api_server"]"'
         type: string
-        default: "['apiserver', 'generation', 'throughput']"
+        default: "['apiserver', 'throughput', 'longtext']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -27,10 +27,12 @@ on:
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
+  OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
+  ALLURE_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/allure_report/${{ github.run_id }}
+  TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
+  OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  FAIL_CONFIG: ${{ github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
 
 jobs:
   linux-build:
@@ -42,7 +44,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.4
+      DOCKER_TAG: cuda12.8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -67,25 +69,16 @@ jobs:
           retention-days: 1
           name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
 
-
-  benchmark:
+  download_pkgs:
     needs: linux-build
-    if: ${{github.event_name == 'schedule' || !cancelled()}}
+    if: ${{!cancelled()}}
     runs-on: [self-hosted, linux-a100]
-    strategy:
-      fail-fast: false
-      matrix:
-        benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
-    timeout-minutes: 480
+    timeout-minutes: 50
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
-        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -94,42 +87,82 @@ jobs:
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: cp -r /nvme/qa_test_models/offline_pkg/lmdeploy/. .
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
+      - name: Copy Artifacts
+        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Copy Artifacts - offline
+        if: ${{inputs.offline_mode}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Mark as start
+        run: |
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
+
+  benchmark:
+    needs: download_pkgs
+    if: ${{github.event_name == 'schedule' || !cancelled()}}
+    runs-on: [self-hosted, linux-a100]
+    strategy:
+      fail-fast: false
+      matrix:
+        benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
+        gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
+        include:
+          - n: 8
+            gpu_num: gpu_num_1
+          - n: 4
+            gpu_num: gpu_num_2
+          - n: 2
+            gpu_num: gpu_num_4
+          - n: 1
+            gpu_num: gpu_num_8
+    timeout-minutes: 480
+    container:
+      image: openmmlab/lmdeploy:latest-cu12
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/github-actions/packages:/root/packages
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
+        - /mnt/bigdisk:/mnt/bigdisk
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
-      - name: Install lmdeploy - offline
-        if: ${{inputs.offline_mode}}
-        run: |
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/py310/lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
           python3 -m pip list
           lmdeploy check_env
-          mkdir ${{env.REPORT_DIR}}/allure-results/.pytest_cache -p
-          ln -s ${{env.REPORT_DIR}}/allure-results/.pytest_cache autotest
       - name: Run other benchmark
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m 'gpu_num_1 and not pr_test' ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m 'gpu_num_2 and not pr_test' ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m 'gpu_num_4 and not pr_test' ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py --run_id ${{ github.run_id }} -m 'gpu_num_8 and not pr_test' ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Clear workfile
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
           export workdir=$(pwd)
           cd ..
@@ -157,5 +190,6 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Get overview
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           pip install pandas fire mmengine
           python3 .github/scripts/action_tools.py generate_benchmark_report $REPORT_DIR

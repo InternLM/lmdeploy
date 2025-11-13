@@ -1,10 +1,11 @@
 model_path: /nvme/qa_test_models
 resource_path: /nvme/qa_test_models/resource
-dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
+eval_log_path: /nvme/qa_test_models/evaluation_report
 benchmark_path: /nvme/qa_test_models/benchmark-reports
 dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 env_tag: a100
+
 
 tp_config:
     Llama-4-Scout-17B-16E-Instruct: 4
@@ -22,6 +23,7 @@ tp_config:
     Qwen3-32B: 2
     Qwen3-30B-A3B: 2
     Qwen3-30B-A3B-Base: 2
+    Qwen2.5-32B-Instruct : 2
     Qwen2.5-72B-Instruct: 4
     Qwen2.5-VL-32B-Instruct: 2
     DeepSeek-V2-Lite-Chat: 2
@@ -33,8 +35,9 @@ tp_config:
     MiniCPM-V-2_6: 2
     gemma-2-27b-it: 2
     InternVL2-Llama3-76B-AWQ: 4
-    gpt-oss-20b-bf16: 2
-    gpt-oss-120b-bf16: 4
+    gpt-oss-20b-BF16: 2
+    gpt-oss-120b-BF16: 4
+
 
 
 turbomind_chat_model:
@@ -139,8 +142,8 @@ pytorch_chat_model:
     - Qwen/Qwen2.5-VL-32B-Instruct
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
-    - lmsys/gpt-oss-20b-bf16
-    - lmsys/gpt-oss-120b-bf16
+    - unsloth/gpt-oss-20b-BF16
+    - unsloth/gpt-oss-120b-BF16
     - mistralai/Mistral-7B-Instruct-v0.3
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - google/gemma-3-12b-it
@@ -285,6 +288,7 @@ turbomind_quatization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Chat
+        - Qwen/Qwen2.5-7B-Instruct
 
 pytorch_quatization:
     awq:
@@ -349,8 +353,11 @@ pytorch_quatization:
 longtext_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-1-70B-Instruct
-    - internlm/internlm2_5-7b-chat-1m
-    - internlm/internlm3-8b-instruct
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
 
 benchmark_model:
     - internlm/Intern-S1
@@ -367,6 +374,15 @@ benchmark_model:
     - Qwen/Qwen3-235B-A22B
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
-    - deepseek-ai/DeepSeek-V2-Lite-Chat
-    - lmsys/gpt-oss-20b-bf16
-    - lmsys/gpt-oss-120b-bf16
+    - unsloth/gpt-oss-20b-BF16
+    - unsloth/gpt-oss-120b-BF16
+
+
+evaluate_model:
+  - google/gemma-2-9b-it
+  - google/gemma-2-27b-it
+  - meta-llama/Meta-Llama-3-1-8B-Instruct
+  - Qwen/Qwen2.5-7B-Instruct
+  - Qwen/Qwen2.5-32B-Instruct
+  - Qwen/Qwen1.5-MoE-A2.7B-Chat
+  - Qwen/Qwen3-30B-A3B

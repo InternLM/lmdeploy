@@ -144,6 +144,7 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    state_offsets: torch.LongTensor = None
 
     def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -152,7 +153,7 @@ class ModelInputs:
             step_seqlens = self.seq_length
         self.history_lengths += step_seqlens
         self.max_kv_seqlen += self.max_q_seqlen
-        self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
+        self.sum_kv_seqlen += self.max_q_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -224,7 +225,7 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
-        max_kv_seqlen = self.max_kv_seqlen
+        max_kv_seqlen = self.max_kv_seqlen - self.max_q_seqlen
 
         # for mllama
         history_cross_length = self.history_cross_length
@@ -241,6 +242,7 @@ class ModelInputs:
             max_q_seqlen = end - start
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
+            max_kv_seqlen += max_q_seqlen
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -256,10 +258,10 @@ class ModelInputs:
                 model_metas=self.model_metas,
                 cross_length=cross_length,
                 history_cross_length=history_cross_length,
+                state_offsets=self.state_offsets,
             )
             ret.append(inp)
             history_cross_length = cross_length
-            max_kv_seqlen += max_q_seqlen
 
             start = end
 
@@ -322,6 +324,10 @@ class StepContext:
     dp_meta: DPMeta = None
     enable_microbatch: bool = False
 
+    # states for ssm
+    state_caches: List = None
+    state_offsets: torch.LongTensor = None
+
     _outputs: Dict = field(default_factory=dict)
 
     @classmethod
@@ -330,6 +336,7 @@ class StepContext:
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build step context.
@@ -389,6 +396,8 @@ class StepContext:
             cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
+            state_caches=state_caches,
+            state_offsets=inputs.state_offsets,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -454,6 +463,7 @@ class StepContextManager:
         inputs: ModelInputs,
         model_config: ModelConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build context."""
@@ -461,6 +471,7 @@ class StepContextManager:
             inputs,
             model_config,
             kv_caches,
+            state_caches,
             kv_quant_policy,
         )
 

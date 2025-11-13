@@ -131,6 +131,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Qwen2-MoE (57BA14B)</li>
   <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Qwen3, Qwen3-MoE</li>
+  <li>Qwen3-Next(80B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -163,6 +164,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
+  <li>Qwen3-VL (2B - 235B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
@@ -213,7 +215,7 @@ pip install lmdeploy
 若使用 GeForce RTX 50 系列显卡，请安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
 
 ```shell
-export LMDEPLOY_VERSION=0.10.0
+export LMDEPLOY_VERSION=0.10.2
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
 ```

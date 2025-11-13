@@ -127,6 +127,10 @@ jobs:
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Mark as start
+        run: |
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
 
   test_tools:
     if: ${{!cancelled() && !contains(needs.download_pkgs.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
@@ -179,7 +183,6 @@ jobs:
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat
@@ -270,7 +273,6 @@ jobs:
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Start restful api
@@ -278,7 +280,7 @@ jobs:
         run: |
           lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_chat_restful.log 2>&1 &
           echo "restful_pid=$!" >> "$GITHUB_ENV"
-          sleep 600s
+          sleep 900s
       - name: Test lmdeploy - restful api
         if:  matrix.model == 'Intern-S1'
         timeout-minutes: 30
@@ -301,7 +303,7 @@ jobs:
           chmod -R 777 $workdir
 
   get_coverage_report:
-    if: ${{!cancelled() && success()}}
+    if: ${{!cancelled()}}
     runs-on: [self-hosted, h800-r1]
     needs: [test_tools, test_restful]
     timeout-minutes: 5
@@ -318,6 +320,7 @@ jobs:
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Get coverage report
