@@ -37,21 +37,19 @@ lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --
 3. **生成评测配置并执行评测**
 
 ```shell
-# 生成评测配置文件
 cd {the/root/path/of/lmdeploy/repo}
-python eval/gen_config.py <task_name> \
-    --api-server http://{api-server-ip}:10000 \
-    --judger-server http://{judger-server-ip}:20000 \
-    -o /path/to/e2e_config.py
 
-# 执行评测任务
 ## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
-opencompass /path/to/e2e_config.py -w {oc_output_dir}
+python eval/eval.py {task_name} \
+    --mode all \
+    --api-server http://{api-server-ip}:10000 \
+    --judger-server http://{judger-server-ip}:20000 \
+    -w {oc_output_dir}
 ```
 
-关于 `gen_config.py` 的详细使用方法，比如指定评测集，请通过 `python evaluation/gen_config.py --help` 查阅。
+关于 `eval.py` 的详细使用方法，比如指定评测集，请通过 `python eval/eval.py --help` 查阅。
 
 评测任务完成后，结果将保存在 `{oc_output_dir}/{yyyymmdd_hhmmss}` 目录中，其中 `{yyyymmdd_hhmmss}` 为任务执行的时间戳。
 
@@ -70,20 +68,20 @@ lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 2. **生成推理配置并执行推理**
 
 ```shell
-# 生成推理配置文件
 cd {the/root/path/of/lmdeploy/repo}
-python eval/gen_config.py <task_name> --mode infer \
-    --api-server http://{api_server_ip}:10000 \
-    -o /path/to/infer_config.py
 
-# 执行推理任务
 ## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
-opencompass /path/to/infer_config.py -m infer -w {oc_output_dir}
+python eval/eval.py {task_name} \
+    --mode infer \
+    --api-server http://{api-server-ip}:10000 \
+    -w {oc_output_dir}
 ```
 
-关于 `gen_config.py` 的详细使用方法，比如指定评测集，请通过 `python evaluation/gen_config.py --help` 查阅。
+关于 `eval.py` 的详细使用方法，比如指定评测集，请通过 `python eval/eval.py --help` 查阅。
+
+推理完成后，结果将保存在 `{oc_output_dir}/{yyyymmdd_hhmmss}` 目录中，其中 `{yyyymmdd_hhmmss}` 为任务执行的时间戳。
 
 ### 评判阶段
 
@@ -98,17 +96,15 @@ lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --
 2. **生成评判配置并执行评判**
 
 ```shell
-# 生成评判配置文件
 cd {the/root/path/of/lmdeploy/repo}
-python eval/gen_config.py {task_name} --mode eval \
-    --judger-server http://{judger_serverip}:20000 \
-    -o /path/to/judger_config.py
 
-# 执行评判任务
 ## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
-opencompass /path/to/judger_config.py -m eval -w {oc_output_dir} -r {yyyymmdd_hhmmss}
+python eval/eval.py {task_name} \
+    --mode eval \
+    --judger-server http://{judger-server-ip}:20000 \
+    -w {oc_output_dir} -r {yyyymmdd_hhmmss}
 ```
 
 注意事项：
@@ -117,4 +113,4 @@ opencompass /path/to/judger_config.py -m eval -w {oc_output_dir} -r {yyyymmdd_hh
 - `-w` 参数指定的输出目录 `oc_output_dir` 需与推理阶段一致
 - `-r` 参数用于指定“之前的输出与结果”，应填入推理阶段生成的时间戳目录名，即 `{oc_output_dir}` 下的子目录名称
 
-关于 `gen_config.py` 的详细使用方法，比如指定评测集，请通过 `python evaluation/gen_config.py --help` 查阅。
+关于 `eval.py` 的详细使用方法，比如指定评测集，请通过 `python eval/eval.py --help` 查阅。

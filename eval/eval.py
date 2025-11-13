@@ -104,10 +104,10 @@ def perform_evaluation(config, api_server, judger_server, mode, work_dir, reuse)
     """
     if mode in ['infer', 'all']:
         served_model_name = get_model_name_from_server(api_server, 'api')
-        config = config.replace("MODEL_PATH=''", f"MODEL_PATH='{served_model_name}'")
+        config = config.replace("MODEL_PATH = ''", f"MODEL_PATH = '{served_model_name}'")
     if mode in ['eval', 'all']:
         judger_model_name = get_model_name_from_server(judger_server, 'judger')
-        config = config.replace("JUDGER_MODEL_PATH=''", f"JUDGER_MODEL_PATH='{judger_model_name}'")
+        config = config.replace("JUDGER_MODEL_PATH = ''", f"JUDGER_MODEL_PATH = '{judger_model_name}'")
 
     # write updated config to work_dir
     if work_dir:
@@ -128,7 +128,7 @@ def perform_evaluation(config, api_server, judger_server, mode, work_dir, reuse)
             raise ValueError(f'Invalid reuse timestamp format: {reuse}. Expected format: YYYYMMDD_HHMMSS') from e
     try:
         print(f'Executing command: {" ".join(cmd)}')
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, text=True, check=True)
         return result
     except Exception as e:
         print(f'命令执行失败！错误信息: {e}')
@@ -176,6 +176,8 @@ def main():
     api_server = args.api_server
     judger_server = args.judger_server
     datasets = args.datasets
+    mode = args.mode
+    work_dir = args.work_dir
 
     # Process server addresses
     if api_server and not api_server.startswith('http'):
@@ -187,31 +189,40 @@ def main():
     config = read_config()
 
     # update task name in config
-    config = config.replace("TASK_TAG=''", f"TASK_TAG='{task_name}'")
+    config = config.replace("TASK_TAG = ''", f"TASK_TAG = '{task_name}'")
 
     # update datasets part of config according to args.datasets
     config = update_datasets(config, datasets)
 
     # update api_server part of config according to args.api_server
-    config = config.replace("API_SERVER_ADDR='http://<API_SERVER>'", f"API_SERVER_ADDR='{api_server}'")
+    if api_server:
+        config = config.replace("API_SERVER_ADDR = 'http://<API_SERVER>'", f"API_SERVER_ADDR = '{api_server}'")
+    if judger_server:
+        # update judger_server part of config according to args.judger_server
+        config = config.replace("JUDGER_ADDR = 'http://<JUDGER_SERVER>'", f"JUDGER_ADDR = '{judger_server}'")
 
-    # update judger_server part of config according to args.judger_server
-    config = config.replace("JUDGER_ADDR='http://<JUDGER_SERVER>'", f"JUDGER_ADDR='{judger_server}'")
-
-    if args.mode == 'config':
-        # only generate config file
-        if args.work_dir:
-            os.makedirs(args.work_dir, exist_ok=True)
-            output_file = os.path.join(args.work_dir, 'config.py')
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(config)
-            print(f'Config written to {output_file}')
+    if mode == 'config':
+        try:
+            # if api_server is accessible, retrieve /v1/models to get model_name
+            served_model_name = get_model_name_from_server(api_server, 'api')
+            config = config.replace("MODEL_PATH = ''", f"MODEL_PATH = '{served_model_name}'")
+        finally:
+            pass
+        try:
+            # if judger_server is accessible, retrieve /v1/models to get model_name
+            judger_model_name = get_model_name_from_server(judger_server, 'judger')
+            config = config.replace("JUDGER_MODEL_PATH = ''", f"JUDGER_MODEL_PATH = '{judger_model_name}'")
+        finally:
+            pass
+        # write updated config to work_dir
+        if work_dir:
+            save_config(work_dir, config)
         else:
             print(config)
-        return
+            return
 
     # perform evaluation
-    perform_evaluation(config, api_server, judger_server, args.mode, args.work_dir, args.reuse)
+    perform_evaluation(config, api_server, judger_server, mode, work_dir, args.reuse)
 
 
 if __name__ == '__main__':
