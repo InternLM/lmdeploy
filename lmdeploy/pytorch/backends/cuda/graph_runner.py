@@ -209,7 +209,8 @@ class CUDAGraphRunner(GraphRunner):
 
         if not enable_graph:
             with record_function('forward_eager'):
-                return self.model(**kwargs)
+                output = self.model(**kwargs)
+                return self.model.make_output_buffers(output)
 
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]

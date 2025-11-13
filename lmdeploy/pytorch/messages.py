@@ -415,7 +415,7 @@ class HistoryRouterExperts:
     """History router experts."""
     ALLOC_SIZE = 64
 
-    def __init__(self, expert_ids: np.ndarray = None, dtype: np.dtype = np.int16):
+    def __init__(self, expert_ids: np.ndarray = None, dtype: np.dtype = np.uint16):
         self.dtype = dtype
         if expert_ids is None:
             self._expert_ids = None
