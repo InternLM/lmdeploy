@@ -97,10 +97,11 @@ def _get_llama3_parameters(config: PretrainedConfig):
 def _get_fope_parameters(config: PretrainedConfig):
     """Get fope parameters."""
     params = FopeParameters()
-    params.num_inv_freq = config.num_inv_freq
+    rope_scaling = config.rope_scaling
+    params.num_inv_freq = rope_scaling['num_inv_freq']
     params.num_key_value_heads = config.num_key_value_heads
-    params.fope_sep_head = config.fope_sep_head
-    return dict(use_fope=True, fope_params=params)
+    params.fope_sep_head = rope_scaling['fope_sep_head']
+    return dict(fope_params=params)
 
 
 def build_rotary_params(config: PretrainedConfig):
@@ -111,6 +112,9 @@ def build_rotary_params(config: PretrainedConfig):
     if rope_scaling is not None:
         # BC: "rope_type" was originally "type"
         rope_type_str = config.rope_scaling.get('rope_type', config.rope_scaling.get('type', 'default'))
+        if rope_type_str.startswith('fope'):
+            params.update(_get_fope_parameters(config))
+            rope_type_str = 'default' if rope_type_str == 'fope' else rope_type_str[5:]
         build_funcs = dict(default=_get_default_rope_parameters,
                            linear=_get_linear_scaling_rope_parameters,
                            dynamic=_get_dynamic_ntk_parameters,
@@ -125,9 +129,6 @@ def build_rotary_params(config: PretrainedConfig):
     if partial_rotary_factor is not None:
         params['partial_rotary_factor'] = partial_rotary_factor
 
-    if getattr(config, 'use_fope', False):
-        params.update(_get_fope_parameters(config))
-
     return params
 
 
@@ -140,8 +141,7 @@ def build_rotary_embedding(dim: int,
                            llama3_params: Llama3Parameters = None,
                            fope_params: FopeParameters = None,
                            emb_type: RopeType = RopeType.Default,
-                           partial_rotary_factor: float = None,
-                           use_fope: bool = False) -> nn.Module:
+                           partial_rotary_factor: float = None) -> nn.Module:
     """Build rotary embedding op."""
     backend = get_backend()
 
@@ -159,8 +159,7 @@ def build_rotary_embedding(dim: int,
                          llama3_params=llama3_params,
                          emb_type=emb_type)
 
-    if use_fope:
-        assert fope_params is not None, 'fope_params should not be None when use_fope is True.'
+    if fope_params is not None:
         inv_freq = impl.inv_freq
         fope_params.inv_freq = inv_freq
         fope = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params)
