@@ -14,7 +14,7 @@ If sufficient computational resources are available, please refer to the [End-to
 pip install lmdeploy
 pip install "opencompass[full]"
 
-# Download the lmdeploy source code, which will be used in subsequent steps to access eval/gen_config.py
+# Download the lmdeploy source code, which will be used in subsequent steps to access eval script and configuration
 git clone --depth=1 https://github.com/InternLM/lmdeploy.git
 ```
 
@@ -37,22 +37,21 @@ lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --
 3. **Generate Evaluation Configuration and Execute**
 
 ```shell
-# Generate evaluation configuration
-cd {the/root/path/of/lmdeploy/repo}
-python eval/gen_config.py <task_name> \
-    --api-server http://{api-server-ip}:10000 \
-    --judger-server http://{judger-server-ip}:20000 \
-    -o /path/to/e2e_config.py
 
-# Run evaluation task
+cd {the/root/path/of/lmdeploy/repo}
+
 ## Specify the dataset path. OC will download the datasets automatically if they are
 ## not found in the path
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
-opencompass /path/to/e2e_config.py -w {oc_output_dir}
+python eval/eval.py {task_name} \
+    --mode all \
+    --api-server http://{api-server-ip}:10000 \
+    --judger-server http://{judger-server-ip}:20000 \
+    -w {oc_output_dir}
 ```
 
-For detailed usage instructions about `gen_config.py`, such as specifying evaluation datasets, please run `python evaluation/gen_config.py --help`.
+For detailed usage instructions about `eval.py`, such as specifying evaluation datasets, please run `python eval/eval.py --help`.
 
 After evaluation completion, results are saved in `{oc_output_dir}/{yyyymmdd_hhmmss}`, where `{yyyymmdd_hhmmss}` represents the task timestamp.
 
@@ -71,21 +70,20 @@ lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 2. **Generate Inference Configuration and Execute**
 
 ```shell
-# Generate inference configuration
 cd {the/root/path/of/lmdeploy/repo}
-python eval/gen_config.py <task_name> --mode infer \
-    --api-server http://{api_server_ip}:10000 \
-    -o /path/to/infer_config.py
 
-# Run inference task
 ## Specify the dataset path. OC will download the datasets automatically if they are
 ## not found in the path
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
-opencompass /path/to/infer_config.py -m infer -w {oc_output_dir}
+# Run inference task
+python eval/eval.py {task_name} \
+    --mode infer \
+    --api-server http://{api-server-ip}:10000 \
+    -w {oc_output_dir}
 ```
 
-For detailed usage instructions about `gen_config.py`, such as specifying evaluation datasets, please run `python evaluation/gen_config.py --help`.
+For detailed usage instructions about `eval.py`, such as specifying evaluation datasets, please run `python eval/eval.py --help`.
 
 ### Evaluation Stage
 
@@ -100,17 +98,13 @@ lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --
 2. **Generate Evaluation Configuration and Execute**
 
 ```shell
-# Generate evaluation configuration
 cd {the/root/path/of/lmdeploy/repo}
-python eval/gen_config.py {task_name} --mode eval \
-    --judger-server http://{judger_serverip}:20000 \
-    -o /path/to/judger_config.py
 
-# Run evaluation task
 ## Specify the dataset path. OC will download the datasets automatically if they are
 ## not found in the path
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
+# Run evaluation task
 opencompass /path/to/judger_config.py -m eval -w {oc_output_dir} -r {yyyymmdd_hhmmss}
 ```
 
@@ -120,4 +114,4 @@ Important Notes:
 - The `oc_output_dir` specified with `-w` must match the directory used in the inference stage
 - The `-r` parameter indicates "previous outputs & results" and should specify the timestamp directory generated during the inference stage (the subdirectory under `{oc_output_dir}`)
 
-For detailed usage instructions about `gen_config.py`, such as specifying evaluation datasets, please run `python evaluation/gen_config.py --help`.
+For detailed usage instructions about `eval.py`, such as specifying evaluation datasets, please run `python eval/eval.py --help`.

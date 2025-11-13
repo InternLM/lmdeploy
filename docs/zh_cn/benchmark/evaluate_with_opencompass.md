@@ -14,7 +14,7 @@
 pip install lmdeploy
 pip install "opencompass[full]"
 
-# 下载 lmdeploy 源码，在后续步骤中会使用到 eval/gen_config.py
+# 下载 lmdeploy 源码，在后续步骤中会使用到 eval/* 中的评测脚本和配置文件
 git clone --depth=1 https://github.com/InternLM/lmdeploy.git
 ```
 
@@ -73,6 +73,7 @@ cd {the/root/path/of/lmdeploy/repo}
 ## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
+# 执行推理任务
 python eval/eval.py {task_name} \
     --mode infer \
     --api-server http://{api-server-ip}:10000 \
@@ -101,6 +102,7 @@ cd {the/root/path/of/lmdeploy/repo}
 ## 指定数据集路径。如果在路径下没有找到评测数据集，OC会自动下载
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
+# 执行评测任务
 python eval/eval.py {task_name} \
     --mode eval \
     --judger-server http://{judger-server-ip}:20000 \

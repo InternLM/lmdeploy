@@ -78,7 +78,7 @@ for item in datasets:
         item['eval_cfg']['evaluator']['llm_evaluator']['judge_cfg'] = judge_cfg
 
 #######################################################################
-#                       PART 2  Dataset Summarizer                     #
+#                         Dataset Summarizer                          #
 #######################################################################
 
 core_summary_groups = [
@@ -120,7 +120,7 @@ summarizer = dict(
 )
 
 #######################################################################
-#                 PART 4  Inference/Evaluation Configuration          #
+#                   Inference/Evaluation Configuration                #
 #######################################################################
 
 # infer with local runner
