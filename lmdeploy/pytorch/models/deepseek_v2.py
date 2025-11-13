@@ -584,6 +584,7 @@ class MoEGate(nn.Module):
         self.norm_topk_prob = config.norm_topk_prob
         self.renormalize = self.top_k > 1 and self.norm_topk_prob
         self.router_n_groups = getattr(config, 'router_n_groups', -1)
+        assert self.top_k % self.router_n_groups == 0, f'{self.top_k} cannot be divided by {self.router_n_groups}'
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
@@ -632,14 +633,13 @@ class MoEGate(nn.Module):
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
             if self.router_n_groups > 0:
-                assert self.top_k % self.router_n_groups == 0, \
-                    f'{self.top_k} cannot be divided by {self.router_n_groups}'
                 assert scores_for_choice.shape[-1] % self.router_n_groups == 0, \
                     f'{scores_for_choice.shape[-1]} cannot be divided by {self.router_n_groups}'
                 per_group_top_k = self.top_k // self.router_n_groups
                 group_size = scores_for_choice.shape[-1] // self.router_n_groups
-                group_offsets = (torch.arange(self.router_n_groups, device=scores_for_choice.device) * group_size).view(
-                    1, -1, 1)  # [1, n_groups, 1]
+                group_offsets = self.softmax_topk.impl.get_group_offsets(self.router_n_groups,
+                                                                         group_size,
+                                                                         device=scores_for_choice.device)
                 scores_for_choice = scores_for_choice.unflatten(-1, (self.router_n_groups, group_size))
                 topk_weight, topk_idx = torch.topk(scores_for_choice, per_group_top_k, dim=-1)
                 topk_idx = (topk_idx + group_offsets).flatten(-2, -1)

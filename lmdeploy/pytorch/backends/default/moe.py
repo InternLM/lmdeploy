@@ -11,19 +11,19 @@ class DefaultSoftmaxTopKImpl(SoftmaxTopKImpl):
         self.top_k = top_k
         self.dim = dim
         self.n_groups = n_groups
+        assert self.top_k % self.n_groups == 0, f'{self.top_k} cannot be divided by {self.n_groups}'
 
     def forward(self, x: torch.Tensor):
         """forward."""
         routing_weights = torch.softmax(x, dim=self.dim, dtype=torch.float32)
         if self.n_groups > 0:
-            assert self.top_k % self.n_groups == 0, f'{self.top_k} cannot be divided by {self.n_groups}'
             assert routing_weights.shape[
-                -1] % self.n_groups == 0, f'{routing_weights.shape[-1]} cannot be divided by {self.n_groups}'
+                self.
+                dim] % self.n_groups == 0, f'{routing_weights.shape[self.dim]} cannot be divided by {self.n_groups}'
             per_group_top_k = self.top_k // self.n_groups
-            group_size = routing_weights.shape[-1] // self.n_groups
-            group_offsets = (torch.arange(self.n_groups, device=routing_weights.device) * group_size).view(
-                1, -1, 1)  # [1, n_groups, 1]
-            routing_weights = routing_weights.unflatten(-1, (self.n_groups, group_size))
+            group_size = routing_weights.shape[self.dim] // self.n_groups
+            group_offsets = self.get_group_offsets(self.n_groups, group_size, routing_weights.device)
+            routing_weights = routing_weights.unflatten(self.dim, (self.n_groups, group_size))
             topk_weights, topk_ids = torch.topk(routing_weights, per_group_top_k, dim=-1)
             topk_ids = (topk_ids + group_offsets).flatten(-2, -1)
             topk_weights = topk_weights.flatten(-2, -1)

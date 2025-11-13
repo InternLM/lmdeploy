@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
 from abc import ABC, abstractmethod
 from typing import Callable, List
 
@@ -8,6 +9,12 @@ import torch.distributed as dist
 
 class SoftmaxTopKImpl(ABC):
     """Softmax topk implementation api."""
+
+    @staticmethod
+    @functools.lru_cache
+    def get_group_offsets(n_groups: int, group_size: int, device: str):
+        group_offsets = (torch.arange(n_groups, device=device) * group_size).view(1, -1, 1)  # [1, n_groups, 1]
+        return group_offsets
 
     @abstractmethod
     def forward(self, x: torch.Tensor):
