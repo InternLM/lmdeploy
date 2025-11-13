@@ -875,7 +875,7 @@ class Engine(EngineBase):
             # logprobs
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
-            if num_logprobs >= 0:
+            if logprobs is not None:
                 cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
 
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
