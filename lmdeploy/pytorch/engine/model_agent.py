@@ -493,23 +493,16 @@ class BaseModelAgent:
 
             def get_output(self):
                 """Get tmp_output."""
-                if not (return_logits or return_routed_experts):
+                if return_logits:
+                    torch.cuda.synchronize()
+                    output_hidden_states = self._output.to(self._device)
+                else:
                     seqlen = torch.full((1, ),
                                         self._output.numel() // self._output.size(-1),
                                         device=self._output.device,
                                         dtype=self._output.dtype)
-                    return strategy.slice_outputs(self._output, seqlen), None
-                else:
-                    if return_logits:
-                        torch.cuda.synchronize()
-                        output_hidden_states = self._output.to(self._device)
-                    else:
-                        seqlen = torch.full((1, ),
-                                            self._output.numel() // self._output.size(-1),
-                                            device=self._output.device,
-                                            dtype=self._output.dtype)
-                        output_hidden_states = strategy.slice_outputs(self._output, seqlen)
-                    return output_hidden_states, self._routed_experts
+                    output_hidden_states = strategy.slice_outputs(self._output, seqlen)
+                return output_hidden_states, self._routed_experts
 
         __forward = self.async_forward
 
