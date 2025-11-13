@@ -1439,6 +1439,9 @@ def serve(model_path: str,
     _, pipeline_class = get_task(model_path)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
+        # router replay
+        if backend_config.enable_return_routed_experts:
+            backend_config.enable_transfer_obj_ref = True
     VariableInterface.async_engine = pipeline_class(model_path=model_path,
                                                     model_name=model_name,
                                                     backend=backend,
