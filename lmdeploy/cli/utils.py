@@ -667,6 +667,15 @@ class ArgumentHelper:
                                    default=0.85,
                                    help='The confidence threshold for dllm.')
 
+    @staticmethod
+    def enable_return_routed_experts(parser):
+        """Add argument return routed experts to parser."""
+
+        return parser.add_argument('--enable-return-routed-experts',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to output routed expert ids for replay')
+
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
 class FlexibleArgumentParser(argparse.ArgumentParser):

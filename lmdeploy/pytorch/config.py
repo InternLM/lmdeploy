@@ -347,6 +347,7 @@ class MiscConfig:
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
+    enable_return_routed_experts: bool = False
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -356,12 +357,15 @@ class MiscConfig:
                                  unmasking_strategy=dllm_unmasking_strategy,
                                  denoising_steps=engine_config.dllm_denoising_steps,
                                  confidence_threshold=engine_config.dllm_confidence_threshold)
-        misc_config = cls(custom_module_map=engine_config.custom_module_map,
-                          empty_init=engine_config.empty_init,
-                          prefill_interval=engine_config.prefill_interval,
-                          model_format=engine_config.model_format,
-                          hf_overrides=engine_config.hf_overrides,
-                          disable_vision_encoder=engine_config.disable_vision_encoder,
-                          logprobs_mode=engine_config.logprobs_mode,
-                          dllm_config=dllm_config)
+        misc_config = cls(
+            custom_module_map=engine_config.custom_module_map,
+            empty_init=engine_config.empty_init,
+            prefill_interval=engine_config.prefill_interval,
+            model_format=engine_config.model_format,
+            hf_overrides=engine_config.hf_overrides,
+            disable_vision_encoder=engine_config.disable_vision_encoder,
+            logprobs_mode=engine_config.logprobs_mode,
+            dllm_config=dllm_config,
+            enable_return_routed_experts=engine_config.enable_return_routed_experts,
+        )
         return misc_config

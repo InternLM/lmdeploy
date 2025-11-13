@@ -72,6 +72,7 @@ class BatchedOutputs:
     logprobs: Optional[BatchedLogProbs] = None
     new_token_timestamp: int = 0
     extra_outputs: Optional[ExtraOutputs] = None
+    all_routed_experts: Optional[torch.Tensor] = None
 
     def to_cpu(self):
         """To cpu."""
@@ -238,7 +239,6 @@ def model_forward(
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
-            model_metas = None
             model_metas = model.update_model_metas(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
@@ -248,13 +248,14 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-
+            if not isinstance(output, Dict):
+                output = dict(hidden_states=output)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if context.model_metas is not None and context.model_metas[0] is not None:
                 model_metas = context.model_metas
-            seq_length = context.q_seqlens[:len(inputs.seq_length)]
-
-    return dict(hidden_states=output, model_metas=model_metas, seq_length=seq_length)
+            output['model_metas'] = model_metas
+            output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
+            return output
 
 
 def _try_to_cuda(val, non_blocking: bool = False):
@@ -444,6 +445,7 @@ class BaseModelAgent:
         inputs: ModelInputs,
         return_logits: bool,
         sync_long_context: bool,
+        return_routed_experts: bool,
     ):
         """Model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
@@ -457,10 +459,23 @@ class BaseModelAgent:
                 self._start = 0
                 self._output: torch.Tensor = None
                 self._device: torch.device = None
+                self._routed_experts: torch.Tensor = None
 
             def gather(self, output):
                 """gather."""
                 tmp_output = output['hidden_states']
+                seq_len = tmp_output.size(-2)
+
+                if return_routed_experts and 'all_routed_experts' in output:
+                    tmp_exp_ids = output['all_routed_experts']
+                    out_exp_ids = self._routed_experts
+                    if out_exp_ids is None:
+                        out_exp_ids = tmp_exp_ids.new_empty(self._max_seq_len, *tmp_exp_ids.shape[1:], device='cpu')
+                        self._device = tmp_output.device
+                    out_exp_ids[self._start:self._start + seq_len, ...].copy_(tmp_exp_ids, non_blocking=True)
+                    self._routed_experts = out_exp_ids
+                    if not return_logits:
+                        self._start += seq_len
 
                 if not return_logits:
                     self._output = tmp_output
@@ -468,7 +483,7 @@ class BaseModelAgent:
 
                 out_logits = self._output
                 start = self._start
-                seq_len = tmp_output.size(-2)
+
                 if out_logits is None:
                     out_logits = tmp_output.new_empty(1, self._max_seq_len, tmp_output.size(-1), device='cpu')
                     self._device = tmp_output.device
@@ -478,14 +493,16 @@ class BaseModelAgent:
 
             def get_output(self):
                 """Get tmp_output."""
-                if not return_logits:
+                if return_logits:
+                    torch.cuda.synchronize()
+                    output_hidden_states = self._output.to(self._device)
+                else:
                     seqlen = torch.full((1, ),
                                         self._output.numel() // self._output.size(-1),
                                         device=self._output.device,
                                         dtype=self._output.dtype)
-                    return strategy.slice_outputs(self._output, seqlen)
-                torch.cuda.synchronize()
-                return self._output.to(self._device)
+                    output_hidden_states = strategy.slice_outputs(self._output, seqlen)
+                return output_hidden_states, self._routed_experts
 
         __forward = self.async_forward
 
@@ -503,7 +520,11 @@ class BaseModelAgent:
                 model_metas = tmp_out.get('model_metas')
                 output_gather.gather(tmp_out)
                 tmp_out.pop('hidden_states', None)
-            tmp_out['hidden_states'] = output_gather.get_output()
+                tmp_out.pop('all_routed_experts', None)
+            tmp_out['hidden_states'], routed_experts = output_gather.get_output()
+
+            if return_routed_experts:
+                tmp_out['all_routed_experts'] = routed_experts
             return tmp_out
 
         origin_inputs = inputs
@@ -595,6 +616,7 @@ class BaseModelAgent:
         sampling_inputs: SamplingInputs = None,
         stopping_criteria: StoppingCriteria = None,
         return_logits: bool = False,
+        return_routed_experts: bool = False,
         is_dummy: bool = False,
         sync_long_context: bool = False,
         extra_inputs: ExtraInputs = None,
@@ -707,6 +729,7 @@ class BaseModelAgent:
                 inputs,
                 return_logits=return_logits,
                 sync_long_context=sync_long_context,
+                return_routed_experts=return_routed_experts and need_output,
             )
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
@@ -731,6 +754,8 @@ class BaseModelAgent:
                 # post sampling
                 next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
                                                                                  extra_inputs)
+                # for router replay
+                all_routed_experts = output.get('all_routed_experts', None)
 
                 with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
                     logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
@@ -751,6 +776,7 @@ class BaseModelAgent:
                                        stop_pos=stop_pos,
                                        model_metas=model_metas,
                                        logprobs=logprobs,
+                                       all_routed_experts=all_routed_experts,
                                        extra_outputs=extra_outputs))
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
@@ -934,9 +960,16 @@ class BaseModelAgent:
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
-        build_model_ctx = BuildModelContext(disable_vision_encoder=self.misc_config.disable_vision_encoder,
-                                            dllm_config=self.misc_config.dllm_config,
-                                            strategy_factory=self.strategy_factory)
+        # for router replay
+        need_output = self.dist_ctx.dp > 1 or self.dist_ctx.rank % self.dist_ctx.tp == 0
+        enable_return_routed_experts = self.misc_config.enable_return_routed_experts and need_output
+
+        build_model_ctx = BuildModelContext(
+            disable_vision_encoder=self.misc_config.disable_vision_encoder,
+            dllm_config=self.misc_config.dllm_config,
+            strategy_factory=self.strategy_factory,
+            enable_return_routed_experts=enable_return_routed_experts,
+        )
         patched_model = build_patched_model(self.model_config,
                                             device=device,
                                             model_format=self.misc_config.model_format,

@@ -17,10 +17,12 @@ from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, St
 SeqList = List[SchedulerSequence]
 
 
+@dataclass
 class ARExtraInputs(ExtraInputs):
     """Ar extra inputs."""
 
 
+@dataclass
 class ARExtraOutputs(ExtraOutputs):
     """Ar extra outputs."""
 
