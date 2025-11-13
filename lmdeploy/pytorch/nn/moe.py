@@ -27,11 +27,11 @@ class MoeType(Enum):
 class SoftmaxTopK(nn.Module):
     """Softmax topk."""
 
-    def __init__(self, top_k: int, dim: int = -1):
+    def __init__(self, top_k: int, dim: int = -1, n_groups: int = -1):
         super().__init__()
         self.top_k = top_k
         impl_builder = get_backend().get_layer_impl_builder(OpType.SoftmaxTopK)
-        self.impl = impl_builder.build(top_k, dim)
+        self.impl = impl_builder.build(top_k, dim, n_groups=n_groups)
 
     def forward(self, x: torch.Tensor):
         """forward."""

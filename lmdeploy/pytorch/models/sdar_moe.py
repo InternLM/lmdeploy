@@ -178,7 +178,10 @@ class SDARMoeSparseMoeBlock(nn.Module):
             is_tp=False,
         )
 
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.softmax_topk = SoftmaxTopK(
+            self.top_k,
+            n_groups=getattr(config, 'router_n_groups', -1),
+        )
 
         world_size, _ = get_tp_world_rank()
         _all_reduce = world_size > 1

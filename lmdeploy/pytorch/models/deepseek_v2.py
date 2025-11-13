@@ -583,7 +583,8 @@ class MoEGate(nn.Module):
         self.topk_group = config.topk_group
         self.norm_topk_prob = config.norm_topk_prob
         self.renormalize = self.top_k > 1 and self.norm_topk_prob
-
+        self.router_n_groups = getattr(config, 'router_n_groups', -1)
+        assert self.top_k % self.router_n_groups == 0, f'{self.top_k} cannot be divided by {self.router_n_groups}'
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
@@ -591,7 +592,7 @@ class MoEGate(nn.Module):
         if self.topk_method == 'noaux_tc':
             self.e_score_correction_bias = nn.Parameter(
                 torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
 
@@ -631,17 +632,30 @@ class MoEGate(nn.Module):
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
-            group_scores = (scores_for_choice.view(sequence_length, self.n_group,
-                                                   -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
-            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
-            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
-            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
-            score_mask = (group_mask.unsqueeze(-1).expand(sequence_length, self.n_group,
-                                                          self.n_routed_experts // self.n_group).reshape(
-                                                              sequence_length, -1))  # [n, e]
-            tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
-            _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
-            topk_weight = scores.gather(1, topk_idx)
+            if self.router_n_groups > 0:
+                assert scores_for_choice.shape[-1] % self.router_n_groups == 0, \
+                    f'{scores_for_choice.shape[-1]} cannot be divided by {self.router_n_groups}'
+                per_group_top_k = self.top_k // self.router_n_groups
+                group_size = scores_for_choice.shape[-1] // self.router_n_groups
+                group_offsets = self.softmax_topk.impl.get_group_offsets(self.router_n_groups,
+                                                                         group_size,
+                                                                         device=scores_for_choice.device)
+                scores_for_choice = scores_for_choice.unflatten(-1, (self.router_n_groups, group_size))
+                topk_weight, topk_idx = torch.topk(scores_for_choice, per_group_top_k, dim=-1)
+                topk_idx = (topk_idx + group_offsets).flatten(-2, -1)
+                topk_weight = topk_weight.flatten(-2, -1)
+            else:
+                group_scores = (scores_for_choice.view(sequence_length, self.n_group,
+                                                       -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
+                group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
+                group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+                group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+                score_mask = (group_mask.unsqueeze(-1).expand(sequence_length, self.n_group,
+                                                              self.n_routed_experts // self.n_group).reshape(
+                                                                  sequence_length, -1))  # [n, e]
+                tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
+                _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
+                topk_weight = scores.gather(1, topk_idx)
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
