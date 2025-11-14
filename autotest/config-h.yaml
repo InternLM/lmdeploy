@@ -18,6 +18,7 @@ tp_config:
     gpt-oss-20b-BF16: 2
     DeepSeek-V3.1: 8
     Qwen3-30B-A3B-Base: 2
+    Qwen2.5-32B-Instruct: 2
 
 turbomind_chat_model:
     - internlm/Intern-S1
