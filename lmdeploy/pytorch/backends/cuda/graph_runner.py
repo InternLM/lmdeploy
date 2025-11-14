@@ -262,7 +262,7 @@ class CUDAGraphRunner(GraphRunner):
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
             tp_size = self._get_capture_tokens(padding_batch_size)
-            dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
+            dp_meta.sync_tp_size(tp_size)
         return inputs
 
     def get_capture_batch_sizes(self) -> List[int]:

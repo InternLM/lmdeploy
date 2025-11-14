@@ -698,8 +698,8 @@ class Qwen3NextSparseMoeBlock(nn.Module):
 
         # get all reduce
         dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dp
-        world_size = dist_ctx.world_size
+        dp = dist_ctx.dist_config.dp
+        world_size = dist_ctx.dist_config.moe_tp
         if dp == 1 and world_size > 1:
             self._all_reduce = True
         else:

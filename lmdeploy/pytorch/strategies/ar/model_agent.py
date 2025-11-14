@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 
-import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
@@ -115,7 +115,8 @@ class ARModelAgentStrategy(ModelAgentStrategy):
     @contextmanager
     def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ExtraInputs, dist_ctx: DistContext):
         """Broadcast next token ids and extra inputs."""
-        tp_gpu_group = dist_ctx.tp_gpu_group
-        handle = dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
+        tp_gpu_group = dist_ctx.attn_tp_group.gpu_group
+        rank = dist.get_global_rank(tp_gpu_group, 0)
+        handle = dist.broadcast(next_token_ids, src=rank, group=tp_gpu_group, async_op=True)
         yield
         handle.wait()

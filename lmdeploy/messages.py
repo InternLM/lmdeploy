@@ -292,6 +292,9 @@ class PytorchEngineConfig:
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
+        attn_tp_size (int): tp size for attention, only works for dp>1
+        mlp_tp_size (int): tp size for mlp, only works for dp>1
+        moe_tp_size (int): tp size for moe, only works for dp>1
         cache_max_entry_count (float): the percentage of gpu memory occupied
             by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
             it defaults to 0.8, signifying the percentage of FREE GPU memory
@@ -353,6 +356,9 @@ class PytorchEngineConfig:
     ep: int = 1
     session_len: int = None
     max_batch_size: int = None
+    attn_tp_size: int = None
+    mlp_tp_size: int = None
+    moe_tp_size: int = None
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64

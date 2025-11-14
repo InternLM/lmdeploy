@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.eplb import EPLBManager
@@ -201,8 +201,6 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             n_groups=getattr(config, 'router_n_groups', -1),
         )
 
-        world_size, _ = get_tp_world_rank()
-        _all_reduce = world_size > 1
         if get_dist_manager().current_context().dist_config.enable_eplb:
             dist_ctx = get_dist_manager().current_context()
             self.eplb_dispatch_info = EPLBManager.get_dispatch_info(
@@ -219,7 +217,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
-            all_reduce=_all_reduce,
+            all_reduce=True,
             layer_idx=layer_idx,
         )
 

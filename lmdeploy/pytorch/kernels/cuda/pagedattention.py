@@ -446,8 +446,8 @@ def _reduce_split_kernel(
     BLOCK_DV: tl.constexpr,
 ):
     """Second step kernel of split k attention."""
-    cur_batch = tl.program_id(0)
-    cur_head = tl.program_id(1)
+    cur_batch = tl.program_id(1)
+    cur_head = tl.program_id(0)
 
     # initialize offsets
     offs_dv = tl.arange(0, BLOCK_DV)
@@ -735,8 +735,8 @@ def paged_attention_fwd(
                                         num_warps=num_warps,
                                         num_stages=num_stages)
 
-    num_warps = 4
-    grid = (num_tokens, head)
+    num_warps = 2
+    grid = (head, num_tokens)
     if quant_policy == 4:
         Lv *= 2
         BLOCK_DV *= 2

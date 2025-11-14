@@ -19,22 +19,45 @@ if TYPE_CHECKING:
 @dataclass
 class DPMeta:
     tp_sizes: List[int] = None
-    ep_sizes: List[int] = None
+    moe_tp_sizes: List[int] = None
+
+    @staticmethod
+    def _gather_tp_sizes(tp: int, seqlen: int, dist_ctx: dist.DistContext, layer_type: str):
+        """Gather tp size."""
+        attn_tp = dist_ctx.dist_config.attn_tp
+        if tp > 1 and tp != attn_tp:
+            dist_group = dist.get_dist_group(layer_type=layer_type)
+            gather_group = dist_group.gpu_gather_group
+            rank = gather_group.rank()
+            tp_size_tensor = torch.zeros(gather_group.size(), dtype=torch.int32, device='cuda')
+            tp_size_tensor[rank].fill_(seqlen)
+            dist.all_gather_into_tensor(tp_size_tensor, tp_size_tensor[rank], group=gather_group)
+            tp_sizes = tp_size_tensor.tolist()
+            assert all(size >= 0 for size in tp_sizes), (f'seqlen: {seqlen}, Invalid tp sizes: {tp_sizes}')
+        else:
+            tp_sizes = [seqlen]
+        return tp_sizes
 
     @classmethod
     def build(cls, seqlen: int):
         """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
+        dist_config = dist_ctx.dist_config
 
-        tp = dist_ctx.tp
-        if tp > 1:
-            tp_sizes = [None for _ in range(tp)]
-            tp_group = dist.get_tp_group('gpu')
-            dist.all_gather_object(tp_sizes, seqlen, group=tp_group)
+        mlp_tp = dist_config.mlp_tp
+        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, dist_ctx, layer_type='mlp')
+
+        moe_tp = dist_config.moe_tp
+        if moe_tp == mlp_tp:
+            moe_tp_sizes = tp_sizes
         else:
-            tp_sizes = [seqlen]
+            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, dist_ctx, layer_type='moe')
 
-        return DPMeta(tp_sizes=tp_sizes, )
+        return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
+
+    def sync_tp_size(self, tp_size: int):
+        self.tp_sizes = [tp_size] * len(self.tp_sizes)
+        self.moe_tp_sizes = [tp_size] * len(self.moe_tp_sizes)
 
 
 @dataclass
@@ -144,6 +167,7 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    is_dummy: bool = False
     state_offsets: torch.LongTensor = None
 
     def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
@@ -372,6 +396,8 @@ class StepContext:
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
+        if inputs.is_dummy:
+            kv_seqlens = torch.zeros_like(kv_seqlens)
 
         ret = StepContext(
             input_ids=inputs.input_ids,

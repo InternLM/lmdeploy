@@ -37,7 +37,6 @@ class ExecutorBase:
         self.dist_config = dist_config
         self.misc_config = misc_config
         self.dp = dist_config.dp
-        self.tp = dist_config.tp
         self.world_size = dist_config.world_size
         self.device_type = device_type
 
@@ -199,7 +198,7 @@ class ExecutorBase:
         assert free_mem > 0, 'No enough gpu memory for state cache. Please reduce max_batch_size.'
 
         vocal_size = self.model_config.vocab_size
-        tp = self.dist_config.attn_config.tp
+        tp = self.dist_config.attn_tp
         cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, tp,
                                                             cache_config.quant_policy)
         runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mem, cache_block_size, vocal_size)
