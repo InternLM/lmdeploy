@@ -447,6 +447,41 @@ def monk_deep_gemm():
         del deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked
 
 
+@contextlib.contextmanager
+def mock_deep_gemm():
+    from dlblas.kernels.fused_moe_v3 import use_deep_gemm
+    if use_deep_gemm:
+        yield
+        return
+
+    # patch deep_gemm
+    import deep_gemm
+    import dlblas
+
+    from lmdeploy.pytorch.third_party import deep_gemm as patched_deep_gemm
+    func0_ = getattr(deep_gemm, 'get_col_major_tma_aligned_tensor', None)
+    func1_ = getattr(deep_gemm, 'm_grouped_gemm_fp8_fp8_bf16_nt_masked', None)
+    deep_gemm.get_col_major_tma_aligned_tensor = patched_deep_gemm.get_mn_major_tma_aligned_tensor
+    deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked = patched_deep_gemm.m_grouped_fp8_gemm_nt_masked
+
+    # patch dlblas
+    dlblas.kernels.fused_moe_v3.use_deep_gemm = True
+    dlblas.kernels.fused_moe_v3.m_grouped_gemm_fp8_fp8_bf16_nt_contiguous = \
+        patched_deep_gemm.m_grouped_fp8_gemm_nt_contiguous
+    yield
+
+    # unpatch dlblas
+    dlblas.kernels.fused_moe_v3.use_deep_gemm = False
+
+    # unpatch deep_gemm
+    if func0_ is not None:
+        deep_gemm.get_col_major_tma_aligned_tensor = func0_
+        deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked = func1_
+    else:
+        del deep_gemm.get_col_major_tma_aligned_tensor
+        del deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked
+
+
 class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
     def __init__(self,

@@ -9,7 +9,7 @@ from torch.profiler import record_function
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
+from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 
 if TYPE_CHECKING:
@@ -264,6 +264,7 @@ class ModelInputs:
                 end = min(max_seq_len, start + split_size)
 
             max_q_seqlen = end - start
+            max_kv_seqlen += max_q_seqlen
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
             max_kv_seqlen += max_q_seqlen
@@ -325,6 +326,7 @@ class StepContext:
     """
     input_ids: torch.LongTensor
     model_config: ModelConfig
+    cache_config: CacheConfig
     block_offsets: torch.IntTensor
     position_ids: torch.LongTensor
     attention_mask: torch.LongTensor
@@ -359,6 +361,7 @@ class StepContext:
         cls,
         inputs: ModelInputs,
         model_config: ModelConfig,
+        cache_config: CacheConfig,
         kv_caches: List = None,
         state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
@@ -402,6 +405,7 @@ class StepContext:
         ret = StepContext(
             input_ids=inputs.input_ids,
             model_config=model_config,
+            cache_config=cache_config,
             block_offsets=inputs.block_offsets,
             position_ids=position_ids,
             input_embeddings=input_embeddings,
@@ -489,6 +493,7 @@ class StepContextManager:
         self,
         inputs: ModelInputs,
         model_config: ModelConfig,
+        cache_config: CacheConfig,
         kv_caches: List = None,
         state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
@@ -497,6 +502,7 @@ class StepContextManager:
         return StepContext.new(
             inputs,
             model_config,
+            cache_config,
             kv_caches,
             state_caches,
             kv_quant_policy,
