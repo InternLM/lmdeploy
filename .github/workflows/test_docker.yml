@@ -21,8 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        cuda_version: ['cu12.8', cu12, cu11]
-        python_version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        cuda_version: [cu13, cu12]
+        python_version: ['3.10', '3.11', '3.12', '3.13']
     env:
       CUDA_VERSION: ${{ matrix.cuda_version }}
       PYTHON_VERSION: ${{ matrix.python_version }}

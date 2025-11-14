@@ -25,6 +25,8 @@ elif [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
     apt-get install -y --no-install-recommends cuda-minimal-build-12-4
 elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
     apt-get install -y --no-install-recommends cuda-minimal-build-12-8
+elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    apt-get install -y --no-install-recommends cuda-minimal-build-13-0
 fi
 
 apt-get clean -y
@@ -42,7 +44,9 @@ fi
 
 pip install -U pip wheel setuptools
 
-if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    pip install nvidia-nvshmem-cu13
+elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     pip install nvidia-nvshmem-cu12
 fi
 
