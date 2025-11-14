@@ -19,6 +19,7 @@ project(TurboMind LANGUAGES CXX CUDA)
 if (MSVC)
     # use standard conformant preprocessor
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus")
 endif ()
 
@@ -101,6 +102,10 @@ if(NOT xgrammar_POPULATED)
 
   # Bring the populated content into the build
   add_subdirectory(${xgrammar_SOURCE_DIR} ${xgrammar_BINARY_DIR})
+  if(TARGET xgrammar)
+    target_compile_options(xgrammar PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+    target_compile_options(xgrammar PRIVATE $<$<C_COMPILER_ID:MSVC>:/utf-8>)
+  endif()
 endif()
 
 # the environment variable

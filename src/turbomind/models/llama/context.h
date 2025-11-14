@@ -22,6 +22,7 @@ struct Communicators {
 
     comm::DeviceComm d_comm;
     int              d_tp_group;
+    int              d_cp_group;
 };
 
 // Execution context for the model

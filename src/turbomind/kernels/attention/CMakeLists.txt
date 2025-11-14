@@ -45,7 +45,7 @@ set_property(TARGET attention PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_compile_options(attention PRIVATE -O3
     $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr>)
-
+target_link_libraries(attention PRIVATE nvidia::cutlass::cutlass)
 
 if (BUILD_TEST)
     target_compile_options(attention PRIVATE
@@ -60,6 +60,7 @@ if (BUILD_TEST)
     target_link_libraries(test_attention PRIVATE
         attention
         # flash_attention
+        nvidia::cutlass::cutlass
         Llama
         unfused_attention_kernels
         logger
@@ -68,4 +69,7 @@ if (BUILD_TEST)
     add_executable(test_quant test_quant.cu test_utils.cu)
     target_compile_options(test_quant PRIVATE
         --generate-line-info -O3 -use_fast_math --expt-relaxed-constexpr)
+    target_link_libraries(test_quant PRIVATE
+        nvidia::cutlass::cutlass
+    )
 endif ()

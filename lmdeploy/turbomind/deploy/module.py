@@ -335,14 +335,13 @@ class Misc(Module):
                 return tensor
             return torch.nn.functional.pad(tensor, (0, 0, 0, pad_size), 'constant', 0)
 
+        tp = self.model.attn_tp_size * self.model.attn_cp_size
         if emb is not None:
-            tp = self.model.attn_tp_size
             emb = pad_weight(emb, tp=tp)
             self.model.save_split(emb, 'tok_embeddings.weight', split_dim=1, split_num=tp)
         if norm_weight is not None:
             self.model.export_weight(norm_weight, 'norm.weight')
         if output_weight is not None:
-            tp = self.model.attn_tp_size
             output_weight = pad_weight(output_weight, tp=tp)
             # transpose
             self.model.save_split(output_weight.t(), 'output.weight', split_dim=1, split_num=tp)

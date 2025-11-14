@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "cutlass/fast_math.h"
 #include <cstdint>
 #include <cuda_runtime.h>
 
@@ -22,6 +23,8 @@ struct BlockIteratorParams {
     int        layer_id;
     int        block_len;
 };
+
+typedef void (*cp_post_fn)(void* context);
 
 /// TODO: Rename to attention::Param
 template<typename T>
@@ -75,9 +78,14 @@ struct AttentionParams {
     int    max_split_k;
     int*   split_cnt;
     float* partial_O;
-    float* partial_M;
-    float* partial_L;
-    int*   locks;
+    float* partial_ML;
+
+    // context parallel
+    int                 cp_rank{0};
+    cutlass::FastDivmod cp_size{1};
+    int                 offset_q{0};  // decode offset
+    cp_post_fn          cp_fn{nullptr};
+    void*               cp_fn_ctx{nullptr};
 
     int          arch;
     cudaStream_t stream;
