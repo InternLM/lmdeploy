@@ -32,15 +32,15 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, Di
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
+from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest, ChatCompletionResponseChoice,
                                             ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse,
                                             ChatCompletionTokenLogprob, ChatMessage, ChoiceLogprobs, CompletionRequest,
                                             CompletionResponse, CompletionResponseChoice,
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-                                            GenerateReqInput, GenerateReqMetaOutput, GenerateReqOutput, GenerateRequest,
-                                            LogProbs, ModelCard, ModelList, ModelPermission, PoolingRequest,
-                                            PoolingResponse, TopLogprob, UpdateParamsRequest, UsageInfo)
+                                            GenerateReqInput, GenerateReqMetaOutput, GenerateReqOutput, LogProbs,
+                                            ModelCard, ModelList, ModelPermission, PoolingRequest, PoolingResponse,
+                                            TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -65,6 +65,7 @@ class VariableInterface:
     # following is for tool parsers
     tool_parser: Optional[ToolParser] = None
     allow_terminate_by_client: bool = False
+    enable_abort_handling: bool = False
 
 
 router = APIRouter()
@@ -127,21 +128,32 @@ def create_error_response(status: HTTPStatus, message: str, error_type='invalid_
                         status_code=status.value)
 
 
-async def check_request(request) -> Optional[JSONResponse]:
+def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
         return create_error_response(HTTPStatus.NOT_FOUND, f'The model {request.model!r} does not exist.')
-    if hasattr(request, 'n') and request.n <= 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n {request.n!r} must be a positive int.')
-    if hasattr(request, 'top_p') and not (request.top_p > 0 and request.top_p <= 1):
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p {request.top_p!r} must be in (0, 1].')
-    if hasattr(request, 'top_k') and request.top_k < 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The top_k {request.top_k!r} cannot be a negative integer.')
-    if hasattr(request, 'temperature') and not (request.temperature <= 2 and request.temperature >= 0):
-        return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The temperature {request.temperature!r} must be in [0, 2]')
-    return
+
+    # Import the appropriate check function based on request type
+    if isinstance(request, ChatCompletionRequest):
+        from .serving_chat_completion import check_request
+        check_func = check_request
+    elif isinstance(request, CompletionRequest):
+        from .serving_completion import check_request
+        check_func = check_request
+    elif isinstance(request, GenerateReqInput):
+        from .serving_generate import check_request
+        check_func = check_request
+    else:
+        # Define an async function that always returns success
+        def always_success(req, backend_config):
+            return ''
+
+        check_func = always_success
+
+    error_msg = check_func(request, VariableInterface.async_engine.backend_config)
+    if error_msg:
+        return create_error_response(HTTPStatus.BAD_REQUEST, error_msg)
+    return None
 
 
 def _create_completion_logprobs(tokenizer: Tokenizer,
@@ -362,7 +374,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
+    error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
@@ -712,7 +724,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
+    error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
@@ -901,11 +913,28 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
+    error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+
+    prompt = request.prompt
+    input_ids = request.input_ids
+    image_data = request.image_data
+    if image_data is not None:
+        # convert to openai format
+        image_input = []
+        if not isinstance(image_data, List):
+            image_data = [image_data]
+        for img in image_data:
+            if isinstance(img, str):
+                image_input.append(dict(type='image_url', image_url=dict(url=img)))
+            else:
+                image_input.append(dict(type='image_url', image_url=img))
+        text_input = dict(type='text', text=prompt if prompt else input_ids)
+        prompt = [dict(role='user', content=[text_input] + image_input)]
+        input_ids = None
 
     gen_config = GenerationConfig(
         max_new_tokens=request.max_tokens,
@@ -922,12 +951,13 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         skip_special_tokens=request.skip_special_tokens,
         spaces_between_special_tokens=request.spaces_between_special_tokens,
         include_stop_str_in_output=request.include_stop_str_in_output,
+        return_routed_experts=request.return_routed_experts,
     )
 
     result_generator = VariableInterface.async_engine.generate(
-        messages=request.prompt,
+        messages=prompt,
         session_id=request.session_id,
-        input_ids=request.input_ids,
+        input_ids=input_ids,
         gen_config=gen_config,
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
@@ -935,33 +965,33 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         do_preprocess=False,
     )
 
-    def create_finish_reason(finish_reason):
-        # TODO: add detail info
-        if not finish_reason:
-            return None
-        if finish_reason == 'length':
-            return dict(type='length')
-        if finish_reason == 'stop':
-            return dict(type='stop')
-        return dict(type='abort')
-
-    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason):
-        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(finish_reason),
+    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
+        # only output router experts in last chunk
+        routed_experts = None if finish_reason is None else routed_experts
+        meta = GenerateReqMetaOutput(finish_reason=dict(type=finish_reason) if finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
+                                     routed_experts=routed_experts,
                                      completion_tokens=res.generate_token_len)
-        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
+
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta, routed_experts=routed_experts)
         return response.model_dump_json()
 
     async def generate_stream_generator():
         async for res in result_generator:
             text = res.response or ''
             output_ids = res.token_ids
+            routed_experts = res.routed_experts
             logprobs = []
             if res.logprobs:
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                     logprobs.append((tok_logprobs[tok], tok))
-            response_json = create_generate_response_json(res, text, output_ids, logprobs, res.finish_reason)
+            response_json = create_generate_response_json(res,
+                                                          text,
+                                                          output_ids,
+                                                          logprobs,
+                                                          res.finish_reason,
+                                                          routed_experts=routed_experts)
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -985,9 +1015,10 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                     logprobs.append((tok_logprobs[tok], tok))
         nonlocal response
-        meta = GenerateReqMetaOutput(finish_reason=create_finish_reason(res.finish_reason),
+        meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
+                                     routed_experts=res.routed_experts,
                                      completion_tokens=res.generate_token_len)
         response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 
@@ -1105,6 +1136,12 @@ async def wakeup(raw_request: Request = None):
     return Response(status_code=200)
 
 
+@router.get('/is_sleeping', dependencies=[Depends(check_api_key)])
+async def is_sleeping(raw_request: Request = None):
+    is_sleeping = VariableInterface.async_engine.is_sleeping
+    return JSONResponse(content={'is_sleeping': is_sleeping})
+
+
 """ PD Disaggregation API Begin """
 
 
@@ -1149,8 +1186,23 @@ async def free_cache(cache_free_request: DistServeCacheFreeRequest) -> JSONRespo
 """ PD Disaggregation API End """
 
 
+@router.post('/abort_request')
+async def abort_request(request: AbortRequest, raw_request: Request = None):
+    """Abort an ongoing request."""
+    if not VariableInterface.enable_abort_handling:
+        return Response(
+            status_code=501,
+            content='This server does not support abort requests. Enable with --enable-abort-handling flag.')
+
+    if request.abort_all:
+        await VariableInterface.async_engine.stop_all_session()
+    else:
+        await VariableInterface.async_engine.stop_session(request.session_id)
+    return Response(status_code=200)
+
+
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
-async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = None):
+async def chat_interactive_v1(request, raw_request: Request = None):
     return create_error_response(
         HTTPStatus.BAD_REQUEST, 'v1/chat/interactive is deprecated, please launch server with --enable-prefix-cache '
         'and use /v1/chat/completions instead.')
@@ -1313,6 +1365,7 @@ def serve(model_path: str,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
           allow_terminate_by_client: bool = False,
+          enable_abort_handling: bool = False,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1371,6 +1424,7 @@ def serve(model_path: str,
     logger.setLevel(log_level)
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
+    VariableInterface.enable_abort_handling = enable_abort_handling
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')
@@ -1385,6 +1439,9 @@ def serve(model_path: str,
     _, pipeline_class = get_task(model_path)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
+        # router replay
+        if backend_config.enable_return_routed_experts:
+            backend_config.enable_transfer_obj_ref = True
     VariableInterface.async_engine = pipeline_class(model_path=model_path,
                                                     model_name=model_name,
                                                     backend=backend,

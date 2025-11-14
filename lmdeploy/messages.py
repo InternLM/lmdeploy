@@ -117,6 +117,9 @@ class GenerationConfig:
     preserve_cache: bool = False
     migration_request: Optional[MigrationRequest] = None
 
+    # router replay
+    return_routed_experts: bool = False
+
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
         stop_token_ids/bad_token_ids."""
@@ -259,7 +262,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
 
     def __post_init__(self):
         """Check input validation."""
@@ -289,6 +292,9 @@ class PytorchEngineConfig:
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
+        attn_tp_size (int): tp size for attention, only works for dp>1
+        mlp_tp_size (int): tp size for mlp, only works for dp>1
+        moe_tp_size (int): tp size for moe, only works for dp>1
         cache_max_entry_count (float): the percentage of gpu memory occupied
             by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
             it defaults to 0.8, signifying the percentage of FREE GPU memory
@@ -350,6 +356,9 @@ class PytorchEngineConfig:
     ep: int = 1
     session_len: int = None
     max_batch_size: int = None
+    attn_tp_size: int = None
+    mlp_tp_size: int = None
+    moe_tp_size: int = None
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64
@@ -372,10 +381,13 @@ class PytorchEngineConfig:
     enable_mp_engine: bool = False
     mp_engine_backend: str = 'mp'
     model_format: str = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
+    # router replay
+    enable_return_routed_experts: bool = False
+    enable_transfer_obj_ref: bool = False
 
     # dllm
     dllm_block_length: int = None
@@ -457,14 +469,18 @@ class Response:
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
+    routed_experts: Any = None
 
     def __repr__(self):
         logits = 'logits=None' if self.logits is None else f'logits.shape={self.logits.shape}\nlogits={self.logits}'
         hidden_state = (
             'last_hidden_state=None' if self.last_hidden_state is None else
             f'last_hidden_state.shape={self.last_hidden_state.shape}\nlast_hidden_state={self.last_hidden_state}')
-        s = (f'text={self.text}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
-             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}')
+        routed_experts = 'routed_experts=None' if self.routed_experts is None else \
+            f'routed_experts.shape={self.routed_experts.shape}'
+
+        s = (f'text={self.text!r}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
+             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}\n{routed_experts}')
         return s
 
 
@@ -544,6 +560,7 @@ class EngineOutput:
     last_hidden_state: torch.Tensor = None
     cache_block_ids: Optional[List[int]] = None
     req_metrics: Optional[RequestMetrics] = None
+    routed_experts: torch.Tensor = None
 
 
 @dataclass

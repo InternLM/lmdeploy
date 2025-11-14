@@ -179,7 +179,11 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        response = client.chat.completions.create(model=model_name, messages=messages, temperature=0.01, top_p=0.8)
+        response = client.chat.completions.create(model=model_name,
+                                                  messages=messages,
+                                                  temperature=0.01,
+                                                  top_p=0.8,
+                                                  max_completion_tokens=1024)
 
         output_content = response.choices[0].message.content
         file.writelines('output:' + output_content + '\n')
@@ -714,7 +718,7 @@ def start_proxy_server(config, worker_id):
     else:
         port = PROXY_PORT + worker_num
 
-    proxy_url = f'http://127.0.0.1:{port}'
+    proxy_url = f'http://127.0.0.1:{port}'  # noqa: E231, E261
     try:
         response = requests.get(f'{proxy_url}/nodes/status', timeout=5)
         if response.status_code == 200:
@@ -745,7 +749,7 @@ def start_proxy_server(config, worker_id):
     sleep(5)
     for i in range(timeout):
         sleep(1)
-        if proxy_health_check(f'http://127.0.0.1:{port}'):
+        if proxy_health_check(f'http://127.0.0.1:{port}'):  # noqa: E231, E261
             break
 
         try:

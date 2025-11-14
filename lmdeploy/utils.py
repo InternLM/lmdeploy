@@ -6,9 +6,11 @@ import os
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from logging import Logger, LogRecord
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
+import torch
 from transformers import PretrainedConfig
 
 logger_initialized = {}
@@ -458,8 +460,15 @@ def serialize_state_dict(state_dict: dict) -> str:
     from multiprocessing.reduction import ForkingPickler
 
     from torch.multiprocessing.reductions import reduce_tensor
-    assert all(v.device.type == 'cuda' for v in state_dict.values())
-    data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
+
+    # flattened_tensor
+    if 'metadata' in state_dict and 'flattened_tensor' in state_dict:
+        data = state_dict
+        if isinstance(data['flattened_tensor'], torch.Tensor):
+            data['flattened_tensor'] = reduce_tensor(state_dict['flattened_tensor'])
+    else:
+        data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
+
     buf = BytesIO()
     ForkingPickler(buf).dump(data)
     buf.seek(0)
@@ -473,3 +482,88 @@ def is_dlblas_installed():
     except Exception:
         is_dlblas_installed = False
     return is_dlblas_installed
+
+
+# from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/weight_sync/tensor_bucket.py
+
+
+@dataclass
+class FlattenedTensorMetadata:
+    """Metadata for flatten bucket tensor."""
+    name: str
+    shape: torch.Size
+    dtype: torch.dtype
+    start_idx: int
+    end_idx: int
+    numel: int
+
+
+class FlattenedTensorBucket:
+    """Pack multiple flattened tensor into one to transfer efficiently."""
+
+    def __init__(
+        self,
+        named_tensors: List[Tuple[str, torch.Tensor]] = None,
+        flattened_tensor: torch.Tensor = None,
+        metadata: List[FlattenedTensorMetadata] = None,
+    ):
+        """Initialize a tensor bucket from a list of named tensors or from pre-
+        flattened data.
+
+        Args:
+            named_tensors: List of (name, tensor) tuples (for creating new bucket)
+            flattened_tensor: Pre-flattened tensor (for reconstruction)
+            metadata: Pre-computed metadata (for reconstruction)
+        """
+        if named_tensors is not None:
+            num_tensors = len(named_tensors)
+            self.metadata = [None] * num_tensors
+            self.flattened_tensor = [None] * num_tensors
+            if num_tensors > 0:
+                if num_tensors > 1:
+                    dtypes = [t.dtype for _, t in named_tensors]
+                    if not all([d == dtypes[0] for d in dtypes[1:]]):
+                        raise ValueError(f'All tensors should have same dtype, but given {dtypes}')
+
+                current_idx = 0
+                for idx, (name, tensor) in enumerate(named_tensors):
+                    self.flattened_tensor[idx] = tensor.flatten()
+                    numel = tensor.numel()
+                    self.metadata[idx] = FlattenedTensorMetadata(name=name,
+                                                                 shape=tensor.shape,
+                                                                 dtype=tensor.dtype,
+                                                                 start_idx=current_idx,
+                                                                 end_idx=current_idx + numel,
+                                                                 numel=numel)
+                    current_idx += numel
+
+                self.flattened_tensor = torch.cat(self.flattened_tensor, dim=0)
+        else:
+            if flattened_tensor is None or metadata is None:
+                raise ValueError('Must provide either named_tensors or both flattened_tensor and metadata')
+            self.metadata = metadata
+            self.flattened_tensor = flattened_tensor
+
+    def get_flattened_tensor(self) -> torch.Tensor:
+        """Get the flattened tensor containing multiple tensors."""
+        return self.flattened_tensor
+
+    def get_metadata(self) -> List[FlattenedTensorMetadata]:
+        """Get all metadatas for all tensors in the bucket."""
+        return self.metadata
+
+    def reconstruct_tensors(self) -> List[Tuple[str, torch.Tensor]]:
+        """Reconstruct original tensors."""
+        # preallocate the result list
+        reconstructed = [None] * len(self.metadata)
+
+        for i, meta in enumerate(self.metadata):
+            tensor = self.flattened_tensor[meta.start_idx:meta.end_idx].reshape(meta.shape)
+
+            # batch dtype conversion (if needed)
+            if tensor.dtype != meta.dtype:
+                tensor = tensor.to(meta.dtype)
+
+            reconstructed[i] = (meta.name, tensor)
+
+        return reconstructed

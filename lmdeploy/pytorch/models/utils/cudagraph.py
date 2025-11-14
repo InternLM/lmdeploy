@@ -54,6 +54,15 @@ class CudaGraphMixin:
         """Return True is model support cudagraph."""
         return attn_metadata.is_decoding
 
+    def make_output_buffers(self, output):
+        """Make output buffers."""
+        if isinstance(output, torch.Tensor):
+            output_buffers = dict(hidden_states=output)
+        else:
+            assert isinstance(output, Dict)
+            output_buffers = output
+        return output_buffers
+
     def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
@@ -122,6 +131,7 @@ class CudaGraphMixin:
 
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
         input_buffers['qkv_lens'].zero_()
+        input_buffers['q_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
         input_buffers['qkv_lens'][:, :batch_size] = qkv
         input_buffers['cu_seqlens_q'][1:batch_size + 1] = input_buffers['q_seqlens'][:batch_size].cumsum(0)
         input_buffers['cu_seqlens_k'][1:batch_size + 1] = input_buffers['kv_seqlens'][:batch_size].cumsum(0)
@@ -197,3 +207,10 @@ class CudaGraphMixin:
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
+
+    def get_outputs_cudagraph(self, output_buffers: Dict[str, torch.Tensor], input_ids: Tensor, **kwargs):
+        """Get outputs from buffers."""
+        num_tokens = input_ids.size(-1)
+        outputs = dict()
+        outputs['hidden_states'] = output_buffers['hidden_states'][:, :num_tokens]
+        return outputs

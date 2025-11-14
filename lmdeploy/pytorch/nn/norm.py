@@ -45,7 +45,7 @@ class RMSNorm(nn.Module):
             builder = backend.get_layer_impl_builder(OpType.RMSNorm)
 
         if tp:
-            world_size, rank = get_tp_world_rank()
+            world_size, rank = get_tp_world_rank('attn')
             hidden_size = get_distribute_size(hidden_size, world_size, rank, align=align)
 
         self.register_parameter('weight', self.create_weight(hidden_size, dtype, device))
@@ -60,7 +60,7 @@ class RMSNorm(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('attn')
         loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]
         param.copy_(loaded_weight)
 

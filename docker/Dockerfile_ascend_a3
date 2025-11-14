@@ -1,0 +1,27 @@
+# DOCKER_BUILDKIT=1 docker build --build-arg ASCEND_DEVICE=ascend_a3 \
+#     --build-arg DLINFER_TAG=main --build-arg LMDEPLOY_TAG=main --network=host \
+#     -t lmdeploy_dlinfer:a3 -f  Dockerfile_ascend_a3 .
+ARG ASCEND_DEVICE_TYPE=ascend_a3
+ARG ASCEND_HUB=swr.cn-south-1.myhuaweicloud.com/ascendhub
+
+FROM ${ASCEND_HUB}/cann:8.3.rc1.alpha002-a3-openeuler24.03-py3.11 AS ascend_a3_base
+
+FROM ${ASCEND_DEVICE_TYPE}_base AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN dnf update -y && \
+    dnf install -y jemalloc jemalloc-devel && \
+    dnf clean all && rm -rf /var/cache/dnf
+
+ENV HCCL_CONNECT_TIMEOUT=7200 \
+    PYTORCH_NPU_ALLOC_CONF="expandable_segments:True" \
+    HCCL_OP_EXPANSION_MODE="AIV" \
+    LD_PRELOAD=/usr/lib64/libjemalloc.so.2:$LD_PRELOAD
+
+ARG DLINFER_TAG=main
+ARG LMDEPLOY_TAG=main
+RUN --mount=type=cache,target=/root/.cache \
+    pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn && \
+    pip install --no-cache-dir torch==2.8.0 torch-npu==2.8.0rc1 torchvision==0.23.0 && \
+    TORCH_DEVICE_BACKEND_AUTOLOAD=0 DEVICE=ascend pip install git+https://github.com/DeepLink-org/dlinfer.git@${DLINFER_TAG} && \
+    LMDEPLOY_TARGET_DEVICE=ascend pip install git+https://github.com/InternLM/lmdeploy.git@${LMDEPLOY_TAG}
