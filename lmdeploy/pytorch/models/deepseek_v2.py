@@ -1169,6 +1169,12 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
 
+        from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
+        deepep_mode = DeepEPMode.NORMAL
+        if context.is_decoding:
+            deepep_mode = DeepEPMode.LOW_LATENCY
+        DeepEPBuffer.set_deepep_mode(deepep_mode)
+
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,
