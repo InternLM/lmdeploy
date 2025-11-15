@@ -22,13 +22,14 @@ fi
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
 
     if [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
-        DEEP_GEMM_VERSION=03d0be3
         FLASH_MLA_VERSION=9edee0c
     else
-        DEEP_GEMM_VERSION=79f48ee
         FLASH_MLA_VERSION=c759027
     fi
 
+    # The current EP implementation uses dlblas, which is incompatible with the latest deep_gemm APIs.
+    # To ensure compatibility, we pin deep_gemm to an older version.
+    DEEP_GEMM_VERSION=03d0be3
     DEEP_EP_VERSION=26cf250
     pip install nvidia-nvshmem-cu12
 
