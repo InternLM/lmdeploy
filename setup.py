@@ -4,32 +4,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from setuptools import find_packages, setup
-
-pwd = os.path.dirname(__file__)
-version_file = 'lmdeploy/version.py'
+from setuptools import setup
 
 
 def get_target_device():
     return os.getenv('LMDEPLOY_TARGET_DEVICE', 'cuda')
-
-
-def readme():
-    with open(os.path.join(pwd, 'README.md'), encoding='utf-8') as f:
-        content = f.read()
-    return content
-
-
-def get_version():
-    file_path = os.path.join(pwd, version_file)
-    pattern = re.compile(r"\s*__version__\s*=\s*'([0-9A-Za-z.-]+)'")
-    with open(file_path, 'r') as f:
-        for line in f:
-            m = pattern.match(line)
-            if m:
-                return m.group(1)
-        else:
-            assert False, f'No version found {file_path}'
 
 
 def get_turbomind_deps():
@@ -154,16 +133,6 @@ else:
 
 if __name__ == '__main__':
     setup(
-        name='lmdeploy',
-        version=get_version(),
-        description='A toolset for compressing, deploying and serving LLM',
-        long_description=readme(),
-        long_description_content_type='text/markdown',
-        author='OpenMMLab',
-        author_email='openmmlab@gmail.com',
-        packages=find_packages(exclude=()),
-        include_package_data=True,
-        setup_requires=parse_requirements('requirements/build.txt'),
         tests_require=parse_requirements('requirements/test.txt'),
         install_requires=parse_requirements(f'requirements/runtime_{get_target_device()}.txt') + extra_deps,
         extras_require={
@@ -171,17 +140,6 @@ if __name__ == '__main__':
             'lite': parse_requirements('requirements/lite.txt'),
             'serve': parse_requirements('requirements/serve.txt'),
         },
-        classifiers=[
-            'Programming Language :: Python :: 3.9',
-            'Programming Language :: Python :: 3.10',
-            'Programming Language :: Python :: 3.11',
-            'Programming Language :: Python :: 3.12',
-            'Programming Language :: Python :: 3.13',
-            'Intended Audience :: Developers',
-            'Intended Audience :: Education',
-            'Intended Audience :: Science/Research',
-        ],
-        entry_points={'console_scripts': ['lmdeploy = lmdeploy.cli:run']},
         ext_modules=ext_modules,
         cmdclass=cmdclass,
     )
