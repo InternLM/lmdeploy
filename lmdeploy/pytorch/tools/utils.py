@@ -192,3 +192,24 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
             print(colored('─' * (term_size), border_color, attrs=['dark']))
         else:
             print(colored('━' * term_size, border_color))
+
+
+def visualize_chat_completions(outputs, enable_meta: bool = True):
+    """Visualize chat completions."""
+    from openai.types.chat import ChatCompletion
+
+    from lmdeploy.messages import Response
+    if isinstance(outputs, ChatCompletion):
+        outputs = [outputs]
+
+    resps = []
+    for out in outputs:
+        assert isinstance(out, ChatCompletion)
+        choice = out.choices[0]
+        resp = Response(text=choice.message.content,
+                        input_token_len=out.usage.prompt_tokens,
+                        generate_token_len=out.usage.completion_tokens,
+                        finish_reason=choice.finish_reason)
+        resps.append(resp)
+
+    return visualize_pipe_out(resps, enable_meta=enable_meta)

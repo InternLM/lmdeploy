@@ -134,7 +134,7 @@ class Engine:
     def __init__(self, model_path: str, engine_config, csv: str):
         self.pipe = pipeline(model_path, backend_config=engine_config, log_level='ERROR')
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
+        self.return_routed_experts = getattr(self.pipe.backend_config, 'enable_return_routed_experts', False)
         self.csv = csv
 
     def process_request(self, requests, profiler: Profiler, temperature, top_p, top_k, stream_output):
@@ -146,6 +146,7 @@ class Engine:
                              top_k=top_k,
                              ignore_eos=True,
                              do_sample=False,
+                             return_routed_experts=self.return_routed_experts,
                              max_new_tokens=output_len) for _, _, output_len in requests
         ]
 
@@ -254,6 +255,7 @@ def parse_args():
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     ArgumentHelper.eager_mode(pt_group)
+    ArgumentHelper.enable_return_routed_experts(pt_group)
 
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
@@ -302,6 +304,7 @@ def main():
             thread_safe=False,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
+            enable_return_routed_experts=args.enable_return_routed_experts,
         )
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)

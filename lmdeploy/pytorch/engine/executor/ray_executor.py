@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -199,8 +200,9 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
         from lmdeploy.pytorch.distributed import all_reduce, get_dist_manager
         with get_dist_manager().context(self.dist_ctx):
+            group = self.dist_ctx.tp_group.gpu_group
             tmp = torch.empty((1, ), device='cuda')
-            all_reduce(tmp)
+            all_reduce(tmp, group=group)
 
     def pack_output(self, output: Dict):
         """Pack output."""
@@ -242,14 +244,11 @@ class RayExecutor(ExecutorBase):
                          adapters=adapters,
                          device_type=device_type)
 
-        self.dp_rank = dist_config.dp_rank
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
             logger.info('Init ray cluster.')
-            ray_world_size = self.world_size
-            if self.dp > 1:
-                ray_world_size = 1
-            self.ray_ctx = RayContext(ray_world_size, dp=dist_config.dp, device_type=device_type)
+            attn_tp = dist_config.attn_tp
+            self.ray_ctx = RayContext(attn_tp, dp=dist_config.dp, device_type=device_type)
             placement_group = self.ray_ctx.get_placement_group()
             self.placement_group = placement_group
 
@@ -285,13 +284,11 @@ class RayExecutor(ExecutorBase):
             self._init_distributed_environment_by_device(device_type)
 
             logger.info('Init distributed process group.')
-            if self.dp == 1:
-                ray.get([
-                    worker.init_process_group.remote(rank, self.master_addr, self.master_port)
-                    for rank, worker in enumerate(self.workers)
-                ])
-            else:
-                ray.get(self.workers[0].init_process_group.remote(self.dp_rank, self.master_addr, self.master_port))
+            rank_offset = dist_config.dp_rank * attn_tp
+            ray.get([
+                worker.init_process_group.remote(rank + rank_offset, self.master_addr, self.master_port)
+                for rank, worker in enumerate(self.workers)
+            ])
 
             if self.dist_config.world_size > 1:
                 logger.info('Warming up distribute environment, this might take long time, please waiting...')
@@ -350,6 +347,13 @@ class RayExecutor(ExecutorBase):
         if tags is None or 'kv_cache' in tags:
             self.update_configs()
         self.collective_rpc('wakeup', (tags, ))
+
+    def serialize(self, obj) -> str:
+        """Serialize obj."""
+        ref = ray.put(obj)
+        data = ray.cloudpickle.dumps(ref)
+        data = base64.b64encode(data).decode('utf-8')
+        return data
 
     def get_input_processor(self):
         """Build cache engine."""
@@ -510,7 +514,8 @@ class RayExecutor(ExecutorBase):
         for bundle_id, bundle in enumerate(placement_group.bundle_specs):
             if bundle.get(device_str, 0) and self._valid_bundle_id(bundle_id):
                 bundle_indices.append(bundle_id)
-        bundle_indices = bundle_indices[:self.world_size]
+        attn_tp = self.dist_config.attn_tp
+        bundle_indices = bundle_indices[:attn_tp]
 
         workers = list()
         for _, bundle_id in enumerate(bundle_indices):

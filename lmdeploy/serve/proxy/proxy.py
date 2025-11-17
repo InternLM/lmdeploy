@@ -388,8 +388,9 @@ class NodeManager:
             node_url (str): the node url.
             start (int): the start time point. time.time()
         """
-        self.nodes[node_url].unfinished -= 1
-        self.nodes[node_url].latency.append(time.time() - start)
+        if node_url in self.nodes:
+            self.nodes[node_url].unfinished -= 1
+            self.nodes[node_url].latency.append(time.time() - start)
 
     def create_background_tasks(self, url: str, start: int):
         """To create a background task.
@@ -597,6 +598,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         # Prefill
         prefill_request_dict = copy.deepcopy(request_dict)
         prefill_request_dict['max_tokens'] = 1
+        prefill_request_dict['max_completion_tokens'] = 1
         prefill_request_dict['stream'] = False
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
