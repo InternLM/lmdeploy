@@ -62,6 +62,30 @@ def test_restful_chat_tp4(config, worker_id):
         run_vl_testcase(config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_8
+@pytest.mark.test_ascend
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=8), indirect=True)
+def test_restful_chat_tp8(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_vl_testcase(config)
+    else:
+        run_vl_testcase(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_16
+@pytest.mark.test_ascend
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=16), indirect=True)
+def test_restful_chat_tp16(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_vl_testcase(config)
+    else:
+        run_vl_testcase(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
 def getKvintModelList(tp_num, quant_policy: int = None):
     return [{
         'model': item,

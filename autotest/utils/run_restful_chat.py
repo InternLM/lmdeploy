@@ -65,8 +65,6 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     device = os.environ.get('DEVICE', '')
     if device:
         cmd += f' --device {device} '
-        if device == 'ascend':
-            cmd += '--eager-mode '
 
     if backend_type == 'turbomind':
         if ('w4' in model or '4bits' in model or 'awq' in model.lower()):

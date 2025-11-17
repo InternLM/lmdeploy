@@ -79,6 +79,7 @@ def get_turbomind_model_list(tp_num):
     model_list = get_evaluate_turbomind_model_list(tp_num, kvint_list=[4, 8])
     new_model_list = []
     for model in model_list:
+        model['extra'] = '--session-len 65536 '
         model['cuda_prefix'] = None
         new_model_list.append(model)
     return new_model_list
@@ -88,6 +89,7 @@ def get_pytorch_model_list(tp_num):
     model_list = get_evaluate_pytorch_model_list(tp_num, kvint_list=[4, 8])
     new_model_list = []
     for model in model_list:
+        model['extra'] = '--session-len 65536 '
         model['cuda_prefix'] = None
         new_model_list.append(model)
     return new_model_list
@@ -166,6 +168,7 @@ def test_turbomind_restful_tp8(config, run_id, prepare_environment, worker_id):
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=1), indirect=True)
 def test_pytorch_restful_tp1(config, run_id, prepare_environment, worker_id):
@@ -176,6 +179,7 @@ def test_pytorch_restful_tp1(config, run_id, prepare_environment, worker_id):
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_2
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=2), indirect=True)
 def test_pytorch_restful_tp2(config, run_id, prepare_environment, worker_id):
@@ -186,6 +190,7 @@ def test_pytorch_restful_tp2(config, run_id, prepare_environment, worker_id):
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=4), indirect=True)
 def test_pytorch_restful_tp4(config, run_id, prepare_environment, worker_id):
@@ -196,6 +201,7 @@ def test_pytorch_restful_tp4(config, run_id, prepare_environment, worker_id):
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_8
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=8), indirect=True)
 def test_pytorch_restful_tp8(config, run_id, prepare_environment, worker_id):
@@ -206,6 +212,7 @@ def test_pytorch_restful_tp8(config, run_id, prepare_environment, worker_id):
 @pytest.mark.eval
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=1), indirect=True)
 def test_pytorch_judgeeval_tp1(config, run_id, prepare_environment_judge_evaluate, worker_id):
@@ -216,6 +223,7 @@ def test_pytorch_judgeeval_tp1(config, run_id, prepare_environment_judge_evaluat
 @pytest.mark.eval
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_2
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=2), indirect=True)
 def test_pytorch_judgeeval_tp2(config, run_id, prepare_environment_judge_evaluate, worker_id):
@@ -227,6 +235,7 @@ def test_pytorch_judgeeval_tp2(config, run_id, prepare_environment_judge_evaluat
 @pytest.mark.pytorch
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=4), indirect=True)
 def test_pytorch_judgeeval_tp4(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
@@ -237,6 +246,7 @@ def test_pytorch_judgeeval_tp4(config, run_id, prepare_environment_judge_evaluat
 @pytest.mark.pytorch
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_8
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=8), indirect=True)
 def test_pytorch_judgeeval_tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')

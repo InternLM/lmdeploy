@@ -214,48 +214,56 @@ class AscendDeviceHandler(DeviceHandler):
     def get_available_devices(self):
         """Get list of available Ascend devices by checking AICPU usage
         rate."""
-        available_ascend = []
+        available_chips = []
         try:
-            # Get the number of NPU devices
             result = subprocess.run(['npu-smi', 'info', '-l'], capture_output=True, text=True, timeout=10)
             if result.returncode != 0:
-                return available_ascend
+                return available_chips
 
-            # Parse the output to get device count
-            # Looking for lines like "Device Count : X"
-            device_count = 0
-            for line in result.stdout.split('\n'):
-                if 'Total Count' in line:
-                    match = re.search(r'Total Count\s*:\s*(\d+)', line)
+            lines = result.stdout.split('\n')
+            device_info = []
+            current_device_id = None
+
+            for line in lines:
+                if 'NPU ID' in line:
+                    match = re.search(r'NPU ID\s*:\s*(\d+)', line)
                     if match:
-                        device_count = int(match.group(1))
-                        break
+                        current_device_id = int(match.group(1))
+                elif 'Chip Count' in line and current_device_id is not None:
+                    match = re.search(r'Chip Count\s*:\s*(\d+)', line)
+                    if match:
+                        chip_count = int(match.group(1))
+                        device_info.append((current_device_id, chip_count))
+                        current_device_id = None
 
-            # Check each device's AICPU usage
-            for i in range(device_count):
+            for device_id, chip_count in device_info:
                 try:
-                    result = subprocess.run(
-                        ['npu-smi', 'info', '-t', 'usages', '-i', str(i)], capture_output=True, text=True, timeout=10)
-                    if result.returncode != 0:
-                        continue
 
-                    # Parse the output to get AICPU Usage Rate
-                    # Looking for lines like "Aicpu Usage Rate(%) : X"
-                    aicpu_usage = 100  # Default to 100% (busy)
-                    for line in result.stdout.split('\n'):
-                        if 'Aicpu Usage Rate(%)' in line:
-                            match = re.search(r'Aicpu Usage Rate\(%\)\s*:\s*(\d+)', line)
-                            if match:
-                                aicpu_usage = int(match.group(1))
-                                break
+                    for chip_index in range(chip_count):
+                        result = subprocess.run(
+                            ['npu-smi', 'info', '-t', 'usages', '-i',
+                             str(device_id), '-c',
+                             str(chip_index)],
+                            capture_output=True,
+                            text=True,
+                            timeout=10)
+                        if result.returncode != 0:
+                            continue
 
-                    # If AICPU usage is 0, consider the device available
-                    if aicpu_usage == 0:
-                        available_ascend.append(str(i))
+                        aicpu_usage = 100
+                        for line in result.stdout.split('\n'):
+                            if 'Aicpu Usage Rate(%)' in line:
+                                match = re.search(r'Aicpu Usage Rate\(%\)\s*:\s*(\d+)', line)
+                                if match:
+                                    aicpu_usage = int(match.group(1))
+                                    break
+
+                        if aicpu_usage == 0:
+                            chip_identifier = device_id * chip_count + chip_index
+                            available_chips.append(str(chip_identifier))
                 except (subprocess.TimeoutExpired, subprocess.SubprocessError):
                     continue
 
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
-            # npu-smi command not found or other error
             pass
-        return available_ascend
+        return available_chips

@@ -16,7 +16,7 @@ tp_config:
     Intern-S1-mini: 2
     InternVL3_5-8B: 2
     InternVL3_5-38B: 4
-    Qwen2.5-32B-Instruct: 2
+    Qwen2.5-32B-Instruct: 4
 
 pytorch_chat_model:
     - Qwen/Qwen3-30B-A3B

@@ -47,8 +47,6 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
     device = os.environ.get('DEVICE', '')
     if device:
         backend_config.device_type = device
-        if device == 'ascend':
-            backend_config.eager_mode = True
 
     if 'lora' in backend_type:
         backend_config.adapters = extra.get('adapters')

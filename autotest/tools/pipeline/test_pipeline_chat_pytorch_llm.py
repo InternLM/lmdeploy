@@ -76,6 +76,17 @@ def test_pipeline_chat_pytorch_tp8(config, common_case_config, model, worker_id)
 
 @pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
+@pytest.mark.pipeline_chat_pytorch
+@pytest.mark.gpu_num_16
+@pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=16, exclude_dup=True))
+def test_pipeline_chat_pytorch_tp16(config, common_case_config, model, worker_id):
+    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090

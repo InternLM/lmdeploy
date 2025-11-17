@@ -98,6 +98,19 @@ def test_restful_chat_tp8(config, common_case_config, worker_id):
         run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api_pytorch
+@pytest.mark.gpu_num_16
+@pytest.mark.test_ascend
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=16), indirect=True)
+def test_restful_chat_tp16(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
 def getKvintModelList(tp_num, quant_policy):
     return [{
         'model': item,
