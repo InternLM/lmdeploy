@@ -220,7 +220,6 @@ private:
     const int      tp_rank_;
     const DataType data_type_;
     const bool     debug_;
-    const bool     is_driver_;
 
     // Refs into `Context<T>`
     cudaStream_t const stream_{};
