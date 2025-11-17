@@ -440,21 +440,20 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
         group_ids_[i]->Initialize();
     }
 
-    const int device_num = engine_param_.outer_dp_size * comm_size_;
+    const int device_per_node = engine_param_.devices.size();
+    const int device_offset   = device_per_node * engine_param_.node_rank;
 
-    engine_params_.resize(device_num, engine_param_);
-    for (int i = 0; i < device_num; ++i) {
+    engine_params_.resize(device_per_node, engine_param_);
+    for (int i = 0; i < device_per_node; ++i) {
         auto& e         = engine_params_[i];
-        e.outer_dp_rank = i / comm_size_;
-        e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
-        e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
-        e.mlp_tp_rank   = i % comm_size_;
+        e.outer_dp_rank = (i + device_offset) / comm_size_;
+        e.attn_tp_rank  = (i + device_offset) % comm_size_ % e.attn_tp_size;
+        e.attn_dp_rank  = (i + device_offset) % comm_size_ / e.attn_tp_size;
+        e.mlp_tp_rank   = (i + device_offset) % comm_size_;
     }
 
-    for (int local_rank = 0, offset = engine_param_.devices.size() * engine_param_.node_rank;
-         local_rank < engine_param_.devices.size();
-         ++local_rank) {
-        auto& e = engine_params_[offset + local_rank];
+    for (int local_rank = 0; local_rank < device_per_node; ++local_rank) {
+        auto& e = engine_params_[local_rank];
         if (e.attn_tp_rank == 0) {
             node_dp_ranks_.push_back(e.outer_dp_rank * e.attn_dp_size + e.attn_dp_rank);
         }
@@ -478,13 +477,13 @@ std::unique_ptr<ModelRequest> LlamaTritonModel::createModelInstance(int device_i
 void LlamaTritonModel::createSharedWeights(int device_id, int rank)
 {
     CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
-    weights_[rank % engine_param_.devices.size()] =
-        std::make_shared<LlamaWeight>(dtype_, model_param_, engine_params_.at(rank), lora_param_, moe_param_);
+    weights_[device_id] =
+        std::make_shared<LlamaWeight>(dtype_, model_param_, engine_params_.at(device_id), lora_param_, moe_param_);
 }
 
 TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 {
-    const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[rank % engine_param_.devices.size()])->get_parameters();
+    const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[device_id])->get_parameters();
     TensorMap   params;
     for (const auto& [name, tensor_ptr] : tensor_ptr_map) {
         params[name] = *tensor_ptr;
@@ -541,7 +540,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
     core::ContextGuard guard{ctx->core_stream, ctx->allocator, Allocator{kCPUpinned}};
 
-    const auto& engine_param = engine_params_.at(rank);
+    const auto& engine_param = engine_params_.at(device_id);
 
     // Get `h_comm` first as ctx will be moved later
     const auto h_comm = ctx->comm.h_comm;
