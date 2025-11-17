@@ -92,7 +92,7 @@ This stage uses the evaluation model (Judger) to assess the quality of inference
 1. **Deploy Evaluation Model (Judger)**
 
 ```shell
-lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2
+lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2 --session-len 65536
 ```
 
 2. **Generate Evaluation Configuration and Execute**
