@@ -274,7 +274,6 @@ class TurboMind:
 
         self._postprocess_config(tm_model.tm_config, engine_config)
 
-        print(yaml.safe_dump(self.config_dict))
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
                                                                      config=yaml.safe_dump(self.config_dict),
                                                                      weight_type=self.config.model_config.weight_type)
