@@ -31,7 +31,7 @@ lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 2. **部署评测模型（Judger）**
 
 ```shell
-lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2
+lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2 --session-len 65536
 ```
 
 3. **生成评测配置并执行评测**
