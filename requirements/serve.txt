@@ -1,3 +1,3 @@
-gradio
+aiohttp
+prometheus_client
 protobuf
-tritonclient[grpc]

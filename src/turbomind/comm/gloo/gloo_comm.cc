@@ -169,7 +169,7 @@ struct GlooCommImpl: public HostCommImpl {
         return std::make_shared<GlooCommImpl>(new_store, new_n_ranks, new_rank);
     }
 
-    void Sync() override
+    void Sync(bool blocking) override
     {
         ::gloo::BarrierOptions opts(context_);
         opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));

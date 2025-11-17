@@ -59,6 +59,7 @@ def _fwd_grouped_split_kernel(
     stride_od: tl.constexpr,
     stride_boffb,
     kv_group_num: tl.constexpr,
+    seq_len: tl.constexpr,
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
@@ -74,18 +75,20 @@ def _fwd_grouped_split_kernel(
 ):
     """First step kernel of split k attention."""
     cur_batch = tl.program_id(2)
-    cur_kv_head = tl.program_id(0)
+    tile_id = tl.program_id(0)
     split_k_id = tl.program_id(1)
 
-    if BLOCK_H < kv_group_num:
-        HEAD_PER_CTA: tl.constexpr = BLOCK_H
-    else:
-        HEAD_PER_CTA: tl.constexpr = kv_group_num
-    cur_head = cur_kv_head * HEAD_PER_CTA + tl.arange(0, BLOCK_H)
-    mask_h = cur_head < cur_kv_head * HEAD_PER_CTA + HEAD_PER_CTA
+    HEADS_PER_REQ: tl.constexpr = kv_group_num * seq_len
+    TILES_PER_GROUP: tl.constexpr = tl.cdiv(HEADS_PER_REQ, BLOCK_H)
+    subtile_id = tile_id % TILES_PER_GROUP
+    cur_kv_head = tile_id // TILES_PER_GROUP
+    offs_h = subtile_id * BLOCK_H + tl.arange(0, BLOCK_H)
+    cur_head = cur_kv_head * kv_group_num + offs_h % kv_group_num
+    cur_token = cur_batch * seq_len + offs_h // kv_group_num
+
+    mask_h = cur_head < cur_kv_head * kv_group_num + kv_group_num
+    mask_h = mask_h & (cur_token < cur_batch * seq_len + seq_len)
     mask_h = mask_h & (cur_head < num_heads_q)
-    if BLOCK_H < kv_group_num:
-        cur_kv_head = (cur_kv_head * HEAD_PER_CTA) // kv_group_num
 
     q_seqlen = 1
     kv_seqlen = tl.load(KV_seqlens + cur_batch)
@@ -104,7 +107,7 @@ def _fwd_grouped_split_kernel(
     off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
     off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd + offs_n[:, None] * stride_vbs)
 
-    off_q = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
+    off_q = (cur_token[:, None] * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
     q = tl.load(Q + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
 
     k_ptrs = K + off_k
@@ -114,7 +117,7 @@ def _fwd_grouped_split_kernel(
         offs_d1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
         mask_d1 = offs_d1 < head_size
         offs_d1 = offs_d1 % head_size
-        off_q1 = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
+        off_q1 = (cur_token[:, None] * stride_qbs + cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
         q1 = tl.load(Q + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
         off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
         k1_ptrs = K + off_k1
@@ -170,7 +173,7 @@ def _fwd_grouped_split_kernel(
         if start_n + BLOCK_N > history_len or window_size > 0:
             qk_mask = history_len >= (start_n + offs_n)
             if window_size > 0:
-                qk_mask = qk_mask and ((start_n + offs_n) >= kv_min_loc)
+                qk_mask = qk_mask & ((start_n + offs_n) >= kv_min_loc)
             qk = tl.where(
                 qk_mask[None, :],
                 qk,
@@ -196,11 +199,11 @@ def _fwd_grouped_split_kernel(
 
     # initialize pointers to output
     if loop_end > loop_start:
-        off_acc = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
+        off_acc = (cur_token[:, None] * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
                    offs_dv[None, :] * stride_od)
         tl.store(Acc_out + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
-    off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
+    off_meta = (cur_token * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
     tl.store(Acc_out + off_meta, m_i, mask=mask_h)
     tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
 
@@ -388,7 +391,7 @@ def _fwd_grouped_split_quant_kernel(
         if start_n + BLOCK_N > history_len or window_size > 0:
             qk_mask = history_len >= (start_n + offs_n)
             if window_size > 0:
-                qk_mask = qk_mask and ((start_n + offs_n) >= kv_min_loc)
+                qk_mask = qk_mask & ((start_n + offs_n) >= kv_min_loc)
             qk = tl.where(
                 qk_mask[None, :],
                 qk,
@@ -430,6 +433,7 @@ def _fwd_grouped_split_quant_kernel(
 def _reduce_split_kernel(
     Acc,
     Out,
+    sinks,
     stride_ak,
     stride_abs,
     stride_ah,
@@ -442,8 +446,8 @@ def _reduce_split_kernel(
     BLOCK_DV: tl.constexpr,
 ):
     """Second step kernel of split k attention."""
-    cur_batch = tl.program_id(0)
-    cur_head = tl.program_id(1)
+    cur_batch = tl.program_id(1)
+    cur_head = tl.program_id(0)
 
     # initialize offsets
     offs_dv = tl.arange(0, BLOCK_DV)
@@ -465,6 +469,10 @@ def _reduce_split_kernel(
 
     acc = tl.sum(acc_k, 0)
     l_sum = tl.sum(l_k, 0)
+
+    if sinks is not None:
+        sink = tl.load(sinks + cur_head).to(l_sum.dtype)
+        l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
     acc = acc / l_sum
 
     out_offs = (cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od)
@@ -498,19 +506,27 @@ def _kernel_meta_sm8x(BLOCK_DMODEL: int, BLOCK_H: int):
 
 def _kernel_meta_sm9x(BLOCK_DMODEL: int, BLOCK_H: int):
     """Kernel meta default."""
-    return _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
+    num_warps = 4
+    if BLOCK_DMODEL * BLOCK_H > 4096:
+        num_stages = 2
+    else:
+        num_stages = 3
+    return num_warps, num_stages
 
 
-def _get_split_k(device_idx: int, head_grid: int, batch_size: int):
+def _get_split_k(device_idx: int, head_grid: int, batch_size: int, num_warps: int):
     """Get split k."""
     props = get_device_props(device_idx)
     num_sm = props['multi_processor_count']
     # estimated occupancy 12.5%
     warps_per_sm = props['warps_per_sm'] // 8
+    cta_per_sm = triton.cdiv(warps_per_sm, num_warps)
+    cta_per_device = num_sm * cta_per_sm
 
-    SPLIT_K = triton.cdiv(num_sm * warps_per_sm // head_grid, triton.next_power_of_2(batch_size))
+    SPLIT_K = triton.cdiv(cta_per_device // head_grid, triton.next_power_of_2(batch_size))
     SPLIT_K = 1 << (SPLIT_K.bit_length() - 1)
-    SPLIT_K = max(min(SPLIT_K, 64), 4)
+    max_split = 1 << (num_sm.bit_length() - 1)
+    SPLIT_K = max(min(SPLIT_K, max_split), 4)
     return SPLIT_K
 
 
@@ -527,6 +543,7 @@ def paged_attention_fwd(
     window_size: int = None,
     sm_scale: float = None,
     logit_softcapping: float = None,
+    sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
     """Paged Attention forward.
@@ -582,7 +599,13 @@ def paged_attention_fwd(
     if sm_scale is None:
         sm_scale = 1.0 / (Lq**0.5)
     batch, head = kv_seqlens.shape[0], q.shape[-2]
-    kv_group_num = q.shape[-2] // k.shape[h_dim]
+    num_tokens = q.shape[-3]
+    num_kv_heads = k.shape[h_dim]
+    kv_group_num = head // num_kv_heads
+
+    if sinks is not None:
+        assert sinks.is_contiguous()
+        assert sinks.numel() == head
 
     BLOCK = k.size(s_dim)
     assert BLOCK >= 16
@@ -591,26 +614,15 @@ def paged_attention_fwd(
                        'might leads to bad performance. '
                        'Please reduce `block_size`.')
 
-    is_decoding = q.shape[-3] == kv_seqlens.size(0)
-    assert is_decoding, 'we only support decoding paged attention.'
+    valid = num_tokens % batch == 0
+    assert valid, 'we only support decoding paged attention.'
+    seq_len = num_tokens // batch
 
     BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq)
-    p2_kv_group_num = triton.next_power_of_2(kv_group_num)
-    BLOCK_H = max(16, min(BLOCK, p2_kv_group_num))
-    grid_1 = triton.cdiv(head, min(BLOCK_H, kv_group_num))
-
-    SPLIT_K = _get_split_k(q.device.index, grid_1, batch)
-
-    if quant_policy != 4:
-        acc = q.new_empty(batch, head, SPLIT_K, Lv + 2, dtype=torch.float32)
-    else:
-        acc = q.new_empty(batch, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)
-
-    grid = (
-        grid_1,
-        SPLIT_K,
-        batch,
-    )
+    HEADS_PER_REQ = kv_group_num * seq_len
+    BLOCK_H = max(16, min(BLOCK, triton.next_power_of_2(HEADS_PER_REQ)))
+    TILES_PER_GROUP = triton.cdiv(HEADS_PER_REQ, BLOCK_H)
+    grid_1 = TILES_PER_GROUP * num_kv_heads
 
     if _nv_cap[0] < 8:
         num_warps, num_stages = _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
@@ -618,6 +630,19 @@ def paged_attention_fwd(
         num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DMODEL, BLOCK_H)
     else:
         num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
+
+    SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
+
+    if quant_policy != 4:
+        acc = q.new_empty(num_tokens, head, SPLIT_K, Lv + 2, dtype=torch.float32)
+    else:
+        acc = q.new_empty(num_tokens, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)
+
+    grid = (
+        grid_1,
+        SPLIT_K,
+        batch,
+    )
 
     if quant_policy > 0:
         _fwd_grouped_split_quant_kernel[grid](q,
@@ -694,6 +719,7 @@ def paged_attention_fwd(
                                         stride_od=acc.stride(-1),
                                         stride_boffb=block_offsets.stride(0),
                                         kv_group_num=kv_group_num,
+                                        seq_len=seq_len,
                                         window_size=window_size,
                                         head_size=Lk,
                                         head_size_v=Lv,
@@ -709,13 +735,14 @@ def paged_attention_fwd(
                                         num_warps=num_warps,
                                         num_stages=num_stages)
 
-    num_warps = 4
-    grid = (batch, head)
+    num_warps = 2
+    grid = (head, num_tokens)
     if quant_policy == 4:
         Lv *= 2
         BLOCK_DV *= 2
     _reduce_split_kernel[grid](acc,
                                o,
+                               sinks,
                                stride_ak=acc.stride(2),
                                stride_abs=acc.stride(0),
                                stride_ah=acc.stride(1),

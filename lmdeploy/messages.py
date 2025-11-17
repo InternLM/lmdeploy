@@ -2,13 +2,13 @@
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
-from lmdeploy.pytorch.disagg.request import MigrationRequest
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 
 from .tokenizer import Tokenizer
 from .utils import get_logger
@@ -63,7 +63,7 @@ class GenerationConfig:
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
         logprobs (int): Number of log probabilities to return per output token.
-        response_format (Dict): Only pytorch backend support formatting
+        response_format (Dict): Generate responses according to given formatting.
         response. Examples:
             {
                 "type": "json_schema",
@@ -110,11 +110,15 @@ class GenerationConfig:
     logits_processors: Optional[List[LogitsProcessor]] = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
+    include_stop_str_in_output: bool = False
 
     # for disaggregation
     with_cache: bool = False
     preserve_cache: bool = False
     migration_request: Optional[MigrationRequest] = None
+
+    # router replay
+    return_routed_experts: bool = False
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
@@ -195,7 +199,9 @@ class TurbomindEngineConfig:
             be allocated to the k/v cache.
             For lmdeploy versions greater than `v0.2.1`, it defaults to 0.8,
             signifying the percentage of FREE GPU memory to be reserved for
-            the k/v cache
+            the k/v cache.
+            When it's an integer > 0, it represents the total number of k/v
+            blocks.
         cache_chunk_size (int): The policy to apply for KV block from
             the block manager, default to -1.
         cache_block_seq_len (int): the length of the token sequence in
@@ -223,6 +229,9 @@ class TurbomindEngineConfig:
         devices(List[int]): the used devices
         empty_init (bool): Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
+        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+            It can be used to override the default config of the model
+        enable_metrics (bool): enable metrics system
     """
 
     dtype: str = 'auto'
@@ -256,13 +265,14 @@ class TurbomindEngineConfig:
     devices: Optional[List[int]] = None
     empty_init: bool = False
     communicator: str = 'nccl'
+    hf_overrides: Optional[Dict[str, Any]] = None
+    enable_metrics: bool = True
 
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'tp must be a positive integer'
-        assert 0 < self.cache_max_entry_count < 1, \
-            'invalid cache_max_entry_count'
+        assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
@@ -286,6 +296,9 @@ class PytorchEngineConfig:
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
+        attn_tp_size (int): tp size for attention, only works for dp>1
+        mlp_tp_size (int): tp size for mlp, only works for dp>1
+        moe_tp_size (int): tp size for moe, only works for dp>1
         cache_max_entry_count (float): the percentage of gpu memory occupied
             by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
             it defaults to 0.8, signifying the percentage of FREE GPU memory
@@ -325,7 +338,20 @@ class PytorchEngineConfig:
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
         enable_mp_engine (bool): run engine in multi-process mode.
+        mp_engine_backend (str): backend of mp engine, options:
+            ['mp', 'ray']. Default to `mp`.
         model_format (str): weight quantization policy, options: ['fp8'].
+        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+            It can be used to override the default config of the model,
+        disable_vision_encoder (bool): Whether to disable loading vision
+            encoder. Default to False.
+        logprobs_mode (str): The mode of logprob, options: ['raw_logits', 'raw_logprobs']
+        dllm_block_length (int): Block size of block diffusion model.
+        dllm_unmasking_strategy (str): Dllm unmasking strategy, options:
+            ['low_confidence_dynamic', 'low_confidence_static', 'sequential'].
+        dllm_denoising_steps (int): Dllm denoising steps.
+        dllm_confidence_threshold (float): dllm unmasking threshold for
+            dynamic unmasking.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -334,6 +360,9 @@ class PytorchEngineConfig:
     ep: int = 1
     session_len: int = None
     max_batch_size: int = None
+    attn_tp_size: int = None
+    mlp_tp_size: int = None
+    moe_tp_size: int = None
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64
@@ -354,8 +383,21 @@ class PytorchEngineConfig:
     enable_microbatch: bool = False
     enable_eplb: bool = False
     enable_mp_engine: bool = False
+    mp_engine_backend: str = 'mp'
     model_format: str = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
+    hf_overrides: Optional[Dict[str, Any]] = None
+    disable_vision_encoder: bool = False
+    logprobs_mode: str = None
+    # router replay
+    enable_return_routed_experts: bool = False
+    enable_transfer_obj_ref: bool = False
+
+    # dllm
+    dllm_block_length: int = None
+    dllm_unmasking_strategy: str = 'low_confidence_dynamic'
+    dllm_denoising_steps: int = None
+    dllm_confidence_threshold: float = 0.85
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
@@ -374,6 +416,8 @@ class PytorchEngineConfig:
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
+        assert self.block_size >= 16 and (self.block_size & (self.block_size - 1)) == 0, \
+            f'block_size must be >= 16 and a power of 2, but got {self.block_size}'
         if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
@@ -394,6 +438,8 @@ class ResponseType(enum.Enum):
     HANDLER_NOT_EXIST = enum.auto()
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
+    CANCEL = enum.auto()
+    PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
 
 
 @dataclass
@@ -427,13 +473,26 @@ class Response:
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
+    routed_experts: Any = None
+
+    def __repr__(self):
+        logits = 'logits=None' if self.logits is None else f'logits.shape={self.logits.shape}\nlogits={self.logits}'
+        hidden_state = (
+            'last_hidden_state=None' if self.last_hidden_state is None else
+            f'last_hidden_state.shape={self.last_hidden_state.shape}\nlast_hidden_state={self.last_hidden_state}')
+        routed_experts = 'routed_experts=None' if self.routed_experts is None else \
+            f'routed_experts.shape={self.routed_experts.shape}'
+
+        s = (f'text={self.text!r}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
+             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}\n{routed_experts}')
+        return s
 
 
-# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
-class EngineCoreEventType(enum.IntEnum):
-    """The type of engine core request event.
+# modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+class EventType(enum.IntEnum):
+    """The type of request event.
 
-    QUEUED - when the request was received by the engine core and added to the scheduler queue
+    QUEUED - when the request was enqued by the engine
     SCHEDULED - when the request was first scheduled for execution
     PREEMPTED - the request has been put back in the waiting queue in order to make room for other requests to complete.
                 It will be re-scheduled in future and re-start its prefill phase
@@ -443,55 +502,69 @@ class EngineCoreEventType(enum.IntEnum):
     PREEMPTED = 3  # FIXME, currently ignored for simplicity
 
 
-# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+# modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
 @dataclass
-class EngineCoreEvent():
-    """A timestamped engine core event associated with a request.
+class EngineEvent:
+    """A timestamped engine event associated with a request.
 
-    The timestamp is a monotonic timestamps and is used for by the engine frontend to calculate intervals between engine
-    core events. These timestamps should not be compared with timestamps from other processes.
+    Attributes:
+        type: the type of an event associated with a request during its life cycle
+        timestamp: the WALL-CLOCK time when the event happens.
     """
-    type: EngineCoreEventType
+    type: EventType
     timestamp: float
 
     @classmethod
-    def new_event(cls, event_type: EngineCoreEventType, timestamp: Optional[float] = None) -> 'EngineCoreEvent':
-        timestamp = time.perf_counter() if timestamp is None else timestamp
+    def new_event(cls, event_type: EventType, timestamp: Optional[float] = None) -> 'EngineEvent':
+        # Timestamps MUST use wall-clock time (time.time()) to maintain consistency
+        # between csrc(std::chrono::system_clock) and python
+        timestamp = time.time() if timestamp is None else timestamp
         return cls(event_type, timestamp)
 
 
 @dataclass
-class MetricsInfo:
-    """Metrics info from the inference engine."""
-    engine_core_timestamp: float = 0.0
-    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
-    scheduler_raw_info: dict = field(default_factory=dict)
+class ScheduleMetrics:
+    active_seqs: int = 0
+    waiting_seqs: int = 0
+    total_blocks: int = 0
+    active_blocks: int = 0
+    cached_blocks: int = 0
+    free_blocks: int = 0
+
+
+@dataclass
+class RequestMetrics:
+    """Basic metrics for a request.
+
+    Attributes:
+        token_timestamp: A wall-clock time when a token is generated.
+        engine_events: List of engine events during inference.
+    """
+    token_timestamp: float = 0.0
+    engine_events: List[EngineEvent] = field(default_factory=list)
 
 
 @dataclass
 class EngineOutput:
-    """Engine output for turbomind/pytorch engine.
+    """Engine output from turbomind/pytorch engine.
 
     Args:
         status (ResponseType): the response type.
-        token_ids (List[int]): the output token ids.
-        num_token (int): the length of output token, for turbomind, num_token
-            may not equal to the length of token_ids
+        token_ids (List[int]): the newly generated token ids in each iteration.
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
-        metrics_info (MetricsInfo): metrics info from the inference engine.
+        req_metrics (RequestMetrics): request metrics information
     """
     status: ResponseType
     token_ids: List[int]
-    num_token: int
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
-
     cache_block_ids: Optional[List[int]] = None
-    metrics_info: Optional[MetricsInfo] = None
+    req_metrics: Optional[RequestMetrics] = None
+    routed_experts: torch.Tensor = None
 
 
 @dataclass

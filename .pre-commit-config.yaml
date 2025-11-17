@@ -27,6 +27,7 @@ repos:
         args: ["--remove"]
       - id: mixed-line-ending
         args: ["--fix=lf"]
+
   - repo: https://github.com/executablebooks/mdformat
     rev: 0.7.9
     hooks:
@@ -40,7 +41,7 @@ repos:
     rev: v2.1.0
     hooks:
       - id: codespell
-        args: ["--skip=third_party/*,*.ipynb,*.proto,src/turbomind/*,docker/Dockerfile_aarch64_ascend,docs/en/get_started/ascend/get_started.md,docs/zh_cn/get_started/ascend/get_started.md"]
+        args: ["--skip=third_party/*,*.ipynb,*.proto,src/turbomind/*,docker/Dockerfile_ascend*,docs/en/get_started/ascend/get_started.md,docs/zh_cn/get_started/ascend/get_started.md"]
 
 
   - repo: https://github.com/myint/docformatter
@@ -55,3 +56,8 @@ repos:
     hooks:
     -   id: check-copyright
         args: ["lmdeploy"]
+
+exclude: |
+  (?x)(
+    ^cmake/.*\.patch$
+  )

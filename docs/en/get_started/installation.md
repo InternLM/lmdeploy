@@ -23,7 +23,7 @@ pip install lmdeploy
 The default prebuilt package is compiled on **CUDA 12**. If CUDA 11+ (>=11.3) is required, you can install lmdeploy by:
 
 ```shell
-export LMDEPLOY_VERSION=0.9.1
+export LMDEPLOY_VERSION=0.10.2
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
@@ -34,47 +34,45 @@ The release frequency of LMDeploy is approximately once or twice monthly. If you
 
 ## Install from source
 
-If you are using the PyTorch Engine for inference, the installation from the source is quite simple:
+By default, LMDeploy will build with NVIDIA CUDA support, utilizing both the Turbomind and PyTorch backends. Before installing LMDeploy, ensure you have successfully installed the CUDA Toolkit.
+
+Once the CUDA toolkit is successfully set up, you can build and install LMDeploy with a single command:
 
 ```shell
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
-pip install -e .
+pip install git+https://github.com/InternLM/lmdeploy.git
 ```
 
-But if you are using the TurboMind Engine, you have to build the source as shown below. The `openmmlab/lmdeploy:{tag}` docker image is strongly recommended.
-
-**Step 1** - Get the docker image of LMDeploy
+You can also explicitly disable the Turbomind backend to avoid CUDA compilation by setting the `DISABLE_TURBOMIND` environment variable:
 
 ```shell
-docker pull openmmlab/lmdeploy:latest
+DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 ```
 
-```{note}
-The "openmmlab/lmdeploy:latest" is based on "nvidia/cuda:12.4.1-devel-ubuntu22.04". If you are working on a platform with cuda 11+ driver, please use "openmmlab/lmdeploy:latest-cu11".
-The pattern of the LMDeploy docker image tag is "openmmlab/lmdeploy:{version}-cu(11|12)" since v0.5.3.
-```
-
-**Step 2** - Clone LMDeploy source code and change to its root directory
+If you prefer a specific version instead of the `main` branch of LMDeploy, you can specify it in your command:
 
 ```shell
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
+pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.10.2.zip
 ```
 
-**Step 3** - launch docker container in interactive mode
+If you want to build LMDeploy with support for Ascend, Cambricon, or MACA, install LMDeploy with the corresponding `LMDEPLOY_TARGET_DEVICE` environment variable.
+
+LMDeploy also supports installation on AMD GPUs with ROCm.
 
 ```shell
-docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest /bin/bash
-```
+#The recommended way is to use the official ROCm PyTorch Docker image with pre-installed dependencies:
+docker run -it \
+    --cap-add=SYS_PTRACE \
+    --security-opt seccomp=unconfined \
+    --device=/dev/kfd \
+    --device=/dev/dri \
+    --group-add video \
+    --ipc=host \
+    --network=host \
+    --shm-size 32G \
+    -v /root:/workspace \
+    rocm/pytorch:latest
 
-**Step 4** - build and installation
 
-```shell
-cd /opt/lmdeploy
-mkdir -p build && cd build
-bash ../generate.sh make
-make -j$(nproc) && make install
-cd ..
-pip install -e .
+#Once inside the container, install LMDeploy with ROCm support:
+LMDEPLOY_TARGET_DEVICE=rocm pip install  git+https://github.com/InternLM/lmdeploy.git
 ```

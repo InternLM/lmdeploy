@@ -12,6 +12,7 @@
 #include <cub/warp/warp_scan.cuh>
 
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
@@ -127,6 +128,7 @@ __global__ void MoeGateKernel_V2(float*       scales,  // [e,n]
 
 template<int block_dim, class Mask>
 __global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
+                                 int*       f2E,      // [e*n]
                                  int*       en2f,     // [e,n]
                                  int*       offsets,  // [E+1]
                                  Mask*      masks,    // [E,n], padded
@@ -241,6 +243,7 @@ __global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
                 const int flat_id = prefix[i] + offset;
                 const int ti      = vi * vec_size + i;
                 f2n[flat_id]      = ti;
+                f2E[flat_id]      = ei;
                 // No ti is generated for padded tokens so we are safe
                 en2f[data[i] * tokens + ti] = flat_id;
             }
@@ -565,7 +568,8 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 template<int N>
 inline constexpr std::integral_constant<int, N> _Int{};
 
-void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
+void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
+                      int*         f2E,            // [e*n] -> E
                       int*         en2f,           // [e,n] -> n*e
                       int*         offsets,        // [E+1]
                       float*       scales,         // [e,n]
@@ -662,6 +666,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
         const dim3    blocks(tiles, experts + 1);
 
         MoeScanKernel_v2<threads><<<blocks, threads, 0, st>>>(f2n,  //
+                                                              f2E,
                                                               en2f,
                                                               offsets,
                                                               (int8_t*)masks,
@@ -794,84 +799,88 @@ void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n
                                                             dim);
 }
 
-template<int vec_size, int exp_k, int block_dim, class T>
+template<int vec_size, int exp_k, bool has_bias, int block_dim, class T>
 __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
                                 const T*     src,         // [e*n, d]
+                                const T*     bias,        // [  E, d]
                                 const float* scales,      // [  e, n]
                                 const int*   en2f,        // [  e, n] :: (e,n) -> e*n
+                                const int*   f2E,         // [  e* n]
                                 const float* dst_scales,  // [n]
-                                int          dims,
+                                int          dim,
                                 int          tokens,
+                                T            bscale,
                                 float        dst_scale)
 {
-    using Vec = Array<T, vec_size>;
+    if constexpr (TURBOMIND_ARCH_DTYPE_GUARD(data_type_v<T>)) {
+        const int64_t ti = blockIdx.x;
 
-    const int64_t ti = blockIdx.x;
+        dst += dim * ti;
 
-    auto dst_ptr = (Vec*)dst + dims * ti;
-
-    if (dst_scales) {
-        dst_scale = dst_scales[ti];
-        dst_scale = fdividef(1.f, 1.f + expf(-dst_scale));
-    }
-
-    // Should be warp uniforms
-    const Vec* src_ptr[exp_k];
-    float      scale[exp_k];
-    PRAGMA_UNROLL
-    for (int e = 0; e < exp_k; ++e) {
-        src_ptr[e] = (const Vec*)src + dims * en2f[e * tokens + ti];
-        scale[e]   = scales ? scales[e * tokens + ti] : 1.f;
-    }
-
-    for (int i = threadIdx.x; i < dims; i += block_dim) {
-#if 1
-        Array<float, vec_size> accum{};
-        if (dst_scale) {
-            Vec v;
-            Ldg(v, dst_ptr[i].data());
-            using namespace ops;
-            accum = cast<float>(v) * dst_scale;
+        if (dst_scales) {
+            dst_scale = dst_scales[ti];
+            dst_scale = fdividef(1.f, 1.f + expf(-dst_scale));
         }
+
+        // Should be warp uniforms
+        const T* src_[exp_k];
+        const T* bias_[exp_k];
+
+        float scale[exp_k];
+
         PRAGMA_UNROLL
         for (int e = 0; e < exp_k; ++e) {
-            Vec v;
-            Ldg(v, src_ptr[e][i].data());
-            using namespace ops;
-            const auto x = cast<float>(v) * scale[e];
-            accum        = accum + x;
+            int fid = __ldg(&en2f[e * tokens + ti]);
+            src_[e] = src + dim * fid;
+            if constexpr (has_bias) {
+                bias_[e] = bias + __ldg(&f2E[fid]) * dim;
+            }
+            scale[e] = scales ? __ldg(&scales[e * tokens + ti]) : 1.f;
         }
-        Store(dst_ptr[i].data(), cast<T>(accum));
-#else
-        Array<T, vec_size> accum{};
-        if (dst_scale) {
-            Vec v;
-            Ldg(v, dst_ptr[i].data());
-            using namespace ops;
-            accum = v * (T)dst_scale;
+
+        using Vec = Array<T, vec_size>;
+
+        for (int i = threadIdx.x * vec_size; i < dim; i += block_dim * vec_size) {
+            Array<float, vec_size> accum{};
+            if (dst_scale) {
+                Vec v;
+                Load(v, &dst[i]);
+                using namespace ops;
+                accum = cast<float>(v) * dst_scale;
+            }
+            PRAGMA_UNROLL
+            for (int e = 0; e < exp_k; ++e) {
+                Vec v;
+                Load(v, src_[e] + i);
+                using namespace ops;
+                if constexpr (has_bias) {
+                    Vec b;
+                    Load(b, bias_[e] + i);
+                    PRAGMA_UNROLL
+                    for (int i = 0; i < vec_size; ++i) {
+                        v[i] = __hfma(b[i], bscale, v[i]);
+                    }
+                }
+                const auto x = cast<float>(v) * scale[e];
+                accum        = accum + x;
+            }
+            Store(&dst[i], cast<T>(accum));
         }
-        PRAGMA_UNROLL
-        for (int e = 0; e < exp_k; ++e) {
-            Vec v;
-            Ldg(v, src_ptr[e][i].data());
-            using namespace ops;
-            const auto x = v * (T)scale[e];
-            accum        = accum + x;
-        }
-        Store(dst_ptr[i].data(), accum);
-#endif
     }
 }
 
-template<class T>
+template<bool has_bias, class T>
 void invokeMoeReduce(T*           dst,
                      const T*     src,
+                     const T*     bias,
                      const float* scales,
                      const int*   en2f,
+                     const int*   f2E,
                      const float* dst_scales,
                      int          tokens,
                      int          experts_per_token,
-                     int          dims,
+                     int          dim,
+                     T            bscale,
                      float        dst_scale,
                      cudaStream_t st)
 {
@@ -881,14 +890,17 @@ void invokeMoeReduce(T*           dst,
         constexpr int threads     = 256;
         constexpr int vec_size    = 16 / sizeof(T);
         constexpr int exp_per_tok = decltype(e)::value;
-        MoeReduceKernel<vec_size, exp_per_tok, threads><<<tokens, threads, 0, st>>>(  //
+        MoeReduceKernel<vec_size, exp_per_tok, has_bias, threads><<<tokens, threads, 0, st>>>(  //
             dst,
             src,
+            bias,
             scales,
             en2f,
+            f2E,
             dst_scales,
-            dims / vec_size,
+            dim,
             tokens,
+            bscale,
             dst_scale);
     };
 
@@ -911,10 +923,13 @@ void invokeMoeReduce(T*           dst,
 
 void invokeMoeCombine(Ref<Tensor>   out_,
                       const Tensor& src,
+                      const Tensor& bias,
                       const float*  scales,
                       const int*    en2f,
+                      const int*    f2E,
                       const float*  dst_scales,
                       int           experts_per_token,
+                      float         bscale,
                       float         dst_scale,
                       cudaStream_t  st)
 {
@@ -923,21 +938,34 @@ void invokeMoeCombine(Ref<Tensor>   out_,
     const int tokens = out.shape(0);
     TM_CHECK_EQ(src.shape(0), tokens * experts_per_token);
 
-    auto invoke = [&](auto t) {
+    auto invoke = [&](auto has_bias, auto t) {
         using T = decltype(t);
-        return invokeMoeReduce(out.data<T>(),
-                               src.data<T>(),
-                               scales,
-                               en2f,
-                               dst_scales,
-                               tokens,
-                               experts_per_token,
-                               src.shape(1),
-                               dst_scale,
-                               st);
+        return invokeMoeReduce<has_bias.value>(out.data<T>(),
+                                               src.data<T>(),
+                                               bias.data_or((T*)nullptr),
+                                               scales,
+                                               en2f,
+                                               f2E,
+                                               dst_scales,
+                                               tokens,
+                                               experts_per_token,
+                                               src.shape(1),
+                                               (T)bscale,
+                                               dst_scale,
+                                               st);
     };
 
-    TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), invoke);
+    auto dispatch_dtype = [&](auto t) {
+        if (bias) {
+            TM_CHECK_NOTNULL(f2E);
+            return invoke(std::true_type{}, t);
+        }
+        else {
+            return invoke(std::false_type{}, t);
+        }
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), dispatch_dtype);
 }
 
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)

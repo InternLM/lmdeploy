@@ -3,8 +3,8 @@ import os
 from typing import List, Optional
 
 import torch
+import torch.distributed as dist
 
-import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.dlinfer import linear
 
 from ..linear import LinearBuilder, LinearImpl
@@ -32,12 +32,13 @@ class DlinferLinearImpl(LinearImpl):
                 weight: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False,
+                group: dist.ProcessGroup = None,
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""
         out = linear(x, weight, bias, False)
         if all_reduce:
-            dist.all_reduce(out)
+            dist.all_reduce(out, group=group)
         return out
 
 

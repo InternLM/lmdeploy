@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import List
+from typing import Callable, List
 
 import torch
 
@@ -12,9 +12,11 @@ from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopK
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
     """Dlinfer softmax topk implementation."""
 
-    def __init__(self, top_k: int, dim: int = -1):
+    def __init__(self, top_k: int, dim: int = -1, n_groups: int = -1):
         self.top_k = top_k
         self.dim = dim
+        if n_groups != -1:
+            raise NotImplementedError('Group router not supported')
 
     def forward(self, x: torch.Tensor):
         routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k)
@@ -50,8 +52,13 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                 topk_ids: torch.LongTensor,
                 gate_up_weights: torch.Tensor,
                 down_weights: torch.Tensor,
-                expert_list: List[int] = None):
+                gate_up_bias: torch.Tensor = None,
+                down_bias: torch.Tensor = None,
+                expert_list: List[int] = None,
+                act_func: Callable = None):
         """forward."""
+        assert gate_up_bias is None
+        assert down_bias is None
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
                          self.renormalize)
 

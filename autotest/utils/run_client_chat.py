@@ -1,39 +1,11 @@
 import os
 from subprocess import PIPE, Popen
 
+from utils.config_utils import _is_bf16_supported_by_device
 from utils.get_run_config import get_command_with_extra, get_model_name
 from utils.rule_condition_assert import assert_result
 
-from lmdeploy.utils import is_bf16_supported
-
 TEMPLATE = 'autotest/template.json'
-
-
-def command_line_test(config,
-                      case,
-                      case_info,
-                      model_case,
-                      type,
-                      extra: str = None,
-                      cuda_prefix: str = None,
-                      worker_id: str = ''):
-    dst_path = config.get('dst_path')
-
-    if type == 'api_client':
-        cmd = 'lmdeploy serve api_client ' + extra
-    else:
-        cmd = get_command_with_extra('lmdeploy chat ' + dst_path + '/workspace_' + model_case,
-                                     config,
-                                     model_case,
-                                     cuda_prefix=cuda_prefix)
-        if type == 'turbomind':
-            if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
-                cmd += ' --model-format awq'
-            elif 'gptq' in model_case.lower():
-                cmd += ' --model-format gptq'
-        if case == 'base_testcase':
-            cmd += ' --chat-template ' + TEMPLATE
-    return command_test(config, [cmd], model_case, case, case_info, type == 'turbomind', worker_id=worker_id)
 
 
 def hf_command_line_test(config,
@@ -49,7 +21,7 @@ def hf_command_line_test(config,
     else:
         model_path = model_case
 
-    if str(config.get('env_tag')) == '3090':
+    if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         extra += ' --cache-max-entry-count 0.7'
 
     cmd = get_command_with_extra(' '.join(['lmdeploy chat', model_path, '--backend', type, extra,
@@ -60,7 +32,7 @@ def hf_command_line_test(config,
                                  cuda_prefix=cuda_prefix)
 
     if type == 'pytorch':
-        if not is_bf16_supported():
+        if not _is_bf16_supported_by_device():
             cmd += ' --dtype float16'
     if type == 'turbomind':
         if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
@@ -70,6 +42,14 @@ def hf_command_line_test(config,
 
     if case == 'base_testcase':
         cmd += ' --chat-template ' + TEMPLATE
+
+    # Add device option if specified in environment
+    device = os.environ.get('DEVICE', '')
+    if device:
+        cmd += f' --device {device} '
+        if device == 'ascend':
+            cmd += '--eager-mode '
+
     return command_test(config, [cmd], model_case, '_'.join(['hf', type, case]), case_info, True)
 
 
@@ -92,8 +72,6 @@ def command_test(config, cmd, model, case, case_info, need_extract_output, worke
         file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
 
         spliter = '\n\n'
-        if 'codellama' in model.lower() and 'serve' not in ' '.join(cmd):
-            spliter = '\n!!\n'
         # join prompt together
         prompt = ''
         for item in case_info:
@@ -141,10 +119,7 @@ def command_test(config, cmd, model, case, case_info, need_extract_output, worke
 # 从输出中解析模型输出的对话内容
 def parse_dialogue(inputs: str, model: str, spliter: str):
     dialogues = inputs.strip()
-    if '!!' in spliter:
-        sep = 'enter !! to end the input >>>'
-    else:
-        sep = 'double enter to end input >>>'
+    sep = 'double enter to end input >>>'
     dialogues = dialogues.strip()
     dialogues = dialogues.split(sep)
     dialogues = [d.strip() for d in dialogues]

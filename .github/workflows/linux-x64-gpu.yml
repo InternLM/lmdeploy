@@ -27,8 +27,9 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        cudaver: [11.8, 12.4]
+        cudaver: [12.4, 12.8]
     name: cuda-${{ matrix.cudaver }}
     runs-on: ubuntu-latest
     steps:
@@ -55,6 +56,5 @@ jobs:
             cd /work
             source /opt/conda/bin/activate
             conda activate py310
-            mkdir build && cd build
-            bash ../generate.sh make
-            make -j$(nproc) && make install
+            pip install build
+            python -m build --wheel

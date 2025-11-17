@@ -1,8 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/kernels/gemm/cast.h"
+
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
-#include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/math.h"
 
 namespace turbomind {
@@ -109,6 +111,23 @@ void extend_to_u16(uint16_t* dst, const uint4_t* src, size_t n, cudaStream_t st)
     invokeCast<8>(dst, src, n, st);
 }
 
+namespace {
+
+__global__ void extend_u16_u8(uint16_t* dst, const uint8_t* src, size_t n)
+{
+    int64_t idx = threadIdx.x + (int64_t)blockDim.x * blockIdx.x;
+    if (idx < n) {
+        dst[idx] = src[idx];
+    }
+}
+
+}  // namespace
+
+void extend_to_u16(uint16_t* dst, const uint8_t* src, size_t n, cudaStream_t st)
+{
+    extend_u16_u8<<<(n + 511) / 512, 512, 0, st>>>(dst, src, n);
+}
+
 template<int VecSize, class T>
 __global__ void fuse_scales_and_zeros_kernel(T* fused, const T* scales, T* zeros, size_t n)
 {
@@ -192,5 +211,49 @@ template void
 interleave_output_dims_impl(uint16_t* fused, const uint16_t* a, const uint16_t* b, int m, int k, cudaStream_t st);
 template void
 interleave_output_dims_impl(uint32_t* fused, const uint32_t* a, const uint32_t* b, int m, int k, cudaStream_t st);
+
+__global__ void adjust_ue8m0_scale_for_half_kernel(uint8_t* data, int n)
+{
+    int64_t idx = threadIdx.x + (int64_t)blockDim.x * blockIdx.x;
+    if (idx < n) {
+        /// TODO: saturate the quantized values accordingly
+        data[idx] = max(0, min(30, (int)data[idx] + 15 - 127));  // exponent 31 is INF in half
+    }
+}
+
+void AdjustUe8m0ScaleForHalf(uint8_t* data, int n, cudaStream_t st)
+{
+    constexpr int block = 512;
+    const int     grid  = cdiv(n, block);
+    adjust_ue8m0_scale_for_half_kernel<<<grid, block, 0, st>>>(data, n);
+}
+
+template<class T0, class T1>
+__global__ void BlockscaleToGroupscale_Kernel(T1* dst, const T0* src, int64_t n, int block_size)
+{
+    int64_t idx = threadIdx.x + (int64_t)blockIdx.x * blockDim.x;
+    if (idx < n) {
+        dst[idx] = (T1)src[idx / block_size];
+    }
+}
+
+Tensor BlockscaleToGroupscale(const Tensor& scales, DataType data_type, int block_size)
+{
+    TM_CHECK_EQ(scales.dtype(), kFloat32);
+
+    Tensor ret{{scales.shape(0), scales.shape(1) * block_size}, data_type, kDEVICE};
+
+    auto stream = core::Context::stream().handle();
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        BlockscaleToGroupscale_Kernel<<<(ret.size() + 511) / 512, 512, 0, stream>>>(
+            ret.data<T>(), scales.data<float>(), ret.size(), block_size);
+    };
+
+    TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
+
+    return ret;
+}
 
 }  // namespace turbomind

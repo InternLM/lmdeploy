@@ -1,5 +1,5 @@
 base_testcase:
-    - 简要介绍乌鲁木齐的景点#A brief introduction to Urumqi’s attractions:
+    - 乌鲁木齐的景点A brief introduction to Urumqi’s attractions:
         - contain:
             - urumqi
             - 乌鲁木齐

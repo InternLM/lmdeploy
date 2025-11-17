@@ -194,32 +194,45 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     }
 }
 
+double get_memory_bandwidth()  // -> GB/s
+{
+    int clock_rate_khz{};
+    int bus_width_bits{};
+    cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrMemoryClockRate, 0);
+    cudaDeviceGetAttribute(&bus_width_bits, cudaDevAttrGlobalMemoryBusWidth, 0);
+    return 2. * (double)clock_rate_khz / 1e6 * (double)bus_width_bits / 8.;
+}
+
 #define KV_INT8 0
 
 #define KV_INT4 0
 
 #define DECODING 0
 
+#define SINK 5
+
 template<class T>
 int test_attention()
 {
     AttentionParams<T> params{};
 
-    constexpr size_t kHeadDim = 192;
+    constexpr size_t kHeadDim    = 128;
+    constexpr int    kWindowSize = 128 << 20;
 
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum   = 32;
-    constexpr size_t KvHeadNum  = kHeadNum / 4;
-    constexpr size_t kBatchSize = 1;
+    constexpr size_t kHeadNum   = 64;
+    constexpr size_t KvHeadNum  = kHeadNum / 8;
+    constexpr size_t kBatchSize = 256;
     constexpr size_t kInputLen  = 1;
-    // constexpr size_t kSequenceLen = 63;
+
+    constexpr size_t kSequenceLen = 1000;
     // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 511;
     // constexpr size_t kSequenceLen = 2047;
     // constexpr size_t kSequenceLen = 4095;
-    constexpr size_t kSequenceLen = 8191;
+    // constexpr size_t kSequenceLen = 8 * 1024 - 1;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
@@ -229,7 +242,7 @@ int test_attention()
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
     // constexpr int kSequenceLen = 2047;
-    constexpr int kBlockSz   = 128;
+    constexpr int kBlockSz   = 64;
     constexpr int kMaxSplitK = 128;
 #else
 
@@ -250,7 +263,7 @@ int test_attention()
 
     // prefill
     constexpr size_t kHeadNum     = 16;
-    constexpr size_t KvHeadNum    = kHeadNum / 1;
+    constexpr size_t KvHeadNum    = kHeadNum / 8;
     constexpr size_t kBatchSize   = 2;
     constexpr size_t kInputLen    = 8192;
     constexpr size_t kSequenceLen = 0;
@@ -309,12 +322,18 @@ int test_attention()
     thrust::universal_vector<float> qk_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
     thrust::universal_vector<T>     pr_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
 
+    thrust::universal_vector<T> sinks(kHeadNum);
+
     thrust::fill(semaphores.begin(), semaphores.end(), 0);
 
     rng.GenerateNormal(qkv.data().get(), qkv.size(), 1.f, 0.f);
 
     rng.GenerateNormal(k_cache.data().get(), kBatchSize * KvHeadNum * kContextLen * kHeadDim);
     rng.GenerateNormal(v_cache.data().get(), kBatchSize * KvHeadNum * kContextLen * kHeadDim);
+
+    if (SINK) {
+        rng.GenerateUniform(sinks.data().get(), sinks.size(), 2 * SINK, -SINK);
+    }
 
     if (0) {
         // Set input range to zero
@@ -413,7 +432,13 @@ int test_attention()
     params.num_heads     = kHeadNum;
     params.num_kv_heads  = KvHeadNum;
     params.size_per_head = kHeadDim;
+    params.window_size   = kWindowSize;
     params.inv_sqrt_dh   = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
+
+    if (SINK) {
+        params.sinks       = sinks.data().get();
+        params.scale_sinks = 1. / std::sqrt((float)params.size_per_head);
+    }
 
     float scale_factor = -std::log2f(kRoPEBase) / kRoPEDim;
     params.rope_param  = RopeKernelParam{RopeType::kDefault, nullptr, kRoPEDim, scale_factor, 1.f};
@@ -430,9 +455,8 @@ int test_attention()
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
 
-    Reference<T> reference(kDump ? Reference<T>::kUNFUSED : Reference<T>::kFLASH_ATTENTION, {});
-    // Reference<T> reference(Reference<T>::kUNFUSED, {});
-    reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
+    Reference<T> reference({});
+    reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize, kWindowSize);
 
     for (int i = 0; i < 1; ++i) {
         reference.Execute(params.out,  //
@@ -440,6 +464,7 @@ int test_attention()
                           v_cache_ref.data().get(),
                           qkv.data().get(),
                           bias_QKV.data().get(),
+                          SINK ? sinks.data().get() : nullptr,
                           kRoPEBase,
                           kRoPEDim);
     }
@@ -473,20 +498,31 @@ int test_attention()
 
     std::vector<thrust::universal_vector<T>> outputs;
 
+    std::vector<cudaEvent_t> ev_start(kTestIter);
+    std::vector<cudaEvent_t> ev_end(kTestIter);
+
+    for (int i = 0; i < kTestIter; ++i) {
+        cudaEventCreate(&ev_start[i]);
+        cudaEventCreate(&ev_end[i]);
+    }
+
     for (int i = 0; i < std::max(kTestIter, 1); ++i) {
 
 #if DECODING
+        cudaEventRecord(ev_start[i]);
         dispatchDecoding<T>(params);
+        cudaEventRecord(ev_end[i]);
 #else
         // input -> blocked
         invokeProcessKV_v2_(params);
         // blocked -> linear
         invokeFlattenKV_v2_(params, cu_kv_lens[kBatchSize]);
 
-        // auto tmp = std::exchange(params.linear_iter_params.kv_cache, nullptr);
+        cudaEventRecord(ev_start[i]);
         dispatchAttention(params);
-        // params.linear_iter_params.kv_cache = std::exchange(tmp, nullptr);
+        cudaEventRecord(ev_end[i]);
 #endif
+
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";
             return -1;
@@ -536,6 +572,23 @@ int test_attention()
                        kBatchSize,
                        kQuantPolicy);
     cudaDeviceSynchronize();
+
+    const size_t nbytes = blocks.size() / kContextLen * std::min(kContextLen, (size_t)params.window_size);
+    const size_t ops =
+        2 * kInputLen * std::min(kContextLen, (size_t)params.window_size) * kHeadDim * kHeadNum * kBatchSize;
+
+    const float peak_bw = get_memory_bandwidth();
+
+    std::cout << "Device peak global memory bandwidth: " << peak_bw << " GB/s\n";
+
+    for (int i = 0; i < kTestIter; ++i) {
+        float ms{};
+        cudaEventElapsedTime(&ms, ev_start[i], ev_end[i]);
+        const float bw      = nbytes / 1e9f / ms * 1000.f;
+        const float flops   = ops / 1e12f / ms * 1000.f;
+        const float percent = bw / peak_bw * 100.f;
+        printf("time %.3f ms, bw %.3f GB/s, %.3f %%, tflops %.3f \n", ms, bw, percent, flops);
+    }
 
     if (outputs.size() > 1) {
         std::cout << "Evaluating consistency..." << std::endl;

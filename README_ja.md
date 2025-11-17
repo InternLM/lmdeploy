@@ -23,10 +23,6 @@ ______________________________________________________________________
 
 ## 最新ニュース 🎉
 
-<details open>
-<summary><b>2025</b></summary>
-</details>
-
 <details close>
 <summary><b>2024</b></summary>
 
@@ -83,8 +79,6 @@ LMDeployは、[MMRazor](https://github.com/open-mmlab/mmrazor)および[MMDeploy
 
 - **簡単な分散サーバー**：リクエスト分散サービスを活用することで、LMDeployは複数のマシンおよびカードにわたるマルチモデルサービスのデプロイを容易にします。
 
-- **インタラクティブな推論モード**：マルチラウンドの対話プロセス中にアテンションのk/vをキャッシュすることで、エンジンは対話履歴を記憶し、履歴セッションの繰り返し処理を回避します。
-
 - **優れた互換性**：LMDeployは、[KV Cache Quant](docs/en/quantization/kv_quant.md)、[AWQ](docs/en/quantization/w4a16.md)、および[Automatic Prefix Caching](docs/en/inference/turbomind_config.md)を同時に使用することをサポートします。
 
 # パフォーマンス
@@ -123,11 +117,13 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Qwen2-MoE (57BA14B)</li>
   <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Qwen3, Qwen3-MoE</li>
+  <li>Qwen3-Next(80B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
-  <li>GLM4 (9B)</li>
+  <li>GLM-4 (9B)</li>
+  <li>GLM-4-0414 (9B, 32B)</li>
   <li>CodeGeeX4 (9B)</li>
   <li>YI (6B-34B)</li>
   <li>Mistral (7B)</li>
@@ -142,6 +138,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
+  <li>SDAR (1.7B-30B)</li>
 </ul>
 </td>
 <td>
@@ -152,12 +149,16 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
+  <li>Qwen3-VL (2B - 235B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>InternVL3 (1B-78B)</li>
+  <li>InternVL3.5 (1B-241BA28B)</li>
+  <li>Intern-S1 (241B)</li>
+  <li>Intern-S1-mini (8.3B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
@@ -167,6 +168,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-3-vision (4.2B)</li>
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
+  <li>GLM-4.1V-Thinking (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>

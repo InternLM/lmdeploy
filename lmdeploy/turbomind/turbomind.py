@@ -8,14 +8,13 @@ import math
 import os
 import os.path as osp
 import sys
-from collections import defaultdict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -23,18 +22,21 @@ import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
+from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
-from .utils import ModelSource, get_model_source
 
 # TODO: find another way import _turbomind
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
+import _xgrammar as _xgr  # noqa: E402
+
+from .tokenizer_info import TokenizerInfo  # noqa: E402
 
 logger = get_logger('lmdeploy')
 
@@ -137,11 +139,9 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
-                 tokenizer: object,
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
-                 model_source: ModelSource = ModelSource.WORKSPACE,
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
@@ -165,19 +165,14 @@ class TurboMind:
 
         self.gpu_count = len(_engine_config.devices)
         self.devices = _engine_config.devices
+        self._engine_created = False
 
-        self.tokenizer = tokenizer
-        if model_source == ModelSource.WORKSPACE:
-            self.model_comm = self._from_workspace(model_path=model_path, engine_config=_engine_config)
-        else:
-            if not osp.exists(model_path):
-                model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
-            self.model_comm = self._from_hf(model_source=model_source,
-                                            model_path=model_path,
-                                            engine_config=_engine_config)
-
+        if not osp.exists(model_path):
+            model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
+        self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config)
+        self.tokenizer = Tokenizer(model_path)
         if not _engine_config.empty_init:
-            self._load_weights(model_source)
+            self._load_weights()
             self._process_weights()
             self._create_engine()
 
@@ -190,10 +185,9 @@ class TurboMind:
             logger.warning('the model may not be loaded successfully '
                            f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
 
-    def _load_weights(self, model_source: ModelSource):
+    def _load_weights(self):
         """Load weights."""
-        if model_source == ModelSource.WORKSPACE:
-            return
+        self._get_model_params()
 
         with torch.cuda.device(self.devices[0]):
             self._tm_model.export()
@@ -213,6 +207,7 @@ class TurboMind:
             ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
             for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks):
                 pass
+        self._engine_created = True
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -232,8 +227,12 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _get_model_params(self, model_comm, tm_params: defaultdict):
+    def _get_model_params(self):
         """Get turbomind model params when loading from hf."""
+
+        model_comm = self.model_comm
+        tm_params = self._tm_model.tm_params
+        tm_params.clear()
 
         def _get_params(device_id, que):
             rank = self.node_id * self.gpu_count + device_id
@@ -251,7 +250,11 @@ class TurboMind:
         for _ in range(self.gpu_count):
             tensor_map = que.get()
             for k, v in tensor_map.items():
-                tm_params[k].append(v)
+                if k not in tm_params:
+                    tm_params[k] = [v]
+                else:
+                    tm_params[k].append(v)
+        logger.warning(f'get {len(tm_params)} model params')
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """Postprocess turbomind config by."""
@@ -278,10 +281,8 @@ class TurboMind:
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
-    def _from_hf(self, model_source: ModelSource, model_path: str, engine_config: TurbomindEngineConfig):
+    def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
-        assert model_source == ModelSource.HF_MODEL, \
-            f'{model_source} is not supported'
         assert is_supported(model_path), (f'turbomind does not support {model_path}. '
                                           'Plz try pytorch engine instead.')
 
@@ -299,34 +300,22 @@ class TurboMind:
         self._create_weight(model_comm)
         # output model
         self._tm_model = tm_model
-        # get tm params
-        tm_params = tm_model.tm_params
-        self._get_model_params(model_comm, tm_params)
-        logger.warning(f'get {len(tm_params)} model params')
         return model_comm
 
-    def _from_workspace(self, model_path: str, engine_config: TurbomindEngineConfig):
-        """Load model which is converted by `lmdeploy convert`"""
-        config_path = osp.join(model_path, 'triton_models', 'weights', 'config.yaml')
-        # load TurbomindModelConfig from config file
-        with open(config_path, 'r') as f:
-            _cfg = yaml.safe_load(f)
-        cfg = TurbomindModelConfig.from_dict(_cfg)
+    def sleep(self, level: int = 1):
+        """Sleep the model."""
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            for _ in e.map(self.model_comm.sleep, range(self.gpu_count), [level] * self.gpu_count):
+                pass
 
-        # always use tp in converted model (config.yaml)
-        assert cfg.model_config.attn_tp_size == engine_config.attn_tp_size, \
-            f'tp size mismatch ({cfg.model_config.attn_tp_size} vs {engine_config.attn_tp_size})'
-
-        self._postprocess_config(cfg, engine_config)
-
-        weight_dir = osp.join(model_path, 'triton_models', 'weights')
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
-                                                                     config=yaml.safe_dump(self.config_dict),
-                                                                     weight_type=self.config.weight_type)
-
-        # create weight and load params
-        self._create_weight(model_comm)
-        return model_comm
+    def wakeup(self, tags: Optional[list[str]] = None):
+        """Wakeup the model."""
+        if tags is None:
+            tags = ['weights', 'kv_cache']
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
+            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count, ranks):
+                pass
 
     def update_params(self, request: UpdateParamsRequest):
         """Update params.
@@ -348,6 +337,7 @@ class TurboMind:
             return func(*args).clone()
 
         if not hasattr(self, '_export_iter'):
+            self._get_model_params()
             que = Queue()
             tm_model = self._tm_model
             tm_model.input_model.model_path = que
@@ -366,12 +356,12 @@ class TurboMind:
         if request.finished:
             self._check_unloaded_tm_params()
             self._process_weights()
-            self._create_engine()
+            if self._engine_created is False:
+                self._create_engine()
 
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
-                        tokenizer: object,
                         model_name: str = None,
                         chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
@@ -395,14 +385,10 @@ class TurboMind:
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to update configuration when initialize the engine.
         """
-        model_source = get_model_source(pretrained_model_name_or_path)
-        logger.info(f'model_source: {model_source}')
         return cls(model_path=pretrained_model_name_or_path,
-                   tokenizer=tokenizer,
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,
-                   model_source=model_source,
                    **kwargs)
 
     def close(self):
@@ -413,6 +399,7 @@ class TurboMind:
             del self._export_iter
         if self.model_comm is not None:
             self.model_comm = None
+        self._engine_created = False
         if hasattr(self, 'store'):
             del self.store
 
@@ -426,11 +413,20 @@ class TurboMind:
         """
         return TurboMindInstance(self, self.config, cuda_stream_id)
 
+    def get_schedule_metrics(self):
+        # TODO: support dp
+        tm_metrics = self.model_comm.get_schedule_metrics(0, 0)
+        return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
+                               waiting_seqs=tm_metrics.waiting_seqs,
+                               total_blocks=tm_metrics.total_blocks,
+                               active_blocks=tm_metrics.active_blocks,
+                               free_blocks=tm_metrics.free_blocks)
+
 
 def _get_logits(outputs, offset: int):
     logits = outputs['logits']
 
-    def _func(out: EngineOutput, step: int):
+    def _func(out: EngineOutput, step: int, **kwargs):
         out.logits = logits[:step - offset - 1, :]
 
     return _func
@@ -439,23 +435,30 @@ def _get_logits(outputs, offset: int):
 def _get_last_hidden_state(outputs, offset: int):
     last_hidden_state = outputs['last_hidden_state']
 
-    def _func(out: EngineOutput, step: int):
+    def _func(out: EngineOutput, step: int, **kwargs):
         out.last_hidden_state = last_hidden_state[:step - offset - 1, :]
 
     return _func
 
 
-def _get_logprobs_impl(logprob_vals: torch.Tensor,
-                       logprob_idxs: torch.Tensor,
-                       logprob_nums: torch.Tensor,
-                       output_ids: List[int],
-                       logprobs: int,
-                       out_logprobs: List[Dict[int, float]] = None):
-    length = len(output_ids)
-    offset = len(out_logprobs)
-    if length == offset:
-        return out_logprobs
-    for (pos, idx, val, n) in zip(range(offset, length), logprob_idxs[offset:length], logprob_vals[offset:length],
+def _get_logprobs_impl(logprob_vals: torch.Tensor, logprob_idxs: torch.Tensor, logprob_nums: torch.Tensor,
+                       output_ids: List[int], logprobs: int, offset: int):
+    """Get logprob of each generated token.
+
+    Args:
+        logprob_vals (torch.Tensor): shape (max_new_tokens, 1024),
+            1024 is the max_logprobs that turbomind engine can output
+        logprob_idxs (torch.Tensor): shape (max_new_tokens, 1024)
+        logprob_nums (torch.Tensor): shape (max_new_tokens,)
+        output_ids (List[int]): new generated token ids
+        logprobs (int): top n logprobs to return
+        offset (int): offset to index logprob_vals, logprob_idxs and logprob_nums.
+            It indicates where to start getting logprobs for the current generated tokens `output_ids`
+    """
+    out_logprobs = []
+    # the total generated token number until now
+    length = len(output_ids) + offset
+    for (pos, idx, val, n) in zip(range(len(output_ids)), logprob_idxs[offset:length], logprob_vals[offset:length],
                                   logprob_nums[offset:length]):
         topn = min(n.item(), logprobs)
         tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
@@ -473,15 +476,38 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor,
 
 
 def _get_logprobs(outputs, output_logprobs: int):
-    logprob_vals = outputs['logprob_vals']
-    logprob_idxs = outputs['logprob_indexes']
-    logprob_nums = outputs['logprob_nums']
+    logprob_vals = outputs['logprob_vals']  # shape {max_new_tokens, 1024}
+    logprob_idxs = outputs['logprob_indexes']  # shape {max_new_tokens, 1024}
+    logprob_nums = outputs['logprob_nums']  # shape {max_new_tokens,}
+    offset = 0  # offset to index logprob_vals, logprob_idxs and logprob_nums
 
-    logprobs = []
+    def _func(out: EngineOutput, step: int, **kwargs):
+        nonlocal offset
+        out.logprobs = _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs,
+                                          offset)
+        offset += len(out.token_ids)
 
-    def _func(out: EngineOutput, step: int):
-        _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs, logprobs)
-        out.logprobs = logprobs
+    return _func
+
+
+def _get_metrics(metrics):
+    import time
+
+    from lmdeploy.messages import EngineEvent, EventType, RequestMetrics
+
+    is_first = True
+
+    def _func(out: EngineOutput, step: int, **kwargs):
+        nonlocal is_first
+        if not is_first:
+            out.req_metrics = RequestMetrics(token_timestamp=time.time())
+        else:
+            events = [
+                EngineEvent(EventType.QUEUED, metrics.enque_time / 1000000),
+                EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
+            ]
+            out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)
+            is_first = False
 
     return _func
 
@@ -527,6 +553,21 @@ class TurboMindInstance:
 
         self.config = config
         self.lock = None
+        # error code map from csrc (refer to `struct Request` in src/turbomind/engine/request.h)
+        # to lmdeploy.messages.ResponseType
+        self.errcode_map = {
+            0: ResponseType.SUCCESS,
+            1: ResponseType.SESSION_NOT_EXIST,
+            2: ResponseType.SESSION_REPEAT,
+            3: ResponseType.SESSION_REPEAT,
+            4: ResponseType.INTERNAL_ENGINE_ERROR,
+            5: ResponseType.INTERNAL_ENGINE_ERROR,
+            6: ResponseType.INPUT_LENGTH_ERROR,
+            7: ResponseType.FINISH,
+            8: ResponseType.CANCEL,
+            9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
+            -1: ResponseType.INTERNAL_ENGINE_ERROR,
+        }
 
     @property
     def model_inst(self):
@@ -539,7 +580,7 @@ class TurboMindInstance:
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
-                                     input_len: int):
+                                     input_len: int, metrics: '_tm.RequestMetrics'):
 
         def _get_offset(type):
             return input_len - 1 if type == 'generation' else 0
@@ -553,6 +594,8 @@ class TurboMindInstance:
             fs.append(_get_last_hidden_state(outputs, offset))
         if gen_config.logprobs:
             fs.append(_get_logprobs(outputs, gen_config.logprobs))
+        if self.tm_model.engine_config.enable_metrics:
+            fs.append(_get_metrics(metrics))
         return fs
 
     def prepare_embeddings(self, input_embeddings=None, input_embedding_ranges=None):
@@ -582,7 +625,7 @@ class TurboMindInstance:
             if item and isinstance(item[0], np.ndarray):
                 item = [torch.from_numpy(x).squeeze() for x in item]
             # convert to lookup table type
-            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16)
+            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16, fp8=torch.bfloat16)
             dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
             item = [x.to(dtype=dtype) for x in item]
             item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
@@ -599,11 +642,19 @@ class TurboMindInstance:
 
         return input_embeddings, input_embedding_ranges
 
+    def prepare_mrope(self, input_meta: Dict[str, Any], input_len: int):
+        mrope_position_ids = input_meta['mrope_position_ids']
+        mrope_position_delta = input_meta['mrope_position_delta']
+        assert mrope_position_ids.size(-1) == input_len
+        mrope_position_ids = mrope_position_ids.t().contiguous()
+        return mrope_position_ids, mrope_position_delta
+
     def prepare_inputs(self,
                        input_ids,
                        gen_config: GenerationConfig,
                        input_embeddings=None,
-                       input_embedding_ranges=None):
+                       input_embedding_ranges=None,
+                       input_meta: Dict[str, Any] = None):
         """Convert inputs format."""
         assert isinstance(input_ids, Sequence)
 
@@ -616,6 +667,12 @@ class TurboMindInstance:
         if input_embeddings is not None:
             inputs['input_embeddings'] = input_embeddings.cpu()
             inputs['input_embedding_ranges'] = input_embedding_ranges
+
+        if input_meta and 'mrope_position_ids' in input_meta:
+            mrope_position_ids, mrope_position_delta = self.prepare_mrope(input_meta, input_len)
+            inputs['mrope_position_ids'] = mrope_position_ids.type(torch.int32)
+            inputs['mrope_position_delta'] = mrope_position_delta.type(torch.int32)
+            inputs['mrope_length'] = torch.IntTensor([mrope_position_ids.shape[0]])
 
         return inputs, input_len
 
@@ -641,6 +698,7 @@ class TurboMindInstance:
                                  input_ids,
                                  input_embeddings=None,
                                  input_embedding_ranges=None,
+                                 input_meta: Dict[str, Any] = None,
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
@@ -669,7 +727,43 @@ class TurboMindInstance:
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
                                                 input_embeddings=input_embeddings,
                                                 input_embedding_ranges=input_embedding_ranges,
+                                                input_meta=input_meta,
                                                 gen_config=gen_config)
+
+        if gen_config.response_format is not None:
+            tokenizer = self.tm_model.tokenizer
+            vocab_size = self.tm_model.config.model_config.vocab_size
+
+            try:
+                tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
+                decode_grammar_type = gen_config.response_format['type']
+                if decode_grammar_type == 'json_schema':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
+                elif decode_grammar_type == 'regex_schema':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]
+                elif decode_grammar_type == 'json_object':
+                    decode_grammar = '{"type" : "object", "additionalProperties": true}'
+
+                compiler = _xgr.GrammarCompiler(tokenizer_info)
+
+                if decode_grammar_type == 'json_schema':
+                    decode_grammar = json.dumps(decode_grammar)
+                    grammar = compiler.compile_json_schema(decode_grammar)
+                elif decode_grammar_type == 'regex_schema':
+                    decode_grammar = str(decode_grammar)
+                    grammar = compiler.compile_regex(decode_grammar)
+                elif decode_grammar_type == 'json_object':
+                    decode_grammar = str(decode_grammar)
+                    grammar = compiler.compile_json_schema(decode_grammar)
+                else:
+                    assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
+                                   '["json_schema", "regex_schema", "json_object"]'
+
+                self.model_inst.set_grammar(grammar)
+            except ValueError as e:
+                logger.warning(f'Failed to initialize guided decoding for tokenizer {tokenizer}, '
+                               f'disable guided decoding: {e}')
+                gen_config.response_format = None
 
         session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
@@ -678,11 +772,12 @@ class TurboMindInstance:
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)
 
-        outputs, shared_state = self.model_inst.forward(inputs, session, gen_cfg, stream_output, signal_cb)
+        outputs, shared_state, metrics = self.model_inst.forward(inputs, session, gen_cfg, stream_output,
+                                                                 self.tm_model.engine_config.enable_metrics, signal_cb)
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
-        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len)
+        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len, metrics)
 
         output_ids_buf = outputs['output_ids']
 
@@ -690,7 +785,6 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        output_len = 0
         prev_len = step + input_len
         try:
             while True:
@@ -698,20 +792,21 @@ class TurboMindInstance:
                 state = shared_state.consume()
 
                 status, seq_len = state.status, state.seq_len
+                ret_status = ResponseType.SUCCESS
 
                 if status in [7, 8]:  # finish / canceled
-                    finish, status = True, 0
+                    finish = True
+                    ret_status = ResponseType.FINISH if status == 7 else ResponseType.CANCEL
                 elif status:
-                    yield self._get_error_output()
+                    logger.error(f'internal error. status_code {status}')
+                    yield self._get_error_output(status)
                     break
 
                 if seq_len == prev_len and not finish:
                     continue
 
-                output_ids += output_ids_buf[prev_len:seq_len].tolist()
-                output_len += seq_len - prev_len
-                status = ResponseType.FINISH if finish else ResponseType.SUCCESS  # noqa
-                output = EngineOutput(status, output_ids, output_len)
+                output_ids = output_ids_buf[prev_len:seq_len].tolist()
+                output = EngineOutput(ret_status, output_ids)
 
                 for f in extra_fs:
                     f(output, seq_len)
@@ -729,7 +824,7 @@ class TurboMindInstance:
         except Exception as e:
             logger.error(f'[async_stream_infer] {type(e).__name__} {e}')
             self.model_inst.cancel()
-            yield self._get_error_output()
+            yield self._get_error_output(-1)
         finally:
             # Contract: `cb` won't be called again if status is non-zero
             # wait for status to be set as `finish` or `error`
@@ -738,8 +833,8 @@ class TurboMindInstance:
                 state = shared_state.consume()
             logger.info(f'[async_stream_infer] session {session_id} done')
 
-    def _get_error_output(self):
-        return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR, token_ids=[], num_token=0)
+    def _get_error_output(self, status):
+        return EngineOutput(status=self.errcode_map[status], token_ids=[])
 
     def _get_generation_config(self, cfg: GenerationConfig):
         c = _tm.GenerationConfig()

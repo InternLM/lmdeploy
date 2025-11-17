@@ -40,6 +40,22 @@ def env_to_int(
     return value
 
 
+def env_to_list_int(
+    env_var: str,
+    default: list[int] = None,
+):
+    """Env to list of int."""
+    default_ = default if default is not None else []
+    value = os.getenv(env_var)
+    if value is None:
+        return default_
+    try:
+        value = [int(x) for x in value.split(',')]
+    except Exception:
+        value = default_
+    return value
+
+
 _ENVS = dict()
 
 
@@ -71,6 +87,7 @@ with set_envs():
     ray_nsys_output_prefix = os.getenv('LMDEPLOY_RAY_NSYS_OUT_PREFIX', None)
 
     # ascend
+    ascend_set_rt_visable_devices_by_ray = env_to_bool('ASCEND_SET_RT_VISIBLE_DEVICES_BY_RAY', False)
     ascend_rank_table_file = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
 
     # dp
@@ -91,12 +108,31 @@ with set_envs():
     ray_timeline_enable = env_to_bool('LMDEPLOY_RAY_TIMELINE_ENABLE', False)
     ray_timeline_output_path = os.getenv('LMDEPLOY_RAY_TIMELINE_OUT_PATH', 'ray_timeline.json')
 
+    # ray external placement group bundles
+    # only used when lmdeploy is initialized inside a Ray Actor with pg allocated
+    ray_external_pg_bundles = env_to_list_int('LMDEPLOY_RAY_EXTERNAL_PG_BUNDLES', [])
+
     # dist
     dist_master_addr = os.getenv('LMDEPLOY_DIST_MASTER_ADDR', None)
     dist_master_port = os.getenv('LMDEPLOY_DIST_MASTER_PORT', None)
 
     # logging
     log_file = os.getenv('LMDEPLOY_LOG_FILE', None)
+
+    # check env
+    enable_check_env = env_to_bool('LMDEPLOY_ENABLE_CHECK_ENV', True)
+
+    # dlblas
+    # we don't need to read this, it would be passed to ray workers
+    # If Ray is launched from outside, it may fail to access the environment variables.
+    os.getenv('DEEPEP_MAX_BATCH_SIZE', None)
+
+    # deepgemm
+    os.getenv('DG_JIT_DEBUG', '0')
+    os.getenv('DG_JIT_PRINT_COMPILER_COMMAND', '0')
+
+    # model agent
+    skip_warmup = env_to_bool('LMD_SKIP_WARMUP', False)
 
 
 def get_all_envs():

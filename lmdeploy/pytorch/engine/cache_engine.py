@@ -1,5 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+import json
+import math
+from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
@@ -7,9 +10,9 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import (AssignmentInstruct, DistServeRegisterMRMessage, MigrationAssignment,
                                               MigrationExecutionBatch)
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, ModelConfig
@@ -17,6 +20,23 @@ from ..config import CacheConfig, ModelConfig
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 
 logger = get_logger('lmdeploy')
+
+
+def round_up(x: int, alignment: int) -> int:
+    """Round up x to the nearest multiple of alignment."""
+    return ((x + alignment - 1) // alignment) * alignment
+
+
+@dataclass
+class CacheDesc:
+    """Cache description."""
+    shape: List[int]
+    dtype: torch.dtype
+    alignment: int = 256
+
+    def __post_init__(self):
+        self.size = math.prod(self.shape) * self.dtype.itemsize
+        self.aligned_size = round_up(self.size, self.alignment)
 
 
 class CacheEngine:
@@ -28,6 +48,8 @@ class CacheEngine:
         rank (int): distribution rank, 0 on non-distributed environment.
         world_size (int): distribution world size, 1 on non-distributed
             environment.
+        cache_stream (torch.cuda.Stream): the stream used for cache engine swap,
+            if set to None, it's created in CacheEngine.
     """
 
     def __init__(
@@ -37,6 +59,7 @@ class CacheEngine:
         rank: int = 0,
         tp_rank: int = 0,
         world_size: int = 1,
+        cache_stream: torch.cuda.Stream = None,
     ) -> None:
         self.world_size = world_size
         self.rank = rank
@@ -62,7 +85,7 @@ class CacheEngine:
         self.migration_backend_impl: Optional[MigrationBackendImpl] = None
 
         # Initialize the stream for caching operations.
-        self.cache_stream = torch.cuda.Stream()
+        self.cache_stream = cache_stream or torch.cuda.Stream()
         assert self.cache_stream != torch.cuda.current_stream()
         # Initialize the events for stream synchronization.
         self.events = torch.cuda.Event()
@@ -315,7 +338,7 @@ class CacheEngine:
 
     """ Metheds for PD Disaggregation Begin. """
 
-    def p2p_initialize(self, migration_init_request: DistServeInitRequest):
+    def p2p_initialize(self, migration_init_request: DistServeInitRequest) -> DistServeKVTransferEndpointInfo:
         if not self.migration_backend_impl:
             self.migration_backend_impl = MIGRATION_BACKENDS.module_dict[self.cache_config.migration_backend.name]()
         migration_init_request.rank = self.rank
@@ -330,11 +353,14 @@ class CacheEngine:
                                                              offset=t.storage_offset(),
                                                              length=t.numel() * t.itemsize)
             self.migration_backend_impl.register_memory_region(register_mr_request)
-        return self.migration_backend_impl.endpoint_info(migration_init_request.remote_engine_id,
-                                                         migration_init_request.protocol)
+        return DistServeKVTransferEndpointInfo(protocol=migration_init_request.protocol,
+                                               endpoint_info=json.dumps(
+                                                   self.migration_backend_impl.endpoint_info(
+                                                       migration_init_request.remote_engine_id,
+                                                       migration_init_request.protocol)))
 
-    def p2p_connect(self, migration_conn_request: DistServeConnectionRequest):
-        self.migration_backend_impl.p2p_connect(migration_conn_request[self.tp_rank])
+    def p2p_connect(self, remote_engine_id: str, migration_conn_request: List[DistServeKVTransferEndpointInfo]):
+        self.migration_backend_impl.p2p_connect(remote_engine_id, migration_conn_request[self.tp_rank])
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
 
@@ -377,3 +403,77 @@ class CacheEngine:
             ))
 
     """ Metheds for PD Disaggregation End. """
+
+
+class StateCacheEngine:
+    """Cache engine for state cache."""
+
+    def __init__(self, cache_config: CacheConfig):
+        self.cache_config = cache_config
+        self.mem_pool, self._state_caches = self.allocate_caches(num_caches=cache_config.num_state_caches,
+                                                                 state_shapes=cache_config.states_shapes,
+                                                                 device='cuda')
+
+    @staticmethod
+    def allocate_caches(num_caches: int, state_shapes: List[Tuple[Tuple[int], torch.dtype]], device: torch.device):
+        """Allocate cache implement."""
+
+        if len(state_shapes) == 0 or num_caches == 0:
+            return torch.empty((0, 0), dtype=torch.uint8, device=device), []
+
+        cache_descs = [CacheDesc(shape, dtype) for shape, dtype in state_shapes]
+
+        # get mempool size
+        mem_pool_size = 0
+        for desc in cache_descs:
+            mem_pool_size += desc.aligned_size
+
+        # create pool
+        mem_pool = torch.zeros((num_caches, mem_pool_size), dtype=torch.uint8, device=device)
+
+        # slice caches
+        caches = []
+        remain_pool = mem_pool
+        for desc in cache_descs:
+            cache = remain_pool[:, :desc.size].view(desc.dtype).view((num_caches, *desc.shape))
+            remain_pool = remain_pool[:, desc.aligned_size:]
+            caches.append(cache)
+        return mem_pool, caches
+
+    @staticmethod
+    def get_cache_state_size(state_shapes: List[Tuple[Tuple[int], torch.dtype]]) -> int:
+        """Get the required cache size of the state cache.
+
+        Args:
+            state_shapes (List[Tuple[Tuple[int], torch.dtype]]): The shapes and dtypes of the states.
+
+        Return:
+            int: Required memory size in bytes.
+        """
+        mem_pool, _ = StateCacheEngine.allocate_caches(num_caches=1, state_shapes=state_shapes, device='meta')
+        return mem_pool.numel() * mem_pool.element_size()
+
+    @property
+    def state_caches(self):
+        """State caches."""
+        return self._state_caches
+
+    def init_caches(self, idx: torch.Tensor, mask: torch.Tensor):
+        """Initialize state caches.
+
+        idx: indices of caches to be initialized.
+        mask: mask to indicate which idx to be initialized.
+        """
+        if idx is None:
+            return
+
+        if len(self._state_caches) <= 0:
+            return
+
+        num_caches = self.cache_config.num_state_caches
+
+        # get mask of all caches so we can perform inplace mask fill
+        cache_masks = torch.zeros((num_caches, ), dtype=torch.bool, device=idx.device)
+        cache_masks.index_copy_(0, idx, mask)
+        reshaped_mask = cache_masks.view((-1, ) + (1, ) * (self.mem_pool.dim() - 1))
+        self.mem_pool.masked_fill_(reshaped_mask, 0)

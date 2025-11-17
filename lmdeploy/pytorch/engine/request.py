@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
 
-from lmdeploy.messages import MetricsInfo, ResponseType
+from lmdeploy.messages import RequestMetrics, ResponseType
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -31,7 +31,7 @@ class Response:
     event: asyncio.Event
     data: Any = None
     err_msg: str = ''
-    metrics_info: MetricsInfo = None
+    req_metrics: RequestMetrics = None
 
 
 @dataclass
@@ -225,7 +225,7 @@ class RequestManager:
             return False
         return not self.requests.empty()
 
-    async def get_all_requests(self) -> Dict[RequestType, Request]:
+    async def get_all_requests(self) -> Dict[RequestType, List[Request]]:
         """Get all requests in current queue."""
         num_reqs = self.requests.qsize()
         reqs: ReqList = []
@@ -247,7 +247,7 @@ class RequestManager:
             __proc_reqs(elem)
 
         # gather requests
-        reqs_by_type: Dict[RequestType, Request] = dict((t, []) for t in RequestType)
+        reqs_by_type: Dict[RequestType, List[Request]] = dict((t, []) for t in RequestType)
         for req in reqs:
             reqs_by_type[req.type].append(req)
         return reqs_by_type
@@ -300,11 +300,10 @@ class RequestManager:
 
         # handle requests
         for req_type in self.request_priority:
-            # request exists
-            if req_type not in reqs_by_type or len(reqs_by_type) == 0:
+            reqs: ReqList = reqs_by_type.get(req_type, [])
+            if not reqs:
                 continue
 
-            reqs: ReqList = reqs_by_type[req_type]
             _log_reqs(reqs)
             self.process_request(req_type, reqs, **kwargs)
 

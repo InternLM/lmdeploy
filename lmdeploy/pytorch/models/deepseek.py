@@ -9,7 +9,7 @@ from transformers.configuration_utils import PretrainedConfig
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -123,7 +123,10 @@ class DeepseekMoE(nn.Module):
             is_tp=False,
         )
 
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.softmax_topk = SoftmaxTopK(
+            self.top_k,
+            n_groups=getattr(config, 'router_n_groups', -1),
+        )
 
         self.experts = build_fused_moe(
             self.hidden_dim,
@@ -309,29 +312,7 @@ class DeepseekModel(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        rope_scaling = getattr(config, 'rope_scaling', None)
-        emb_type = RopeType.LinearScaling
-        scaling_factor = 1.0
-        if rope_scaling is not None:
-            rope_type = rope_scaling['type']
-            if rope_type == 'linear':
-                emb_type = RopeType.LinearScaling
-            if rope_type == 'dynamic':
-                emb_type = RopeType.DynamicNTKScaling
-            else:
-                raise RuntimeError(f'Unsupported rope type: {rope_type}')
-            scaling_factor = rope_scaling.get('factor', scaling_factor)
-
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            scaling_factor,
-            emb_type=emb_type,
-        )
+        self.rotary_emb = build_rotary_embedding_from_config(config)
 
     def forward(
         self,

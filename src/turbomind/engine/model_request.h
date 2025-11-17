@@ -4,6 +4,8 @@
 
 #include <memory>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/gateway.h"
 
@@ -28,14 +30,17 @@ public:
         GenerationConfig gen_cfg;
 
         bool stream_output;
+        bool enable_metrics;
     };
 
     struct OutputParam {
         std::shared_ptr<TensorMap>          tensors;
         std::shared_ptr<AtomicRequestState> state;
+        std::shared_ptr<RequestMetrics>     metrics;
     };
 
     OutputParam Forward(InputParam param, std::function<void()> cb);
+    void        setGrammar(const xgrammar::CompiledGrammar& grammar);
 
 protected:
     Gateway* const gateway_;
@@ -50,8 +55,9 @@ protected:
 
     std::weak_ptr<Request> request_;
 
-    std::shared_ptr<TensorMap> inputs_;
-    std::shared_ptr<TensorMap> outputs_;
+    std::shared_ptr<TensorMap>                 inputs_;
+    std::shared_ptr<TensorMap>                 outputs_;
+    std::shared_ptr<xgrammar::CompiledGrammar> grammar_;
 };
 
 }  // namespace turbomind

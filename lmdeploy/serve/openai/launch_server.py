@@ -97,11 +97,10 @@ def launch_server(num_nodes: int,
     ep = backend_config.ep
     assert dp > 1, f'only support dp > 1, but give dp={dp}'
     assert tp > 1 or ep > 1, f'only support tp > 1 or ep > 1, but given tp={tp} ep={ep}'
-    assert tp <= dp, f'only support tp <= dp, but give tp={tp}, dp={dp}'
-    assert ep <= dp, f'only support ep <= dp, but give tp={ep}, dp={dp}'
 
+    num_devices = max(dp, tp, ep)
     dp_per_node = dp // num_nodes
-    tp_per_dp = 1  # each dp uses one rank
+    tp_per_dp = num_devices // dp
     http_or_https = 'https' if kwargs.get('ssl', False) else 'http'
     model_name = kwargs.get('model_name', None)
     if model_name is None:

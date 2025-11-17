@@ -1,13 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import inspect
 import json
-from dataclasses import asdict, fields
+from dataclasses import asdict, field, fields
 from typing import List
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
 
 from lmdeploy.messages import TurbomindEngineConfig
+from lmdeploy.utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 
 def config_from_dict(cls, env):
@@ -51,24 +54,28 @@ class ModelConfig:
     # Therefore, we add a new attr "embedding_size" to represent the vocab dim
     # of token_embedding
     embedding_size: int = 0
-    # for some models like qwen2.5, the vocab size of the model is larger than
-    # the vocab size of the tokenizer.
-    tokenizer_size: int = None
     num_layer: int = None
     inter_size: List[int] = None
     norm_eps: float = None
     attn_bias: int = 0
+    mlp_bias: bool = False
+    window_size: List[int] = field(default_factory=list)
+    attn_sink: bool = False
     qk_norm: bool = False
     size_per_head: int = 128
     group_size: int = 64
+    data_type: str = None
     weight_type: str = None
+    expert_weight_type: str = None
     session_len: int = None
     attn_tp_size: int = 1
     mlp_tp_size: int = 1
     model_format: str = 'hf'
     expert_num: List[int] = ()
+    expert_router_bias: bool = False
     expert_inter_size: int = 0
     experts_per_token: int = 0
+    activation_type: str = ''
     moe_shared_gate: bool = False
     norm_topk_prob: bool = False
     routed_scale: float = 1.0
@@ -104,6 +111,7 @@ class RopeParam:
     low_freq_factor: float = None
     high_freq_factor: float = None
     original_max_position_embeddings: int = None
+    mrope_section: List[int] = None
 
 
 @dataclass
@@ -150,15 +158,37 @@ class TurbomindModelConfig:
             if hasattr(self.attention_config, key):
                 setattr(self.attention_config, key, value)
 
+        # update from hf_overrides
+        if hasattr(config, 'hf_overrides') and config.hf_overrides:
+            hf_overrides = config.hf_overrides
+
+            if hf_overrides.get('rope_scaling'):
+                override_params = hf_overrides.get('rope_scaling')
+
+                rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
+                rope_param.type = override_params.get('rope_type', '')
+                if rope_param.type == 'yarn' and 'original_max_position_embeddings' in override_params:
+                    rope_param.factor = self.attention_config.max_position_embeddings / override_params[
+                        'original_max_position_embeddings']
+                    rope_param.max_position_embeddings = override_params['original_max_position_embeddings']
+                else:
+                    rope_param.factor = override_params.get('factor', 1.0)
+                    rope_param.max_position_embeddings = override_params.get('original_max_position_embeddings', None)
+
+                self.attention_config.rope_param = rope_param
+            logger.warning(f'Overriding HF config with {hf_overrides}')
+
         # use dynamic ntk
         if config.rope_scaling_factor:
-            if self.attention_config.rope_param is None:
-                # some ut will create empty RopeParam, will check base/dim in src code
-                self.attention_config.rope_param = RopeParam(type='', base=0, dim=0)
-            self.attention_config.rope_param.__dict__.update(
-                type='dynamic',
-                factor=config.rope_scaling_factor,
-                max_position_embeddings=self.attention_config.max_position_embeddings)
+            # some ut will create empty RopeParam, will check base/dim in src code
+            rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
+            rope_param.type = 'dynamic'
+            rope_param.factor = config.rope_scaling_factor
+            rope_param.max_position_embeddings = self.attention_config.max_position_embeddings
+
+            self.attention_config.rope_param = rope_param
+            logger.warning(
+                '`--rope-scaling-factor` will be removed in a future release. Please instead use `--hf-overrides`.')
 
     @classmethod
     def from_dict(cls, config: dict = {}):

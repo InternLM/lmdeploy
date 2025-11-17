@@ -42,6 +42,7 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/187:/mnt/187
         - /mnt/shared:/mnt/shared
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Setup systems
@@ -65,20 +66,19 @@ jobs:
           make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-          python3 -m pip install cmake packaging wheel transformers_stream_generator transformers==4.51.3 datasets openai einops timm decord
-          python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt -r requirements/build.txt
-          mkdir -p build && cd build &&\
-          sh ../generate.sh &&\
-          ninja -j$(nproc) && ninja install &&\
-          cd .. &&\
-          python3 -m pip install -e . &&\
-          rm -rf build
+          # We need to pin transformers version (<4.52.0) to avoid test failures due to breaking changes.
+          python3 -m pip install transformers==4.51.3 timm
+          python3 -m pip install -r requirements/lite.txt
+          python3 -m pip install -r requirements/test.txt
+          python3 -m pip install -e .
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/flash_attn-2.8.0.post2-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /nvme/qa_test_models/offline_pkg/flash_attn-2.8.3+cu12torch2.8cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
       - name: Check env
         run: |
           python3 -m pip list
           lmdeploy check_env
+          mkdir allure-results
+          echo "starttime=$(date +%s)" > allure-results/status.txt
       - name: Test lmdeploy
         run: |
           CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=allure-results --clean-alluredir
@@ -90,6 +90,7 @@ jobs:
           export report_dir="$REPORT_DIR/$date_today"
           echo "Save report to $report_dir"
           mv allure-results $report_dir
+          echo "status=done" >> $report_dir/status.txt
       - name: Clear workfile
         if: always()
         run: |

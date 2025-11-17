@@ -10,7 +10,10 @@
 #include <memory>
 #include <ostream>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/utils/metrics.h"
 
 namespace turbomind {
 
@@ -133,20 +136,25 @@ struct Request {
 
     std::shared_ptr<AtomicRequestState> state;
 
+    std::shared_ptr<RequestMetrics> metrics;
+
     int ec;  // set when disabling conflicting requests
 
     enum
     {
-        kOk       = 0,
-        kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
-        kConflict = 2,  // Concurrent requests to the same sequence
-        kBusy     = 3,  // Sequence is already running
-        kInactive = 4,  // Sequence to `stop` is not active
-        kFail     = 5,  // Can't find sequence for `stop` request or internal error during inference
-        kTooLong  = 6,  // history + prompt > session_len,
-        kFinish   = 7,
-        kCancel   = 8,
+        kOk            = 0,
+        kInvalid       = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
+        kConflict      = 2,  // Concurrent requests to the same sequence
+        kBusy          = 3,  // Sequence is already running
+        kInactive      = 4,  // Sequence to `stop` is not active
+        kFail          = 5,  // Can't find sequence for `stop` request or internal error during inference
+        kTooLong       = 6,  // history + prompt > session_len,
+        kFinish        = 7,
+        kCancel        = 8,
+        kInconsistency = 9,  // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
     };
+
+    std::shared_ptr<xgrammar::GrammarMatcher> matcher;
 };
 
 inline void UpdateState(Request& r, int status, int seq_len)

@@ -3,6 +3,7 @@ import json
 import os.path as osp
 from collections import deque
 from dataclasses import dataclass
+from functools import partial
 from typing import List, Optional, Sequence, Tuple, Union
 
 from lmdeploy.utils import get_logger
@@ -289,12 +290,18 @@ class HuggingFaceTokenizer:
         # This is the first iteration for this sequence
         new_tokens = tokenizer.convert_ids_to_tokens(all_input_ids[ids_offset:],
                                                      skip_special_tokens=skip_special_tokens)
+        # `convert_ids_to_tokens` returns None for out-of-range token_id
+        new_tokens = new_tokens or []
+        new_tokens = [x for x in new_tokens if x is not None] if None in new_tokens else new_tokens
         if prev_tokens is None:
             # Please notice that in VLLM, indexes are detokenized one by one
             # while in LMDeploy, every turn, the detokenized indexes length
             # can be different.
             prev_tokens = tokenizer.convert_ids_to_tokens(all_input_ids[:ids_offset],
                                                           skip_special_tokens=skip_special_tokens)
+            # `convert_ids_to_tokens` returns None for out-of-range token_id
+            prev_tokens = prev_tokens or []
+            prev_tokens = [x for x in prev_tokens if x is not None] if None in prev_tokens else prev_tokens
             read_offset = len(prev_tokens)
             if skip_special_tokens and new_tokens and new_tokens[0] in tokenizer.all_special_ids:
                 read_offset = read_offset + 1  # skip special token
@@ -378,6 +385,35 @@ class ChatGLMTokenizer(HuggingFaceTokenizer):
         self.model._pad = __pad
 
 
+class GptOssTokenizer(HuggingFaceTokenizer):
+    """Tokenizer of GPT-OSS."""
+
+    def __init__(self, model_dir: str):
+        super(GptOssTokenizer, self).__init__(model_dir)
+        from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        self.role = Role.ASSISTANT
+        self.parser = partial(StreamableParser, encoding, role=Role.ASSISTANT)
+
+    def detokenize_incrementally(self,
+                                 all_input_ids: Sequence[int],
+                                 state: DetokenizeState,
+                                 skip_special_tokens: bool = True,
+                                 spaces_between_special_tokens: bool = True):
+        if not hasattr(state, 'stream'):
+            state.stream = self.parser()
+
+        response = ''
+        stream = state.stream
+        for token_id in all_input_ids[state.ids_offset:]:
+            stream.process(token_id)
+            if stream.current_channel in ['final', 'analysis'] and stream.current_role == self.role:
+                response += stream.last_content_delta or ''
+
+        state.ids_offset = len(all_input_ids)
+        return response, state
+
+
 class Tokenizer:
     """Tokenize prompts or de-tokenize tokens into texts.
 
@@ -386,6 +422,12 @@ class Tokenizer:
     """
 
     def __init__(self, model_path: str):
+        from transformers import AutoConfig, PretrainedConfig
+        try:
+            model_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        except Exception as e:  # noqa
+            model_cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
+        is_gpt_oss = getattr(model_cfg, 'model_type', '') == 'gpt_oss'
         from transformers.models.auto.tokenization_auto import get_tokenizer_config
         tokenizer_config = get_tokenizer_config(model_path, trust_remote_code=True)
         config_tokenizer_class = tokenizer_config.get('tokenizer_class')
@@ -393,6 +435,8 @@ class Tokenizer:
             self.model = ChatGLM4Tokenizer(model_path)
         elif config_tokenizer_class == 'ChatGLMTokenizer':
             self.model = ChatGLMTokenizer(model_path)
+        elif is_gpt_oss:
+            self.model = GptOssTokenizer(model_path)
         else:
             self.model = HuggingFaceTokenizer(model_path)
         self.logger = get_logger('lmdeploy')

@@ -38,7 +38,7 @@ public:
 
     virtual std::shared_ptr<HostCommImpl> Split(int color, int key) = 0;
 
-    virtual void Sync() = 0;
+    virtual void Sync(bool blocking = false) = 0;
 
     virtual void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) = 0;
 

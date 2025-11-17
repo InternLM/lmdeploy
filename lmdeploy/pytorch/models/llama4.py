@@ -9,11 +9,10 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import build_fused_moe
-from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -206,8 +205,8 @@ class Llama4TextMoe(nn.Module):
         )
         self.shared_expert = Llama4TextMLP(config, dtype=dtype, device=device, is_tp=True, all_reduce=False)
 
-        dist_ctx = dist.get_dist_manager().current_context()
-        self.tp = dist_ctx.tp
+        dist_config = dist.get_dist_manager().current_config()
+        self.tp = dist_config.tp
 
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
@@ -325,29 +324,7 @@ class Llama4TextModel(nn.Module):
     @staticmethod
     def build_llama4_rotary_embedding(config: Llama4TextConfig):
         """Build llama4 rotary embedding."""
-
-        scaling_factor = 1.0
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        llama3_params = None
-        rope_scaling = config.rope_scaling
-        if rope_scaling is None:
-            emb_type = RopeType.Default
-        else:
-            emb_type = RopeType.Llama3
-            low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
-            high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
-            llama3_params = Llama3Parameters(low_freq_factor, high_freq_factor)
-
-        return build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            scaling_factor,
-            llama3_params=llama3_params,
-            emb_type=emb_type,
-        )
+        return build_rotary_embedding_from_config(config)
 
     def forward(
         self,

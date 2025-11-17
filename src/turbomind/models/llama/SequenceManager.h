@@ -26,11 +26,11 @@ struct Sequence {
     BlockIds  blocks;
     UniqueIds block_unique_ids;
 
-    int input_length = 0;
+    int input_length = 0;  // the number of tokens to be processed in each forward iter
 
     mutable std::vector<int> prompt;
 
-    mutable std::vector<int> tokens;  // update by user
+    mutable std::vector<int> tokens;  // update by user or when the sequence is finished
 
     mutable int cache_len = 0;
 
@@ -54,7 +54,7 @@ inline std::ostream& operator<<(std::ostream& os, const Sequence& seq)
 {
     os << "id=" << seq.id << ", status=" << seq.status << ", token_count=" << seq.tokens.size()
        << ", block_count=" << seq.blocks.size() << ", cache_len=" << seq.cache_len
-       << ", random_state_size=" << seq.random_state.size();
+       << ", random_state_size=" << seq.random_state.size() << ", input_length=" << seq.input_length;
     return os;
 }
 
@@ -111,7 +111,22 @@ public:
                                       int                          step_length,
                                       AdjustInputCount             adjust);
 
-    void CacheIfEnabled(const Sequences& sequences, int active_size);
+    /** @brief cache the input prompt tokens of each seq in sequences[0:active_size-1]
+     *
+     * @param sequences The sequence list
+     * @param active_size the number of active sequences in the list
+     */
+    void CachePrompt(const Sequences& sequences, int active_size);
+
+    /** @brief cache the generated tokens of a given sequence
+     *
+     * @param sequence the given sequence
+     *
+     * @note This function can only be called after the sequence finish generation
+     * and all tokens including the prompt tokens and generated tokens have been put to
+     * `seq.tokens`
+     */
+    void CacheGeneration(const Sequence& sequence);
 
     [[nodiscard]] void* GetBlockPtr(int block_id)
     {
@@ -122,6 +137,29 @@ public:
     {
         return block_manager_->max_block_count();
     }
+
+    int total_count() const noexcept
+    {
+        return block_manager_->total_count();
+    }
+
+    int active_count() const noexcept
+    {
+        return block_manager_->active_count();
+    }
+
+    int free_count() const noexcept
+    {
+        return block_manager_->free_count();
+    }
+
+    int cached_count() const noexcept
+    {
+        return block_manager_->cached_count();
+    }
+
+    // return #total_seq, #active_seq, #cached_seq
+    std::tuple<int, int, int> seq_stats() const noexcept;
 
 private:
     void Erase(std::map<uint64_t, Sequence>::iterator& it);
@@ -142,6 +180,8 @@ private:
                                   const std::vector<int>& counts,
                                   const BlockIds&         blocks,
                                   const UniqueIds&        unique_ids);
+
+    void PrefixMatch(Sequences& sequences);
 
 private:
     int block_seq_len_;

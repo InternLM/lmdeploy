@@ -2,7 +2,7 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch.messages import SchedulerSession
+from lmdeploy.pytorch.messages import SchedulerSession, SequenceManager, SequenceMeta
 from lmdeploy.pytorch.paging.block_manager import DefaultBlockManager, WindowBlockManager
 from lmdeploy.pytorch.paging.block_manager.base_block_manager import LogicalAllocator
 
@@ -89,8 +89,16 @@ class TestDefaultBlockManager:
     def block_mgr(self, num_cpu_blocks, num_gpu_blocks):
         yield DefaultBlockManager(num_cpu_blocks, num_gpu_blocks)
 
-    def test_alloc(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0, block_size)
+    @pytest.fixture
+    def seq_manager(self, block_size):
+        from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+        strategy = ARSequenceStrategy()
+        seq_meta = SequenceMeta(block_size, strategy=strategy)
+        yield SequenceManager(seq_meta)
+
+    def test_alloc(self, block_mgr, seq_manager, num_gpu_blocks):
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
 
         # test alloc
         token_ids = torch.tensor([1])
@@ -113,9 +121,10 @@ class TestDefaultBlockManager:
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
 
-    def test_num_required_blocks(self, block_mgr, block_size, num_gpu_blocks):
+    def test_num_required_blocks(self, block_mgr, seq_manager, num_gpu_blocks):
         from lmdeploy.pytorch.messages import InputEmbeddings
-        sess = SchedulerSession(0, block_size)
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
 
         token_ids = torch.tensor([1])
         msg = sess.add_sequence(token_ids)
@@ -133,8 +142,9 @@ class TestDefaultBlockManager:
         num_required = block_mgr.num_required_blocks(msg)
         assert num_required == 3
 
-    def test_append_slot(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0, block_size)
+    def test_append_slot(self, block_mgr, seq_manager, num_gpu_blocks):
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
 
         # test append
         token_ids = torch.tensor([1])
@@ -158,8 +168,9 @@ class TestDefaultBlockManager:
         assert len(block_table) == 2
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
 
-    def test_swap(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0, block_size)
+    def test_swap(self, block_mgr, seq_manager, num_gpu_blocks):
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
 
         token_ids = torch.tensor([1] * (block_size + 1))
         msg = sess.add_sequence(token_ids)
@@ -216,11 +227,19 @@ class TestWindowBlockManager:
         yield 4
 
     @pytest.fixture
+    def seq_manager(self, block_size):
+        from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+        strategy = ARSequenceStrategy()
+        seq_meta = SequenceMeta(block_size, strategy=strategy)
+        yield SequenceManager(seq_meta)
+
+    @pytest.fixture
     def block_mgr(self, num_cpu_blocks, num_gpu_blocks, window_size):
         yield WindowBlockManager(num_cpu_blocks, num_gpu_blocks, window_size)
 
-    def test_alloc(self, block_mgr, block_size, num_gpu_blocks):
-        sess = SchedulerSession(0, block_size)
+    def test_alloc(self, block_mgr, seq_manager, num_gpu_blocks):
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
 
         # test alloc
         token_ids = torch.tensor([1])
@@ -243,8 +262,8 @@ class TestWindowBlockManager:
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
 
-    def test_win_alloc(self, block_mgr, block_size, num_gpu_blocks, window_size):
-        sess = SchedulerSession(0, block_size)
+    def test_win_alloc(self, block_mgr, seq_manager, num_gpu_blocks, window_size):
+        sess = SchedulerSession(0, seq_manager)
 
         # 2 win block
         token_ids = torch.tensor([1] * window_size)

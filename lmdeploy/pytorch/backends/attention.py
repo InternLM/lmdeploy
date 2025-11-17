@@ -67,6 +67,10 @@ class AttentionImpl(ABC, Generic[T]):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         attn_metadata: T,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+        learnable_sink: torch.Tensor = None,
+        inplace: bool = False,
     ) -> torch.Tensor:
         """forward."""
         raise NotImplementedError
@@ -88,6 +92,8 @@ class AttentionBuilder(ABC, Generic[T]):
         logical_softcapping: float = None,
         causal: bool = True,
         use_flash_mla: bool = False,
+        learnable_sink: bool = False,
+        block_sparse_size: int = 1,
         **kwargs,
     ) -> AttentionImpl[T]:
         """build."""

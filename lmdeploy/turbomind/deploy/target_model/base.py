@@ -2,7 +2,6 @@
 
 import os.path as osp
 from abc import ABC
-from collections import defaultdict
 from collections.abc import Sequence
 
 import torch
@@ -55,7 +54,7 @@ class BaseOutputModel(ABC):
         self.mlp_tp_size = self.model_config.mlp_tp_size
         self.out_dir = out_dir
         self.to_file = True if out_dir else False
-        self.tm_params = defaultdict(list)
+        self.tm_params = dict()
 
         # get `model_info` at first, which will be updated to `self.model_config` and `self.attention_config`
         self.input_model_info = self.input_model.model_info()
@@ -102,10 +101,6 @@ class BaseOutputModel(ABC):
         final_cfg.update(self.input_model_info)
         if 'embedding_size' not in self.input_model_info.keys():
             final_cfg.update(embedding_size=self.input_model_info['vocab_size'])
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.input_model.tokenizer_path, trust_remote_code=True)
-        tokenizer_size = min(len(tokenizer), final_cfg['vocab_size'])
-        final_cfg.update(tokenizer_size=tokenizer_size)
 
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 
@@ -146,24 +141,30 @@ class BaseOutputModel(ABC):
         elif len(self.tm_params) > 0:
             tm_params = self.tm_params
             weight_type = self.model_config.weight_type
+            data_type = self.model_config.data_type
             assert weight_type in ['float16', 'bfloat16', 'int4', 'fp8']
 
             # currently, the tensor type should in
             # [torch.float, torch.half, torch.bfloat16, torch.int32]
-            torch_tensor = param.cuda().contiguous()
+            torch_tensor = param if param.is_contiguous() else param.contiguous()
+            torch_tensor = torch_tensor.cuda()
             assert torch_tensor.dtype in [torch.int32, torch.float, torch.half, torch.bfloat16, torch.uint8]
-            if torch_tensor.dtype != torch.int32:
+            FLOAT_TYPES = [torch.float, torch.half, torch.bfloat16]
+            if weight_type == 'fp8':
+                # avoid casting float scales to half
+                if torch_tensor.dtype == torch.bfloat16 and data_type == 'float16':
+                    torch_tensor = torch_tensor.half()
+            elif torch_tensor.dtype in FLOAT_TYPES:
                 if weight_type in ['float16', 'int4']:
                     torch_tensor = torch_tensor.half()
                 elif weight_type == 'bfloat16':
                     torch_tensor = torch_tensor.bfloat16()
-                elif weight_type == 'fp8':
-                    pass
                 else:
                     torch_tensor = torch_tensor.half()
-            for tm_tensor in tm_params[name]:
-                tm_tensor.copy_from(torch_tensor)
-            tm_params.pop(name)
+            if name in tm_params:
+                for tm_tensor in tm_params[name]:
+                    tm_tensor.copy_from(torch_tensor)
+                tm_params.pop(name)
         else:
             tprint('skip export', name, param.shape)
 

@@ -22,7 +22,9 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
 
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/gemm/types.h"
+
 #include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
@@ -43,13 +45,22 @@ struct LoraWeight {
     void*      b;
 };
 
+using gemm::QuantDesc;
+using gemm::MatrixLayout;
+using gemm::Epilogue;
+
 struct LlamaDenseWeight: public core::Module {
 
-    LlamaDenseWeight(): data_type{}, weight_type{}, lora{}, k_desc{}, q_desc{} {}
+    LlamaDenseWeight():
+        data_type{}, weight_type{}, input_type{}, weight_quant{}, input_quant{}, epilogue{}, k_desc{}, q_desc{}
+    {
+    }
 
     void emplace(int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size);
 
-    void prepare(bool fused_moe, bool use_simt);
+    void preprocess();
+
+    void prepare(bool fused_moe = 0);
 
     LlamaDenseWeight& operator=(std::nullptr_t)
     {
@@ -67,21 +78,24 @@ struct LlamaDenseWeight: public core::Module {
     int output_dim = 0;
     int group_size = 1;
 
-    DataType data_type;
-    DataType weight_type;
-
     Tensor weight;
     Tensor bias;
 
     Tensor scales;
     Tensor zeros;
 
-    Tensor scales_zeros;
+    DataType data_type;
 
-    LoraWeight lora;
+    DataType weight_type;
+    DataType input_type;
 
-    gemm::MatrixLayout k_desc;
-    gemm::MatrixLayout q_desc;
+    QuantDesc weight_quant;
+    QuantDesc input_quant;
+
+    Epilogue epilogue;
+
+    MatrixLayout k_desc;
+    MatrixLayout q_desc;
 };
 
 struct LlamaAttentionWeight: public core::Module {
@@ -99,12 +113,16 @@ struct LlamaAttentionWeight: public core::Module {
                          int      tp_rank,
                          DataType data_type,
                          DataType weight_type,
-                         int      group_size);
+                         int      group_size,
+                         int      window_size,
+                         bool     sink);
 
-    void prepare(bool use_simt);
+    void prepare();
 
     LlamaDenseWeight qkv;
     LlamaDenseWeight output;
+
+    Tensor sinks;
 
     LlamaDenseWeight q_proj;
     LlamaDenseWeight q_a_proj;
@@ -114,32 +132,40 @@ struct LlamaAttentionWeight: public core::Module {
 
     Tensor q_a_layernorm;
     Tensor kv_a_layernorm;
+
+    int window_size{};
 };
 
 struct LlamaFfnWeight: core::Module {
 
     LlamaFfnWeight() = default;
 
-    LlamaFfnWeight(int      hidden_dim,
-                   int      inter_size,
-                   int      tp_size,
-                   int      tp_rank,
-                   DataType data_type,
-                   DataType weight_type,
-                   int      group_size,
-                   bool     fuse_silu_act);
+    LlamaFfnWeight(int            hidden_dim,
+                   int            inter_size,
+                   bool           bias,
+                   int            tp_size,
+                   int            tp_rank,
+                   DataType       data_type,
+                   DataType       weight_type,
+                   int            group_size,
+                   ActivationType act_type,
+                   bool           fuse_silu_act);
 
     static constexpr bool fuse_up_and_gate = true;
 
-    void prepare(bool fused_moe, bool use_simt);
+    void prepare(bool fused_moe);
 
     LlamaDenseWeight gating;
     LlamaDenseWeight intermediate;
     LlamaDenseWeight output;
     LlamaDenseWeight fused_gating_intermediate;
 
+    ActivationType act_type;
+
     int  inter_size{};
     bool is_fused_silu{};
+
+    int tp_rank{};
 };
 
 struct MoeFfnWeight: core::Module {
@@ -149,14 +175,16 @@ struct MoeFfnWeight: core::Module {
     MoeFfnWeight(int             layer_id,
                  const MoeParam& param,
                  int             hidden_dim,
+                 bool            mlp_bias,
                  DataType        data_type,
                  DataType        weight_type,
                  int             group_size,
                  int             tp_size,
                  int             tp_rank,
+                 ActivationType  act_type,
                  bool            fuse_silu_act);
 
-    void prepare(bool use_simt);
+    void prepare();
 
     LlamaDenseWeight gate;
     LlamaDenseWeight shared_gate;
@@ -168,5 +196,7 @@ struct MoeFfnWeight: core::Module {
 
     MoeParam::Method method{};
 };
+
+void LinkExperts(std::function<LlamaDenseWeight*(int)> experts, int n, LlamaDenseWeight& d);
 
 }  // namespace turbomind

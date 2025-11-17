@@ -1,161 +1,110 @@
-# Copyright 2024- the Outlines developers
-# This file is adapted from
-# https://github.com/outlines-dev/outlines/blob/main/outlines/serve/vllm.py
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-
-#     http://www.apache.org/licenses/LICENSE-2.0
-
-import copy
-import math
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-from collections import defaultdict
-from functools import lru_cache
-from typing import DefaultDict, Dict, List, Union
+# Copyright (c) OpenMMLab. All rights reserved.
+import json
+import logging
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-from outlines.fsm.guide import CFGGuide, Generate, RegexGuide, Write
-from outlines.fsm.json_schema import build_regex_from_schema
-from pydantic import BaseModel
+import xgrammar as xgr
 from transformers import PreTrainedTokenizerBase
 
-
-class BaseLogitsProcessor:
-
-    def init_state(self):
-        """Initialize the FSM states."""
-        self.fsm_state: DefaultDict[int, int] = defaultdict(int)
-
-    def __call__(self, input_ids: List[int], scores: torch.Tensor) -> torch.Tensor:
-        """Use the FSM to bias the logits before sampling the next token."""
-
-        seq_id = hash(tuple(input_ids))
-
-        if len(input_ids) == 0:
-            self.init_state()
-        else:
-            last_token = input_ids[-1]
-            last_seq_id = hash(tuple(input_ids[:-1]))
-            self.fsm_state[seq_id] = self.fsm.get_next_state(state=self.fsm_state[last_seq_id], token_id=last_token)
-
-        instruction = self.fsm.get_next_instruction(self.fsm_state[seq_id])
-
-        if type(instruction) == Generate:
-            allowed_tokens = instruction.tokens
-        elif type(instruction) == Write:
-            # TODO: support fast forward tokens
-            allowed_tokens = [instruction.tokens[0]]
-        else:
-            raise TypeError(f'Unsupported instruction type {type(instruction)}')
-
-        mask = torch.full((scores.shape[-1], ), -math.inf, device=scores.device)
-        mask[allowed_tokens] = 0
-        scores.add_(mask)
-
-        return scores
-
-    def adapt_tokenizer(self, tokenizer):
-        """Adapt tokenizer to use to compile the FSM.
-
-        The API of Outlines tokenizers is slightly different to that of `transformers`. In addition we need to handle
-        the missing spaces to Llama's tokenizer to be able to compile FSMs for this model.
-        """
-        from outlines.integrations.utils import adapt_tokenizer
-        tokenizer = adapt_tokenizer(tokenizer)
-        # vocab size greater than logits shape because of '[UNUSED_TOKEN_...]'
-        if hasattr(tokenizer, '_tokenizer'):
-            tokenizer.vocabulary = tokenizer._tokenizer.get_vocab(with_added_tokens=False)
-        return tokenizer
+logger = logging.getLogger('lmdeploy')
 
 
-class RegexLogitsProcessor(BaseLogitsProcessor):
+class GuidedDecodingManager:
+    processors = {}
 
-    def __init__(self, regex_string: str, tokenizer):
-        """Compile the FSM that drives the regex-structured generation.
+    def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: Optional[int]):
+        if vocab_size is None:
+            vocab_size = tokenizer.vocab_size
 
-        Args:
-            regex_string: A string that represents a regular expression
-            tokenizer: The model's tokenizer
-        """
-        tokenizer = self.adapt_tokenizer(copy.deepcopy(tokenizer))
-        fsm = RegexGuide(regex_string, tokenizer)
-        self.fsm = fsm
+        tokenizer_info = xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=vocab_size)
+        self.compiler = xgr.GrammarCompiler(tokenizer_info)
+        self.vocab_size = vocab_size
 
+    def get_processors(self, session_ctx: List[Dict[str, Any]],
+                       response_formats: Tuple[Dict]) -> Dict[int, xgr.GrammarMatcher]:
+        processors = {}
+        for i, _format in enumerate(response_formats):
+            if isinstance(_format, Dict) and _format.get('type', 'text') != 'text':
+                schema_type = _format['type']
+                if schema_type == 'json_schema':
+                    schema = _format['json_schema']
+                    if isinstance(schema, Dict):
+                        for key in ['json_schema', 'schema']:
+                            if key in schema:
+                                schema = json.dumps(schema[key], ensure_ascii=False)
 
-class JSONLogitsProcessor(RegexLogitsProcessor):
+                    if not isinstance(schema, str):
+                        raise ValueError(f'Cannot parse schema {schema}. The schema must be '
+                                         'either a dictionary or a string that contains the'
+                                         ' JSON Schema specification')
+                elif schema_type == 'regex_schema':
+                    schema = _format.get('regex_schema', '')
+                elif schema_type == 'json_object':
+                    schema = '{"type" : "object", "additionalProperties": true}'
+                else:
+                    raise ValueError(f'unsupported format type: {schema_type}')
 
-    def __init__(self, schema: Union[str, Dict, BaseModel], tokenizer):
-        """Compile the FSM that drives the JSON-guided generation.
+                session_id = session_ctx[i]['session_id']
+                seq_id = session_ctx[i]['seq_id']
 
-        Args:
-            schema: A str schema that encodes the structure we want the model
-                to generate
-            tokenizer: The model's tokenizer
-        """
-        regex_string = build_regex_from_schema(schema)
-        super().__init__(regex_string, tokenizer)
+                processors[i] = self.get_processor(session_id, seq_id, schema, schema_type)
 
+        return processors
 
-class CFGLogitsProcessor(BaseLogitsProcessor):
+    def get_processor(self, session_id: int, seq_id: int, schema: str, type: str) -> xgr.GrammarMatcher:
+        if session_id in self.processors:
+            session_dict = self.processors[session_id]
+            if seq_id in session_dict:
+                processor = session_dict[seq_id]
+                return processor
 
-    def __init__(self, cfg: str, tokenizer: PreTrainedTokenizerBase):
-        """Compile the FSM that drives the context free grammar generation.
+        if type == 'json_schema':
+            if isinstance(schema, str):
+                schema = json.loads(schema)
 
-        Parameters
-        ----------
-        cfg
-            A string that represents a context-free grammar
-        tokenizer
-            The model's tokenizer
-        """
-        tokenizer = self.adapt_tokenizer(tokenizer)
-        fsm = CFGGuide(cfg, tokenizer)
-        self.fsm = fsm
-
-
-# copied from https://github.com/vllm-project/vllm/blob/a7f65c2be93f491771aca31106f790bf381c0bad/vllm/model_executor/guided_decoding/outlines_decoding.py#L31  # noqa
-JSON_GRAMMAR = r"""
-?start: object | array
-
-?value: object
-| array
-| UNESCAPED_STRING
-| SIGNED_NUMBER      -> number
-| "true"             -> true
-| "false"            -> false
-| "null"             -> null
-
-array  : "[" [value ("," value)*] "]"
-object : "{" [pair ("," pair)*] "}"
-pair   : UNESCAPED_STRING ":" value
-
-%import common.UNESCAPED_STRING
-%import common.SIGNED_NUMBER
-%import common.WS
-
-%ignore WS
-"""
-
-
-@lru_cache(maxsize=32)
-def _get_guided_logits_processor(guide: str, tokenizer: PreTrainedTokenizerBase, type: str):
-    try:
-        if type == 'json_object':
-            return CFGLogitsProcessor(guide, tokenizer)
-        elif type == 'json_schema':
-            return JSONLogitsProcessor(guide, tokenizer)
+            assert isinstance(schema, dict)
+            compiled = self.compiler.compile_json_schema(schema)
         elif type == 'regex_schema':
-            return RegexLogitsProcessor(guide, tokenizer)
+            compiled = self.compiler.compile_regex(schema)
+        elif type == 'json_object':
+            compiled = self.compiler.compile_json_schema(schema)
         else:
-            return None
-    except Exception as e:
-        from lmdeploy.utils import get_logger
-        logger = get_logger('lmdeploy')
-        logger.error(e)
-        return None
+            assert False, f'Do not support schema type {type}'
+
+        processor = xgr.GrammarMatcher(compiled, terminate_without_stop_token=True)
+        self.processors.setdefault(session_id, {})[seq_id] = processor
+        logger.info(f'create guided processor for session_id={session_id}, seq_id={seq_id}, and '
+                    f'total_processors={len(self.processors)}')
+        return processor
+
+    def remove_processor(self, session_id: int):
+        if session_id in self.processors:
+            del self.processors[session_id]
+            logger.info(
+                f'delete guided processor for session_id={session_id}, and total_processors={len(self.processors)}')
+
+    def allocate_batched_bitmap(self, batch_size: int) -> torch.Tensor:
+        return xgr.allocate_token_bitmask(batch_size, self.vocab_size)
+
+    def fill_bitmap(self, processor: xgr.GrammarMatcher, guided_bitmask: torch.Tensor, index: int) -> None:
+        processor.fill_next_token_bitmask(guided_bitmask, index)
+
+    def accept_token(self, processor: xgr.GrammarMatcher, token: int) -> None:
+        processor.accept_token(token)
+
+    def apply_batched_bitmap(self, logits: torch.Tensor, guided_bitmask: torch.Tensor) -> None:
+        device = logits.device
+        dtype = logits.dtype
+
+        if device.type in {'cpu', 'cuda'}:
+            xgr.apply_token_bitmask_inplace(logits, guided_bitmask.to(device))
+        else:
+            cpu_logits = logits.cpu().float()
+            cpu_mask = guided_bitmask.cpu()
+            xgr.apply_token_bitmask_inplace(cpu_logits, cpu_mask)
+            logits.copy_(cpu_logits.to(device, dtype))
+
+    def clear(self) -> None:
+        self.processors.clear()
+        logger.info(f'clear guided processors, total_processors={len(self.processors)}')

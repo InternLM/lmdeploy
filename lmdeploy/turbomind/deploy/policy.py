@@ -9,9 +9,9 @@ def to_cuda(x: torch.Tensor, *args):
 
 
 def get_u4_slices(x: torch.Tensor, dtype: torch.dtype) -> List[torch.Tensor]:
-    assert x.dtype == torch.int32
+    MAP = {torch.int32: 8, torch.uint8: 2}
     xs = []
-    for _ in range(8):
+    for _ in range(MAP[x.dtype]):
         xs.append((x & 15).to(dtype))
         x = x >> 4
     return xs
@@ -46,6 +46,17 @@ def process_gptq(x: torch.Tensor, kind: str):
     return x
 
 
+def process_mxfp4(x: torch.Tensor, kind: str):
+    # print(x.shape, x.dtype, kind)
+    x = x.cuda()
+    if kind == 'blocks':
+        xs = get_u4_slices(torch.flatten(x, start_dim=-2), torch.uint8)
+        x = torch.flatten(torch.stack(xs, dim=-1), start_dim=-2)
+    if kind == 'scales':
+        pass
+    return x
+
+
 def process_fp8(x: torch.Tensor, kind: str):
     x = x.cuda()
     if x.dtype == torch.float8_e4m3fn:
@@ -62,6 +73,8 @@ def get_input_policy(model_format):
         return process_awq_gemm
     elif model_format == 'gptq':
         return process_gptq
+    elif model_format == 'mxfp4':
+        return process_mxfp4
     elif model_format == 'fp8':
         return process_fp8
     else:

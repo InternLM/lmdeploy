@@ -8,6 +8,7 @@ from typing import Dict, Tuple
 
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
@@ -19,7 +20,7 @@ logger = get_logger('lmdeploy')
 
 class SocVersion:
     Ascend310P: str = 'Ascend310P'
-    Ascend910B: str = 'Ascend910B'
+    Ascend910: str = 'Ascend910'
 
     @classmethod
     @lru_cache(maxsize=1)
@@ -38,8 +39,8 @@ class SocVersion:
         return cls.device_name().startswith(cls.Ascend310P)
 
     @classmethod
-    def is_Ascend910B(cls) -> bool:
-        return cls.device_name().startswith(cls.Ascend910B)
+    def is_Ascend910(cls) -> bool:
+        return cls.device_name().startswith(cls.Ascend910)
 
 
 class AscendKVQuantMeta:
@@ -105,7 +106,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        if SocVersion.is_Ascend910B():
+        if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
         elif SocVersion.is_Ascend310P():
             return (
@@ -123,7 +124,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        if SocVersion.is_Ascend910B():
+        if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
         elif SocVersion.is_Ascend310P():
             return (
@@ -133,6 +134,16 @@ class AscendOpsBackend(DlinferOpsBackend):
             )
         else:
             raise ValueError(f'dlinfer does not support {SocVersion.device_name()} device currently.')
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def enable_aclgraph(cls) -> bool:
+        if os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'aclgraph' and not SocVersion.is_Ascend310P():
+            return True
+        elif os.getenv('ASCEND_GRAPH_MODE', 'aclgraph') == 'atbgraph' or SocVersion.is_Ascend310P():
+            return False
+        else:
+            raise ValueError(f"unsupported ASCEND_GRAPH_MODE: {os.getenv('ASCEND_GRAPH_MODE')}")
 
     @classmethod
     def update_step_context(cls, step_context):
@@ -147,7 +158,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             return cls.total_slots
 
         kv_start_indices, attention_mask = [], []
-        if SocVersion.is_Ascend910B():
+        if SocVersion.is_Ascend910():
             block_num, block_size, *_ = step_context.kv_caches[0][0].shape
         elif SocVersion.is_Ascend310P():
             block_num, _, block_size, _ = step_context.kv_caches[0][0].shape
@@ -202,7 +213,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             # prepare some params of unpaged_prefill attention stage.
             q_start_loc_cpu, kv_seqlens_cpu = None, None
             q_seqlens_cpu = step_context.q_seqlens.cpu()
-            if SocVersion.is_Ascend910B():
+            if SocVersion.is_Ascend910():
                 single_attention_mask = torch.logical_not(
                     torch.tril(
                         torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.bool).cuda(),
@@ -243,10 +254,10 @@ class AscendOpsBackend(DlinferOpsBackend):
             kv_seqlens = step_context.kv_seqlens.to(torch.int32)
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
-                    if SocVersion.is_Ascend910B():
+                    if SocVersion.is_Ascend910():
                         attention_mask = [mask.half() for mask in attention_mask]
                 else:
-                    if SocVersion.is_Ascend910B():
+                    if SocVersion.is_Ascend910():
                         attention_mask = [
                             torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
                         ]
@@ -258,6 +269,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                     else:
                         raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
                     kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
+            if not is_unpaged_prefill and AscendOpsBackend.enable_aclgraph():
+                kv_seqlens = kv_seqlens.cpu().tolist()
         else:
             if step_context.is_decoding:
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu()
@@ -307,10 +320,14 @@ class AscendOpsBackend(DlinferOpsBackend):
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
-        from .graph_runner import AscendGraphRunner
-        ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
-        AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
-        return ascend_graph_runner
+        if AscendOpsBackend.enable_aclgraph():
+            from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
+            return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
+        else:
+            from .graph_runner import AscendGraphRunner
+            ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
+            AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
+            return ascend_graph_runner
 
     @staticmethod
     def init():
@@ -339,5 +356,6 @@ class AscendOpsBackend(DlinferOpsBackend):
     @staticmethod
     def support_ray():
         """Support ray."""
-        os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
+        if not _envs.ascend_set_rt_visable_devices_by_ray:
+            os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
         return True

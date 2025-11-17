@@ -26,6 +26,17 @@
 #define TURBOMIND_ARCH_SM90 0
 #endif
 
+#define TURBOMIND_ARCH_HAS_BF16 TURBOMIND_ARCH_SM80
+
+#define TURBOMIND_ARCH_HAS_FP8 TURBOMIND_ARCH_SM90
+
+#define TURBOMIND_ARCH_BF16_GUARD(type) (TURBOMIND_ARCH_HAS_BF16 || type != ::turbomind::kBfloat16)
+
+#define TURBOMIND_ARCH_FP8_GUARD(type)                                                                                 \
+    (TURBOMIND_ARCH_HAS_FP8 || (type != ::turbomind::kFloat8_e4m3 && type != ::turbomind::kFloat8_e5m2))
+
+#define TURBOMIND_ARCH_DTYPE_GUARD(type) (TURBOMIND_ARCH_BF16_GUARD(type) && TURBOMIND_ARCH_FP8_GUARD(type))
+
 #if defined(__CUDA_ARCH__) && !defined(__INTELLISENSE__)
 #if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
 #define PRAGMA_UNROLL _Pragma("unroll")

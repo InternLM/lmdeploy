@@ -43,7 +43,6 @@ def test_registered_models():
                                                                           group_size=0)
         assert output_name == register_name
         assert config.model_config.group_size == group_size
-        assert config.weight_type == weight_type
         assert config.session_len > 0
         assert config.model_config.model_arch is not None
 

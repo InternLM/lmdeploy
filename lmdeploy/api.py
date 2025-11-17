@@ -68,16 +68,11 @@ def pipeline(model_path: str,
             if backend_config is not None else None
         model_path = get_model(model_path, download_dir, revision)
 
-    task, pipeline_class = get_task(model_path)
-    if task == 'vlm':
-        if backend_config and backend_config.enable_prefix_caching:
-            backend_config.enable_prefix_caching = False
-            logger.warning('VLM does not support prefix caching.')
-
-    if type(backend_config) is not PytorchEngineConfig:
+    _, pipeline_class = get_task(model_path)
+    if not isinstance(backend_config, PytorchEngineConfig):
         # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
-    backend = 'pytorch' if type(backend_config) is PytorchEngineConfig else 'turbomind'
+    backend = 'pytorch' if isinstance(backend_config, PytorchEngineConfig) else 'turbomind'
     logger.info(f'Using {backend} engine')
 
     return pipeline_class(model_path,

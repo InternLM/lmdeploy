@@ -27,6 +27,12 @@ ______________________________________________________________________
 <summary><b>2025</b></summary>
 </details>
 
+- 【2025年9月】TurboMind 引擎支持 MXFP4，适用于 NVIDIA V100 及以上 GPU。在 H800 上推理 openai gpt-oss 模型，性能可达 vLLM 的 1.5倍！
+- 【2025年6月】深度优化 FP8 MoE 模型推理
+- 【2025年6月】集成[DLSlime](https://github.com/DeepLink-org/DLSlime)和[Mooncake](https://github.com/kvcache-ai/Mooncake)，实现DeepSeek PD分离部署，向两个团队表示诚挚的感谢！
+- 【2025年4月】集成deepseek-ai组件FlashMLA、DeepGemm、DeepEP、MicroBatch、eplb等，提升DeepSeek推理性能
+- 【2025年1月】新增对DeepSeek V3及R1的支持
+
 <details close>
 <summary><b>2024</b></summary>
 
@@ -87,8 +93,6 @@ LMDeploy 由 [MMDeploy](https://github.com/open-mmlab/mmdeploy) 和 [MMRazor](ht
 
 - **便捷的服务**：通过请求分发服务，LMDeploy 支持多模型在多机、多卡上的推理服务。
 
-- **有状态推理**：通过缓存多轮对话过程中 attention 的 k/v，记住对话历史，从而避免重复处理历史会话。显著提升长文本多轮对话场景中的效率。
-
 - **卓越的兼容性**: LMDeploy 支持 [KV Cache 量化](docs/zh_cn/quantization/kv_quant.md), [AWQ](docs/zh_cn/quantization/w4a16.md) 和 [Automatic Prefix Caching](docs/zh_cn/inference/turbomind_config.md) 同时使用。
 
 # 性能
@@ -127,11 +131,13 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Qwen2-MoE (57BA14B)</li>
   <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Qwen3, Qwen3-MoE</li>
+  <li>Qwen3-Next(80B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
   <li>ChatGLM2 (6B)</li>
-  <li>GLM4 (9B)</li>
+  <li>GLM-4 (9B)</li>
+  <li>GLM-4-0414 (9B, 32B)</li>
   <li>CodeGeeX4 (9B)</li>
   <li>YI (6B-34B)</li>
   <li>Mistral (7B)</li>
@@ -146,6 +152,8 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Phi-3.5-MoE (16x3.8B)</li>
   <li>Phi-4-mini (3.8B)</li>
   <li>MiniCPM3 (4B)</li>
+  <li>SDAR (1.7B-30B)</li>
+  <li>gpt-oss (20B, 120B)</li>
 </ul>
 </td>
 <td>
@@ -156,12 +164,16 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
+  <li>Qwen3-VL (2B - 235B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>InternVL3 (1B-78B)</li>
+  <li>InternVL3.5 (1B-241BA28B)</li>
+  <li>Intern-S1 (241B)</li>
+  <li>Intern-S1-mini (8.3B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>CogVLM-Chat (17B)</li>
@@ -171,6 +183,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Phi-3-vision (4.2B)</li>
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
+  <li>GLM-4.1V-Thinking (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>
@@ -197,7 +210,17 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
-自 v0.3.0 起，LMDeploy 预编译包默认基于 CUDA 12 编译。如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
+自 v0.3.0 版本起，默认预编译包基于 **CUDA 12** 编译。
+
+若使用 GeForce RTX 50 系列显卡，请安装基于 **CUDA 12.8** 编译的 LMDeploy 预编译包。
+
+```shell
+export LMDEPLOY_VERSION=0.10.2
+export PYTHON_VERSION=310
+pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu128-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
+如果需要在 CUDA 11+ 下安装 LMDeploy，或者源码安装 LMDeploy，请参考[安装文档](docs/zh_cn/get_started/installation.md)
 
 ## 离线批处理
 
@@ -264,6 +287,15 @@ with lmdeploy.pipeline("internlm/internlm3-8b-instruct") as pipe:
     author={LMDeploy Contributors},
     howpublished = {\url{https://github.com/InternLM/lmdeploy}},
     year={2023}
+}
+```
+
+```bibtex
+@article{zhang2025efficient,
+  title={Efficient Mixed-Precision Large Language Model Inference with TurboMind},
+  author={Zhang, Li and Jiang, Youhe and He, Guoliang and Chen, Xin and Lv, Han and Yao, Qian and Fu, Fangcheng and Chen, Kai},
+  journal={arXiv preprint arXiv:2508.15601},
+  year={2025}
 }
 ```
 

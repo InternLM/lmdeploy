@@ -14,7 +14,7 @@ logger = get_logger('lmdeploy')
 TRITON_VERSION = version.parse(triton.__version__)
 VERSION_300 = version.parse('3.0.0')
 VERSION_320 = version.parse('3.2.0')
-assert TRITON_VERSION >= version.parse('2.2.0')
+assert TRITON_VERSION >= VERSION_300
 
 # TODO: fast op might not work on non-nv device
 tanh = tl.extra.cuda.libdevice.tanh
@@ -56,7 +56,8 @@ def _load_kv(ptrs, boundary_check: tl.constexpr):
 def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, history_mask,
                        kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
                        logit_softcapping: tl.constexpr, k_bound: tl.constexpr, v_bound: tl.constexpr,
-                       shared_kv: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_DK1: tl.constexpr):
+                       shared_kv: tl.constexpr, block_sparse_size: tl.constexpr, BLOCK_N: tl.constexpr,
+                       BLOCK_DK1: tl.constexpr):
     k_ptrs = tl.advance(k_ptrs, (0, loop_start))
     v_ptrs = tl.advance(v_ptrs, (loop_start, 0))
     if BLOCK_DK1:
@@ -77,9 +78,13 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
             qk *= sm_scale
             qk = softcapping(qk, logit_softcapping)
             qk = qk * tl_log2(math.e)
-            qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
+            if block_sparse_size > 1:
+                offs_mask = (start_n + offs_n) // block_sparse_size * block_sparse_size
+                qk_mask = (history_mask[:, None]) >= offs_mask[None, :]
+            else:
+                qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
             if window_size > 0:
-                qk_mask = qk_mask and ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+                qk_mask = qk_mask & ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
             qk = tl.where(
                 qk_mask,
                 qk,
@@ -148,9 +153,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
 
 
 # @triton.autotune(list(configs),
-#                  key=['head_dim_k', 'head_dim_v'],
-#                  warmup=10,
-#                  rep=25)
+#                  key=['head_dim_k', 'head_dim_v'])
 @triton.jit
 def _flash_prefill_fwd_kernel(
     q_ptr,
@@ -161,6 +164,7 @@ def _flash_prefill_fwd_kernel(
     q_seqlens_ptr,
     kv_start_loc_ptr,
     kv_seqlens_ptr,
+    sinks,
     sm_scale,
     stride_qs: tl.constexpr,
     stride_qh: tl.constexpr,
@@ -181,6 +185,7 @@ def _flash_prefill_fwd_kernel(
     window_size: tl.constexpr,
     logit_softcapping: tl.constexpr,
     shared_kv: tl.constexpr,
+    block_sparse_size: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_DK: tl.constexpr,
@@ -219,7 +224,7 @@ def _flash_prefill_fwd_kernel(
     offs_dk = tl.multiple_of(tl.max_contiguous(offs_dk % head_dim_k, BLOCK_DK), BLOCK_DK)
     off_q = ((q_start_loc + offs_m[:, None]) * stride_qs + head_id * stride_qh + offs_dk[None, :] * stride_qd)
     q_ptrs = q_ptr + off_q
-    q = tl.load(q_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk[None, :]))
+    q = tl.load(q_ptrs, mask=((offs_m[:, None] < q_seqlen) & mask_dk[None, :]))
 
     k_ptrs = tl.make_block_ptr(
         base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
@@ -253,7 +258,7 @@ def _flash_prefill_fwd_kernel(
         offs_dk1 = tl.multiple_of(tl.max_contiguous(offs_dk1 % head_dim_k, BLOCK_DK1), BLOCK_DK1)
         offs_q1 = ((q_start_loc + offs_m[:, None]) * stride_qs + head_id * stride_qh + offs_dk1[None, :] * stride_qd)
         q1_ptrs = q_ptr + offs_q1
-        q1 = tl.load(q1_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk1[None, :]))
+        q1 = tl.load(q1_ptrs, mask=((offs_m[:, None] < q_seqlen) & mask_dk1[None, :]))
         k1_ptrs = tl.make_block_ptr(
             base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
             shape=(head_dim_k, kv_seqlen),
@@ -296,6 +301,7 @@ def _flash_prefill_fwd_kernel(
                                        k_bound=k_bound0,
                                        v_bound=v_bound0,
                                        shared_kv=shared_kv,
+                                       block_sparse_size=block_sparse_size,
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
 
@@ -323,9 +329,14 @@ def _flash_prefill_fwd_kernel(
                                        k_bound=k_bound1,
                                        v_bound=v_bound1,
                                        shared_kv=shared_kv,
+                                       block_sparse_size=block_sparse_size,
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
     # epilogue
+    if sinks is not None:
+        sink = tl.load(sinks + head_id).to(l_i.dtype)
+        l_i = l_i + tl.exp2(sink * tl_log2(math.e) - m_i)
+
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
 
@@ -396,6 +407,40 @@ def _kernel_meta_sm9x(BLOCK_DK: int, shared_kv: bool):
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
+def _kernel_meta_sm12x(BLOCK_DK: int, shared_kv: bool):
+    # Blackwell (sm_120, cc 12.x) + B200/B100 variants
+    if BLOCK_DK <= 128:
+        BLOCK_M = 128
+        BLOCK_N = 128 if shared_kv else 64
+        num_warps = 8
+        num_stages = 3
+    elif BLOCK_DK <= 256:
+        BLOCK_M = 64
+        BLOCK_N = 128 if shared_kv else 64
+        num_warps = 8
+        num_stages = 3
+    elif BLOCK_DK <= 512:
+        BLOCK_M = 64 if shared_kv else 32
+        BLOCK_N = 64
+        num_warps = 4
+        num_stages = 2
+    else:
+        BLOCK_M = 32
+        BLOCK_N = 32 if not shared_kv else 64
+        num_warps = 4
+        num_stages = 2
+
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
+def _kernel_meta_rocm(BLOCK_DK: int, shared_kv: bool):
+    BLOCK_N = 32
+    BLOCK_M = 32 if BLOCK_DK > 128 else 64
+    num_warps = 4
+    num_stages = 1
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
 def flash_attention_fwd(
     q_states: Tensor,
     k_states: Tensor,
@@ -409,7 +454,9 @@ def flash_attention_fwd(
     window_size: int = None,
     sm_scale: float = None,
     logit_softcapping: float = None,
+    sinks: Tensor = None,
     causal: bool = True,
+    block_sparse_size: int = 1,
     kv_layout: str = 'hsd',
 ):
     """Varlen flash Attention forward.
@@ -452,20 +499,30 @@ def flash_attention_fwd(
     num_kv_heads = k_states.size(h_dim)
     kv_group_num = num_heads // num_kv_heads
 
+    if sinks is not None:
+        assert sinks.is_contiguous()
+        assert sinks.numel() == num_heads
+
     BLOCK_DK, BLOCK_DK1, BLOCK_DV = _get_block_d(head_dim_k, head_dim_v)
 
     shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
 
     num_warps = 4
-    if _nv_cap[0] < 8:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
-    if _nv_cap[0] < 9:
-        if _nv_cap[1] in [6, 9]:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
-        else:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
+    hip_mode = getattr(torch.version, 'hip', None) is not None
+    if hip_mode:
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_rocm(BLOCK_DK, shared_kv)
     else:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
+        if _nv_cap[0] < 8:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
+        elif _nv_cap[0] < 9:
+            if _nv_cap[1] in [6, 9]:
+                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
+            else:
+                BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
+        elif _nv_cap[0] < 10:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
+        else:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)
 
     BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](
@@ -477,6 +534,7 @@ def flash_attention_fwd(
         q_seqlens,
         kv_start_loc,
         kv_seqlens,
+        sinks,
         sm_scale=sm_scale,
         stride_qs=q_states.stride(0),
         stride_qh=q_states.stride(1),
@@ -497,6 +555,7 @@ def flash_attention_fwd(
         window_size=window_size,
         logit_softcapping=logit_softcapping,
         shared_kv=shared_kv,
+        block_sparse_size=block_sparse_size,
         BLOCK_DK=BLOCK_DK,
         BLOCK_DK1=BLOCK_DK1,
         BLOCK_DV=BLOCK_DV,

@@ -17,18 +17,10 @@ def check_qkv_split_layout(layout: str):
                            f'but get: {layout}')
 
 
-def _get_tp_world_rank(is_tp: bool):
-    """Get tp world size."""
-    if is_tp:
-        return get_tp_world_rank()
-    else:
-        return 1, 0
-
-
-def update_tp_args(is_tp: bool, all_reduce: bool, colwise: bool):
+def update_tp_args(is_tp: bool, all_reduce: bool, colwise: bool, layer_type: str = 'attn'):
     """Update tp args according to the environment."""
     if is_tp:
-        world, _ = get_tp_world_rank()
+        world, _ = get_tp_world_rank(layer_type)
         is_tp = world > 1
 
     if not is_tp or colwise:
@@ -46,10 +38,12 @@ class QKVMixin:
                  head_size: int,
                  head_size_v: int,
                  num_replicate_kv_heads: int = 1,
-                 is_tp: bool = False):
+                 is_tp: bool = False,
+                 tp: int = 1,
+                 tp_rank: int = 0):
         qkv_split_section = self._get_qkv_out_features(num_q_heads, num_kv_heads, head_size, head_size_v,
                                                        num_replicate_kv_heads)
-        num_q_heads, num_kv_heads = self._update_num_heads(is_tp, num_q_heads, num_kv_heads)
+        num_q_heads, num_kv_heads = self._update_num_heads(is_tp, tp, tp_rank, num_q_heads, num_kv_heads)
         self.num_q_heads = num_q_heads
         self.num_kv_heads = num_kv_heads
         self.head_size = head_size
@@ -72,11 +66,11 @@ class QKVMixin:
         all_out_features = (num_q_heads * head_size, num_kv_heads_real * head_size, num_kv_heads_real * head_size_v)
         return all_out_features
 
-    def _update_num_heads(self, is_tp: bool, num_q_heads: int, num_kv_heads: int):
+    def _update_num_heads(self, is_tp: bool, tp: int, tp_rank: int, num_q_heads: int, num_kv_heads: int):
         """Update num heads."""
         if not is_tp:
             return num_q_heads, num_kv_heads
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = tp, tp_rank
         num_q_heads = get_distribute_size(num_q_heads, world_size, rank)
         num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
 

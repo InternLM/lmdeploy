@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
 from typing import Any, Dict, List, Tuple
 
 import torch
@@ -8,9 +9,11 @@ from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
+from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 from lmdeploy.utils import get_logger
 
 from ..graph_runner import GraphRunner
+from .attention import TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -26,6 +29,25 @@ def next_power_of_2(n: int):
     n |= n >> 32
     n += 1
     return n
+
+
+@functools.lru_cache
+def _get_capture_batch_size_impl(max_batches: int):
+    """Capture batch size."""
+    ret = []
+    batch_size = 1
+    batch_step = 256
+    # power of 2
+    while batch_size <= min(batch_step, max_batches):
+        ret.append(batch_size)
+        batch_size *= 2
+
+    # step
+    ret += list(range(batch_size, max_batches + 1, batch_step))
+
+    if max_batches != ret[-1]:
+        ret.append(max_batches)
+    return ret
 
 
 def _false(*args, **kwargs):
@@ -80,7 +102,8 @@ class CUDASingleGraphRunner:
         current_stream = torch.cuda.current_stream()
 
         # warmup
-        self.model(**padded_kwargs)
+        warmup_output = self.model(**padded_kwargs)
+        warmup_buffers = self.model.make_output_buffers(warmup_output)
 
         self._graph = torch.cuda.CUDAGraph()
         # unsafe kernel call in other thread might invalid the capture
@@ -88,21 +111,21 @@ class CUDASingleGraphRunner:
         with torch.cuda.graph(self._graph, pool=self.pool, stream=current_stream, capture_error_mode='thread_local'):
             output = self.model(**padded_kwargs)
 
-        output_buffers = dict(logits=output)
+        output_buffers = self.model.make_output_buffers(output)
         self.meta.output_buffers = output_buffers
+        output = self.model.get_outputs_cudagraph(warmup_buffers, **kwargs)
         return output
 
     @record_function('forward_cudagraph')
     def forward(self, **kwargs):
         """forward."""
-        num_tokens = kwargs['input_ids'].size(-1)
         assert self._graph is not None
         self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
         self.model.update_context_cudagraph(self.meta, context)
         self._graph.replay()
-
-        output = self.meta.output_buffers['logits'][:, :num_tokens]
+        output_buffers = self.meta.output_buffers
+        output = self.model.get_outputs_cudagraph(output_buffers, **kwargs)
         return output
 
     def __del__(self):
@@ -126,6 +149,11 @@ class CUDAGraphRunner(GraphRunner):
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
         self.has_try_compile_model: bool = False
 
+        # strategy factory
+        build_ctx = model.ctx_mgr.build_ctx
+        strategy_factory: StrategyFactoryBase = build_ctx.strategy_factory
+        self.cudagraph_strategy = strategy_factory.build_cudagraph_strategy()
+
     def check_enable_graph(self):
         """Check enable graph."""
         if self.backend_config.eager_mode:
@@ -144,19 +172,33 @@ class CUDAGraphRunner(GraphRunner):
 
         self.has_try_compile_model = True
 
+    def _get_capture_tokens(self, batch_size: int):
+        """Get capture tokens."""
+        cap_sizes = self.get_capture_batch_sizes()
+        for size in cap_sizes:
+            if size >= batch_size:
+                return size
+        assert False, f'Unsupported batch_size={batch_size}'
+
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
-                      attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
+                      attn_metadata: TritonAttentionMetadata, inputs_embeds: torch.Tensor, **kwargs):
         """Get graph key."""
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
-        num_tokens = input_ids.numel()
+        batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
         if meta.padding_batch_size is None:
-            new_num_tokens = next_power_of_2(num_tokens)
+            batch_size = self._get_capture_tokens(batch_size)
         else:
-            new_num_tokens = next_power_of_2(meta.padding_batch_size)
-        return (new_num_tokens, is_decoding, enable_microbatch)
+            batch_size = self._get_capture_tokens(meta.padding_batch_size)
+        return (batch_size, is_decoding, enable_microbatch)
+
+    def _get_max_tokens(self, graph_key: tuple):
+        max_batches = graph_key[0]
+        is_decoding = graph_key[1]
+        assert is_decoding
+        return self.cudagraph_strategy.get_max_tokens(max_batches)
 
     def __call__(self, **kwargs):
         """call."""
@@ -167,13 +209,14 @@ class CUDAGraphRunner(GraphRunner):
 
         if not enable_graph:
             with record_function('forward_eager'):
-                return self.model(**kwargs)
+                output = self.model(**kwargs)
+                return self.model.make_output_buffers(output)
 
         graph_key = self.get_graph_key(**kwargs)
-        max_tokens = graph_key[0]
+        max_batches = graph_key[0]
         is_decoding = graph_key[1]
         if graph_key not in self._runner_map:
-            max_batches = max_tokens if is_decoding else self.max_batches
+            max_tokens = self._get_max_tokens(graph_key)
             runner = CUDASingleGraphRunner(self.model,
                                            max_batches=max_batches,
                                            max_tokens=max_tokens,
@@ -182,12 +225,14 @@ class CUDAGraphRunner(GraphRunner):
                                            pool=self.graph_pool_handle,
                                            model_config=self.model_config,
                                            device=self.device)
-            runner.capture(**kwargs)
+            output = runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
+            # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
+            return output
         else:
             runner = self._runner_map[graph_key]
-        output = runner.forward(**kwargs)
-        return output
+            output = runner.forward(**kwargs)
+            return output
 
     @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
@@ -216,6 +261,10 @@ class CUDAGraphRunner(GraphRunner):
         if is_decoding and dp_meta is not None:
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
-            tp_size = next_power_of_2(padding_batch_size)
-            dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
+            tp_size = self._get_capture_tokens(padding_batch_size)
+            dp_meta.sync_tp_size(tp_size)
         return inputs
+
+    def get_capture_batch_sizes(self) -> List[int]:
+        """Capture batch sizes."""
+        return _get_capture_batch_size_impl(self.cache_config.max_batches)

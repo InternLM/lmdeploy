@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict, List
+from typing import Dict, List
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
+from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
 
@@ -23,7 +23,6 @@ class UniExecutor(ExecutorBase):
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  misc_config: MiscConfig,
-                 tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
         """Initialize Executor."""
@@ -33,7 +32,6 @@ class UniExecutor(ExecutorBase):
                          backend_config=backend_config,
                          dist_config=DistConfig(),
                          misc_config=misc_config,
-                         tokenizer=tokenizer,
                          adapters=adapters,
                          device_type=device_type)
 
@@ -43,7 +41,6 @@ class UniExecutor(ExecutorBase):
                                              cache_config=cache_config,
                                              backend_config=backend_config,
                                              misc_config=misc_config,
-                                             tokenizer=tokenizer,
                                              device_ctx=self.device_ctx,
                                              adapters=adapters)
 
@@ -93,6 +90,8 @@ class UniExecutor(ExecutorBase):
     async def forward_async(self, inputs):
         """Start forward."""
         self.model_agent.set_forward_inputs(inputs)
+        # switch to task: ModelAgent._async_loop_inputs_preprocess
+        await asyncio.sleep(0)
 
     async def get_output_async(self, dp_rank: int = 0):
         """Get output async."""
@@ -112,9 +111,9 @@ class UniExecutor(ExecutorBase):
         """
         return [self.model_agent.cache_engine.p2p_initialize(init_request)]
 
-    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+    def p2p_connect(self, remote_engine_id: str, conn_request: List[DistServeKVTransferEndpointInfo]):
         """rdma_connect."""
-        self.model_agent.cache_engine.p2p_connect(conn_request)
+        self.model_agent.cache_engine.p2p_connect(remote_engine_id, conn_request)
 
     async def migrate(self, batch: MigrationExecutionBatch):
         """KV Cache Migration."""

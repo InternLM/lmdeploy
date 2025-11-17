@@ -1,3 +1,4 @@
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include <utility>
 
@@ -6,12 +7,14 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/data_type.h"
 
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/gemm/cast.h"
+#include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/utils.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
-
-#include "src/turbomind/utils/memory_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -19,6 +22,7 @@ void LlamaDenseWeight::emplace(
     int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size)
 {
     this->data_type   = data_type;
+    this->input_type  = data_type;
     this->weight_type = weight_type;
     this->input_dim   = input_dim;
     this->output_dim  = output_dim;
@@ -35,141 +39,191 @@ void LlamaDenseWeight::emplace(
     }
 
     if (weight_type == kFloat8_e4m3) {
-        scales = Tensor{{cdiv(input_dim, 128), cdiv(output_dim, 128)}, kFloat, kDEVICE};
+        TM_CHECK_EQ(group_size, 128);
+        scales       = Tensor{{cdiv(input_dim, group_size), cdiv(output_dim, group_size)}, kFloat, kDEVICE};
+        weight_quant = QuantDesc{gemm::QuantType::kB, group_size};
+        if (getSMVersion() == 90) {
+            input_type  = kFloat8_e4m3;
+            input_quant = QuantDesc{gemm::QuantType::kK, group_size};
+        }
+        register_parameter("scales", scales);
+    }
+    else if (weight_type == kFloat4_e2m1) {
+        scales       = Tensor{{cdiv(input_dim, group_size), output_dim}, kUint8, kDEVICE};
+        input_type   = data_type;
+        weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
         register_parameter("scales", scales);
     }
     else if (is_qweight) {
         TM_CHECK(input_dim % group_size == 0) << input_dim << " " << group_size;
-        scales = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
-        zeros  = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
+        scales       = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
+        zeros        = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
+        weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
         register_parameter("scales", scales);
         register_parameter("zeros", zeros);
     }
+
+    k_desc = {};
+    q_desc = {};
+
+    // default case: floating point, N-major
+    k_desc.type  = weight.dtype();
+    k_desc.order = gemm::kRowMajor;
+    k_desc.rows  = input_dim;
+    k_desc.cols  = output_dim;
+    k_desc.ld    = output_dim;
 }
 
-static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt, cudaStream_t st)
+void LlamaDenseWeight::preprocess()
 {
-    TM_CHECK_EQ(dense.weight_type, data_type_v<uint4_t>);
-
-    using namespace gemm;
-
-    auto [order_b, pack_b, order_v, pack_v] =
-        get_weight_and_scales_layout(data_type_v<uint4_t>, is_fused_moe, getSMVersion(), use_simt);
-
-    if (order_b == kColMajor) {
-        Buffer trans{dense.input_dim * dense.output_dim, data_type_v<uint4_t>, kDEVICE};
-        transpose_u4(
-            (uint4_t*)trans.raw_data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim, dense.output_dim, st);
-        cudaMemcpyAsync(
-            dense.weight.raw_data(), trans.raw_data(), dense.input_dim * dense.output_dim / 2, cudaMemcpyDefault, st);
-    }
-
-    Buffer_<uint16_t> tmp_w{dense.input_dim * dense.output_dim, kDEVICE};
-    extend_to_u16(tmp_w.data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim * dense.output_dim, st);
-    sync_check_cuda_error();
-
-    MatrixLayout w_desc{
-        data_type_v<half_t>,
-        order_b,
-        (int)dense.input_dim,   // k
-        (int)dense.output_dim,  // n
-        order_b == kRowMajor ? (int)dense.output_dim : (int)dense.input_dim,
-    };
-
-    MatrixLayout k_desc = w_desc;
-    k_desc.type         = data_type_v<uint4_t>;
-    k_desc.pack         = pack_b;
-
-    cudaMemsetAsync(dense.weight.raw_data(), 0, dense.input_dim * dense.output_dim / 2, st);
-
-    FT_CHECK(Convert(tmp_w.data(), w_desc, dense.weight.raw_data(), k_desc, st) == 0);
-    sync_check_cuda_error();
-
-    const int scale_count = (dense.input_dim / dense.group_size) * dense.output_dim;
-
-    Buffer_<half> tmp_q{scale_count * 2, kDEVICE};
-    fuse_scales_and_zeros(tmp_q.data(), dense.scales.data<half>(), dense.zeros.data<half>(), scale_count, st);
-    sync_check_cuda_error();
-
-    dense.scales = {};
-    dense.zeros  = {};
-
-    dense.scales_zeros = Tensor_<half>{{scale_count, 2}, kDEVICE};
-
-    MatrixLayout s_desc{
-        data_type_v<uint32_t>,
-        order_v,
-        (int)dense.input_dim / dense.group_size,  // k
-        (int)dense.output_dim,                    // n
-        (int)dense.output_dim,
-    };
-
-    MatrixLayout q_desc = s_desc;
-    q_desc.pack         = pack_v;
-
-    FT_CHECK(Convert(tmp_q.data(), s_desc, dense.scales_zeros.raw_data(), q_desc, st) == 0);
-    sync_check_cuda_error();
-
-    dense.k_desc = k_desc;
-    dense.q_desc = q_desc;
-}
-
-static void convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt, cudaStream_t st)
-{
-    using namespace gemm;
-
-    if (!is_fused_moe) {
+    if (!weight) {
         return;
     }
-
-    /// TODO: unify data types
-    auto data_type = dense.data_type;
-
-    const auto [order_b, pack_b, order_v, pack_v] =
-        get_weight_and_scales_layout(data_type, is_fused_moe, getSMVersion(), use_simt);
-
-    const int input_dim  = dense.input_dim;
-    const int output_dim = dense.output_dim;
-
-    TM_CHECK(dense.weight.is_contiguous());
-
-    Buffer_<uint16_t> tmp{input_dim * output_dim, kDEVICE};
-
-    if (order_b == kColMajor) {
-        invokeTransposeAxis01(tmp.data(), (uint16_t*)dense.weight.raw_data(), input_dim, output_dim, 1, st);
-        sync_check_cuda_error();
+    if (weight_quant.type == gemm::QuantType::kB && input_quant.type == gemm::QuantType::kNone) {
+        // Convert blockwise scales to groupwise scales
+        weight_quant.type = gemm::QuantType::kK;
+        scales            = BlockscaleToGroupscale(scales, data_type, weight_quant.group_size);
     }
-    else {
-        check_cuda_error(
-            cudaMemcpyAsync(tmp.data(), dense.weight.raw_data(), dense.weight.byte_size(), cudaMemcpyDefault, st));
-    }
-
-    MatrixLayout src{
-        data_type,
-        order_b,
-        input_dim,   // k
-        output_dim,  // n
-        order_b == kRowMajor ? output_dim : input_dim,
-    };
-
-    MatrixLayout dst = src;
-    dst.pack         = pack_b;
-
-    if (pack_b) {
-        FT_CHECK(Convert(tmp.data(), src, dense.weight.raw_data(), dst, st) == 0);
-        sync_check_cuda_error();
-    }
-    else {
-        check_cuda_error(
-            cudaMemcpyAsync(dense.weight.raw_data(), tmp.data(), dense.weight.byte_size(), cudaMemcpyDefault, st));
-    }
-
-    dense.k_desc = dst;
 }
 
-static void convert_f8(LlamaDenseWeight& dense, cudaStream_t stream)
+static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
 {
     using namespace gemm;
+
+    auto [conv_w, conv_s] =
+        GetConverters(dense.data_type, dense.weight_type, dense.input_type, is_grouped, getSMVersion());
+
+    if (conv_w) {
+        const auto order_w = conv_w->order;
+        const bool is_A    = get_operand_tag(conv_w->pack) == OPERAND_A;
+        const bool is_B    = !is_A;
+
+        const int bits = byte_size(dense.weight_type, 8);
+
+        Tensor_<uint16_t> tmp{{dense.input_dim, dense.output_dim}, kDEVICE};
+
+        if (bits == 4) {  // u4 -> u16
+            extend_to_u16(tmp.data(), (const uint4_t*)dense.weight.raw_data(), tmp.size(), st);
+            sync_check_cuda_error();
+        }
+        else if (bits == 8) {  // u8 -> u16
+            extend_to_u16(tmp.data(), (const uint8_t*)dense.weight.raw_data(), tmp.size(), st);
+            sync_check_cuda_error();
+        }
+        else if (bits == 16) {
+            check_cuda_error(
+                cudaMemcpyAsync(tmp.raw_data(), dense.weight.raw_data(), tmp.byte_size(), cudaMemcpyDefault, st));
+        }
+
+        if (order_w == kRowMajor) {  // (k,m) -> (m,k)
+            Tensor_<uint16_t> trans{{dense.output_dim, dense.input_dim}, kDEVICE};
+            invokeTransposeAxis01(trans.data(), tmp.data(), dense.input_dim, dense.output_dim, 1, st);
+            tmp = trans;
+        }
+
+        MatrixLayout w_desc{
+            dense.data_type,
+            order_w,
+            (int)dense.output_dim,  // M
+            (int)dense.input_dim,   // K
+            order_w == kRowMajor ? (int)dense.input_dim : (int)dense.output_dim,
+        };
+
+        if (is_B) {
+            std::swap(w_desc.rows, w_desc.cols);
+            w_desc.order = ~w_desc.order;
+        }
+
+        MatrixLayout k_desc = w_desc;
+        k_desc.type         = dense.weight_type;
+        // Converter does not recognize e2m1 / e4m3
+        if (bits == 4) {
+            k_desc.type = data_type_v<uint4_t>;
+        }
+        else if (bits == 8) {
+            k_desc.type = data_type_v<uint8_t>;
+        }
+        k_desc.pack = conv_w->pack;
+
+        check_cuda_error(cudaMemsetAsync(dense.weight.raw_data(), 0, dense.weight.byte_size(), st));
+
+        TM_CHECK(conv_w->Convert(tmp.data(), w_desc, dense.weight.raw_data(), k_desc, st) == 0);
+
+        sync_check_cuda_error();
+
+        k_desc.type = dense.weight_type;
+        if (is_A) {
+            k_desc = transpose(k_desc);
+        }
+        dense.k_desc = k_desc;
+    }
+
+    if (conv_s) {
+        const auto order_s = conv_s->order;
+        const auto pack_s  = conv_s->pack;
+        const bool is_A    = get_operand_tag(conv_s->pack) == OPERAND_U;
+        const bool is_B    = !is_A;
+
+        Tensor   tmp_q;
+        DataType scale_type;
+
+        if (dense.zeros) {  // AWQ/GPTQ fuse scales and zeros
+            tmp_q = {{dense.scales.size(), 2}, kHalf, kDEVICE};
+            fuse_scales_and_zeros(
+                tmp_q.data<half>(), dense.scales.data<half>(), dense.zeros.data<half>(), dense.scales.size(), st);
+            scale_type   = kUint32;  // half2
+            dense.zeros  = {};
+            dense.scales = empty_like(tmp_q);
+        }
+        else if (dense.weight_type == kFloat8_e4m3) {  // e4m3
+            tmp_q = empty_like(dense.scales);
+            Copy(dense.scales, tmp_q);
+            scale_type = kUint16;  // bf16
+        }
+        else {  // mxfp4
+            tmp_q = empty_like(dense.scales);
+            Copy(dense.scales, tmp_q);
+            scale_type = kUint8;  // ue8m0
+        }
+
+        if (dense.data_type == kHalf && dense.weight_type == kFloat4_e2m1) {  // mxfp4
+            AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), st);
+            sync_check_cuda_error();
+        }
+
+        MatrixLayout s_desc{
+            scale_type,
+            order_s,
+            (int)dense.output_dim,                    // M
+            (int)dense.input_dim / dense.group_size,  // K
+            (int)dense.output_dim,                    // always MN-major
+        };
+
+        if (is_B) {
+            std::swap(s_desc.rows, s_desc.cols);
+            s_desc.order = ~s_desc.order;
+        }
+
+        MatrixLayout q_desc = s_desc;
+        q_desc.pack         = pack_s;
+
+        TM_CHECK(conv_s->Convert(tmp_q.raw_data(), s_desc, dense.scales.raw_data(), q_desc, st) == 0);
+        sync_check_cuda_error();
+
+        // weight is placed at B in `Linear`
+        if (is_A) {
+            q_desc = transpose(q_desc);
+        }
+        dense.q_desc = q_desc;
+    }
+}
+
+static void ConvertBlockscaleFP8Native(LlamaDenseWeight& dense, cudaStream_t stream)
+{
+    using namespace gemm;
+
+    TM_CHECK_GE(getSMVersion(), 90);
+    TM_CHECK_EQ(dense.data_type, data_type_v<bfloat16_t>);
 
     auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
         using T = decltype(dtype);
@@ -190,7 +244,7 @@ static void convert_f8(LlamaDenseWeight& dense, cudaStream_t stream)
     process(dense.scales, dense.q_desc, float{});
 }
 
-void LlamaDenseWeight::prepare(bool fused_moe, bool use_simt)
+void LlamaDenseWeight::prepare(bool fused_moe)
 {
     if (!weight) {
         return;
@@ -198,16 +252,11 @@ void LlamaDenseWeight::prepare(bool fused_moe, bool use_simt)
 
     auto stream = core::Context::stream().handle();
 
-    if (weight_type == data_type_v<uint4_t>) {
-        TM_CHECK_EQ(data_type, data_type_v<half_t>);
-        convert_u4(*this, fused_moe, use_simt, stream);
-    }
-    else if (weight_type == data_type_v<fp8_e4m3_t>) {
-        TM_CHECK_EQ(data_type, data_type_v<bfloat16_t>);
-        convert_f8(*this, stream);
+    if (weight_type == kFloat8_e4m3 && input_type == kFloat8_e4m3) {
+        ConvertBlockscaleFP8Native(*this, stream);
     }
     else {
-        convert_fp(*this, fused_moe, use_simt, stream);
+        Convert(*this, fused_moe, stream);
     }
 }
 
@@ -222,8 +271,12 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
                                            int      tp_rank,
                                            DataType data_type,
                                            DataType weight_type,
-                                           int      group_size)
+                                           int      group_size,
+                                           int      window_size,
+                                           bool     sink)
 {
+    this->window_size = window_size;
+
     if (mla.kv_lora_rank == 0) {
         qkv.emplace(
             hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp_size, data_type, bias, weight_type, group_size);
@@ -264,9 +317,14 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
     }
     output.emplace((head_num * head_dim) / tp_size, hidden_dim, data_type, bias, weight_type, group_size);
     register_module("wo", output, tp_rank);
+
+    if (sink) {
+        sinks = Tensor{{head_num / tp_size}, data_type, kDEVICE};
+        register_parameter(std::to_string(tp_rank) + ".sinks", sinks);
+    }
 }
 
-void LlamaAttentionWeight::prepare(bool use_simt)
+void LlamaAttentionWeight::prepare()
 {
     std::vector weights{
         &qkv,
@@ -278,187 +336,225 @@ void LlamaAttentionWeight::prepare(bool use_simt)
         &kv_b_proj,
     };
     for (auto& w : weights) {
-        w->prepare(false, use_simt);
+        w->preprocess();
+        w->prepare();
     }
 }
 
-LlamaFfnWeight::LlamaFfnWeight(int      hidden_dim,
-                               int      inter_size,
-                               int      tp_size,
-                               int      tp_rank,
-                               DataType data_type,
-                               DataType weight_type,
-                               int      group_size,
-                               bool     fuse_silu_act)
+LlamaFfnWeight::LlamaFfnWeight(int            hidden_dim,
+                               int            inter_size,
+                               bool           bias,
+                               int            tp_size,
+                               int            tp_rank,
+                               DataType       data_type,
+                               DataType       weight_type,
+                               int            group_size,
+                               ActivationType act_type,
+                               bool           fuse_silu_act)
 {
     TM_CHECK(inter_size % tp_size == 0) << inter_size << " " << tp_size;
 
     inter_size /= tp_size;
 
-    this->inter_size = inter_size;
+    this->inter_size    = inter_size;
+    this->tp_rank       = tp_rank;
+    this->act_type      = act_type;
+    this->is_fused_silu = fuse_silu_act && this->act_type == ActivationType::kSilu;
 
-    gating.emplace(hidden_dim, inter_size, data_type, false, weight_type, group_size);
+    gating.emplace(hidden_dim, inter_size, data_type, bias, weight_type, group_size);
 
-    intermediate.emplace(hidden_dim, inter_size, data_type, false, weight_type, group_size);
+    intermediate.emplace(hidden_dim, inter_size, data_type, bias, weight_type, group_size);
 
-    // fused_gating_intermediate = {hidden_dim, inter_size * 2, data_type, weight_type, group_size};
-    is_fused_silu = fuse_silu_act;
+    output.emplace(inter_size, hidden_dim, data_type, bias, weight_type, group_size);
 
-    output.emplace(inter_size, hidden_dim, data_type, false, weight_type, group_size);
+    if (gating.input_type == kFloat8_e4m3) {  // SM90 FP8*FP8 GEMM, can't fuse
+        this->is_fused_silu = false;
+    }
 
     register_module("w1", gating, tp_rank);
     register_module("w3", intermediate, tp_rank);
     register_module("w2", output, tp_rank);
 }
 
+static void Interleave(const Tensor& a, const Tensor& b, Tensor& c, cudaStream_t st)
+{
+    TM_CHECK(a.layout() == b.layout());
+    int M, K;
+    if (a.ndim() == 2) {
+        std::tie(K, M) = a.shapes(0, 1);
+    }
+    else {
+        M = a.shape(0);
+        K = 1;
+    }
+    auto a_ = a.raw_data();
+    auto b_ = b.raw_data();
+    auto c_ = c.raw_data();
+
+    const int bits = byte_size(a.dtype(), 8);
+    if (bits == 4) {
+        Buffer_<uint8_t> ta{a.size(), kDEVICE};
+        Buffer_<uint8_t> tb{b.size(), kDEVICE};
+        Buffer_<uint8_t> tc{c.size(), kDEVICE};
+        extend_to_u8(ta.data(), (uint4_t*)a_, a.size(), st);
+        extend_to_u8(tb.data(), (uint4_t*)b_, b.size(), st);
+        interleave_output_dims(tc.data(), ta.data(), tb.data(), M, K, st);
+        compact_to_u4((uint4_t*)c_, tc.data(), c.size(), st);
+    }
+    else if (bits == 8) {
+        interleave_output_dims((uint8_t*)c_, (uint8_t*)a_, (uint8_t*)b_, M, K, st);
+    }
+    else if (bits == 16) {
+        interleave_output_dims((uint16_t*)c_, (uint16_t*)a_, (uint16_t*)b_, M, K, st);
+    }
+    else if (bits == 32) {
+        interleave_output_dims((uint32_t*)c_, (uint32_t*)a_, (uint32_t*)b_, M, K, st);
+    }
+    else {
+        TM_CHECK(0);
+    }
+}
+
 void interleave(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataType data_type, cudaStream_t st)
 {
-    FT_CHECK(c.input_dim == a.input_dim);
-    FT_CHECK(c.input_dim == b.input_dim);
-    FT_CHECK(c.output_dim == a.output_dim * 2);
-    FT_CHECK(c.output_dim == b.output_dim * 2);
-    FT_CHECK(c.group_size == a.group_size);
-    FT_CHECK(c.group_size == b.group_size);
+    TM_CHECK_EQ(c.input_dim, a.input_dim);
+    TM_CHECK_EQ(c.input_dim, b.input_dim);
+    TM_CHECK_EQ(c.output_dim, a.output_dim * 2);
+    TM_CHECK_EQ(c.output_dim, b.output_dim * 2);
+    TM_CHECK_EQ(c.group_size, a.group_size);
+    TM_CHECK_EQ(c.group_size, b.group_size);
 
-    auto invoke = [&](auto t) {
-        using T = decltype(t);
-        if (a.weight_type == data_type_v<uint4_t>) {
-            Buffer_<uint8_t> tmp_a{a.weight.size(), kDEVICE};
-            Buffer_<uint8_t> tmp_b{b.weight.size(), kDEVICE};
-            Buffer_<uint8_t> tmp_c{c.weight.size(), kDEVICE};
+    Interleave(a.weight, b.weight, c.weight, st);
+    sync_check_cuda_error();
 
-            extend_to_u8(tmp_a.data(), (const uint4_t*)a.weight.raw_data(), a.output_dim * a.input_dim, st);
-            extend_to_u8(tmp_b.data(), (const uint4_t*)b.weight.raw_data(), b.output_dim * b.input_dim, st);
-
-            interleave_output_dims(tmp_c.data(), tmp_a.data(), tmp_b.data(), a.output_dim, a.input_dim, st);
-
-            compact_to_u4((uint4_t*)c.weight.raw_data(), tmp_c.data(), c.output_dim * c.input_dim, st);
-
-            interleave_output_dims(c.scales.data<T>(),
-                                   a.scales.data<T>(),
-                                   b.scales.data<T>(),
-                                   a.output_dim,
-                                   a.input_dim / a.group_size,
-                                   st);
-            interleave_output_dims(c.zeros.data<T>(),  //
-                                   a.zeros.data<T>(),
-                                   b.zeros.data<T>(),
-                                   a.output_dim,
-                                   a.input_dim / a.group_size,
-                                   st);
-        }
-        else {
-            interleave_output_dims(
-                c.weight.data<T>(), a.weight.data<T>(), b.weight.data<T>(), a.output_dim, a.input_dim, st);
-        }
-        // Check at function level
+    if (a.scales) {
+        Interleave(a.scales, b.scales, c.scales, st);
         sync_check_cuda_error();
-    };
+    }
+    if (a.zeros) {
+        Interleave(a.zeros, b.zeros, c.zeros, st);
+        sync_check_cuda_error();
+    }
+    if (a.bias) {
+        Interleave(a.bias, b.bias, c.bias, st);
+        sync_check_cuda_error();
+    }
+}
 
-    TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
+static void Chunk(const Tensor& a, const Tensor& b, Tensor& c, cudaStream_t st)
+{
+    TM_CHECK(a.layout() == b.layout());
+    int M, K, spitch, dpitch;
+    if (a.ndim() == 2) {
+        std::tie(K, M) = a.shapes(0, 1);
+        spitch         = byte_size(a.dtype(), a.stride(0));
+        dpitch         = byte_size(c.dtype(), c.stride(0));
+    }
+    else {
+        M      = a.shape(0);
+        K      = 1;
+        spitch = byte_size(a.dtype(), M);
+        dpitch = byte_size(c.dtype(), c.shape(0));
+    }
+    int height = K;
+    int width  = byte_size(a.dtype(), M);
+    check_cuda_error(cudaMemcpy2DAsync((char*)c.raw_data(),  //
+                                       dpitch,
+                                       (const char*)a.raw_data(),
+                                       spitch,
+                                       width,
+                                       height,
+                                       cudaMemcpyDefault,
+                                       st));
+    check_cuda_error(cudaMemcpy2DAsync((char*)c.raw_data() + width,  //
+                                       dpitch,
+                                       (const char*)b.raw_data(),
+                                       spitch,
+                                       width,
+                                       height,
+                                       cudaMemcpyDefault,
+                                       st));
 }
 
 void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataType data_type, cudaStream_t st)
 {
-    FT_CHECK(c.input_dim == a.input_dim);
-    FT_CHECK(c.input_dim == b.input_dim);
-    FT_CHECK(c.output_dim == a.output_dim * 2);
-    FT_CHECK(c.output_dim == b.output_dim * 2);
-    FT_CHECK(c.group_size == a.group_size);
-    FT_CHECK(c.group_size == b.group_size);
+    TM_CHECK_EQ(c.input_dim, a.input_dim);
+    TM_CHECK_EQ(c.input_dim, b.input_dim);
+    TM_CHECK_EQ(c.output_dim, a.output_dim * 2);
+    TM_CHECK_EQ(c.output_dim, b.output_dim * 2);
+    TM_CHECK_EQ(c.group_size, a.group_size);
+    TM_CHECK_EQ(c.group_size, b.group_size);
 
-    auto _chunks = [&](auto c, auto a, auto b, int height, int width) {
-        check_cuda_error(
-            cudaMemcpy2DAsync((char*)c + 0x000, width * 2, a, width, width, height, cudaMemcpyDefault, st));
-        check_cuda_error(
-            cudaMemcpy2DAsync((char*)c + width, width * 2, b, width, width, height, cudaMemcpyDefault, st));
-    };
+    Chunk(a.weight, b.weight, c.weight, st);
+    sync_check_cuda_error();
 
-    // TODO: remove unused branches
-    auto invoke = [&](auto t) {
-        using T = decltype(t);
-        if (c.weight_type == data_type_v<uint4_t>) {
-            _chunks(c.weight.raw_data(), a.weight.raw_data(), b.weight.raw_data(), a.input_dim, 4 * a.output_dim / 8);
-            _chunks(c.scales.data<T>(),
-                    a.scales.data<T>(),
-                    b.scales.data<T>(),
-                    a.input_dim / a.group_size,
-                    sizeof(T) * a.output_dim);
-            _chunks(c.zeros.data<T>(),
-                    a.zeros.data<T>(),
-                    b.zeros.data<T>(),
-                    a.input_dim / a.group_size,
-                    sizeof(T) * a.output_dim);
-        }
-        else {
-            _chunks(c.weight.data<T>(), a.weight.data<T>(), b.weight.data<T>(), a.input_dim, sizeof(T) * a.output_dim);
-        }
-        // Check at function level
+    if (a.scales) {
+        Chunk(a.scales, b.scales, c.scales, st);
         sync_check_cuda_error();
-    };
-
-    if (c.weight_type == kFloat8_e4m3) {
-        _chunks(c.scales.data<float>(),
-                a.scales.data<float>(),
-                b.scales.data<float>(),
-                cdiv(a.input_dim, a.group_size),
-                sizeof(float) * cdiv(a.output_dim, a.group_size));
-        _chunks(c.weight.data<fp8_e4m3_t>(),
-                a.weight.data<fp8_e4m3_t>(),
-                b.weight.data<fp8_e4m3_t>(),
-                a.input_dim,
-                a.output_dim);
     }
-    else {
-        TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
+    if (a.zeros) {
+        Chunk(a.zeros, b.zeros, c.zeros, st);
+        sync_check_cuda_error();
+    }
+    if (a.bias) {
+        Chunk(a.bias, b.bias, c.bias, st);
+        sync_check_cuda_error();
     }
 }
 
-void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
+void LlamaFfnWeight::prepare(bool fused_moe)
 {
     const auto data_type = gating.data_type;
 
     auto stream = core::Context().stream().handle();
 
-    // if (fuse_up_and_gate && gating.weight_type != DataType::kFloat8_e4m3) {
-    if (fuse_up_and_gate) {
-        auto& fused_up_and_gate = fused_gating_intermediate;
+    gating.preprocess();
+    intermediate.preprocess();
 
-        fused_up_and_gate.emplace(gating.input_dim,  //
-                                  gating.output_dim * 2,
-                                  gating.data_type,
-                                  false,
-                                  gating.weight_type,
-                                  gating.group_size);
+    if (fuse_up_and_gate) {
+        auto& gate_and_up = fused_gating_intermediate;
+
+        gate_and_up.emplace(gating.input_dim,  //
+                            gating.output_dim * 2,
+                            gating.data_type,
+                            (bool)gating.bias,
+                            gating.weight_type,
+                            gating.group_size);
+        gate_and_up.preprocess();
+        register_module("w1w3", gate_and_up, this->tp_rank);
 
         if (is_fused_silu) {
-            interleave(fused_up_and_gate, gating, intermediate, data_type, stream);
+            interleave(gate_and_up, gating, intermediate, data_type, stream);
+            gate_and_up.epilogue = gemm::Epilogue::kGatedSilu;
         }
         else {
-            chunk(fused_up_and_gate, gating, intermediate, data_type, stream);
+            chunk(gate_and_up, gating, intermediate, data_type, stream);
         }
 
-        fused_gating_intermediate.prepare(fused_moe, use_simt);
+        fused_gating_intermediate.prepare(fused_moe);
 
         gating       = {};
         intermediate = {};
     }
     else {
-        gating.prepare(fused_moe, use_simt);
-        intermediate.prepare(fused_moe, use_simt);
+        gating.prepare(fused_moe);
+        intermediate.prepare(fused_moe);
     }
 
-    output.prepare(fused_moe, use_simt);
+    output.preprocess();
+    output.prepare(fused_moe);
 }
 
 MoeFfnWeight::MoeFfnWeight(int             layer_id,
                            const MoeParam& param,
                            int             hidden_dim,
+                           bool            mlp_bias,
                            DataType        data_type,
                            DataType        weight_type,
                            int             group_size,
                            int             tp_size,
                            int             tp_rank,
+                           ActivationType  act_type,
                            bool            fuse_silu_act)
 {
     if ((int)param.expert_num.size() <= layer_id) {
@@ -471,16 +567,28 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
         return;
     }
 
-    gate.emplace(hidden_dim, expert_num, data_type, false, data_type, 1);
+    gate.emplace(hidden_dim, expert_num, data_type, param.router_bias, data_type, 1);
     register_module("gate", gate);
 
-    method        = param.method;
-    fuse_silu_act = fuse_silu_act && method == MoeParam::kFused && weight_type != kFloat8_e4m3;
+    method = param.method;
+
+    const bool is_cublas_gemm = method == MoeParam::kNaive && byte_size(weight_type, 8) == 16;
+    if (is_cublas_gemm || mlp_bias) {
+        fuse_silu_act = false;
+    }
 
     experts.reserve(expert_num);
     for (int i = 0; i < expert_num; ++i) {
-        experts.emplace_back(new LlamaFfnWeight{
-            hidden_dim, param.inter_size, tp_size, tp_rank, data_type, weight_type, group_size, fuse_silu_act});
+        experts.emplace_back(new LlamaFfnWeight{hidden_dim,
+                                                param.inter_size,
+                                                mlp_bias,
+                                                tp_size,
+                                                tp_rank,
+                                                data_type,
+                                                weight_type,
+                                                group_size,
+                                                act_type,
+                                                fuse_silu_act});
         register_module("experts", *experts.back(), i);
     }
 
@@ -490,76 +598,86 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
     }
 }
 
-void MoeFfnWeight::prepare(bool use_simt)
+void MoeFfnWeight::prepare()
 {
     const auto fused_moe = method == MoeParam::kFused;
 
+    gate.prepare();
+    shared_gate.prepare();
+
     for (auto& e : experts) {
-        e->prepare(fused_moe, use_simt);
+        e->prepare(fused_moe);
     }
-    const int  n_expert = experts.size();
-    const auto st       = core::Context::stream().handle();
 
-    auto make_strided_ptr = [&](const auto& ptrs) {
-        return std::shared_ptr<void>{gemm::make_strided_ptrs(ptrs, st), [](auto p) { cudaFree(p); }};
-    };
-
-    auto make_blocked_ptr = [&](const auto& ptrs) {
-        return std::shared_ptr<void>{gemm::make_blocked_ptrs(ptrs, st), [](auto p) { cudaFree(p); }};
-    };
-
-    auto process = [&](auto getter) {
-        std::vector<std::pair<void*, int>> weight_ptrs;
-        std::vector<std::pair<void*, int>> quant_ptrs;
-
-        for (auto& e : experts) {
-            auto& m = (*e).*getter;
-            weight_ptrs.push_back({m.weight.raw_data(), m.k_desc.ld});
-            if (m.scales_zeros) {
-                quant_ptrs.emplace_back(m.scales_zeros.raw_data(), m.q_desc.ld);
-            }
-            else if (m.scales) {
-                quant_ptrs.emplace_back(m.scales.raw_data(), m.q_desc.ld);
-            }
-        }
-
-        LlamaDenseWeight& m = block.*getter;
-
-        {  // Copy properties from exemplar, this assumes all experts has the same shape
-            LlamaDenseWeight& e = (*experts.at(0)).*getter;
-            m.input_dim         = e.input_dim;
-            m.output_dim        = e.output_dim;
-            m.group_size        = e.group_size;
-            m.data_type         = e.data_type;
-            m.weight_type       = e.weight_type;
-            m.k_desc            = e.k_desc;
-            m.q_desc            = e.q_desc;
-        }
-
-        // Dummy tensors to hold the blocked ptrs
-        if (m.weight_type == kFloat8_e4m3) {
-            TM_CHECK_EQ(quant_ptrs.size(), n_expert);
-            m.weight = Tensor{make_blocked_ptr(weight_ptrs), {n_expert}, m.weight_type, kDEVICE};
-            m.scales = Tensor{make_blocked_ptr(quant_ptrs), {n_expert}, kFloat, kDEVICE};
-        }
-        else {
-            m.weight = Tensor{make_strided_ptr(weight_ptrs), {n_expert}, m.weight_type, kDEVICE};
-            if (!quant_ptrs.empty()) {
-                TM_CHECK_EQ(quant_ptrs.size(), n_expert);
-                m.scales_zeros = Tensor{make_strided_ptr(quant_ptrs), {n_expert}, m.data_type, kDEVICE};
-            }
-        }
-
-        m.k_desc.num = m.q_desc.num = experts.size();
-    };
-
-    process(&LlamaFfnWeight::fused_gating_intermediate);
-    process(&LlamaFfnWeight::output);
+    const int n = experts.size();
+    LinkExperts([&](int i) { return &experts[i]->fused_gating_intermediate; }, n, block.fused_gating_intermediate);
+    LinkExperts([&](int i) { return &experts[i]->output; }, n, block.output);
 
     auto& e = *experts.at(0);
     // Copy MLP properties
     block.inter_size    = e.inter_size;
     block.is_fused_silu = e.is_fused_silu;
+    block.act_type      = e.act_type;
+}
+
+void LinkExperts(std::function<LlamaDenseWeight*(int)> experts, int n, LlamaDenseWeight& d)
+{
+    const auto& e = *experts(0);
+
+    d.input_dim    = e.input_dim;
+    d.output_dim   = e.output_dim;
+    d.group_size   = e.group_size;
+    d.data_type    = e.data_type;
+    d.input_type   = e.input_type;
+    d.weight_type  = e.weight_type;
+    d.input_quant  = e.input_quant;
+    d.weight_quant = e.weight_quant;
+    d.k_desc       = e.k_desc;
+    d.q_desc       = e.q_desc;
+    d.epilogue     = e.epilogue;
+
+    d.k_desc.num = d.q_desc.num = n;
+
+    if (e.bias) {
+        d.bias = Tensor{{n, e.output_dim}, e.bias.dtype(), kDEVICE};
+    }
+
+    std::vector<std::pair<void*, int>> weights;
+    std::vector<std::pair<void*, int>> scales;
+
+    for (int i = 0; i < n; ++i) {
+        auto& e = *experts(i);
+        weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
+        if (e.scales) {
+            scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
+        }
+        if (e.bias) {
+            Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
+        }
+    }
+
+    auto stream = core::Context::stream().handle();
+
+    if (d.weight_type == kFloat8_e4m3 && d.input_type == kFloat8_e4m3) {
+        auto make_blocked_ptr = [&](const auto& ptrs) {
+            return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+        };
+        d.weight = Tensor{make_blocked_ptr(weights), {n}, e.weight.dtype(), kDEVICE};
+        d.scales = Tensor{make_blocked_ptr(scales), {n}, e.scales.dtype(), kDEVICE};
+        // This is needed to be recognized as blocked striding mode
+        d.k_desc.offsets = d.q_desc.offsets = (int*)1;
+    }
+    else {
+        auto make_strided_ptr = [&](const auto& ptrs) {
+            return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+        };
+        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_type, kDEVICE};
+        if (e.scales) {
+            d.scales = Tensor{make_strided_ptr(scales), {n}, e.scales.dtype(), kDEVICE};
+        }
+        // pre-sm90 grouped GEMM need `ld == 0 to resolve strided_ptr
+        d.k_desc.ld = d.q_desc.ld = 0;
+    }
 }
 
 }  // namespace turbomind

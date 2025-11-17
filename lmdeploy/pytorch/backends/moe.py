@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
 from abc import ABC, abstractmethod
-from typing import List
+from typing import Callable, List
 
 import torch
 import torch.distributed as dist
@@ -8,6 +9,12 @@ import torch.distributed as dist
 
 class SoftmaxTopKImpl(ABC):
     """Softmax topk implementation api."""
+
+    @staticmethod
+    @functools.lru_cache
+    def get_group_offsets(n_groups: int, group_size: int, device: str):
+        group_offsets = (torch.arange(n_groups, device=device) * group_size).view(1, -1, 1)  # [1, n_groups, 1]
+        return group_offsets
 
     @abstractmethod
     def forward(self, x: torch.Tensor):
@@ -20,7 +27,7 @@ class SoftmaxTopKBuilder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(top_k: int, dim: int = -1):
+    def build(top_k: int, dim: int = -1, n_groups: int = -1):
         """build."""
         raise NotImplementedError
 
@@ -47,7 +54,10 @@ class FusedMoEImpl(ABC):
                 topk_ids: torch.LongTensor,
                 gate_up_weights: torch.Tensor,
                 down_weights: torch.Tensor,
-                expert_list: List[int] = None):
+                gate_up_bias: torch.Tensor = None,
+                down_bias: torch.Tensor = None,
+                expert_list: List[int] = None,
+                act_func: Callable = None):
         """forward."""
         raise NotImplementedError
 
@@ -133,7 +143,10 @@ class FusedMoEBlockedF8Impl(ABC):
                 gate_up_scale: torch.Tensor,
                 down_weights: torch.Tensor,
                 down_scale: torch.Tensor,
-                expert_list: List[int] = None):
+                gate_up_bias: torch.Tensor = None,
+                down_bias: torch.Tensor = None,
+                expert_list: List[int] = None,
+                act_func: Callable = None):
         """forward."""
         raise NotImplementedError
 
@@ -150,6 +163,8 @@ class FusedMoEBlockedF8Builder(ABC):
               block_size: int = 128,
               ep_size: int = 1,
               ep_group: dist.ProcessGroup = None,
-              out_dtype: torch.dtype = torch.float16):
+              out_dtype: torch.dtype = torch.float16,
+              layer_idx: int = 0,
+              custom_gateup_act: bool = False):
         """Build from mlp."""
         raise NotImplementedError

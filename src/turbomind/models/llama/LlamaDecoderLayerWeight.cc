@@ -25,6 +25,7 @@
 
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -45,7 +46,7 @@ static bool is_fuse_silu_act()
             catch (...) {
             }
         }
-        TM_LOG_INFO("TM_FUSE_SILU_ACT=1");
+        // TM_LOG_INFO("TM_FUSE_SILU_ACT=1");
         return true;
     }();
     return value;
@@ -64,6 +65,7 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
     inter_size_(model.inter_size.at(layer_id)),
     data_type_{data_type},
     weight_type_(model.weight_type),
+    expert_weight_type_(model.expert_weight_type),
     attn_bias_(model.attn_bias),
     attn_tp_size_(engine.attn_tp_size),
     attn_tp_rank_(engine.attn_tp_rank),
@@ -81,19 +83,24 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
                                                      attn_tp_rank_,
                                                      data_type_,
                                                      weight_type_,
-                                                     model.group_size});
+                                                     model.group_size,
+                                                     model.window_size.empty() ? 0 : model.window_size.at(layer_id),
+                                                     model.attn_sink});
     register_module("attention", *self_attn_weights);
 
     if (inter_size_) {
+        const bool is_cublas_gemm = byte_size(weight_type_, 8) == 16;
         ffn_weights.reset(new LlamaFfnWeight{
             hidden_units_,
             inter_size_,
+            model.mlp_bias,
             mlp_tp_size_,
             mlp_tp_rank_,
             data_type_,
             weight_type_,
             model.group_size,
-            weight_type_ == data_type_v<uint4_t> && is_fuse_silu_act(),
+            model.act_type,
+            is_fuse_silu_act() && !is_cublas_gemm,
         });
         register_module("feed_forward", *ffn_weights);
     }
@@ -102,11 +109,13 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
         moe_weights.reset(new MoeFfnWeight{layer_id,
                                            moe_param,
                                            hidden_units_,
+                                           model.mlp_bias,
                                            data_type_,
-                                           weight_type_,
+                                           expert_weight_type_,
                                            model.group_size,
                                            mlp_tp_size_,
                                            mlp_tp_rank_,
+                                           model.act_type,
                                            is_fuse_silu_act()});
         register_module("moe_ffn", *moe_weights);
     }
@@ -121,16 +130,14 @@ LlamaDecoderLayerWeight::~LlamaDecoderLayerWeight() = default;
 
 void LlamaDecoderLayerWeight::prepare(const cudaDeviceProp& prop, cudaStream_t st)
 {
-    const bool use_simt = is_16xx_series(prop.name);
-
-    self_attn_weights->prepare(use_simt);
+    self_attn_weights->prepare();
 
     if (ffn_weights) {
-        ffn_weights->prepare(false, use_simt);
+        ffn_weights->prepare(false);
     }
 
     if (moe_weights) {
-        moe_weights->prepare(use_simt);
+        moe_weights->prepare();
     }
 }
 

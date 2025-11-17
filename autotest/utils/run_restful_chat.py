@@ -1,25 +1,24 @@
+import datetime
 import json
 import os
-import random
-import string
 import subprocess
 from time import sleep, time
 
 import allure
 import psutil
+import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
+from utils.config_utils import _is_bf16_supported_by_device, get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
-from utils.run_client_chat import command_line_test
 
 from lmdeploy.serve.openai.api_client import APIClient
-from lmdeploy.utils import is_bf16_supported
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
+PROXY_PORT = 8000
 
 
 def start_restful_api(config, param, model, model_path, backend_type, worker_id):
@@ -35,7 +34,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     # temp remove testcase because of issue 3434
     if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
-        if 'turbomind' in backend_type and extra is not None and 'communicator native' in extra and tp_num > 1:
+        if 'turbomind' in backend_type and extra is not None and 'cuda-ipc' in extra and tp_num > 1:
             return
 
     if 'modelscope' in param.keys():
@@ -56,13 +55,18 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     else:
         port = DEFAULT_PORT + worker_num
 
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --session-len 8096 --server-port ' +
-                                 str(port),
+    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --server-port ' + str(port),
                                  config,
                                  model,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix,
                                  extra=extra)
+
+    device = os.environ.get('DEVICE', '')
+    if device:
+        cmd += f' --device {device} '
+        if device == 'ascend':
+            cmd += '--eager-mode '
 
     if backend_type == 'turbomind':
         if ('w4' in model or '4bits' in model or 'awq' in model.lower()):
@@ -71,18 +75,19 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
             cmd += ' --model-format gptq'
     if backend_type == 'pytorch':
         cmd += ' --backend pytorch'
-        if not is_bf16_supported():
+        if not _is_bf16_supported_by_device():
             cmd += ' --dtype float16'
     if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
 
-    if not is_bf16_supported():
+    if not _is_bf16_supported_by_device():
         cmd += ' --cache-max-entry-count 0.5'
-    if str(config.get('env_tag')) == '3090':
+    if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         cmd += ' --cache-max-entry-count 0.5'
 
-    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '_' + timestamp + '.log')
 
     print('reproduce command restful: ' + cmd)
 
@@ -94,8 +99,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     http_url = BASE_HTTP_URL + ':' + str(port)
     start_time = int(time())
     start_timeout = 300
-    if not is_bf16_supported():
-        start_timeout = 600
+    if not _is_bf16_supported_by_device() or tp_num >= 4:
+        start_timeout = 720
 
     sleep(5)
     for i in range(start_timeout):
@@ -136,7 +141,6 @@ def stop_restful_api(pid, startRes, param):
 
 def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
-
     model = get_model(http_url)
 
     if model is None:
@@ -147,25 +151,11 @@ def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PO
 
         case_info = cases_info.get(case)
 
-        with allure.step(case + ' step1 - command chat regression'):
-            chat_result, chat_log, msg = command_line_test(config, case, case_info, model, 'api_client', http_url,
-                                                           worker_id)
-            allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
-        with assume:
-            assert chat_result, msg
-
-        with allure.step(case + ' step2 - restful_test - openai chat'):
+        with allure.step(case + ' restful_test - openai chat'):
             restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, worker_id)
             allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
-
-        with allure.step(case + ' step3 - restful_test - interactive chat'):
-            active_result, interactive_log, msg = interactive_test(config, case, case_info, model, http_url, worker_id)
-            allure.attach.file(interactive_log, attachment_type=allure.attachment_type.TEXT)
-
-        with assume:
-            assert active_result, msg
 
 
 def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
@@ -177,8 +167,8 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
 
     result = True
 
-    api_client = APIClient(url)
-    model_name = api_client.available_models[0]
+    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
+    model_name = client.models.list().data[0].id
 
     messages = []
     msg = ''
@@ -189,61 +179,23 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1, max_tokens=256):
-            output_message = output.get('choices')[0].get('message')
-            messages.append(output_message)
+        response = client.chat.completions.create(model=model_name,
+                                                  messages=messages,
+                                                  temperature=0.01,
+                                                  top_p=0.8,
+                                                  max_completion_tokens=1024)
 
-            output_content = output_message.get('content')
-            file.writelines('output:' + output_content + '\n')
+        output_content = response.choices[0].message.content
+        file.writelines('output:' + output_content + '\n')
+        messages.append({'role': 'assistant', 'content': output_content})
 
-            case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
-            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
-            if not case_result:
-                msg += reason
-            result = result & case_result
+        case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
+        file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
+        if not case_result:
+            msg += reason
+        result = result & case_result
     file.close()
     return result, restful_log, msg
-
-
-def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
-    log_path = config.get('log_path')
-
-    interactive_log = os.path.join(log_path, 'interactive_' + model + worker_id + '_' + case + '.log')
-
-    result = True
-
-    file = open(interactive_log, 'w')
-
-    api_client = APIClient(url)
-    file.writelines('available_models:' + ','.join(api_client.available_models) + '\n')
-
-    # Randomly generate 6 characters and concatenate them into a string.
-    characters = string.digits
-    random_chars = ''.join(random.choice(characters) for i in range(6))
-
-    messages = []
-    msg = ''
-    for prompt_detail in case_info:
-        prompt = list(prompt_detail.keys())[0]
-        new_prompt = {'role': 'user', 'content': prompt}
-        messages.append(new_prompt)
-        file.writelines('prompt:' + prompt + '\n')
-
-        for output in api_client.chat_interactive_v1(prompt=prompt,
-                                                     interactive_mode=True,
-                                                     session_id=random_chars,
-                                                     top_k=1,
-                                                     request_output_len=256):
-            output_content = output.get('text')
-            file.writelines('output:' + output_content + '\n')
-
-            case_result, reason = assert_result(output_content, prompt_detail.values(), model)
-            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
-            if not case_result:
-                msg += reason
-            result = result & case_result
-    file.close()
-    return result, interactive_log, msg
 
 
 def health_check(url):
@@ -512,9 +464,9 @@ def test_qwen_multiple_round_prompt(client, model):
         """Get temperature at a location and date.
 
         Args:
-            location: The location to get the temperature for, in the format "City, State, Country".
-            date: The date to get the temperature for, in the format "Year-Month-Day".
-            unit: The unit to return the temperature in. Defaults to "celsius". (choices: ["celsius", "fahrenheit"])
+            location: The location to get the temperature for, in the format 'City, State, Country'.
+            date: The date to get the temperature for, in the format 'Year-Month-Day'.
+            unit: The unit to return the temperature in. Defaults to 'celsius'. (choices: ['celsius', 'fahrenheit'])
 
         Returns:
             the temperature, the location, the date and the unit in a dict
@@ -672,7 +624,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
                 },
             }
         }]
-        messages = [{'role': 'user', 'content': "What's the weather like in Boston today?"}]
+        messages = [{'role': 'user', 'content': 'What\'s the weather like in Boston today?'}]
         response = client.chat.completions.create(model=model_name,
                                                   messages=messages,
                                                   temperature=0.01,
@@ -734,3 +686,90 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
 
     file.close()
     allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
+
+
+def proxy_health_check(url):
+    """Check if proxy server is healthy."""
+    try:
+        # For proxy server, we check if it responds to the /v1/models endpoint
+        import requests
+        response = requests.get(f'{url}/v1/models', timeout=5)
+        if response.status_code == 200:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def start_proxy_server(config, worker_id):
+    """Start the proxy server for testing with enhanced error handling and
+    logging."""
+    log_path = config.get('eval_log_path')
+    if log_path is None:
+        log_path = '/nvme/qa_test_models/evaluation_report'
+    os.makedirs(log_path, exist_ok=True)
+
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    proxy_log = os.path.join(log_path, f'proxy_server_{worker_id}_{timestamp}.log')
+
+    worker_num = get_workerid(worker_id)
+    if worker_num is None:
+        port = PROXY_PORT
+    else:
+        port = PROXY_PORT + worker_num
+
+    proxy_url = f'http://127.0.0.1:{port}'  # noqa: E231, E261
+    try:
+        response = requests.get(f'{proxy_url}/nodes/status', timeout=5)
+        if response.status_code == 200:
+            print(f'Terminating existing nodes on proxy {proxy_url}')
+            requests.get(f'{proxy_url}/nodes/terminate_all', timeout=10)
+            sleep(5)
+    except requests.exceptions.RequestException:
+        pass
+
+    cmd = (f'lmdeploy serve proxy --server-name 127.0.0.1 --server-port {port} '
+           f'--routing-strategy min_expected_latency --serving-strategy Hybrid')
+
+    print(f'Starting proxy server with command: {cmd}')
+    print(f'Proxy log will be saved to: {proxy_log}')
+
+    proxy_file = open(proxy_log, 'w')
+    proxy_process = subprocess.Popen([cmd],
+                                     stdout=proxy_file,
+                                     stderr=proxy_file,
+                                     shell=True,
+                                     text=True,
+                                     encoding='utf-8')
+    pid = proxy_process.pid
+
+    start_time = int(time())
+    timeout = 300
+
+    sleep(5)
+    for i in range(timeout):
+        sleep(1)
+        if proxy_health_check(f'http://127.0.0.1:{port}'):  # noqa: E231, E261
+            break
+
+        try:
+            # Check if process is still running
+            return_code = proxy_process.wait(timeout=1)  # Small timeout to check status
+            if return_code != 0:
+                with open(proxy_log, 'r') as f:
+                    content = f.read()
+                    print(content)
+                return 0, proxy_process
+        except subprocess.TimeoutExpired:
+            continue
+
+        end_time = int(time())
+        total_time = end_time - start_time
+        if total_time >= timeout:
+            break
+
+    proxy_file.close()
+    allure.attach.file(proxy_log, attachment_type=allure.attachment_type.TEXT)
+
+    print(f'Proxy server started successfully with PID: {pid}')
+    return pid, proxy_process

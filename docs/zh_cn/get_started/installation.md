@@ -23,7 +23,7 @@ pip install lmdeploy
 默认的预构建包是在 **CUDA 12** 上编译的。如果需要 CUDA 11+ (>=11.3)，你可以使用以下命令安装 lmdeploy：
 
 ```shell
-export LMDEPLOY_VERSION=0.9.1
+export LMDEPLOY_VERSION=0.10.2
 export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
@@ -34,47 +34,45 @@ LMDeploy 的发布频率大约是每月一次或两次。如果你所需的功�
 
 ## 从源码安装
 
-如果你使用 PyTorch 引擎进行推理，从源代码安装非常简单：
+默认情况下，LMDeploy 将面向 NVIDIA CUDA 环境进行编译安装，并同时启用 Turbomind 和 PyTorch 两种后端引擎。在安装 LMDeploy 之前，请确保已成功安装 CUDA 工具包。
+
+成功安装 CUDA 工具包后，您可以使用以下单行命令构建并安装 LMDeploy：
 
 ```shell
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
-pip install -e .
+pip install git+https://github.com/InternLM/lmdeploy.git
 ```
 
-但如果你使用 TurboMind 引擎，请参考以下说明编译源代码。我们强烈推荐使用 `openmmlab/lmdeploy:{tag}` docker 镜像作为编译安装的环境
-
-**步骤 1** - 获取 LMDeploy 的 docker 镜像
+您还可以通过设置 `DISABLE_TURBOMIND` 环境变量，显式禁用 Turbomind 后端，以避免 CUDA 编译：
 
 ```shell
-docker pull openmmlab/lmdeploy:latest
+DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 ```
 
-```{note}
-"openmmlab/lmdeploy:latest" 基于 "nvidia/cuda:12.4.1-devel-ubuntu22.04"。如果你在带有 cuda 11+ 驱动的平台上工作，请使用 "openmmlab/lmdeploy:latest-cu11"。
-从 v0.5.3 开始，LMDeploy docker 镜像标签的模式是 "openmmlab/lmdeploy:{version}-cu(11|12)"。
-```
-
-**步骤 2** - 克隆 LMDeploy 源代码
+如果您希望使用特定版本，而不是 LMDeploy 的 `main` 分支，可以在命令行中指定：
 
 ```shell
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
+pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.10.2.zip
 ```
 
-**步骤 3** - 以交互模式启动 docker 容器
+如果您希望构建支持昇腾、寒武纪或沐熙的 LMDeploy，请使用相应的 `LMDEPLOY_TARGET_DEVICE` 环境变量进行安装。
+
+LMDeploy 也支持在 AMD GPU 的 ROCm 环境中安装。
 
 ```shell
-docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest /bin/bash
-```
+#The recommended way is to use the official ROCm PyTorch Docker image with pre-installed dependencies:
+docker run -it \
+    --cap-add=SYS_PTRACE \
+    --security-opt seccomp=unconfined \
+    --device=/dev/kfd \
+    --device=/dev/dri \
+    --group-add video \
+    --ipc=host \
+    --network=host \
+    --shm-size 32G \
+    -v /root:/workspace \
+    rocm/pytorch:latest
 
-**步骤 4** - 编译与安装
 
-```shell
-cd /opt/lmdeploy
-mkdir -p build && cd build
-bash ../generate.sh make
-make -j$(nproc) && make install
-cd ..
-pip install -e .
+#Once inside the container, install LMDeploy with ROCm support:
+LMDEPLOY_TARGET_DEVICE=rocm pip install  git+https://github.com/InternLM/lmdeploy.git
 ```

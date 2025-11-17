@@ -21,7 +21,7 @@ public:
         {
             std::lock_guard lock{mutex_};
             if (closed_) {
-                throw std::runtime_error("Queue is clsoed");
+                throw std::runtime_error("Queue is closed");
             }
             queue_.push_back(std::move(r));
         }
@@ -33,7 +33,7 @@ public:
         {
             std::lock_guard lock{mutex_};
             if (closed_) {
-                throw std::runtime_error("Queue is clsoed");
+                throw std::runtime_error("Queue is closed");
             }
             kill_.push_back(std::move(r));
         }
@@ -131,8 +131,8 @@ private:
 
     std::atomic<uint64_t> unique_id_{};
 
-    std::pmr::list<std::shared_ptr<Request>> queue_;
     std::pmr::unsynchronized_pool_resource   pool_;
+    std::pmr::list<std::shared_ptr<Request>> queue_;
 
     std::vector<std::shared_ptr<Request>> kill_;
 

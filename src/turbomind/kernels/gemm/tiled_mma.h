@@ -16,7 +16,7 @@
 
 namespace turbomind::gemm {
 
-template<class MMA_Atom_, class MMA_Map_>
+template<class MMA_Atom_, class MMA_Map_, Order order_ = kColMajor>
 struct Tiled_MMA_v2 {
     using Atom = MMA_Atom_;
     using Map  = MMA_Map_;
@@ -47,6 +47,33 @@ struct Tiled_MMA_v2 {
     __device__ static int3 get_offset(int thread_idx)
     {
         return Map::get_offset(Atom::get_group_id(thread_idx));
+    }
+
+    // (M,N)
+    template<class FragD, class FragA, class FragB, class FragC>
+    __device__ static void mma_k_iter(FragD& frag_D, const FragA& frag_A, const FragB& frag_B, const FragC& frag_C)
+    {
+        if constexpr (order_ == kColMajor) {
+            PRAGMA_UNROLL
+            for (int n = 0; n < kMmaIterN; ++n) {
+                PRAGMA_UNROLL
+                for (int m = 0; m < kMmaIterM; ++m) {
+                    int mm = n % 2 ? (kMmaIterM - m - 1) : m;
+                    Atom::fma(frag_D[mm][n], frag_A[mm], frag_B[n], frag_C[mm][n]);
+                }
+            }
+        }
+        else {
+            PRAGMA_UNROLL
+            for (int m = 0; m < kMmaIterM; ++m) {
+                PRAGMA_UNROLL
+                for (int n = 0; n < kMmaIterN; ++n) {
+                    int nn = n;
+                    int mm = m;
+                    Atom::fma(frag_D[mm][nn], frag_A[mm], frag_B[nn], frag_C[mm][nn]);
+                }
+            }
+        }
     }
 };
 

@@ -9,14 +9,14 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, RMSNorm, RopeType, SiluAndMul,
-                                 build_rotary_embedding)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, RMSNorm, SiluAndMul,
+                                 build_rotary_embedding_from_config)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
-from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
-from .utils.model import DeployModelMixin
+from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 
 def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
@@ -251,16 +251,7 @@ class Qwen2Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        emb_type = RopeType.LinearScaling
-        rope_dim = config.hidden_size // config.num_attention_heads
-        rope_max_pos_emb = config.max_position_embeddings
-        rope_base = config.rope_theta
-        self.rotary_emb = build_rotary_embedding(
-            rope_dim,
-            rope_max_pos_emb,
-            rope_base,
-            emb_type=emb_type,
-        )
+        self.rotary_emb = build_rotary_embedding_from_config(config)
 
     def forward(
         self,
@@ -524,6 +515,7 @@ class PatchMerger(nn.Module):
         return x
 
 
+@vlm_model
 class Qwen2VisionTransformerPretrainedModel(nn.Module):
     """Vision transformer."""
 
@@ -801,11 +793,8 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
         new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
 
         input_ids = kwargs.get('input_ids')
-        attn_metadata = kwargs.get('attn_metadata')
-        block_offsets = attn_metadata.block_offsets
         num_tokens = input_ids.size(-1)
-        batch_size, _ = block_offsets.size()
-        new_batch_size = next_power_of_2(batch_size)
+        new_batch_size = graph_meta.max_batchs
 
         is_decoding = graph_meta.is_decoding
         input_buffers = graph_meta.input_buffers
@@ -819,9 +808,17 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
 
         return new_inputs
 
+    def _get_model_metas(self, context: StepContext):
+        """Get model metas."""
+        model_metas = context.model_metas
+        if model_metas is None:
+            batch_size = context.q_seqlens.numel()
+            return [dict(mrope_delta=0)] * batch_size
+        return [dict(mrope_delta=0) if meta is None else meta for meta in model_metas]
+
     def _update_model_meta_decoding(self, context: StepContext):
         """Update model meta for decoding."""
-        model_metas = context.model_metas
+        model_metas = self._get_model_metas(context)
         position_ids = context.position_ids
 
         mrope_deltas = [meta['mrope_delta'] for meta in model_metas]
@@ -845,7 +842,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixi
 
     def _update_model_meta_prefilling(self, context: StepContext):
         """Update model meta for prefilling."""
-        model_metas = context.model_metas
+        model_metas = self._get_model_metas(context)
         input_multimodals = context.input_multimodals
         if input_multimodals is None:
             input_multimodals = [None] * len(model_metas)

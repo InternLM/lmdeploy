@@ -15,14 +15,24 @@
 #include "src/turbomind/models/llama/llama_params.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/metrics.h"
 
 namespace turbomind {
+
+struct MropeRope {
+    int          stride{};
+    Tensor_<int> position_ids;
+    Buffer_<int> position_delta;
+    Buffer_<int> length;
+};
 
 struct BatchState {
 
     Buffer_<int>  h_prompt_length;  // history + input, ignore generated
     Buffer_<int>  h_context_length;
     Buffer_<bool> h_finished;
+
+    MropeRope mrope;
 
     Tensor_<uint8_t> curand_state;  // [n, sizeof(curandState_t)]
 
@@ -92,7 +102,7 @@ public:
 
     void Finish(GenerationState& g, std::vector<Signal>& signals);
 
-    [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
+    [[nodiscard]] Signal Interrupt(int index, bool force_stop = false);
 
     void ComputeAndOutputLogits(const Tensor& hidden_states, int first, int last);
 
@@ -103,12 +113,16 @@ public:
     explicit LlamaBatch(DataType                 data_type,
                         const EngineParam&       param,
                         std::unique_ptr<LlamaV2> model,
-                        std::unique_ptr<Context> ctx,
+                        std::shared_ptr<Context> ctx,
                         std::shared_ptr<Gateway> gateway,
                         int                      device_id,
                         int                      dp_rank);
 
     ~LlamaBatch();
+
+    void InitializeBufferAndKVCache();
+
+    void FreeBufferAndKVCache();
 
     void Start();
 
@@ -123,6 +137,12 @@ public:
     }
 
     void Warmup();
+
+    ScheduleMetrics getScheduleMetrics()
+    {
+        const std::lock_guard<std::mutex> lock(metrics_mutex_);
+        return schedule_metrics_;
+    }
 
 private:
     void FindCanceledIndices(std::vector<int>& indices);
@@ -182,6 +202,8 @@ private:
 
     void DestroyCommunicators();
 
+    void UpdateMetrics();
+
 private:
     const EngineParam param_;
 
@@ -204,7 +226,7 @@ private:
 
     int session_len_;  // May be truncated in ctor
 
-    std::unique_ptr<Context>         context_;
+    std::shared_ptr<Context>         context_;
     std::unique_ptr<LlamaV2>         model_;
     std::unique_ptr<SequenceManager> sequence_manager_;
 
@@ -276,6 +298,10 @@ private:
     static constexpr int kMaxEndIdsSize      = 32;
 
     std::thread internal_thread_;
+
+    bool            enable_metrics_;
+    ScheduleMetrics schedule_metrics_;
+    std::mutex      metrics_mutex_;
 };
 
 using Engine = LlamaBatch;

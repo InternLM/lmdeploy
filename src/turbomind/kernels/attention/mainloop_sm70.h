@@ -47,9 +47,12 @@ struct Mainloop<arch::Sm70, Impl_> {
                                FragM&         frag_M,
                                FragL&         frag_L,
                                int            offset_Q,
+                               int            offset_K,
                                int            max_step,
                                int            tile_iter,
-                               int            mask_iter,
+                               int            mask_iter_back,
+                               int            mask_iter_front,
+                               int            window_size,
                                float          qk_scale,
                                SharedStorage& storage,
                                const StoreS&  store_S)
@@ -66,14 +69,12 @@ struct Mainloop<arch::Sm70, Impl_> {
 
         Impl::Sync();
 
-        gmem_K.Load<true>(cache_iter, tmp_K, max_step - tile_iter * CTA_S);
+        gmem_K.Load<true>(cache_iter, tmp_K, max_step - offset_K);
         gmem_K.Save(tmp_K);
 
         constexpr auto nop = [](int) {};
 
         auto loop = [&](auto is_residue, auto is_mask) {
-            const int offset_K = tile_iter * CTA_S;
-
             typename GmemIterV::Fragment tmp_V;
 
             gmem_V.Load<is_residue>(cache_iter, tmp_V, is_residue ? max_step - offset_K : CTA_S);
@@ -93,7 +94,7 @@ struct Mainloop<arch::Sm70, Impl_> {
             }
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
+                ApplyCasualMask(frag_S, offset_Q, offset_K, window_size);
             }
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
@@ -106,22 +107,30 @@ struct Mainloop<arch::Sm70, Impl_> {
             Impl::ComputePV(state_PV, frag_O, 0, nop, [&] {});
 
             gmem_K.Save(tmp_K);
+
+            offset_K -= CTA_S;
         };
 
-        PRAGMA_UNROLL
-        for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
+        for (int mask_iter = max(1, mask_iter_back); tile_iter > 0 && mask_iter > 0; --tile_iter, --mask_iter) {
             loop(std::true_type{}, std::true_type{});
         }
 
-        for (; tile_iter >= 0; --tile_iter) {
+        PRAGMA_NO_UNROLL
+        for (; tile_iter > mask_iter_front; --tile_iter) {
             loop(std::false_type{}, std::false_type{});
+        }
+
+        for (; tile_iter > 0; --tile_iter) {
+            loop(std::false_type{}, std::true_type{});
         }
     }
 
-    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
+    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K, int window_size)
     {
         Impl::ForeachS(frag_S, [&](int hi, int qi, int si, int ri, float& score) {
-            if (offset_Q + qi < offset_K + si) {
+            int w = (offset_Q + qi) - (offset_K + si);
+            if (0 <= w && w < window_size) {}
+            else {
                 score -= std::numeric_limits<float>::infinity();
             }
         });

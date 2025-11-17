@@ -13,7 +13,8 @@ from .cogvlm import CogVLMVisionModel  # noqa F401
 from .deepseek import DeepSeekVisionModel  # noqa F401
 from .deepseek_vl2 import DeepSeek2VisionModel  # noqa F401
 from .gemma3_vl import Gemma3VisionModel  # noqa F401
-from .glm_4v import GLM4VisionModel  # noqa F401
+from .glm4_1v import GLM4_1_VisionModel  # noqa F401
+from .glm4_v import GLM4VisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl3_hf import InternVL3VisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
@@ -27,6 +28,7 @@ from .molmo import MolmoVisionModel  # noqa F401
 from .phi3_vision import Phi3VisionModel  # noqa F401
 from .qwen import QwenVisionModel  # noqa F401
 from .qwen2 import Qwen2VLModel  # noqa F401
+from .qwen3 import Qwen3VLModel  # noqa F401
 from .xcomposer2 import Xcomposer2VisionModel  # noqa F401
 from .yi import YiVisionModel  # noqa F401
 
@@ -54,7 +56,7 @@ def load_vl_model(model_path: str,
     max_memory = None
     if not with_llm:
         tp = getattr(backend_config, 'tp', 1)
-        max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
+        max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)} if backend == 'turbomind' else None
 
     _, hf_config = get_model_arch(model_path)
     kwargs = dict(model_path=model_path, with_llm=with_llm, max_memory=max_memory, hf_config=hf_config, backend=backend)

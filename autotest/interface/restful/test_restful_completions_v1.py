@@ -1,3 +1,4 @@
+import pytest
 from utils.restful_return_check import assert_completions_batch_return, assert_completions_stream_return
 
 from lmdeploy.serve.openai.api_client import APIClient
@@ -10,6 +11,7 @@ BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 class TestRestfulInterfaceBase:
 
+    @pytest.mark.internlm2_5
     def test_get_model(self, config):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]

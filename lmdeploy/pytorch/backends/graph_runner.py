@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
 from dataclasses import dataclass
 from typing import List
 
@@ -11,6 +12,18 @@ from lmdeploy.pytorch.model_inputs import StepContext
 @dataclass
 class GraphRunnerMeta:
     padding_batch_size: int = None
+
+
+@functools.lru_cache
+def _get_capture_batch_size_impl(max_batches: int):
+    """Capture batch size."""
+    ret = []
+    batch_size = 1
+    while batch_size < max_batches:
+        ret.append(batch_size)
+        batch_size *= 2
+    ret.append(max_batches)
+    return ret
 
 
 class GraphRunner:
@@ -86,3 +99,7 @@ class GraphRunner:
 
     def update_inputs(self, inputs):
         return inputs
+
+    def get_capture_batch_sizes(self) -> List[int]:
+        """Capture batch sizes."""
+        return _get_capture_batch_size_impl(self.cache_config.max_batches)

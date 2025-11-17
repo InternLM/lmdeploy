@@ -61,7 +61,15 @@ class ImageEncoder:
         outputs = await future
         return outputs
 
-    async def wrap_for_pytorch(self, messages: List[Dict], chat_template, tokenizer, sequence_start) -> List[Dict]:
+    async def wrap_for_pytorch(
+        self,
+        messages: List[Dict],
+        chat_template,
+        tokenizer,
+        sequence_start,
+        tools: Optional[List[object]] = None,
+        enable_thinking: Optional[bool] = None,
+    ) -> List[Dict]:
         """
         Args:
             messages (List[Dict]): a list of message, which is supposed to be
@@ -78,14 +86,31 @@ class ImageEncoder:
                 ]
             )
         """
-        result = self.model.to_pytorch(messages, chat_template, tokenizer, sequence_start)
+        has_input_ids = self.model.has_input_ids(messages)
+        if not has_input_ids:
+            result = self.model.to_pytorch(messages,
+                                           chat_template,
+                                           tokenizer,
+                                           sequence_start,
+                                           tools=tools,
+                                           enable_thinking=enable_thinking)
+        else:
+            result = self.model.to_pytorch_with_input_ids(messages)
         # clear data
         for i, message in enumerate(messages):
             if isinstance(message['content'], List):
                 messages[i]['preprocess'] = None
         return result
 
-    async def wrap_for_turbomind(self, messages: List[Dict], chat_template, tokenizer, sequence_start) -> Dict:
+    async def wrap_for_turbomind(
+        self,
+        messages: List[Dict],
+        chat_template,
+        tokenizer,
+        sequence_start,
+        tools: Optional[List[object]] = None,
+        enable_thinking: Optional[bool] = None,
+    ) -> Dict:
         """
         Args:
             messages (List[Dict]): a list of message, which is supposed to be
@@ -100,7 +125,12 @@ class ImageEncoder:
                 'input_embedding_ranges': list[torch.Tensor],
                 ...
         """
-        result = self.model.to_turbomind(messages, chat_template, tokenizer, sequence_start)
+        result = self.model.to_turbomind(messages,
+                                         chat_template,
+                                         tokenizer,
+                                         sequence_start,
+                                         tools=tools,
+                                         enable_thinking=enable_thinking)
         # clear data
         for i, message in enumerate(messages):
             if isinstance(message['content'], List):

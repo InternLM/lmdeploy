@@ -11,6 +11,7 @@
 #include <memory>
 #include <memory_resource>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <thread>
@@ -111,11 +112,27 @@ void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_req
         }
     };
 
-    auto validate = [&occur](auto& reqs, const char* type) {
+    auto validate = [&](auto& reqs, const char* type) {
         for (const auto& r : reqs) {
             if (occur[r->id] > 1) {
                 TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
                 r->ec = Request::kConflict;
+            }
+            if (param_.enable_prefix_caching) {
+                if (r->session.step != 0) {
+                    // Prefix caching is incompatible with interactive mode
+                    TM_LOG_ERROR("Skip inconsistent %s request for ID %lu step %d", type, r->id, r->session.step);
+                    r->ec = Request::kInconsistency;
+                }
+                else if (r->gen_cfg.output_logits == GenerationConfig::kAll
+                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
+                    // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
+                    TM_LOG_ERROR("Skip inconsistent %s request for ID %lu. It cannot output logits or "
+                                 "last_hidden_states for all tokens",
+                                 type,
+                                 r->id);
+                    r->ec = Request::kInconsistency;
+                }
             }
         }
     };
@@ -203,7 +220,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
     for (const auto& r : reqs) {
 
         if (tp_rank_ == 0) {
-            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request for %llu received.", r->id);
         }
 
         if (r->ec) {
@@ -250,7 +267,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
 
         auto& seq = *state.sequences[idx];
 
-        if (step < seq.tokens.size()) {
+        if (!param_.enable_prefix_caching && step < seq.tokens.size()) {
             // resize sequence tokens to match step
             seq.tokens.resize(step);
             seq.cache_len = std::min(seq.cache_len, step);
@@ -338,6 +355,22 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
                     seq.input_embedding_ranges.emplace_back(begin + seq.tokens.size(), end + seq.tokens.size());
                     emb_tensor_ptr += count;
                 }
+            }
+        }
+
+        // copy mrope input meta
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            TM_CHECK(r->session.start_flag) << "Mrope doesn't support interactive chat";
+            if (r->inputs.count("mrope_position_ids")) {
+                core::Copy(r->inputs.at("mrope_position_ids").data<int>(),
+                           input_length * 3,
+                           state.mrope.position_ids.data() + idx * state.mrope.position_ids.shape(1));
+                core::Copy(
+                    r->inputs.at("mrope_position_delta").data<int>(), 1, state.mrope.position_delta.data() + idx);
+                core::Copy(r->inputs.at("mrope_length").data<int>(), 1, state.mrope.length.data() + idx);
+            }
+            else {
+                check_cuda_error(cudaMemsetAsync(state.mrope.length.data() + idx, 0, sizeof(int), stream_));
             }
         }
 
@@ -674,6 +707,16 @@ void LlamaBatch::CopyState(const std::vector<std::tuple<BatchState*, BatchState*
                     d_idx,
                     std::tuple{s->output_ids.data(), d->output_ids.data(), session_len_},
                     std::tuple{(curandState_t*)s->curand_state.data(), (curandState_t*)d->curand_state.data(), 1});
+
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            IndexedCopy(s_idx,
+                        d_idx,
+                        std::tuple{s->mrope.position_ids.data(),
+                                   d->mrope.position_ids.data(),
+                                   (int)s->mrope.position_ids.shape(1)},
+                        std::tuple{s->mrope.position_delta.data(), d->mrope.position_delta.data(), 1},
+                        std::tuple{s->mrope.length.data(), d->mrope.length.data(), 1});
+        }
     }
 
     for (const auto& [s, d, si, di] : desc) {
@@ -744,6 +787,14 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
 
         s.curand_state = {{batch_size, sizeof(curandState_t)}, kDEVICE};
         Clear(s.curand_state.buffer());
+
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            s.mrope.position_ids   = {{batch_size, session_len_ * 3}, kDEVICE};
+            s.mrope.position_delta = {batch_size, kDEVICE};
+            s.mrope.length         = {batch_size, kDEVICE};
+            Clear(s.mrope.position_delta);
+            Clear(s.mrope.length);
+        }
     }
 
     h_input_length_buf_ = {batch_size, kCPUpinned};
@@ -796,14 +847,14 @@ LlamaBatch::~LlamaBatch()
     cudaStreamSynchronize(stream_);
 
     model_.reset();
-    sequence_manager_.reset();
+    FreeBufferAndKVCache();
     context_.reset();  // This destroy all objects in context except for `stream`
 }
 
 LlamaBatch::LlamaBatch(DataType                 data_type,
                        const EngineParam&       param,
                        std::unique_ptr<LlamaV2> model,  // ! This is moved
-                       std::unique_ptr<Context> ctx,    // ! This is moved
+                       std::shared_ptr<Context> ctx,
                        std::shared_ptr<Gateway> gateway,
                        int                      device_id,
                        int                      dp_rank):
@@ -826,70 +877,39 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
     comm_(context_->comm),
     session_len_(param.session_len)
 {
-    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
-
-    const int dbits = byte_size(data_type, 8);
-
-    const auto quant_policy = model_->param_.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
-
-    SequenceManager::BlockConfig block_config{
-        (int)model_->size_per_head_,
-        (int)model_->local_kv_head_num_,
-        cache_block_seq_len,
-        elem_bits == dbits ? 0 : dbits,
-        elem_bits,
-    };
-
-    const auto get_free_size = [&] {  //
-        size_t free{}, total{};
-        check_cuda_error(cudaMemGetInfo(&free, &total));
-        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
-    };
-
-    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
-                                                block_config,
-                                                param.cache_max_block_count,
-                                                param.cache_chunk_size,
-                                                param.enable_prefix_caching,
-                                                tp_rank_,
-                                                core::Context::alloc(kDEVICE),
-                                                get_free_size});
-
-    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
-    if (max_session_len < session_len_) {
-        if (tp_rank_ == 0) {
-            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
-                           session_len_,
-                           max_session_len);
-        }
-        session_len_ = max_session_len;
-    }
-
-    FT_CHECK(max_context_token_num_ >= session_len_);
-    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
-
-    for (auto& s : states_) {
-        s.requests.resize(max_batch_size_);
-        s.sequences.resize(max_batch_size_);
-        s.seq_len_limit.resize(max_batch_size_);
-        s.errors.resize(max_batch_size_);
-    }
-
-    state_    = &states_[0];
-    back_     = &states_[1];
-    incoming_ = &states_[2];
 
     symm_alloc_ = core::SimpleAllocator::Create([this](ssize_t size) { return SymmAlloc(size, true); },
                                                 [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
                                                 kDEVICE);
 
-    AllocSymmBuffers();
-
-    AllocateBuffer(max_batch_size_, session_len_, cache_block_seq_len);
+    InitializeBufferAndKVCache();
 
     // Wait for allocations
     check_cuda_error(cudaStreamSynchronize(stream_));
+
+    UpdateMetrics();
+}
+
+void LlamaBatch::FreeBuffer()
+{
+    input_ids_buf_       = {};
+    decoder_output_buf_  = {};
+    input_length_buf_    = {};
+    context_length_buf_  = {};
+    init_context_length_ = {};
+    sequence_lengths_    = {};
+    cu_block_counts_     = {};
+    block_ptrs_          = {};
+    sampled_logprobs_    = {};
+    sampled_indexes_     = {};
+    sampled_nums_        = {};
+    token_ids_buf_       = {};
+    sampling_logits_     = {};
+    finished_buf_        = {};
+    seq_limit_len_       = {};
+    rope_theta_          = {};
+    d_random_seed_       = {};
+    d_curand_state_      = {};
 }
 
 void LlamaBatch::InitializeSampling(const GenerationState& g)
@@ -988,14 +1008,14 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 {
     const auto& src_buf   = logits.buffer();
     const auto  elem_size = byte_size(logits.dtype(), 1);
-    // when `is_all` is true, logits only contains last token of the sequences
+    // when `is_all` is false, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
 
     int base = 0;
 
     for (int i = first; i < last; ++i) {
 
-        const int input_len = h_input_length_buf_[i];  // input lenght for this iter
+        const int input_len = h_input_length_buf_[i];  // input length for this iter
 
         if (state_->requests[i]->gen_cfg.output_logits == out_type) {
 
@@ -1185,7 +1205,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // Cache computed blocks to block trie
-    sequence_manager_->CacheIfEnabled(state_->sequences, batch_size);
+    sequence_manager_->CachePrompt(state_->sequences, batch_size);
 
     if (debug_ && tp_rank_ == 0) {
         for (int i = 0; i < batch_size; ++i) {
@@ -1248,16 +1268,15 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
         // recover full context length of partial
         state_->h_context_length[i] = g.partial_context_legnth;
     }
+
+    // Update the schedule metrics since some requests might finish the inference
+    UpdateMetrics();
 }
 
-auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
+auto LlamaBatch::Interrupt(int index, bool force_stop) -> Signal
 {
     if (tp_rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d",
-                    index,
-                    (long)state_->requests[index]->id,
-                    force_stop,
-                    force_end);
+        TM_LOG_INFO("[Interrupt] slot %d, request %llu, stop %d", index, state_->requests[index]->id, force_stop);
     }
 
     if (debug_ && tp_rank_ == 0) {
@@ -1271,21 +1290,23 @@ auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-    if (state_->requests[index]->session.end_flag || force_end) {
-        // Sequence is ending this round or a stop request is issued to end it
+    auto& seq = *state_->sequences[index];
+    {
+        // output_ids is updated & synced in `Finish`
+        const auto output_ids = state_->requests[index]->output_ids.data();
+        const auto output_len = state_->h_context_length[index];
+        // Update token IDs to perform `CacheGeneration` later
+        seq.tokens.resize(output_len);
+        std::copy_n(output_ids, output_len, seq.tokens.data());
+    }
+
+    if (state_->requests[index]->session.end_flag) {
+        // Cache the generated tokens of the sequence
+        sequence_manager_->CacheGeneration(seq);
         FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
     }
     else {
-        const int output_len = state_->h_context_length[index];
-        auto&     seq        = *state_->sequences[index];
-
-        // Update token IDs
-        seq.tokens.resize(output_len);
-
-        // output_ids is updated & synced in `Finish`
-        const auto output_ids = state_->requests[index]->output_ids.data();
-        std::copy_n(output_ids, output_len, seq.tokens.data());
-
+        // Prefix caching is incompatible with interactive mode, so we don't perform `CacheGeneration` here
         // Save random state in host memory
         seq.random_state.resize(sizeof(curandState_t));
         // This async copy must be synchronized by the caller
@@ -1420,17 +1441,21 @@ void LlamaBatch::InternalThreadEntry()
                     }
                 } while (wait);
             }
-            // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
+            // Mark reqs to the same session_id as invalid and also interactive-mode reqs when
+            // prefix caching is enabled(which are dangerous to the engine)
             DisableInvalidRequests(req->infer, req->kill);
             FindCanceledIndices(req->cancel);
+        }
+
+        if (state_->size == g.finished_count) {
+            // Batch is empty, use blocking sync to avoid spinning
+            comm_.h_tp_group->Sync(true);
         }
 
         NvtxScope scope("mainloop");
 
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
-        // shared_state_->barrier->wait();
-        // comm_.h_comm->Sync(comm_.h_comm_tp_group);
         if (comm_.h_tp_group->n_ranks() > 1) {
             Broadcast(comm_.h_tp_group, req, 0);
         }
@@ -1462,6 +1487,9 @@ void LlamaBatch::InternalThreadEntry()
         }
 
         Initialize(g);
+
+        // update the schedule metrics and request metrics in every forward iter
+        UpdateMetrics();
 
         const int n_active = AllReduce(comm_.h_dp_group, state_->active_size, comm::RedOp::kSum);
 
@@ -1609,6 +1637,14 @@ bool LlamaBatch::Forward(GenerationState& g)
             }
         }
 
+        MropeRope mrope;
+        if (model_->attn_param_.rope.type == RopeType::kMrope) {
+            mrope.stride         = state_->mrope.position_ids.shape(1);
+            mrope.position_ids   = state_->mrope.position_ids.slice(first, mini_batch_size);
+            mrope.position_delta = state_->mrope.position_delta.slice(first, mini_batch_size);
+            mrope.length         = state_->mrope.length.slice(first, mini_batch_size);
+        }
+
         // Synchronize batch token num with sync DP ranks
         auto local_token_nums = AllGather(comm_.h_dp_group, sum_q);
         auto global_token_num = std::accumulate(local_token_nums.begin(), local_token_nums.end(), 0);
@@ -1623,6 +1659,7 @@ bool LlamaBatch::Forward(GenerationState& g)
                         h_input_length_buf_.slice(first, mini_batch_size),
                         state_->h_context_length.slice(first, mini_batch_size),
                         rope_theta_.slice(first, mini_batch_size),
+                        &mrope,
                         finished_buf_.slice(first, mini_batch_size),
                         Buffer(local_token_nums.data(), local_token_nums.size(), kCPU),
                         lora_mask_buf_,
@@ -1814,6 +1851,7 @@ void LlamaBatch::Warmup()
                             Buffer{&input_length, 1, kCPU},
                             Buffer{&input_length, 1, kCPU},
                             rope_theta_.slice(0, bsz),
+                            nullptr,  // mrope
                             finished_buf_.slice(0, bsz),
                             Buffer{local_token_nums.data(), (int)local_token_nums.size(), kCPU},
                             Buffer{},
@@ -1841,6 +1879,84 @@ void LlamaBatch::Warmup()
             TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
         }
     }
+}
+
+void LlamaBatch::InitializeBufferAndKVCache()
+{
+    // initialize kvcache, BatchState and persist buffers
+    core::ContextGuard guard{context_->core_stream, context_->allocator, Allocator{kCPUpinned}};
+
+    const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
+
+    const int dbits = byte_size(data_type_, 8);
+
+    const auto quant_policy = model_->param_.quant_policy;
+    const int  elem_bits    = quant_policy ? quant_policy : dbits;
+
+    SequenceManager::BlockConfig block_config{
+        (int)model_->size_per_head_,
+        (int)model_->local_kv_head_num_,
+        cache_block_seq_len,
+        elem_bits == dbits ? 0 : dbits,
+        elem_bits,
+    };
+
+    const auto get_free_size = [&] {  //
+        size_t free{}, total{};
+        check_cuda_error(cudaMemGetInfo(&free, &total));
+        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
+    };
+
+    sequence_manager_.reset(new SequenceManager{model_->layer_num_,
+                                                block_config,
+                                                param_.cache_max_block_count,
+                                                param_.cache_chunk_size,
+                                                param_.enable_prefix_caching,
+                                                tp_rank_,
+                                                core::Context::alloc(kDEVICE),
+                                                get_free_size});
+
+    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
+    if (max_session_len < session_len_) {
+        if (tp_rank_ == 0) {
+            TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
+                           session_len_,
+                           max_session_len);
+        }
+        session_len_ = max_session_len;
+    }
+
+    FT_CHECK(max_context_token_num_ >= session_len_);
+    FT_CHECK(max_forward_token_num_ >= max_batch_size_);
+
+    for (auto& s : states_) {
+        s.requests.resize(max_batch_size_);
+        s.sequences.resize(max_batch_size_);
+        s.seq_len_limit.resize(max_batch_size_);
+        s.errors.resize(max_batch_size_);
+    }
+    state_    = &states_[0];
+    back_     = &states_[1];
+    incoming_ = &states_[2];
+
+    AllocSymmBuffers();
+
+    AllocateBuffer(max_batch_size_, session_len_, model_->attn_param_.cache_block_seq_len);
+}
+
+void LlamaBatch::FreeBufferAndKVCache()
+{
+    sequence_manager_.reset();
+
+    for (auto& s : states_) {
+        s = {};
+    }
+
+    FreeSymmBuffers();
+    FreeBuffer();
+
+    cudaStreamSynchronize(stream_);
+    context_->allocator->trim(0);
 }
 
 void* LlamaBatch::SymmAlloc(size_t size, bool register_)
@@ -1881,11 +1997,41 @@ void LlamaBatch::DestroyCommunicators()
     FreeSymmBuffers();
     comm_.h_comm->Sync();
 
-    // Destroy device communicator
-    comm_.d_comm = {};
-
     cudaStreamSynchronize(stream_);
     comm_.h_comm->Sync();
+}
+
+void LlamaBatch::UpdateMetrics()
+{
+    if (tp_rank_ == 0 && param_.enable_metrics) {
+        // update schedule metrics
+        int total_seqs, active_seqs, cached_seqs;
+        std::tie(total_seqs, active_seqs, cached_seqs) = sequence_manager_->seq_stats();
+
+        {
+            const std::lock_guard<std::mutex> lock(metrics_mutex_);
+
+            schedule_metrics_.total_seqs    = total_seqs;
+            schedule_metrics_.active_seqs   = active_seqs;
+            schedule_metrics_.waiting_seqs  = total_seqs - active_seqs;
+            schedule_metrics_.total_blocks  = sequence_manager_->total_count();
+            schedule_metrics_.active_blocks = sequence_manager_->active_count();
+            schedule_metrics_.cached_blocks = sequence_manager_->cached_count();
+            schedule_metrics_.free_blocks   = sequence_manager_->free_count();
+        }
+
+        // update request metrics
+        for (int i = 0; i < state_->active_size; ++i) {
+            if (!state_->requests[i]) {
+                continue;
+            }
+            auto& metrics = state_->requests[i]->metrics;
+            if (!metrics || metrics->scheduled_time != 0) {
+                continue;
+            }
+            metrics->scheduled_time = RequestMetrics::timestamp();
+        }
+    }
 }
 
 }  // namespace turbomind

@@ -18,17 +18,11 @@
 // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/FfnLayer.h
 
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
-#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 
 namespace turbomind {
-
-void LlamaFfnLayer::activation(Tensor& gating, Tensor& inter, cudaStream_t stream)
-{
-    // Code for dispatching activation types
-    invokeGenericActivation_v3<SiluActivation>(gating, inter, stream);
-}
 
 void LlamaFfnLayer::forward(ForwardParam param)
 {
@@ -46,9 +40,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
     Tensor inter;
 
     if (mlp.fused_gating_intermediate.weight) {
-        const auto type = mlp.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm;
-
-        auto mix = linear_.forward(param.input, mlp.fused_gating_intermediate, type);
+        auto mix = linear_.Forward(param.input, mlp.fused_gating_intermediate);
         sync_check_cuda_error();
 
         gating = mix.slice({0, 0}, {(int)token_num, inter_size});
@@ -57,25 +49,25 @@ void LlamaFfnLayer::forward(ForwardParam param)
         }
     }
     else {
-        gating = linear_.forward(param.input, mlp.gating, LlamaLinear::kGemm);
+        gating = linear_.Forward(param.input, mlp.gating);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("w1", layer_id), 3);
 
-        inter = linear_.forward(param.input, mlp.intermediate, LlamaLinear::kGemm);
+        inter = linear_.Forward(param.input, mlp.intermediate);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(inter, Concat("w3", layer_id), 3);
     }
 
     if (!mlp.is_fused_silu) {
-        // silu(w1(x)) * w3(x)
-        activation(gating, inter, stream);
+        // gate' = silu(gate) * up
+        Activation(gating, inter, mlp.act_type, stream);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.forward(gating, mlp.output, LlamaLinear::kGemm, param.output);
+        linear_.Forward(gating, mlp.output, param.output);
         sync_check_cuda_error();
     }
 }

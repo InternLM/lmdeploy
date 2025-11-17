@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
-from transformers import AutoConfig, AutoModel, CLIPImageProcessor
+from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -76,6 +76,9 @@ class InternVLVisionModel(VisonModel):
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+        IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        self.image_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
 
     def build_preprocessor(self):
         self.config = self.hf_config
@@ -222,7 +225,13 @@ class InternVLVisionModel(VisonModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(
+        messages,
+        chat_template,
+        sequence_start,
+        tools: Optional[List[object]] = None,
+        enable_thinking: Optional[bool] = None,
+    ):
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -234,6 +243,8 @@ class InternVLVisionModel(VisonModel):
                 continue
             n_images = len([1 for x in message['content'] if x['type'] == 'image'])
             content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
+            if len(content) == 0:
+                content.append('')
             prompt = content[0]
             if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
                 prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{IMAGE_TOKEN}</img>')
@@ -245,13 +256,38 @@ class InternVLVisionModel(VisonModel):
             else:
                 pass
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = chat_template.messages2prompt(prompt_messages,
+                                               sequence_start,
+                                               tools=tools,
+                                               enable_thinking=enable_thinking)
         return prompt, IMAGE_TOKEN
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+    def to_pytorch(self,
+                   messages,
+                   chat_template,
+                   tokenizer,
+                   sequence_start,
+                   tools: Optional[List[object]] = None,
+                   enable_thinking: Optional[bool] = None,
+                   **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages,
+                                                 chat_template,
+                                                 sequence_start,
+                                                 tools=tools,
+                                                 enable_thinking=enable_thinking)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+    def to_turbomind(self,
+                     messages,
+                     chat_template,
+                     tokenizer,
+                     sequence_start,
+                     tools: Optional[List[object]] = None,
+                     enable_thinking: Optional[bool] = None,
+                     **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages,
+                                                 chat_template,
+                                                 sequence_start,
+                                                 tools=tools,
+                                                 enable_thinking=enable_thinking)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

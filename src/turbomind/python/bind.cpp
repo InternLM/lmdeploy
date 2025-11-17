@@ -12,12 +12,15 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/metrics.h"
 
 namespace py = pybind11;
 namespace ft = turbomind;
@@ -291,6 +294,21 @@ struct ScopedGIL {
 
 PYBIND11_MODULE(_turbomind, m)
 {
+    py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
+        .def(py::init())
+        .def_readonly("enque_time", &ft::RequestMetrics::enque_time)
+        .def_readonly("scheduled_time", &ft::RequestMetrics::scheduled_time);
+
+    py::class_<ft::ScheduleMetrics, std::shared_ptr<ft::ScheduleMetrics>>(m, "ScheduleMetrics")
+        .def(py::init())
+        .def_readonly("total_seqs", &ft::ScheduleMetrics::total_seqs)
+        .def_readonly("active_seqs", &ft::ScheduleMetrics::active_seqs)
+        .def_readonly("waiting_seqs", &ft::ScheduleMetrics::waiting_seqs)
+        .def_readonly("total_blocks", &ft::ScheduleMetrics::total_blocks)
+        .def_readonly("active_blocks", &ft::ScheduleMetrics::active_blocks)
+        .def_readonly("cached_blocks", &ft::ScheduleMetrics::cached_blocks)
+        .def_readonly("free_blocks", &ft::ScheduleMetrics::free_blocks);
+
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step, bool start, bool end) {
                  if (!start && end) {
@@ -433,13 +451,16 @@ PYBIND11_MODULE(_turbomind, m)
                const ft::SessionParam&     session,
                const ft::GenerationConfig& gen_cfg,
                bool                        stream_output,
+               bool                        enable_metrics,
                std::function<void()>       cb) {
                 ModelRequest::InputParam param{};
-                param.tensors       = std::move(input_tensors);
-                param.session       = session;
-                param.gen_cfg       = gen_cfg;
-                param.stream_output = stream_output;
-                auto ret            = model_request->Forward(std::move(param), [cb = std::move(cb)]() {
+                param.tensors        = std::move(input_tensors);
+                param.session        = session;
+                param.gen_cfg        = gen_cfg;
+                param.stream_output  = stream_output;
+                param.enable_metrics = enable_metrics;
+
+                auto ret = model_request->Forward(std::move(param), [cb = std::move(cb)]() {
                     try {
                         cb();
                     }
@@ -447,13 +468,14 @@ PYBIND11_MODULE(_turbomind, m)
                         std::cerr << e.what() << std::endl;
                     }
                 });
-                return std::make_tuple(std::move(ret.tensors), std::move(ret.state));
+                return std::make_tuple(std::move(ret.tensors), std::move(ret.state), std::move(ret.metrics));
             },
             py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,
             "session"_a,
             "gen_cfg"_a,
             "stream_output"_a,
+            "enable_metrics"_a,
             "cb"_a)
         .def(
             "cancel",
@@ -468,7 +490,15 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::call_guard<py::gil_scoped_release>(),
             "cb"_a,
-            "session_id"_a);
+            "session_id"_a)
+        .def(
+            "set_grammar",
+            [](ModelRequest* model_request, const xgrammar::CompiledGrammar& grammar) {
+                TM_LOG_INFO("Set grammar for model_request");
+                model_request->setGrammar(grammar);
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "grammar"_a);
 
     // transformer model
     using ft::LlamaTritonModel;
@@ -487,31 +517,7 @@ PYBIND11_MODULE(_turbomind, m)
                     delete ptr;
                 };
 
-                turbomind::DataType data_type{};
-
-                if (weight_type == "half" || weight_type == "fp16" || weight_type == "float16"
-                    || weight_type == "int4") {
-                    data_type = turbomind::kFloat16;
-                }
-                else if (weight_type == "bf16" || weight_type == "bfloat16") {
-#ifdef ENABLE_BF16
-                    data_type = turbomind::kBfloat16;
-#else
-                    throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
-#endif
-                }
-                else if (weight_type == "fp8") {
-                    data_type = turbomind::kBfloat16;
-                }
-                else {
-#ifdef ENABLE_FP32
-                    data_type = turbomind::kF32;
-#else
-                    throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
-#endif
-                }
-
-                std::shared_ptr<LlamaTritonModel> model(new LlamaTritonModel(data_type, model_dir, config, gil_factory),
+                std::shared_ptr<LlamaTritonModel> model(new LlamaTritonModel(model_dir, config, gil_factory),
                                                         no_gil_deleter);
                 return model;
             },
@@ -545,6 +551,27 @@ PYBIND11_MODULE(_turbomind, m)
             [](LlamaTritonModel* model, int deviceId, int rank) { model->createEngine(deviceId, rank); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
+            "rank"_a)
+        .def(
+            "get_schedule_metrics",
+            [](LlamaTritonModel* model, int deviceId, int rank) { return model->getScheduleMetrics(deviceId, rank); },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "rank"_a)
+        .def(
+            "sleep",
+            [](LlamaTritonModel* model, int deviceId, int level) { model->sleep(deviceId, level); },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "level"_a)
+        .def(
+            "wakeup",
+            [](LlamaTritonModel* model, int deviceId, const std::vector<std::string>& tags, int rank) {
+                model->wakeup(deviceId, tags, rank);
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "device_id"_a,
+            "tags"_a,
             "rank"_a)
         .def("__str__", &LlamaTritonModel::toString)
         .def("__repr__", &LlamaTritonModel::toString)

@@ -75,7 +75,12 @@ def add_summary(csv_path: str):
         _append_summary('\n')
 
 
-def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_type: str, is_smoke: bool = False):
+def evaluate(models: List[str],
+             datasets: List[str],
+             workspace: str,
+             evaluate_type: str,
+             max_num_workers: int = 8,
+             is_smoke: bool = False):
     """Evaluate models from lmdeploy using opencompass.
 
     Args:
@@ -121,7 +126,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_ty
 
         work_dir = os.path.join(workspace, model)
         cmd_eval = [
-            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
+            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers {max_num_workers}'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         start_time = time.time()
@@ -224,7 +229,7 @@ def generate_benchmark_report(report_path: str):
                     for f in csv_files:
                         df = pd.read_csv(f)
                         merged_df = pd.concat([merged_df, df], ignore_index=True)
-                    if 'throughput' in backend_subfolder:
+                    if 'throughput' in backend_subfolder or 'longtext' in backend_subfolder:
                         merged_df = merged_df.sort_values(by=merged_df.columns[1])
 
                         grouped_df = merged_df.groupby(merged_df.columns[1])

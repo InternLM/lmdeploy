@@ -12,27 +12,17 @@ namespace turbomind {
 
 class LlamaLinear {
 public:
-    enum Type
-    {
-        kGemm,
-        kFusedSiluFfn,
-        kFusedAdd
-    };
-
     explicit LlamaLinear(cudaStream_t stream);
 
-    Tensor forward(const Tensor&           input,  //
+    Tensor Forward(const Tensor&           input,  //
                    const LlamaDenseWeight& weight,
-                   Type                    type   = kGemm,
                    std::optional<Tensor>   output = {});
 
-    void forward_moe(Tensor&                 output,
-                     const Tensor&           input,
-                     const int*              indexes,
-                     const int*              offsets,
-                     const LlamaDenseWeight& weight,
-                     Type                    type,
-                     gemm::Context*          context);
+    Tensor Forward(const Tensor&           input,
+                   const LlamaDenseWeight& weight,
+                   const Buffer_<int>&     indices,
+                   const Buffer_<int>&     offsets,
+                   std::optional<Tensor>   output = {});
 
     void set_measure(bool measure);
 

@@ -2,7 +2,8 @@
 
 #include <cuda_runtime.h>
 
-#include "src/turbomind/kernels/activation_kernels.h"
+#include "src/turbomind/kernels/activation.h"
+#include "src/turbomind/kernels/norm/rms_norm.h"
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -18,6 +19,7 @@ namespace turbomind {
 MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx):
     inter_size_(param.inter_size / engine.mlp_tp_size),
     hidden_dim_(model.hidden_units),
+    tp_size_(engine.mlp_tp_size),
     param_(param),
     stream_(ctx.stream),
     linear_(*ctx.linear)
@@ -27,8 +29,7 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     const int max_expert_num = *std::max_element(param.expert_num.begin(), param.expert_num.end());
 
     if (param_.method == MoeParam::kFused) {
-        context_ =
-            std::make_unique<gemm::MoeGemmContext>(max_expert_num, param.experts_per_token, ctx.device_prop, stream_);
+        // pass
     }
     else {
         expert_ffn_ = std::make_unique<LlamaFfnLayer>(model, ctx);
@@ -36,11 +37,12 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
 
     h_offsets_ = {max_expert_num + 1, kCPUpinned};
 
-    const int max_token_num = engine.max_forward_token_num;
+    const int max_token_num = engine.max_forward_token_num * engine.attn_dp_size;
     const int pad_token_num = (max_token_num + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
 
     masks_   = {max_expert_num * pad_token_num, kDEVICE};
     f2n_     = {param_.experts_per_token * max_token_num, kDEVICE};
+    f2E_     = {param_.experts_per_token * max_token_num, kDEVICE};
     en2f_    = {param_.experts_per_token * max_token_num, kDEVICE};
     scales_  = {param_.experts_per_token * max_token_num, kDEVICE};
     offsets_ = {max_expert_num + 1, kDEVICE};
@@ -52,7 +54,9 @@ Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& ga
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
     Tensor_<float> logits{{input.shape(0), weight.shape(1)}, kDEVICE};
-    linear_.forward(input, gate, LlamaLinear::kGemm, logits);
+    linear_.Forward(input, gate, logits);
+    sync_check_cuda_error();
+    ApplyBias(logits, gate.bias, stream_);
     sync_check_cuda_error();
     return logits;
 }
@@ -69,6 +73,8 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     auto logits = Gate(p.input, moe.gate);
 
+    TM_DEBUG_TENSOR(logits, "logits", 2);
+
     check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, stream_));
     check_cuda_error(cudaMemsetAsync(masks_.data(), -1, sizeof(int8_t) * expert_num * padded, stream_));
 
@@ -84,6 +90,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     /// TODO: fix illegal memory access even if NaN are present in logits
     invokeMoeGate_V2(f2n_.data(),
+                     f2E_.data(),
                      en2f_.data(),
                      offsets_.data(),
                      scales_.data(),
@@ -137,36 +144,21 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         }
     }
     else {
-        context_->update(expert_num, param_.experts_per_token, offsets_.data());
 
         auto& block = moe.block;
 
-        const int inter_dim = block.is_fused_silu ? inter_size_ : inter_size_ * 2;
-        Tensor    inter{{tokens * param_.experts_per_token, inter_dim}, p.input.dtype(), p.input.device()};
+        auto indices = f2n_.slice(0, tokens * param_.experts_per_token);
+        auto offsets = offsets_.slice(0, expert_num + 1);
 
-        linear_.forward_moe(inter,
-                            p.input,
-                            f2n_.data(),
-                            offsets_.data(),
-                            block.fused_gating_intermediate,
-                            block.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm,
-                            context_.get());
+        Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_);
         sync_check_cuda_error();
 
         if (!block.is_fused_silu) {
-            invokeGenericActivation_v3<SiluActivation>(inter.slice({0, 0}, {-1, inter_size_}),  //
-                                                       inter.slice({0, inter_size_}, {-1, -1}),
-                                                       stream_);
+            Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, stream_);
             sync_check_cuda_error();
         }
 
-        linear_.forward_moe(temp_,
-                            inter.slice({0, 0}, {-1, inter_size_}),
-                            nullptr,
-                            offsets_.data(),
-                            block.output,
-                            LlamaLinear::kGemm,
-                            context_.get());
+        linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_);
         sync_check_cuda_error();
     }
 
@@ -181,10 +173,13 @@ void MoeFfnLayer::Combine(ForwardParam& p)
 
     invokeMoeCombine(p.output,
                      temp_,
+                     p.weights->block.output.bias,
                      scales_.data(),
                      en2f_.data(),
+                     f2E_.data(),
                      shared_scales_.data_or((float*)nullptr),
                      param_.experts_per_token,
+                     1.f / tp_size_,
                      p.scale,
                      stream_);
     sync_check_cuda_error();

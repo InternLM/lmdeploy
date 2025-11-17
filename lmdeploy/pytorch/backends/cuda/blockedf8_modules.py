@@ -13,15 +13,6 @@ from .warmup_manager import WarmupMeta, get_warmup_manager
 logger = get_logger('lmdeploy')
 
 
-def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
-    """Reduce scatter."""
-    outs = out.split(tp_sizes, -2)
-    out = outs[rank]
-    outs = list(outs)
-    dist.reduce_scatter(out, outs)
-    return out
-
-
 class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
     """Triton linear blocked f8 implementation."""
 
@@ -37,6 +28,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
                 scale: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False,
+                group: Optional[dist.ProcessGroup] = None,
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""
@@ -52,7 +44,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
 
         if all_reduce:
             if scatter_size is not None:
-                out = _reduce_scatter_input(out, rank, scatter_size)
+                out = dist.reduce_scatter_by_tp_sizes(out, rank, scatter_size, group=group)
             else:
                 dist.all_reduce(out)
         return out
@@ -92,7 +84,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         """warmup."""
         import random
 
-        from deep_gemm.jit_kernels.utils import get_m_alignment_for_contiguous_layout
+        from lmdeploy.pytorch.third_party.deep_gemm import get_m_alignment_for_contiguous_layout
         device = 'cuda'
         max_num_tokens = warmup_meta.max_num_tokens
         alignment = get_m_alignment_for_contiguous_layout()
@@ -117,6 +109,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
                 scale: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False,
+                group: Optional[dist.ProcessGroup] = None,
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""
@@ -128,12 +121,11 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         out = out[:x.size(0)]
         if bias is not None:
             out += bias
+        out = out.unflatten(0, x_shape[:-1])
 
         if all_reduce:
             if scatter_size is not None:
-                out = _reduce_scatter_input(out, rank, scatter_size)
+                out = dist.reduce_scatter_by_tp_sizes(out, rank, scatter_size, group=group)
             else:
-                dist.all_reduce(out)
-
-        out = out.unflatten(0, x_shape[:-1])
+                dist.all_reduce(out, group=group)
         return out

@@ -26,4 +26,4 @@ add_library(gloo_comm STATIC
     tcp_store.cc
 )
 set_property(TARGET gloo_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(gloo_comm PUBLIC gloo logger)
+target_link_libraries(gloo_comm PUBLIC gloo logger xgrammar)

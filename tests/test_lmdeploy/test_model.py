@@ -2,64 +2,110 @@ import pytest
 
 from lmdeploy.model import MODELS, best_match_model
 
+HF_MODELS_WITH_CHAT_TEMPLATES = [
+    'Qwen/Qwen1.5-7B-Chat',
+    'Qwen/Qwen2.5-7B-Instruct',
+    'Qwen/Qwen3-8B',
+    'Qwen/QwQ-32B',
+    'Qwen/QwQ-32B-Preview',
+    'Qwen/QwQ-32B-AWQ',
+    'Qwen/Qwen2.5-VL-7B-Instruct',
+    'Qwen/Qwen2-VL-7B-Instruct',
+    'internlm/internlm2-chat-7b',
+    'internlm/internlm2_5-7b-chat',
+    'internlm/internlm3-8b-instruct',
+    'internlm/Intern-S1',
+    'internlm/Intern-S1-mini',
+    'OpenGVLab/InternVL-Chat-V1-2',
+    'OpenGVLab/InternVL-Chat-V1-5',
+    'OpenGVLab/Mini-InternVL-Chat-2B-V1-5',
+    'OpenGVLab/InternVL2-2B',
+    'OpenGVLab/InternVL2-4B',
+    'OpenGVLab/InternVL2-8B',
+    'OpenGVLab/InternVL2_5-2B',
+    'OpenGVLab/InternVL2_5-4B',
+    'OpenGVLab/InternVL2_5-8B',
+    'OpenGVLab/InternVL3-2B',
+    'OpenGVLab/InternVL3-8B',
+    'OpenGVLab/InternVL3-9B',
+    'OpenGVLab/InternVL3_5-1B',
+    'OpenGVLab/InternVL3_5-4B',
+    'OpenGVLab/InternVL3_5-8B',
+    'OpenGVLab/InternVL3_5-GPT-OSS-20B-A4B-Preview',
+    'AI4Chem/ChemVLM-8B',
+    'deepseek-ai/DeepSeek-V2-Lite',
+    'deepseek-ai/DeepSeek-V3',
+    'deepseek-ai/DeepSeek-R1',
+    'deepseek-ai/DeepSeek-R1-Zero',
+    'deepseek-ai/DeepSeek-V3.1',
+    'deepseek-ai/deepseek-coder-1.3b-instruct',
+    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
+    'zai-org/chatglm3-6b',
+    'zai-org/glm-4-9b-chat',
+    'zai-org/codegeex4-all-9b',
+    'zai-org/cogvlm2-llama3-chat-19B',
+    'microsoft/Phi-3-mini-128k-instruct',
+    'microsoft/Phi-3-vision-128k-instruct',
+    'microsoft/Phi-3.5-mini-instruct',
+    'microsoft/Phi-3.5-vision-instruct',
+    'microsoft/Phi-3.5-MoE-instruct',
+    '01-ai/Yi-1.5-34B-Chat',
+    # Accessing the following models is supposed to be authenticated
+    # 'openbmb/MiniCPM-V-2_6',
+    # 'google/gemma-3-4b-it',
+]
+
+
+@pytest.mark.parametrize('model_path', HF_MODELS_WITH_CHAT_TEMPLATES)
+def test_HFChatTemplate_get_prompt_sequence_start_True(model_path):
+    model = MODELS.get('hf')(model_path=model_path)
+    prompt = 'How to apply chat template using transformers?'
+    messages = [{'role': 'user', 'content': prompt}]
+
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    expected = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    assert model.get_prompt(prompt, sequence_start=True) == expected
+
+
+@pytest.mark.parametrize('model_path', HF_MODELS_WITH_CHAT_TEMPLATES)
+def test_HFChatTemplate_message2prompt_sequence_start_True(model_path):
+    model = MODELS.get('hf')(model_path=model_path)
+    prompt = 'How to apply chat template using transformers?'
+    messages = [{'role': 'user', 'content': prompt}]
+
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    expected = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    assert model.messages2prompt(prompt, sequence_start=True) == expected
+    assert model.messages2prompt(messages, sequence_start=True) == expected
+
+
+@pytest.mark.parametrize('model_path', HF_MODELS_WITH_CHAT_TEMPLATES)
+def test_best_match_model_hf(model_path):
+    assert best_match_model(model_path) == 'hf'
+
 
 @pytest.mark.parametrize('model_path_and_name', [
     ('internlm/internlm-chat-7b', ['internlm']),
     ('internlm/internlm2-1_8b', ['base']),
-    ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
-    ('Qwen/Qwen-7B-Chat', ['qwen']),
-    ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
-    ('Qwen/Qwen2.5-VL-7B-Instruct', ['qwen2d5-vl']),
-    ('Qwen/Qwen3-32B', ['qwen3']),
-    ('Qwen/Qwen3-235B-A22B', ['qwen3']),
     ('codellama/CodeLlama-7b-hf', ['codellama']),
-    ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
     ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
     ('THUDM/chatglm2-6b', ['chatglm']),
-    ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']),
-    ('01-ai/Yi-34B-Chat', ['yi']),
-    ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
-    ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
     ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
-    ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
     ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
-    ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
-    ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
-    ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
-    ('workspace', ['base']),
-    ('OpenGVLab/InternVL2_5-1B', ['internvl2_5']),
-    ('OpenGVLab/InternVL3-1B', ['internvl2_5']),
 ])
-@pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
-def test_best_match_model(model_path_and_name, suffix):
-    if model_path_and_name[0] == 'internlm/internlm2-1_8b' and suffix:
-        return  # internlm/internlm2-1_8b-suffix will got None
-    deduced_name = best_match_model(model_path_and_name[0] + suffix)
+def test_best_match_model(model_path_and_name):
+    deduced_name = best_match_model(model_path_and_name[0])
     if deduced_name is not None:
         assert deduced_name in model_path_and_name[1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
     else:
         assert deduced_name in model_path_and_name[1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
 
 
-@pytest.mark.parametrize('model_name', ['llama2', 'base', 'yi', 'qwen-7b', 'vicuna'])
-@pytest.mark.parametrize('meta_instruction', ['[fake meta_instruction]'])
-def test_model_config(model_name, meta_instruction):
-    from lmdeploy.model import ChatTemplateConfig
-    chat_template = ChatTemplateConfig(model_name, meta_instruction=meta_instruction).chat_template
-    prompt = chat_template.get_prompt('')
-    if model_name == 'base':
-        assert prompt == ''
-    else:
-        assert meta_instruction in prompt
-
-
 def test_base_model():
-    model = MODELS.get('llama')()
-    assert model is not None
-    assert model.capability == 'chat'
-    assert model.get_prompt('test') == 'test'
-    assert model.stop_words is None
-
     model = MODELS.get('internlm')(capability='completion')
     assert model.capability == 'completion'
     assert model.get_prompt('hi') == 'hi'
@@ -85,7 +131,7 @@ def test_vicuna():
 
 
 def test_prefix_response():
-    model = MODELS.get('internlm2')()
+    model = MODELS.get('hf')(model_path='Qwen/Qwen3-8B')
     messages = [dict(role='assistant', content='prefix test')]
     prompt = model.messages2prompt(messages)
     assert prompt[-len('prefix test'):] == 'prefix test'
@@ -109,142 +155,6 @@ def test_internlm_chat():
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
         assert _prompt is None
-
-
-def test_internlm_tool_call():
-    messages = []
-    messages.append({
-        'role':
-        'system',
-        'name':
-        'plugin',
-        'content':
-        '[{"description": "Compute the sum of two numbers", "name": "add", "parameters": {"type": "object", "properties": {"a": {"type": "int", "description": "A number"}, "b": {"type": "int", "description": "A number"}}, "required": ["a", "b"]}}, {"description": "Calculate the product of two numbers", "name": "mul", "parameters": {"type": "object", "properties": {"a": {"type": "int", "description": "A number"}, "b": {"type": "int", "description": "A number"}}, "required": ["a", "b"]}}]'  # noqa
-    })
-    messages.append({'role': 'user', 'content': 'Compute (3+5)*2'})
-    messages.append({
-        'content':
-        '(3+5)*2 = 8*2 =',
-        'role':
-        'assistant',
-        'tool_calls': [{
-            'id': '1',
-            'function': {
-                'arguments': '{"a": 8, "b": 2}',
-                'name': 'mul'
-            },
-            'type': 'function'
-        }]
-    })
-    messages.append({'role': 'tool', 'content': '3+5=16', 'tool_call_id': '1'})
-    model = MODELS.get('internlm2')(capability='chat')
-    assert model.messages2prompt(
-        messages
-    ) == """<|im_start|>system name=<|plugin|>\n[{"description": "Compute the sum of two numbers", "name": "add", "parameters": {"type": "object", "properties": {"a": {"type": "int", "description": "A number"}, "b": {"type": "int", "description": "A number"}}, "required": ["a", "b"]}}, {"description": "Calculate the product of two numbers", "name": "mul", "parameters": {"type": "object", "properties": {"a": {"type": "int", "description": "A number"}, "b": {"type": "int", "description": "A number"}}, "required": ["a", "b"]}}]<|im_end|>\n<|im_start|>user\nCompute (3+5)*2<|im_end|>\n<|im_start|>assistant\n(3+5)*2 = 8*2 =<|action_start|><|plugin|>\n{"name": "mul", "parameters": {"a": 8, "b": 2}}<|action_end|><|im_end|>\n<|im_start|>environment\n3+5=16<|im_end|>\n<|im_start|>assistant\n"""  # noqa
-
-
-def test_messages2prompt4internlm2_chat():
-    model = MODELS.get('internlm2')()
-    # Test with a single message
-    messages = [
-        {
-            'role': 'system',
-            'name': 'interpreter',
-            'content': 'You have access to python environment.'
-        },
-        {
-            'role': 'user',
-            'content': 'use python drwa a line'
-        },
-        {
-            'role': 'assistant',
-            'content': '<|action_start|><|interpreter|>\ncode<|action_end|>\n'
-        },
-        {
-            'role': 'environment',
-            'name': 'interpreter',
-            'content': "[{'type': 'image', 'content': 'image url'}]"
-        },
-    ]
-    tools = [{
-        'type': 'function',
-        'function': {
-            'name': 'add',
-            'description': 'Compute the sum of two numbers',
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'a': {
-                        'type': 'int',
-                        'description': 'A number',
-                    },
-                    'b': {
-                        'type': 'int',
-                        'description': 'A number',
-                    },
-                },
-                'required': ['a', 'b'],
-            },
-        }
-    }]
-    import json
-    expected_prompt = (model.system.strip() + ' name=<|interpreter|>\nYou have access to python environment.' +
-                       model.eosys + model.system.strip() +
-                       f' name={model.plugin}\n{json.dumps(tools, ensure_ascii=False)}' + model.eosys + model.user +
-                       'use python drwa a line' + model.eoh + model.assistant +
-                       '<|action_start|><|interpreter|>\ncode<|action_end|>\n' + model.eoa + model.separator +
-                       model.environment.strip() +
-                       " name=<|interpreter|>\n[{'type': 'image', 'content': 'image url'}]" + model.eoenv +
-                       model.assistant)
-    actual_prompt = model.messages2prompt(messages, tools=tools)
-    assert actual_prompt == expected_prompt
-
-    # Test with a message where 'name' is not in name_map
-    messages_invalid_name = [
-        {
-            'role': 'system',
-            'name': 'invalid_name',
-            'content': 'You have access to python environment.'
-        },
-        {
-            'role': 'user',
-            'content': 'use python draw a line'
-        },
-        {
-            'role': 'assistant',
-            'content': '\ncode\n'
-        },
-        {
-            'role': 'environment',
-            'name': 'invalid_name',
-            'content': "[{'type': 'image', 'content': 'image url'}]"
-        },
-    ]
-    expected_prompt_invalid_name = (model.system.strip() + '\nYou have access to python environment.' + model.eosys +
-                                    model.user + 'use python draw a line' + model.eoh + model.assistant + '\ncode\n' +
-                                    model.eoa + model.separator + model.environment.strip() +
-                                    "\n[{'type': 'image', 'content': 'image url'}]" + model.eoenv + model.assistant)
-    actual_prompt_invalid_name = model.messages2prompt(messages_invalid_name)
-    assert actual_prompt_invalid_name == expected_prompt_invalid_name
-
-
-def test_llama3_1():
-    model = MODELS.get('llama3_1')()
-    messages = [dict(role='user', content='Can you check the top 5 trending songs on spotify?')]
-    tools = [{
-        'name': 'spotify_trending_songs',
-        'description': 'Get top trending songs on Spotify',
-        'parameters': {
-            'n': {
-                'param_type': 'int',
-                'description': 'Number of trending songs to get',
-                'required': True
-            }
-        },
-    }]
-    actual_prompt = model.messages2prompt(messages, tools=tools)
-    expected_prompt = '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n# Tool Instructions\n- Always execute python code in messages that you share.\n- When looking for real time information use relevant functions if available else fallback to brave_search\n\n\n\nYou have access to the following functions:\n\nUse the function \'spotify_trending_songs\' to: Get top trending songs on Spotify\n{"name": "spotify_trending_songs", "description": "Get top trending songs on Spotify", "parameters": {"n": {"param_type": "int", "description": "Number of trending songs to get", "required": true}}}\n\n\nIf a you choose to call a function ONLY reply in the following format:\n<{start_tag}={function_name}>{parameters}{end_tag}\nwhere\n\nstart_tag => `<function`\nparameters => a JSON dict with the function argument name as key and function argument value as value.\nend_tag => `</function>`\n\nHere is an example,\n<function=example_function_name>{"example_name": "example_value"}</function>\n\nReminder:\n- Function calls MUST follow the specified format\n- Required parameters MUST be specified\n- Only call one function at a time\n- Put the entire function call reply on one line"\n- Always add your sources when using search results to answer the user query\n\nYou are a helpful assistant.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nCan you check the top 5 trending songs on spotify?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'  # noqa
-    assert actual_prompt == expected_prompt
 
 
 def test_baichuan():
@@ -277,337 +187,6 @@ def test_llama2():
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
         assert _prompt is None
-
-
-def test_llama3():
-    conversation = [{'role': 'user', 'content': 'Are you ok?'}]
-
-    from lmdeploy.model import Llama3
-    t = Llama3(model_name='llama', capability='chat')
-    prompt = t.messages2prompt(conversation)
-    assert prompt == '<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nAre you ok?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n'  # noqa
-
-
-def test_qwen():
-    prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('qwen')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
-    assert model.stop_words is not None
-
-    model = MODELS.get('qwen')(capability='chat')
-    assert model.get_prompt(prompt, sequence_start=True) != prompt
-    assert model.get_prompt(prompt, sequence_start=False) != prompt
-
-    model = MODELS.get('qwen')(capability='voice')
-    _prompt = None
-    with pytest.raises(AssertionError):
-        _prompt = model.get_prompt(prompt, sequence_start=True)
-        assert _prompt is None
-
-
-def test_qwen2d5():
-    prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('qwen2d5')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
-
-    model = MODELS.get('qwen2d5')(capability='chat')
-
-    # No tool call
-    messages = [dict(role='user', content='What\'s the temperature in San Francisco now?')]
-    no_tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
-                      'Cloud. You are a helpful '
-                      "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
-                      'temperature in San Francisco '
-                      'now?<|im_end|>\n<|im_start|>assistant\n')
-    assert model.messages2prompt(messages) == no_tool_prompt
-    assert model.messages2prompt(messages, tools=[]) == no_tool_prompt
-
-    messages.append({'role': 'assistant', 'content': 'I don\'t know.'})
-    no_tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
-                      'Cloud. You are a helpful '
-                      "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
-                      'temperature in San Francisco '
-                      "now?<|im_end|>\n<|im_start|>assistant\nI don't "
-                      'know.<|im_end|>\n<|im_start|>assistant\n')
-    assert model.messages2prompt(messages) == no_tool_prompt
-    # Single tool call
-    tools = [{
-        'name': 'get_current_temperature',
-        'description': 'Get current temperature at a location.',
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'location': {
-                    'type': 'string',
-                    'description': 'The location to get the temperature for,'
-                    ' in the format \'City, State, Country\'.'
-                },
-                'unit': {
-                    'type': 'string',
-                    'enum': ['celsius', 'fahrenheit'],
-                    'description': 'The unit to return the temperature in. Defaults to '
-                    '\'celsius\'.'
-                }
-            },
-            'required': ['location']
-        }
-    }]
-
-    messages = [dict(role='user', content='What\'s the temperature in San Francisco now?')]
-    tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
-                   'Cloud. You are a helpful assistant.\n\n# Tools\n\nYou '
-                   'may call one or more functions to assist with the user '
-                   'query.\n\nYou are provided with function signatures '
-                   "within <tools></tools> XML tags:\n<tools>\n{\"type\": "
-                   "\"function\", \"function\": {\"name\": "
-                   "\"get_current_temperature\", \"description\": \"Get "
-                   "current temperature at a location.\", \"parameters\": {"
-                   "\"type\": \"object\", \"properties\": {\"location\": {"
-                   "\"type\": \"string\", \"description\": \"The location to "
-                   "get the temperature for, in the format 'City, State, "
-                   "Country'.\"}, \"unit\": {\"type\": \"string\", \"enum\": "
-                   "[\"celsius\", \"fahrenheit\"], \"description\": \"The "
-                   'unit to return the temperature in. Defaults to '
-                   "'celsius'.\"}}, \"required\": ["
-                   "\"location\"]}}}\n</tools>\n\nFor each function call, "
-                   'return a json object with function name and arguments '
-                   'within <tool_call></tool_call> XML tags:\n<tool_call>\n{'
-                   "\"name\": <function-name>, \"arguments\": "
-                   '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
-                   "|>user\nWhat's the temperature in San Francisco "
-                   'now?<|im_end|>\n<|im_start|>assistant\n')
-    assert model.messages2prompt(messages, tools=tools) == tool_prompt
-    # tool call send back
-    messages.append(
-        dict(role='assistant',
-             content='',
-             tool_calls=[{
-                 'id': '0',
-                 'function': {
-                     'arguments': '{"location": "San Francisco, CA, USA", "unit": "celsius"}',
-                     'name': 'get_current_temperature'
-                 },
-                 'type': 'function'
-             }]))
-    messages.append(
-        dict(role='tool',
-             name='get_current_temperature',
-             content={
-                 'temperature': 26.1,
-                 'location': 'San Francisco, California, USA',
-                 'unit': 'celsius'
-             },
-             tool_call_id='0'))
-    tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
-                   'Cloud. You are a helpful assistant.\n\n# Tools\n\nYou '
-                   'may call one or more functions to assist with the user '
-                   'query.\n\nYou are provided with function signatures '
-                   "within <tools></tools> XML tags:\n<tools>\n{\"type\": "
-                   "\"function\", \"function\": {\"name\": "
-                   "\"get_current_temperature\", \"description\": \"Get "
-                   "current temperature at a location.\", \"parameters\": {"
-                   "\"type\": \"object\", \"properties\": {\"location\": {"
-                   "\"type\": \"string\", \"description\": \"The location to "
-                   "get the temperature for, in the format 'City, State, "
-                   "Country'.\"}, \"unit\": {\"type\": \"string\", \"enum\": "
-                   "[\"celsius\", \"fahrenheit\"], \"description\": \"The "
-                   'unit to return the temperature in. Defaults to '
-                   "'celsius'.\"}}, \"required\": ["
-                   "\"location\"]}}}\n</tools>\n\nFor each function call, "
-                   'return a json object with function name and arguments '
-                   'within <tool_call></tool_call> XML tags:\n<tool_call>\n{'
-                   "\"name\": <function-name>, \"arguments\": "
-                   '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
-                   "|>user\nWhat's the temperature in San Francisco "
-                   'now?<|im_end|>\n<|im_start|>assistant\n\n<tool_call>\n'
-                   '{"name": "get_current_temperature", "arguments": '
-                   '{"location": "San Francisco, CA, USA", "unit": '
-                   '"celsius"}}\n</tool_call><|im_end|>\n<|im_start|>'
-                   'user\n<tool_response>\n{'
-                   "'temperature': 26.1, 'location': 'San Francisco, "
-                   "California, USA', 'unit': "
-                   "'celsius'}\n</tool_response><|im_end|>\n<|im_start"
-                   '|>assistant\n')
-    assert model.messages2prompt(messages, tools=tools) == tool_prompt
-    # Multi tool calling
-    tools = [{
-        'name': 'get_current_temperature',
-        'description': 'Get current temperature at a location.',
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'location': {
-                    'type': 'string',
-                    'description': 'The location to get the temperature for, in the format '
-                    '\'City, State, Country\'.'
-                },
-                'unit': {
-                    'type': 'string',
-                    'enum': ['celsius', 'fahrenheit'],
-                    'description': 'The unit to return the temperature in.'
-                    ' Defaults to \'celsius\'.'
-                }
-            },
-            'required': ['location']
-        }
-    }, {
-        'name': 'get_temperature_date',
-        'description': 'Get temperature at a location and date.',
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'location': {
-                    'type': 'string',
-                    'description': 'The location to get the temperature for,'
-                    ' in the format \'City, State, Country\'.'
-                },
-                'date': {
-                    'type': 'string',
-                    'description': 'The date to get the temperature for,'
-                    ' in the format \'Year-Month-Day\'.'
-                },
-                'unit': {
-                    'type': 'string',
-                    'enum': ['celsius', 'fahrenheit'],
-                    'description': 'The unit to return the temperature in.'
-                    ' Defaults to \'celsius\'.'
-                }
-            },
-            'required': ['location', 'date']
-        }
-    }]
-    messages = [
-        dict(role='user',
-             content='Today is 2024-11-14, What\'s the temperature in'
-             ' San Francisco now? How about tomorrow?')
-    ]
-    tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
-                   'Cloud. You are a helpful assistant.\n\n# Tools\n\nYou '
-                   'may call one or more functions to assist with the user '
-                   'query.\n\nYou are provided with function signatures '
-                   "within <tools></tools> XML tags:\n<tools>\n{\"type\": "
-                   "\"function\", \"function\": {\"name\": "
-                   "\"get_current_temperature\", \"description\": \"Get "
-                   "current temperature at a location.\", \"parameters\": {"
-                   "\"type\": \"object\", \"properties\": {\"location\": {"
-                   "\"type\": \"string\", \"description\": \"The location to "
-                   "get the temperature for, in the format 'City, State, "
-                   "Country'.\"}, \"unit\": {\"type\": \"string\", \"enum\": "
-                   "[\"celsius\", \"fahrenheit\"], \"description\": \"The "
-                   'unit to return the temperature in. Defaults to '
-                   "'celsius'.\"}}, \"required\": [\"location\"]}}}\n{"
-                   "\"type\": \"function\", \"function\": {\"name\": "
-                   "\"get_temperature_date\", \"description\": \"Get "
-                   "temperature at a location and date.\", \"parameters\": {"
-                   "\"type\": \"object\", \"properties\": {\"location\": {"
-                   "\"type\": \"string\", \"description\": \"The location to "
-                   "get the temperature for, in the format 'City, State, "
-                   "Country'.\"}, \"date\": {\"type\": \"string\", "
-                   "\"description\": \"The date to get the temperature for, "
-                   "in the format 'Year-Month-Day'.\"}, \"unit\": {\"type\": "
-                   "\"string\", \"enum\": [\"celsius\", \"fahrenheit\"], "
-                   "\"description\": \"The unit to return the temperature "
-                   "in. Defaults to 'celsius'.\"}}, \"required\": ["
-                   "\"location\", \"date\"]}}}\n</tools>\n\nFor each "
-                   'function call, return a json object with function name '
-                   'and arguments within <tool_call></tool_call> XML '
-                   "tags:\n<tool_call>\n{\"name\": <function-name>, "
-                   "\"arguments\": "
-                   '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
-                   "|>user\nToday is 2024-11-14, What's the temperature in "
-                   'San Francisco now? How about '
-                   'tomorrow?<|im_end|>\n<|im_start|>assistant\n')
-    assert model.messages2prompt(messages, tools=tools) == tool_prompt
-
-    messages.append(
-        dict(role='tool',
-             name='get_current_temperature',
-             content={
-                 'temperature': 26.1,
-                 'location': 'San Francisco, California, USA',
-                 'unit': 'celsius'
-             },
-             tool_call_id='0'))
-    messages.append(
-        dict(role='tool',
-             name='get_temperature_date',
-             content={
-                 'temperature': 25.9,
-                 'location': 'San Francisco, California, USA',
-                 'date': '2024-11-15',
-                 'unit': 'celsius'
-             },
-             tool_call_id='1'))
-    tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
-                   'Cloud. You are a helpful assistant.\n\n# Tools\n\nYou '
-                   'may call one or more functions to assist with the user '
-                   'query.\n\nYou are provided with function signatures '
-                   "within <tools></tools> XML tags:\n<tools>\n{\"type\": "
-                   "\"function\", \"function\": {\"name\": "
-                   "\"get_current_temperature\", \"description\": \"Get "
-                   "current temperature at a location.\", \"parameters\": {"
-                   "\"type\": \"object\", \"properties\": {\"location\": {"
-                   "\"type\": \"string\", \"description\": \"The location to "
-                   "get the temperature for, in the format 'City, State, "
-                   "Country'.\"}, \"unit\": {\"type\": \"string\", \"enum\": "
-                   "[\"celsius\", \"fahrenheit\"], \"description\": \"The "
-                   'unit to return the temperature in. Defaults to '
-                   "'celsius'.\"}}, \"required\": [\"location\"]}}}\n{"
-                   "\"type\": \"function\", \"function\": {\"name\": "
-                   "\"get_temperature_date\", \"description\": \"Get "
-                   "temperature at a location and date.\", \"parameters\": {"
-                   "\"type\": \"object\", \"properties\": {\"location\": {"
-                   "\"type\": \"string\", \"description\": \"The location to "
-                   "get the temperature for, in the format 'City, State, "
-                   "Country'.\"}, \"date\": {\"type\": \"string\", "
-                   "\"description\": \"The date to get the temperature for, "
-                   "in the format 'Year-Month-Day'.\"}, \"unit\": {\"type\": "
-                   "\"string\", \"enum\": [\"celsius\", \"fahrenheit\"], "
-                   "\"description\": \"The unit to return the temperature "
-                   "in. Defaults to 'celsius'.\"}}, \"required\": ["
-                   "\"location\", \"date\"]}}}\n</tools>\n\nFor each "
-                   'function call, return a json object with function name '
-                   'and arguments within <tool_call></tool_call> XML '
-                   "tags:\n<tool_call>\n{\"name\": <function-name>, "
-                   "\"arguments\": "
-                   '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
-                   "|>user\nToday is 2024-11-14, What's the temperature in "
-                   'San Francisco now? How about '
-                   'tomorrow?<|im_end|>\n<|im_start|>user\n<tool_response'
-                   ">\n{'temperature': 26.1, 'location': 'San Francisco, "
-                   "California, USA', 'unit': "
-                   "'celsius'}\n</tool_response>\n<tool_response>\n{"
-                   "'temperature': 25.9, 'location': 'San Francisco, "
-                   "California, USA', 'date': '2024-11-15', 'unit': "
-                   "'celsius'}\n</tool_response><|im_end|>\n<|im_start"
-                   '|>assistant\n')
-    assert model.messages2prompt(messages, tools=tools) == tool_prompt
-
-
-def test_qwen2d5_vl():
-    prompt = 'hello, can u introduce yourself'
-    model = MODELS.get('qwen2d5-vl')(capability='completion')
-    assert model.get_prompt(prompt, sequence_start=True) == prompt
-    assert model.get_prompt(prompt, sequence_start=False) == prompt
-
-    model = MODELS.get('qwen2d5-vl')(capability='chat')
-
-    messages = [dict(role='user', content='What\'s the temperature in San Francisco now?')]
-    res = ('<|im_start|>system\nYou are a helpful '
-           "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
-           'temperature in San Francisco '
-           'now?<|im_end|>\n<|im_start|>assistant\n')
-    assert model.messages2prompt(messages) == res
-
-    messages.append({'role': 'assistant', 'content': 'I don\'t know.'})
-    res = ('<|im_start|>system\nYou are a helpful '
-           "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
-           'temperature in San Francisco '
-           "now?<|im_end|>\n<|im_start|>assistant\nI don't "
-           'know.<|im_end|>\n<|im_start|>assistant\n')
-    assert model.messages2prompt(messages) == res
 
 
 def test_codellama_completion():
@@ -664,257 +243,6 @@ def test_codellama_others():
     assert model is None
 
 
-def test_deepseek():
-    model = MODELS.get('deepseek')()
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'hi'
-    }]
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained('deepseek-ai/DeepSeek-V2-Lite', trust_remote_code=True)
-    ref = tokenizer.apply_chat_template(messages, tokenize=False)
-    res = '<｜begin▁of▁sentence｜>' + model.messages2prompt(messages)
-    assert res.startswith(ref)
-
-
-def test_deepseek_coder():
-    model = MODELS.get('deepseek-coder')()
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'hi'
-    }]
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained('deepseek-ai/deepseek-coder-1.3b-instruct', trust_remote_code=True)
-    ref = tokenizer.apply_chat_template(messages, tokenize=False)
-    res = '<｜begin▁of▁sentence｜>' + model.messages2prompt(messages)
-    assert res.startswith(ref)
-
-
-def test_chatglm3():
-    model_path_and_name = 'THUDM/chatglm3-6b'
-    deduced_name = best_match_model(model_path_and_name)
-    assert deduced_name == 'chatglm3'
-    model = MODELS.get(deduced_name)()
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name, trust_remote_code=True)
-    ref = tokenizer.apply_chat_template(messages, tokenize=False)
-    res = model.messages2prompt(messages)
-    assert res.startswith(ref)
-
-
-def test_glm4():
-    model_path_and_name = 'THUDM/glm-4-9b-chat'
-    deduced_name = best_match_model(model_path_and_name)
-    assert deduced_name == 'glm4'
-
-    model = MODELS.get(deduced_name)()
-    # check stop words
-    assert model.stop_words == ['<|user|>', '<|endoftext|>', '<|observation|>']
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name, trust_remote_code=True)
-    ref = tokenizer.apply_chat_template(messages, tokenize=False)
-    res = model.messages2prompt(messages)
-    assert res.startswith(ref)
-
-
-def test_internvl_phi3():
-    assert best_match_model('OpenGVLab/InternVL-Chat-V1-5') == 'internvl-internlm2'
-    assert best_match_model('OpenGVLab/Mini-InternVL-Chat-2B-V1-5') == 'internvl-internlm2'
-
-    model_path_and_name = 'OpenGVLab/Mini-InternVL-Chat-4B-V1-5'
-    deduced_name = best_match_model(model_path_and_name)
-    assert deduced_name == 'internvl-phi3'
-
-    model = MODELS.get(deduced_name)()
-    messages = [{
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'hi'
-    }]
-    res = model.messages2prompt(messages)
-    from huggingface_hub import hf_hub_download
-    hf_hub_download(repo_id=model_path_and_name, filename='conversation.py', local_dir='.')
-
-    try:
-        import os
-
-        from conversation import get_conv_template
-        template = get_conv_template('phi3-chat')
-        template.append_message(template.roles[0], messages[0]['content'])
-        template.append_message(template.roles[1], messages[1]['content'])
-        ref = template.get_prompt()
-        assert res.startswith(ref)
-        if os.path.exists('conversation.py'):
-            os.remove('conversation.py')
-    except ImportError:
-        pass
-
-
-def test_internvl2():
-    model = MODELS.get('internvl2-internlm2')()
-    messages = [{'role': 'user', 'content': 'who are you'}, {'role': 'assistant', 'content': 'I am an AI'}]
-    expected = '<|im_start|>system\n你是由上海人工智能实验室联合商汤科技开发的'\
-        '书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。'\
-        '<|im_end|><|im_start|>user\nwho are you<|im_end|><|im_start|>'\
-        'assistant\nI am an AI'
-    res = model.messages2prompt(messages)
-    assert res == expected
-
-
-def test_chemvlm():
-    deduced_name = best_match_model('AI4Chem/ChemVLM-8B')
-
-    assert deduced_name == 'internvl-internlm2'
-    model = MODELS.get(deduced_name)()
-    messages = [{'role': 'user', 'content': 'who are you'}, {'role': 'assistant', 'content': 'I am an AI'}]
-    expected = '<|im_start|>system\nYou are an AI assistant whose name is '\
-        'InternLM (书生·浦语).<|im_end|>\n<|im_start|>user\nwho are you'\
-        '<|im_end|>\n<|im_start|>assistant\nI am an AI'
-    res = model.messages2prompt(messages)
-    assert res == expected
-
-
-def test_codegeex4():
-    model_path_and_name = 'THUDM/codegeex4-all-9b'
-    deduced_name = best_match_model(model_path_and_name)
-    assert deduced_name == 'codegeex4'
-    model = MODELS.get(deduced_name)()
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name, trust_remote_code=True)
-    ref = tokenizer.apply_chat_template(messages, tokenize=False)
-    res = model.messages2prompt(messages)
-    assert res.startswith(ref)
-
-
-@pytest.mark.parametrize('model_path_and_name', [
-    'microsoft/Phi-3-mini-128k-instruct',
-    'microsoft/Phi-3-vision-128k-instruct',
-    'microsoft/Phi-3.5-mini-instruct',
-    'microsoft/Phi-3.5-vision-instruct',
-    'microsoft/Phi-3.5-MoE-instruct',
-])
-def test_phi3(model_path_and_name):
-    deduced_name = best_match_model(model_path_and_name)
-    assert deduced_name == 'phi-3'
-    model = MODELS.get(deduced_name)()
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path_and_name, trust_remote_code=True)
-    ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    res = model.messages2prompt(messages)
-    assert res.startswith(ref)
-
-
-@pytest.mark.parametrize('model_path_or_name', [
-    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
-    'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
-    'deepseek-ai/DeepSeek-R1',
-    'deepseek-ai/DeepSeek-R1-Zero',
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B',
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
-    'deepseek-ai/DeepSeek-V3',
-])
-def test_deepseek_r1(model_path_or_name):
-    from transformers import AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(model_path_or_name, trust_remote_code=True)
-    deduced_name = best_match_model(model_path_or_name)
-    chat_template = MODELS.get(deduced_name)()
-
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
-    ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    lm_res = chat_template.messages2prompt(messages)
-    assert ref == lm_res
-
-
 @pytest.mark.parametrize(
     'model_path_or_name',
     ['deepseek-ai/deepseek-vl2-tiny', 'deepseek-ai/deepseek-vl2-small', 'deepseek-ai/deepseek-vl2'])
@@ -944,36 +272,6 @@ def test_deepseek_vl2(model_path_or_name):
     assert ref == lm_res
 
 
-@pytest.mark.parametrize('model_path_or_name', [
-    'Qwen/QwQ-32B',
-    'Qwen/QwQ-32B-Preview',
-    'Qwen/QwQ-32B-AWQ',
-])
-def test_qwq(model_path_or_name):
-    from transformers import AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(model_path_or_name, trust_remote_code=True)
-    deduced_name = best_match_model(model_path_or_name)
-    chat_template = MODELS.get(deduced_name)()
-
-    messages = [{
-        'role': 'system',
-        'content': 'you are a helpful assistant'
-    }, {
-        'role': 'user',
-        'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'AGI is?'
-    }]
-    ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    lm_res = chat_template.messages2prompt(messages)
-    assert ref == lm_res
-
-
 @pytest.mark.parametrize('model_path', ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-7B-Instruct'])
 @pytest.mark.parametrize('enable_thinking', [True, False, None])
 def test_qwen3(model_path, enable_thinking):
@@ -981,7 +279,8 @@ def test_qwen3(model_path, enable_thinking):
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     chat_template_name = best_match_model(model_path)
-    chat_template = MODELS.get(chat_template_name)()
+    assert chat_template_name == 'hf'
+    chat_template = MODELS.get(chat_template_name)(model_path)
 
     messages = [{
         'role': 'system',
@@ -1005,3 +304,87 @@ def test_qwen3(model_path, enable_thinking):
                                             enable_thinking=enable_thinking)
     lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
     assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path', ['internlm/Intern-S1'])
+@pytest.mark.parametrize('enable_thinking', [None, True, False])
+@pytest.mark.parametrize('has_user_sys', [True, False])
+def test_interns1(model_path, enable_thinking, has_user_sys):
+    from transformers import AutoTokenizer
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    except OSError:
+        pytest.skip(reason=f'{model_path} not exists')
+
+    chat_template_name = best_match_model(model_path)
+    chat_template = MODELS.get(chat_template_name)(model_path)
+
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    if not has_user_sys:
+        messages = messages[1:]
+
+    if enable_thinking is None:
+        ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    else:
+        ref = tokenizer.apply_chat_template(messages,
+                                            tokenize=False,
+                                            add_generation_prompt=True,
+                                            enable_thinking=enable_thinking)
+    lm_res = chat_template.messages2prompt(messages, enable_thinking=enable_thinking)
+    assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen1.5-7B-Chat', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen3-8B'])
+def test_HFChatTemplate_get_prompt_sequence_start_False_Qwen(model_path):
+    model = MODELS.get('hf')(model_path=model_path)
+    assert model.stop_words == ['<|im_end|>']
+
+    prompt = 'How to apply chat template using transformers?'
+    assert model.get_prompt(prompt,
+                            sequence_start=False) == f'<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n'
+
+
+@pytest.mark.parametrize('model_path', ['internlm/Intern-S1', 'internlm/Intern-S1-mini'])
+def test_InternS1_thinking(model_path):
+    pass
+
+
+@pytest.mark.parametrize('model_path', [''])
+def test_InternVL(model_path):
+    pass
+
+
+@pytest.mark.parametrize('model_path', [''])
+def test_HFChatTemplate_llama(model_path):
+    # TODO: add a huggingface token to github
+    pass
+
+
+@pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-V3'])
+def test_HFChatTemplate_DeepSeek_V3(model_path):
+    model = MODELS.get('hf')(model_path=model_path)
+    assert model.stop_words == ['<｜end▁of▁sentence｜>']
+
+    prompt = 'How to apply chat template using transformers?'
+    assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜>'
+
+
+@pytest.mark.parametrize('model_path', ['deepseek-ai/DeepSeek-R1'])
+def test_HFChatTemplate_DeepSeek_thinking(model_path):
+    model = MODELS.get('hf')(model_path=model_path)
+    assert model.stop_words == ['<｜end▁of▁sentence｜>']
+
+    prompt = 'How to apply chat template using transformers?'
+    assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜><think>\n'

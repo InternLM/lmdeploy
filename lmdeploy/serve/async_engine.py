@@ -4,7 +4,6 @@ import asyncio
 import atexit
 import concurrent.futures
 import dataclasses
-import os
 import random
 from contextlib import asynccontextmanager, closing
 from copy import deepcopy
@@ -14,7 +13,6 @@ from queue import Queue
 from threading import Thread
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
-import torch
 import tqdm
 
 from lmdeploy import Tokenizer
@@ -24,7 +22,8 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, R
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestState
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
-from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
+from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
+                                                   DistServeInitRequest)
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -32,21 +31,55 @@ from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg,
 logger = get_logger('lmdeploy')
 
 
-def get_names_from_model(model_path: str, model_name: str = None):
-    """Get model name and chat template name from workspace model."""
-    triton_model_path = os.path.join(model_path, 'triton_models', 'weights')
-    if not os.path.exists(triton_model_path):
-        chat_template_name = best_match_model(model_path)
-    else:
-        # `model_path` refers to a turbomind model, reading
-        # chat_template_name from the config
-        config_path = os.path.join(triton_model_path, 'config.yaml')
-        with open(config_path, 'r') as f:
-            import yaml
-            config = yaml.safe_load(f)
-        chat_template_name = config['model_config']['chat_template']
-    model_name = model_name if model_name else model_path
-    return model_name, chat_template_name
+def _merge_message_content(msg: Dict) -> Dict:
+    """Merge multimodal content blocks and ensure content field exists.
+
+    This function normalizes message content to match vLLM's behavior:
+    1. Missing content field -> add content='' (empty string)
+    2. None content -> convert to content='' (empty string)
+    3. String content -> return as-is
+    4. List content (multimodal) -> merge all text blocks with newline separator
+
+    Args:
+        msg: A message dict with 'role' and optionally 'content' field
+
+    Returns:
+        A message dict with 'content' field guaranteed to exist
+
+    Note:
+        This implementation is based on vLLM's content processing logic.
+        vLLM uses "\n".join() to merge multiple text blocks from multimodal content.
+
+    References:
+        - vLLM content normalization:
+          https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/chat_utils.py
+          See _parse_chat_message_content() and _parse_chat_message_content_parts()
+        - vLLM text merging logic:
+          text_prompt = "\n".join(texts)
+    """
+    # If content is missing or None, convert to empty string (matches vLLM behavior)
+    # This prevents Jinja2 template errors when rendering chat templates
+    if 'content' not in msg or msg['content'] is None:
+        result = dict(msg)
+        result['content'] = ''
+        return result
+
+    # If content is already a string, return as-is
+    if isinstance(msg['content'], str):
+        return msg
+
+    # If content is a list, merge all text blocks into a single string
+    # This matches vLLM's behavior: text_prompt = "\n".join(texts)
+    content_parts = []
+    for block in msg['content']:
+        if isinstance(block, dict) and block.get('type') == 'text':
+            content_parts.append(block.get('text', ''))
+    merged_content = '\n'.join(content_parts)
+
+    # Preserve all other fields in the message (e.g., tool_calls)
+    result = dict(msg)
+    result['content'] = merged_content
+    return result
 
 
 @dataclasses.dataclass
@@ -65,6 +98,8 @@ class GenOut:
     # for disaggregation
     cache_block_ids: List[int] = None
 
+    routed_experts: Any = None
+
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
     return Response(text=out.response,
@@ -75,6 +110,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     logprobs=out.logprobs,
                     last_hidden_state=out.last_hidden_state,
                     logits=out.logits,
+                    routed_experts=out.routed_experts,
                     index=index)
 
 
@@ -92,6 +128,7 @@ def _append_response(dst: Response, src: Response):
     if src.logprobs:
         dst.logprobs = dst.logprobs or []
         dst.logprobs += src.logprobs
+    dst.routed_experts = src.routed_experts
     return dst
 
 
@@ -131,16 +168,20 @@ class Session:
 
     def close(self):
         """Release engine storage for this session."""
-        if self._engine:
+        if self._engine and self._prompt:
             self._engine._run(coro=self._engine.end_session(self._id)).result()
             self._engine = None
+
+    def stop(self):
+        if self._engine and self._prompt:
+            self._engine._run(coro=self._engine.stop_session(self._id)).result()
 
     def __repr__(self) -> str:
         res = ''
         for user, assistant in self.history:
             if isinstance(user, list):
                 user = str(user)
-            res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
+            res += f'USER: \n{user}\nASSISTANT: \n{assistant}\n'
         return res
 
     def __enter__(self):
@@ -153,12 +194,14 @@ class Session:
                  prompt: str,
                  gen_config: Optional[GenerationConfig] = None,
                  stream_response: bool = True,
-                 do_preprocess: bool = True) -> Union[Response, Iterator[Response]]:
-        self._engine.chat(prompt=prompt,
+                 do_preprocess: bool = True,
+                 adapter_name: str = None) -> Union[Response, Iterator[Response]]:
+        self._engine.chat(prompt,
                           gen_config=gen_config or self._gen_config,
                           stream_response=stream_response,
                           do_preprocess=do_preprocess,
-                          session=self)
+                          session=self,
+                          adapter_name=adapter_name)
         if stream_response:
             return self.generator
         else:
@@ -265,9 +308,12 @@ class AsyncEngine(LogitsMixin):
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
-        self.model_name, chat_template_name = get_names_from_model(model_path, model_name)
+        backend_config = backend_config or (TurbomindEngineConfig()
+                                            if backend == 'turbomind' else PytorchEngineConfig())
+        self.model_name = model_name if model_name else model_path
+        chat_template_name = best_match_model(model_path)
         if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(chat_template_name)
+            chat_template_config = ChatTemplateConfig(chat_template_name, model_path=model_path)
         elif chat_template_config.model_name is None:
             chat_template_config.model_name = chat_template_name
         self.chat_template = chat_template_config.chat_template
@@ -276,20 +322,25 @@ class AsyncEngine(LogitsMixin):
 
         self.tokenizer = Tokenizer(model_path)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
-        self.arch, _ = get_model_arch(model_path)
-
+        self.arch, cfg = get_model_arch(model_path)
+        self.session_len = (_get_and_verify_max_len(cfg, None)
+                            if backend_config.session_len is None else backend_config.session_len)
+        backend_config.session_len = self.session_len
         # build backend engine
         if backend == 'turbomind':
-            self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.hf_tm_cfg = self.engine.config
         elif backend == 'pytorch':
-            self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
         else:
             raise ValueError(f'unsupported backend {backend}')
-
+        self.backend_config = self.engine.engine_config
+        self.is_sleeping = backend_config.empty_init
+        self.sleeping_tags: set[str] = set() if not backend_config.empty_init else {'weights', 'kv_cache'}
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
-        self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
         if self.stop_words is not None:
             self.stop_words = self.stop_words[0][0].tolist()
@@ -312,7 +363,6 @@ class AsyncEngine(LogitsMixin):
         self.free_insts = None
         self.instances.clear()
         self.engine.close()
-        torch._C._cuda_clearCublasWorkspaces()
 
     def __enter__(self):
         return self
@@ -334,12 +384,7 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        self.engine = tm.TurboMind.from_pretrained(model_path,
-                                                   tokenizer=self.tokenizer,
-                                                   engine_config=backend_config,
-                                                   **kwargs)
-        self.backend_config = self.engine.engine_config
-        self.hf_tm_cfg = self.engine.config
+        return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
@@ -347,16 +392,14 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        self.engine = Engine.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=backend_config)
-        self.backend_config = self.engine.engine_config
-        self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
+        return Engine.from_pretrained(model_path, engine_config=backend_config)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []
 
         if getattr(self.backend_config, 'enable_metrics', False):
             from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
-            dp_rank = self.backend_config.dp_rank if self.backend_config.dp else 0
+            dp_rank = self.backend_config.dp_rank if self.backend == 'pytorch' else self.backend_config.node_rank
 
             logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
             self.stat_loggers = [
@@ -366,6 +409,9 @@ class AsyncEngine(LogitsMixin):
 
             # set stats loggers of metrics processor
             metrics_processor.stat_loggers = self.stat_loggers
+
+    def get_schedule_metrics(self):
+        return self.engine.get_schedule_metrics()
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
@@ -399,9 +445,23 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def do_log_stats(self):
-        # loop through CLI logger and Prometheus logger
+        """Loop through CLI logger and Prometheus logger and output the
+        metrics."""
         for stat_logger in self.stat_loggers:
             stat_logger.log()
+
+    async def stop_all_session(self):
+        """Stop all running sessions."""
+        logger.info('stop all sessions')
+        tasks = []
+        session_ids = []
+        for session_id in list(self.id2inst.keys()):
+            generator = self.id2inst.get(session_id)
+            if generator:
+                session_ids.append(session_id)
+                tasks.append(generator.async_cancel(session_id))
+        await asyncio.gather(*tasks)
+        logger.info(f'all {len(session_ids)} sessions stopped')
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -409,6 +469,7 @@ class AsyncEngine(LogitsMixin):
         generator = self.id2inst.get(session_id)
         if generator:
             await generator.async_cancel(session_id)
+            logger.info(f'session {session_id} stopped')
         # else it's not running at all
 
     async def end_session(self, session_id: int):
@@ -426,6 +487,40 @@ class AsyncEngine(LogitsMixin):
             logger.error(f'[end_session] exception caught: {e}')
         finally:
             self._get_free_insts().put_nowait(inst)
+
+    def sleep(self, level: int = 1):
+        """Sleep the model.
+
+        Args:
+            level (int): The sleep level. Level 1 sleep will offload the model
+                weights and discard the kv cache. Level 2 sleep will
+                discard both the model weights and the kv cache.
+        """
+        self.engine.sleep(level)
+        self.sleeping_tags = {'weights', 'kv_cache'}
+        self.is_sleeping = True
+
+    def wakeup(self, tags: Optional[List[str]] = None):
+        """Wake up the model.
+
+        Args:
+            tags: An optional list of tags to reallocate the engine memory
+                for specific memory allocations. Values must be in
+                `("weights", "kv_cache")`. If None, all memory is reallocated.
+                wake_up should be called with all tags (or None) before the
+                engine is used again.
+        """
+        tags = tags or list(self.sleeping_tags)
+        if any(tag not in self.sleeping_tags for tag in tags):
+            logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
+            return
+        self.engine.wakeup(tags)
+        # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instance
+        if self.backend == 'turbomind' and 'kv_cache' in tags:
+            self.instances = [self.engine.create_instance() for _ in range(self.instance_num)]
+            self.free_insts = None
+        self.sleeping_tags = self.sleeping_tags - set(tags)
+        self.is_sleeping = bool(self.sleeping_tags)
 
     def _get_limiter(self):
         if not self.limiter:
@@ -470,7 +565,8 @@ class AsyncEngine(LogitsMixin):
 
         loop = loop or self.internal_thread.loop
         # submit the coroutine to async world
-        asyncio.run_coroutine_threadsafe(_infer(), loop).add_done_callback(lambda x: x.result())
+        asyncio.run_coroutine_threadsafe(_infer(),
+                                         loop).add_done_callback(lambda f: None if f.cancelled() else f.result())
 
         return iter(que.get, None)
 
@@ -584,8 +680,15 @@ class AsyncEngine(LogitsMixin):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
+                                reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
                                 enable_thinking: Optional[bool] = None,
                                 **kwargs):
+        # Change multimodal data to openai text messages, i.e.,
+        # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
+        # [{'role': 'user', 'content': 'hi']
+        # Also ensure all messages have 'content' field (set to None if missing, e.g., assistant with tool_calls)
+        if isinstance(prompt, list):
+            prompt = [_merge_message_content(msg) for msg in prompt]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
@@ -593,7 +696,12 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools, enable_thinking=enable_thinking)
+        prompt = chat_template.messages2prompt(prompt,
+                                               sequence_start,
+                                               tools=tools,
+                                               enable_thinking=enable_thinking,
+                                               reasoning_effort=reasoning_effort,
+                                               **kwargs)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -640,13 +748,13 @@ class AsyncEngine(LogitsMixin):
             session_id: int,
             gen_config: Optional[GenerationConfig] = None,
             tools: Optional[List[object]] = None,
+            reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
             stream_response: bool = True,
             sequence_start: bool = True,
             sequence_end: bool = True,  # no interactive mode by default
             step: int = 0,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
-            skip_stop_tokens: bool = True,
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
@@ -680,11 +788,6 @@ class AsyncEngine(LogitsMixin):
             gen_config.stop_token_ids = self.stop_words
         gen_config.update_from_hf_gen_cfg(self.hf_gen_cfg, self.tokenizer.eos_token_id)
         if not gen_config.do_sample:
-            logger.warning(f'GenerationConfig: {gen_config}')
-            logger.warning('Since v0.6.0, lmdeploy add `do_sample` in '
-                           'GenerationConfig. It defaults to False, meaning greedy '
-                           'decoding. Please set `do_sample=True` if sampling '
-                           ' decoding is needed')
             # greedy decode
             gen_config.top_k = 1
             # avoid unnecessary process
@@ -694,8 +797,7 @@ class AsyncEngine(LogitsMixin):
         elif gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
-            logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
-                         f'Fallback to 1')
+            logger.warning(f'n({gen_config.n}) > 1 hasn\'t been supported yet. Fallback to 1')
             gen_config.n = 1
         if messages:
             prompt = messages
@@ -705,7 +807,9 @@ class AsyncEngine(LogitsMixin):
                                                         sequence_start,
                                                         adapter_name,
                                                         tools=tools,
-                                                        enable_thinking=enable_thinking)
+                                                        reasoning_effort=reasoning_effort,
+                                                        enable_thinking=enable_thinking,
+                                                        **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,
@@ -723,25 +827,32 @@ class AsyncEngine(LogitsMixin):
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
+
         if gen_config.max_new_tokens is None:
-            # for interactive endpoint, will try maximum possible token num
-            gen_config.max_new_tokens = max(128, self.session_len - self.id2step[session_id] - len(input_ids))
-        elif self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len:
-            gen_config.max_new_tokens = max(self.session_len - self.id2step[session_id] - len(input_ids), 128)
-            logger.error(f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
-        if self.id2step[session_id] + len(input_ids) + gen_config.max_new_tokens > self.session_len:
-            logger.error(f'run out of tokens. session={session_id}.')
-            yield GenOut('', self.id2step[session_id], len(input_ids), 0, 'length')
-            if sequence_end is True and sequence_start is False:
-                await self.end_session(session_id)
+            gen_config.max_new_tokens = max(0, self.session_len - self.id2step[session_id] - len(input_ids))
+            if gen_config.max_new_tokens == 0:
+                logger.error(f'run out of tokens. session={session_id}.')
+                yield GenOut('', self.id2step[session_id], len(input_ids), 0, 'length')
+                if sequence_end is True and sequence_start is False:
+                    await self.end_session(session_id)
+                return
+        if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
+                                                          or gen_config.output_logits == 'all'):
+            errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
+                      'when prefix caching is ON')
+            yield GenOut(response=errmsg,
+                         history_token_len=self.id2step[session_id],
+                         input_token_len=len(input_ids),
+                         generate_token_len=0,
+                         finish_reason='error',
+                         token_ids=[])
             return
 
         def is_error(status):
-            return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
+            return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
-        # used to skip / rewind stop words in interactive mode
         stop_ids = []
-        if skip_stop_tokens and not gen_config.ignore_eos:
+        if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
 
         metrics_processor.increment_total_requests()
@@ -751,7 +862,6 @@ class AsyncEngine(LogitsMixin):
             input_len = len(input_ids)
             output_len, gen_len = 0, 0
             state = DetokenizeState(len(input_ids))
-            start_ids_offset = state.ids_offset
             response = ''
             finish_reason = None
             async with self.safe_run(inst,
@@ -763,34 +873,25 @@ class AsyncEngine(LogitsMixin):
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
-                prev_len = 0
                 hit_stop_token = 0
-                req_state = RequestState(prompt_len=input_len)  # per-requst state
+                req_state = RequestState(prompt_tokens=input_len)  # per-requst state
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
+                    metrics_processor.queue_update((outputs, req_state, iteration_stats))
                     # decode res
                     if is_error(outputs.status):
                         break
 
-                    output_len = outputs.num_token
-                    metrics_processor.queue_update((input_len, prev_len, outputs, req_state, iteration_stats))
-
-                    if hit_stop_token or prev_len == output_len:
+                    output_len = len(outputs.token_ids)
+                    if hit_stop_token or output_len == 0:
                         continue
 
                     # This assumes the engine will stop when stop token is hit
                     if output_len and outputs.token_ids[-1] in stop_ids:
                         hit_stop_token = 1
-                        # one token and it's been skipped
-                        if output_len == prev_len + 1:
-                            continue
 
-                    mask = slice(prev_len - output_len, output_len - hit_stop_token)
-
-                    token_ids += outputs.token_ids[mask]
+                    token_ids += outputs.token_ids[:output_len - hit_stop_token]
                     gen_len = len(token_ids) - input_len
-
-                    prev_len = output_len
 
                     ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
@@ -806,33 +907,45 @@ class AsyncEngine(LogitsMixin):
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
+                                 routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
-
                     if outputs.logprobs is not None:
-                        log_offset = ids_offset - start_ids_offset
-                        out.logprobs = outputs.logprobs[log_offset:]
+                        out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
                     if outputs.last_hidden_state is not None:
-                        out.last_hidden_state = outputs.last_hidden_state
-                        if hit_stop_token:
-                            out.last_hidden_state = \
-                                out.last_hidden_state[:-hit_stop_token]
+                        out.last_hidden_state = (outputs.last_hidden_state[:-hit_stop_token]
+                                                 if hit_stop_token else outputs.last_hidden_state)
                     if outputs.logits is not None:
-                        out.logits = outputs.logits
-                        if hit_stop_token:
-                            out.logits = out.logits[:-hit_stop_token]
-
+                        out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
                     yield out
                 # end of generator loop
                 metrics_processor.increment_finished_requests()
 
                 if not is_error(outputs.status):
-                    finish_reason = 'length' \
-                        if gen_len >= gen_config.max_new_tokens else 'stop'
-                    # utf-8 char at the end means it's a potential unfinished
-                    # byte sequence
+                    if outputs.status == ResponseType.CANCEL:
+                        finish_reason = 'abort'
+                    else:
+                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+
+                    # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
+                    token_ids, logits, last_hidden_state, logprobs = [], None, None, None
+                    if gen_config.include_stop_str_in_output and finish_reason == 'stop':
+                        # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
+                        token_ids = outputs.token_ids[-1:]
+                        response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
+                        logits = outputs.logits[-1:] if outputs.logits else None
+                        last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
+                        logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
+                        gen_len += 1
+
+                    # router replay
+                    routed_experts = outputs.routed_experts
+                    if routed_experts is not None and not isinstance(routed_experts, str) and (
+                            not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
+                        routed_experts = routed_experts[:-1]
+
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, output_tokens {gen_len}')
@@ -841,12 +954,22 @@ class AsyncEngine(LogitsMixin):
                                  len(input_ids),
                                  gen_len,
                                  finish_reason,
-                                 token_ids=[],
+                                 token_ids=token_ids,
+                                 logprobs=logprobs,
+                                 logits=logits,
+                                 last_hidden_state=last_hidden_state,
+                                 routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
+                    # Update a session's sequence only when it is in finished status
+                    if outputs.status == ResponseType.FINISH:
+                        if rewind_stop_tokens:
+                            # rewind the step to the token before the stop token
+                            output_len = gen_len
+                        self.id2step[session_id] += input_len + output_len
                 else:
-                    logger.error(f'session {session_id} finished, '
+                    logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')
-                    yield GenOut(response='internal error happened',
+                    yield GenOut(response=f'internal error happened, status code {outputs.status}',
                                  history_token_len=self.id2step[session_id],
                                  input_token_len=len(input_ids),
                                  generate_token_len=0,
@@ -858,11 +981,6 @@ class AsyncEngine(LogitsMixin):
                 if self.backend == 'pytorch':
                     # manually end pytorch session
                     await inst.async_end(session_id)
-            else:
-                if rewind_stop_tokens:
-                    # rewind the step to the token before the stop token
-                    output_len = gen_len
-                self.id2step[session_id] += input_len + output_len
 
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)
@@ -883,6 +1001,7 @@ class AsyncEngine(LogitsMixin):
              session=None,
              gen_config: Optional[GenerationConfig] = None,
              stream_response=False,
+             adapter_name=None,
              **kwargs) -> Union[Session, Iterator]:
         """Chat.
 
@@ -906,11 +1025,13 @@ class AsyncEngine(LogitsMixin):
 
         generator = self.infer(prompt,
                                gen_config,
+                               adapter_name=adapter_name,
                                sequence_start=sequence_start,
                                sequence_end=False,
                                session_id=session._id,
                                stream_response=stream_response,
-                               multiplex=True)
+                               multiplex=True,
+                               step=session._step)
 
         def _gen():
             resp = None
@@ -975,5 +1096,8 @@ class AsyncEngine(LogitsMixin):
 
     def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
         return self.engine.p2p_connect(conn_request)
+
+    def p2p_drop_connect(self, drop_conn_request: List[DistServeDropConnectionRequest]):
+        return self.engine.p2p_drop_connect(drop_conn_request)
 
     """ DistServe Async Engine API End """

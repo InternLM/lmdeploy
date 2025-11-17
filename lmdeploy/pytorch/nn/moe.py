@@ -1,12 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from collections import defaultdict
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
@@ -27,11 +28,11 @@ class MoeType(Enum):
 class SoftmaxTopK(nn.Module):
     """Softmax topk."""
 
-    def __init__(self, top_k: int, dim: int = -1):
+    def __init__(self, top_k: int, dim: int = -1, n_groups: int = -1):
         super().__init__()
         self.top_k = top_k
         impl_builder = get_backend().get_layer_impl_builder(OpType.SoftmaxTopK)
-        self.impl = impl_builder.build(top_k, dim)
+        self.impl = impl_builder.build(top_k, dim, n_groups=n_groups)
 
     def forward(self, x: torch.Tensor):
         """forward."""
@@ -47,10 +48,122 @@ def create_mlp_weights(hidden_dim: int, ffn_dim: int, num_experts: int, dtype: t
 
 def _update_args(hidden_dim: int, ffn_dim: int):
     """Update args."""
-    world_size, _ = get_tp_world_rank()
+    world_size, _ = get_tp_world_rank('moe')
     assert ffn_dim % world_size == 0
     ffn_dim = ffn_dim // world_size
     return hidden_dim, ffn_dim
+
+
+def _split_size(size: int, world_size: int, align: int):
+    size = size // align
+    assert size >= world_size
+    base = size // world_size
+    remain = size % world_size
+    split_size = [base + 1] * remain + [base] * (world_size - remain)
+    split_size = [s * align for s in split_size]
+    return split_size
+
+
+class MoEForwardDPTP:
+
+    def __init__(self, gemm_func: Callable, max_tokens_per_round: int = 8192):
+        """MoE forward dp tp."""
+        self.gemm_func = gemm_func
+        self.dist_ctx = get_dist_manager().current_context()
+        self.dist_config = self.dist_ctx.dist_config
+        self.tp = self.dist_config.moe_tp
+        self.attn_tp = self.dist_config.attn_tp
+
+        tp_group = self.dist_ctx.moe_tp_group
+        self.rank = tp_group.rank
+        self.gather_rank = self.rank // self.attn_tp
+        self.gather_group = tp_group.gpu_gather_group
+        self.tp_group = tp_group.gpu_group
+        self.max_tokens_per_round = max_tokens_per_round * self.attn_tp // self.tp // 2
+
+    def all_gather(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
+                   tp_sizes: List[int]):
+        """All gather."""
+        hidden_states, h0 = dist.gather_by_tp_sizes(hidden_states, tp_sizes, group=self.gather_group, async_op=True)
+        topk_weights, h1 = dist.gather_by_tp_sizes(topk_weights, tp_sizes, group=self.gather_group, async_op=True)
+        topk_ids, h2 = dist.gather_by_tp_sizes(topk_ids, tp_sizes, group=self.gather_group, async_op=True)
+        return hidden_states, topk_weights, topk_ids, (h0, h1, h2)
+
+    def reduce_scatter(self, hidden_states: torch.Tensor, out_states: torch.Tensor, tp_sizes: List[int]):
+        """Reduce scatter."""
+        hidden_states_list = list(hidden_states.split(tp_sizes, -2))
+        cur_out_states = hidden_states_list[self.gather_rank]
+        out_states.copy_(cur_out_states)
+        hidden_states_list = [item for item in hidden_states_list for _ in range(self.attn_tp)]
+        hidden_states_list[self.rank] = out_states
+        handle = dist.reduce_scatter(out_states, hidden_states_list, group=self.tp_group, async_op=True)
+        return out_states, handle
+
+    def _gemm_and_reduce_scatter(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
+                                 output_states: torch.Tensor, tp_sizes: List[int], handles: List[dist.Work]):
+        """Gemm and reduce scatter."""
+        for handle in handles:
+            handle.wait()
+        cur_out = self.gemm_func(hidden_states, topk_weights, topk_ids)
+        return self.reduce_scatter(cur_out, output_states, tp_sizes)
+
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor):
+        """forward."""
+
+        def __slice_tensor(tensor: torch.Tensor, slice_size: int):
+            """Slice tensor."""
+            cur_tensor = tensor[:slice_size]
+            tensor = tensor[slice_size:]
+            return cur_tensor, tensor
+
+        def __slice_and_gather():
+            """Slice and gather."""
+            nonlocal hidden_states, topk_weights, topk_ids, tp_sizes, output_states
+            cur_tp_sizes = tp_sizes.minimum(max_tokens_per_round)
+            tp_sizes -= cur_tp_sizes
+            cur_tp_sizes = cur_tp_sizes.tolist()
+
+            slice_size = cur_tp_sizes[self.gather_rank]
+            cur_hidden_states, hidden_states = __slice_tensor(hidden_states, slice_size)
+            cur_topk_weights, topk_weights = __slice_tensor(topk_weights, slice_size)
+            cur_topk_ids, topk_ids = __slice_tensor(topk_ids, slice_size)
+            cur_output, output_states = __slice_tensor(output_states, slice_size)
+
+            # all gather
+            cur_hidden_states, cur_topk_weights, cur_topk_ids, handles = self.all_gather(
+                cur_hidden_states, cur_topk_weights, cur_topk_ids, cur_tp_sizes)
+            return dict(hidden_states=cur_hidden_states,
+                        topk_weights=cur_topk_weights,
+                        topk_ids=cur_topk_ids,
+                        output_states=cur_output,
+                        handles=handles,
+                        tp_sizes=cur_tp_sizes)
+
+        step_ctx = get_step_ctx_manager().current_context()
+        tp_sizes = step_ctx.dp_meta.moe_tp_sizes
+        tp_sizes = torch.tensor(tp_sizes)
+        max_tokens_per_round = tp_sizes.new_tensor(self.max_tokens_per_round)
+
+        output_states = torch.empty_like(hidden_states)
+        return_states = output_states
+
+        # pre
+        cur_inputs = __slice_and_gather()
+
+        out_handles = []
+        # main loop
+        while tp_sizes.sum() > 0:
+            next_inputs = __slice_and_gather()
+            _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
+            out_handles.append(handle)
+            cur_inputs = next_inputs
+
+        # post
+        _, handle = self._gemm_and_reduce_scatter(**cur_inputs)
+        out_handles.append(handle)
+        for handle in out_handles:
+            handle.wait()
+        return return_states
 
 
 class LinearWeights(nn.Module):
@@ -63,24 +176,40 @@ class LinearWeights(nn.Module):
                  weight_type: str,
                  dtype: torch.dtype,
                  device: torch.device,
+                 bias: bool = False,
                  expert_list: List[int] = None,
                  ep: bool = False):
         super().__init__()
         weight = torch.empty((num_experts, out_features, in_features), dtype=dtype, device=device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
         self.register_parameter('weight', weight)
+
+        if bias:
+            bias = torch.empty((num_experts, out_features), dtype=dtype, device=device)
+            bias = torch.nn.Parameter(bias, requires_grad=False)
+            self.register_parameter('bias', bias)
+        else:
+            self.bias = None
+
         self.ep = ep
         self.expert_list = expert_list
         self.weight_type = weight_type
         self.half_out = out_features // 2
 
+        self.setup_weight_loader()
+
+    def setup_weight_loader(self):
+        """Setup weight loader."""
         if self.ep:
             self.expert_map = defaultdict(list)
-            for idx, eid in enumerate(expert_list):
+            for idx, eid in enumerate(self.expert_list):
                 self.expert_map[eid].append(idx)
             self.weight.weight_loader = self.weight_loader_ep
         else:
             self.weight.weight_loader = self.weight_loader_tp
+
+        if self.bias is not None:
+            self.bias.weight_loader = self.weight_loader_ep if self.ep else self.weight_loader_tp
 
     def update_weight(self, weight: torch.Tensor):
         """Update weight."""
@@ -91,7 +220,7 @@ class LinearWeights(nn.Module):
 
     def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
         """Weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('moe')
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.half_out]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
@@ -102,7 +231,11 @@ class LinearWeights(nn.Module):
             param_data = param.data[expert_id]
             # weight is not contiguous, chunk and copy in cpu is slow
             weight = loaded_weight.to(param_data.device)
-            weight = weight.chunk(world_size, dim=1)[rank]
+            if weight.dim() > 1:
+                weight = weight.chunk(world_size, dim=1)[rank]
+            elif weight.dim() == 1 and rank != 0:
+                # bias with rank>0 should be 0
+                weight = torch.zeros_like(weight)
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
@@ -127,67 +260,44 @@ class LinearWeights(nn.Module):
             param_data.copy_(loaded_weight)
 
 
-def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
-    """Gather input."""
-    shape0 = x.shape[:-2]
-    shape1 = x.shape[-1:]
-    shapes = [shape0 + (size, ) + shape1 for size in tp_sizes]
-    new_x = [x.new_empty(shape) for shape in shapes]
-    dist.all_gather(new_x, x)
-    x = torch.cat(new_x, dim=-2)
-    return x
-
-
-def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
-    """Reduce scatter."""
-    _, rank = get_tp_world_rank()
-    out = out.transpose(0, -2)
-    if not out.is_contiguous():
-        out = out.contiguous()
-    outs = out.split(tp_sizes, 0)
-    outs = list(outs)
-    out = outs[rank]
-    dist.reduce_scatter(out, outs)
-    out = out.transpose(0, -2)
-    return out
-
-
-def _moe_gather_inputs(hidden_states, topk_weights, topk_ids, enable_ep):
-    dist_ctx = get_dist_manager().current_context()
-    dp = dist_ctx.dp
-    if dp <= 1:
+def _moe_gather_inputs(hidden_states, topk_weights, topk_ids, group: Optional[dist.ProcessGroup] = None):
+    dist_config = get_dist_manager().current_config()
+    tp = dist_config.moe_tp
+    if tp == 1:
         return hidden_states, topk_weights, topk_ids
 
-    step_ctx = get_step_ctx_manager().current_context()
-    dp_meta = step_ctx.dp_meta
-    if not enable_ep:
-        if dist_ctx.tp == 1:
-            return hidden_states, topk_weights, topk_ids
-        tp_sizes = dp_meta.tp_sizes
-        hidden_states = _gather_input(hidden_states, tp_sizes)
-        topk_weights = _gather_input(topk_weights, tp_sizes)
-        topk_ids = _gather_input(topk_ids, tp_sizes)
+    tp_mode = dist_config.moe_tp_mode
+    if tp_mode == TPMode.DEFAULT:
+        return hidden_states, topk_weights, topk_ids
+    elif tp_mode == TPMode.DP_TP:
+        step_ctx = get_step_ctx_manager().current_context()
+        dp_meta = step_ctx.dp_meta
+        tp_sizes = dp_meta.moe_tp_sizes
+        hidden_states = dist.gather_by_tp_sizes(hidden_states, tp_sizes, group=group)
+        topk_weights = dist.gather_by_tp_sizes(topk_weights, tp_sizes, group=group)
+        topk_ids = dist.gather_by_tp_sizes(topk_ids, tp_sizes, group=group)
     else:
         raise RuntimeError('Not supported.')
+
     return hidden_states, topk_weights, topk_ids
 
 
-def _moe_reduce(ret, enable_ep):
-    dist_ctx = get_dist_manager().current_context()
-    dp = dist_ctx.dp
-    if dp > 1:
+def _moe_reduce(ret, rank: int, tp_mode: TPMode, group: Optional[dist.ProcessGroup] = None):
+    dist_config = get_dist_manager().current_config()
+    if dist_config.moe_tp == 1:
+        return ret
+
+    if tp_mode == TPMode.DEFAULT:
+        dist.all_reduce(ret, group=group)
+        return ret
+    elif tp_mode == TPMode.DP_TP:
         step_ctx = get_step_ctx_manager().current_context()
         dp_meta = step_ctx.dp_meta
-        if not enable_ep:
-            if dist_ctx.tp == 1:
-                return ret
-            tp_sizes = dp_meta.tp_sizes
-            ret = _reduce_scatter_input(ret, tp_sizes)
-        else:
-            raise RuntimeError('Not supported.')
+        tp_size = dp_meta.moe_tp_sizes
+        ret = dist.reduce_scatter_by_tp_sizes(ret, rank, tp_size, group=group)
+        return ret
     else:
-        dist.all_reduce(ret)
-    return ret
+        raise RuntimeError('Not supported.')
 
 
 class FusedMoE(nn.Module):
@@ -198,23 +308,26 @@ class FusedMoE(nn.Module):
                  ffn_dim: int,
                  num_experts: int,
                  top_k: int,
+                 bias: bool = False,
                  renormalize: bool = False,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
-                 enable_ep: bool = False):
+                 enable_ep: bool = False,
+                 act_func: Callable = None):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
         if dtype is None:
             dtype = torch.float16
+        self.init_tp_args(all_reduce, enable_ep)
 
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoE)
         self.impl = impl_builder.build(top_k, num_experts, renormalize)
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
-            world_size, rank = get_tp_world_rank()
+            world_size, rank = get_tp_world_rank('moe')
             expert_list = self.impl.ep_expert_list(world_size, rank)
             num_experts = len(expert_list)
         else:
@@ -227,6 +340,7 @@ class FusedMoE(nn.Module):
                                      weight_type='gate_up',
                                      dtype=dtype,
                                      device=device,
+                                     bias=bias,
                                      expert_list=expert_list,
                                      ep=enable_ep)
         self.down = LinearWeights(
@@ -236,6 +350,7 @@ class FusedMoE(nn.Module):
             weight_type='down',
             dtype=dtype,
             device=device,
+            bias=bias,
             expert_list=expert_list,
             ep=enable_ep,
         )
@@ -245,11 +360,39 @@ class FusedMoE(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_tp_world_rank()
-        if world_size == 1:
-            all_reduce = False
-        self.all_reduce = all_reduce
         self.enable_ep = enable_ep
+        self.act_func = act_func
+
+    def init_tp_args(self, all_reduce: bool, enable_ep: bool):
+        """Init tp args."""
+        tp, tp_rank = get_tp_world_rank('moe')
+        dist_ctx = get_dist_manager().current_context()
+        dist_cfg = dist_ctx.dist_config
+        _, tp_mode = dist_cfg.get_tp_by_layer('moe')
+        tp = 1 if enable_ep else tp
+        tp_rank = 0 if enable_ep else tp_rank
+        all_reduce = all_reduce if tp > 1 else False
+        all_reduce = False if enable_ep else all_reduce
+
+        self.tp = tp
+        self.tp_rank = tp_rank
+        self.tp_mode = tp_mode
+        self.all_reduce = all_reduce
+        self.tp_group = dist_ctx.moe_tp_group.gpu_group
+        self.gather_group = dist_ctx.moe_tp_group.gpu_gather_group
+
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+
+            def __gemm_func(hidden_states, topk_weights, topk_ids):
+                return self.gemm(
+                    dict(
+                        hidden_states=hidden_states,
+                        topk_weights=topk_weights,
+                        topk_idx=topk_ids,
+                        moe_type=MoeType.Default,
+                    ))['hidden_states']
+
+            self.forward_dptp = MoEForwardDPTP(__gemm_func)
 
     def update_weights(self):
         """Update weights."""
@@ -257,15 +400,47 @@ class FusedMoE(nn.Module):
         self.gate_up.update_weight(gate_up_weights)
         self.down.update_weight(down_weights)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
-        hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states, topk_weights, topk_ids,
-                                                                   self.enable_ep)
+    def gemm(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Gemm."""
+        hidden_states = inputs['hidden_states']
+        topk_weights = inputs['topk_weights']
+        topk_ids = inputs['topk_idx']
 
-        ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.down.weight,
-                                self.expert_list)
+        ret = self.impl.forward(hidden_states,
+                                topk_weights,
+                                topk_ids,
+                                self.gate_up.weight,
+                                self.down.weight,
+                                self.gate_up.bias,
+                                self.down.bias,
+                                self.expert_list,
+                                act_func=self.act_func)
+        return dict(hidden_states=ret)
+
+    def forward_default(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
+        hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states,
+                                                                   topk_weights,
+                                                                   topk_ids,
+                                                                   group=self.gather_group)
+
+        ret = self.impl.forward(hidden_states,
+                                topk_weights,
+                                topk_ids,
+                                self.gate_up.weight,
+                                self.down.weight,
+                                self.gate_up.bias,
+                                self.down.bias,
+                                self.expert_list,
+                                act_func=self.act_func)
         if self.all_reduce:
-            ret = _moe_reduce(ret, self.enable_ep)
+            ret = _moe_reduce(ret, rank=self.tp_rank, tp_mode=self.tp_mode, group=self.tp_group)
         return ret
+
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
+        """forward."""
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+            return self.forward_dptp.forward(hidden_states, topk_weights, topk_ids)
+        return self.forward_default(hidden_states, topk_weights, topk_ids)
 
 
 class LinearWeightsW8A8(LinearWeights):
@@ -310,7 +485,7 @@ class LinearWeightsW8A8(LinearWeights):
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """Weight loader scale tp."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('moe')
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.half_out]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
@@ -351,7 +526,7 @@ class FusedMoEW8A8(nn.Module):
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
-            world_size, rank = get_tp_world_rank()
+            world_size, rank = get_tp_world_rank('moe')
             expert_list = self.impl.ep_expert_list(world_size, rank)
             num_experts = len(expert_list)
         else:
@@ -381,7 +556,7 @@ class FusedMoEW8A8(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_tp_world_rank()
+        world_size, _ = get_tp_world_rank('moe')
         if world_size == 1:
             all_reduce = False
         self.all_reduce = all_reduce
@@ -413,6 +588,7 @@ class LinearWeightsBlockedF8(LinearWeights):
                  block_size: int,
                  dtype: torch.dtype,
                  device: torch.device,
+                 bias: bool = False,
                  expert_list: List[int] = None,
                  ep: bool = False):
         super().__init__(
@@ -422,6 +598,7 @@ class LinearWeightsBlockedF8(LinearWeights):
             weight_type=weight_type,
             dtype=dtype,
             device=device,
+            bias=bias,
             expert_list=expert_list,
             ep=ep,
         )
@@ -431,13 +608,14 @@ class LinearWeightsBlockedF8(LinearWeights):
                                        device=device)
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         self.register_parameter('weight_scale_inv', weight_scale_inv)
-        self.weight._base_weight_loader = self.weight.weight_loader
-        self.weight.weight_loader = self.weight_loader_with_quant
 
         if self.ep:
+            self.weight._base_weight_loader = self.weight.weight_loader
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_ep
         else:
+            self.weight._base_weight_loader = self.weight_loader_tp_blocked_fp8
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_tp
+        self.weight.weight_loader = self.weight_loader_with_quant
 
     def update_weight(self, weight: torch.Tensor, weight_scale_inv: torch.Tensor):
         """Update weight."""
@@ -456,22 +634,58 @@ class LinearWeightsBlockedF8(LinearWeights):
         for expert_id in expert_ids:
             self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
 
+    def _chunk_weight_tp(self, weight: torch.Tensor, dim: int, world_size: int, rank: int, align: int):
+        """Chunk with align."""
+        split_size = _split_size(weight.size(dim), world_size, align)
+        return weight.split(split_size, dim=dim)[rank]
+
+    def weight_loader_tp_blocked_fp8(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
+                                     shard_id: str):
+        """Weight loader."""
+        world_size, rank = get_tp_world_rank('moe')
+        if shard_id == 'gate':
+            param_data = param.data[expert_id, :self.half_out]
+            weight = self._chunk_weight_tp(loaded_weight,
+                                           dim=0,
+                                           world_size=world_size,
+                                           rank=rank,
+                                           align=self.block_size)
+        elif shard_id == 'up':
+            param_data = param.data[expert_id, self.half_out:]
+            weight = self._chunk_weight_tp(loaded_weight,
+                                           dim=0,
+                                           world_size=world_size,
+                                           rank=rank,
+                                           align=self.block_size)
+        elif shard_id == 'down':
+            param_data = param.data[expert_id]
+            # weight is not contiguous, chunk and copy in cpu is slow
+            weight = loaded_weight.to(param_data.device)
+            if weight.dim() > 1:
+                weight = self._chunk_weight_tp(weight, dim=1, world_size=world_size, rank=rank, align=self.block_size)
+            elif weight.dim() == 1 and rank != 0:
+                # bias with rank>0 should be 0
+                weight = torch.zeros_like(weight)
+        else:
+            raise RuntimeError(f'Unknown shard_id: {shard_id}')
+        param_data.copy_(weight)
+
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """Weight loader scale tp."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('moe')
         block_size = self.block_size
         half_out = self.half_out // block_size
         if shard_id == 'gate':
             param_data = param.data[expert_id, :half_out]
-            weight = loaded_weight.chunk(world_size, dim=0)[rank]
+            weight = self._chunk_weight_tp(loaded_weight, dim=0, world_size=world_size, rank=rank, align=1)
         elif shard_id == 'up':
             param_data = param.data[expert_id, half_out:]
-            weight = loaded_weight.chunk(world_size, dim=0)[rank]
+            weight = self._chunk_weight_tp(loaded_weight, dim=0, world_size=world_size, rank=rank, align=1)
         elif shard_id == 'down':
             param_data = param.data[expert_id]
             loaded_weight = loaded_weight.to(param_data.device)
-            weight = loaded_weight.chunk(world_size, dim=1)[rank]
+            weight = self._chunk_weight_tp(loaded_weight, dim=1, world_size=world_size, rank=rank, align=1)
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
@@ -496,18 +710,21 @@ class FusedMoEBlockedF8(nn.Module):
                  ffn_dim: int,
                  num_experts: int,
                  top_k: int,
+                 bias: bool = False,
                  renormalize: bool = False,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
                  enable_ep: bool = False,
-                 layer_idx: int = 0):
+                 layer_idx: int = 0,
+                 act_func: Callable = None):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
         dtype = torch.float16 if dtype is None else dtype
         self.block_size = 128
+        self.init_tp_args(all_reduce, enable_ep)
         dist_ctx = get_dist_manager().current_context()
         self.ep_size, rank = get_ep_world_rank()
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
@@ -519,13 +736,14 @@ class FusedMoEBlockedF8(nn.Module):
                                        ep_size=self.ep_size,
                                        ep_group=dist_ctx.ep_gpu_group,
                                        out_dtype=dtype,
-                                       layer_idx=layer_idx)
+                                       layer_idx=layer_idx,
+                                       custom_gateup_act=act_func is not None)
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
             num_experts = len(expert_list)
         else:
-            hidden_dim, ffn_dim = _update_args(hidden_dim, ffn_dim)
+            hidden_dim, ffn_dim = self._update_args(hidden_dim, ffn_dim, align=self.block_size)
             expert_list = None
         self.expert_list = expert_list
 
@@ -536,6 +754,7 @@ class FusedMoEBlockedF8(nn.Module):
                                               block_size=self.block_size,
                                               dtype=fp8_dtype,
                                               device=device,
+                                              bias=bias,
                                               expert_list=expert_list,
                                               ep=self.ep_size > 1)
         self.down = LinearWeightsBlockedF8(
@@ -546,6 +765,7 @@ class FusedMoEBlockedF8(nn.Module):
             block_size=self.block_size,
             dtype=fp8_dtype,
             device=device,
+            bias=bias,
             expert_list=expert_list,
             ep=self.ep_size > 1,
         )
@@ -555,10 +775,45 @@ class FusedMoEBlockedF8(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_tp_world_rank()
-        if world_size == 1:
-            all_reduce = False
+        self.act_func = act_func
+
+    @staticmethod
+    def _update_args(hidden_dim: int, ffn_dim: int, align: int):
+        """Update args."""
+        world_size, rank = get_tp_world_rank('moe')
+        split_size = _split_size(ffn_dim, world_size, align)
+        ffn_dim = split_size[rank]
+        return hidden_dim, ffn_dim
+
+    def init_tp_args(self, all_reduce: bool, enable_ep: bool):
+        """Init tp args."""
+        tp, tp_rank = get_tp_world_rank('moe')
+        dist_ctx = get_dist_manager().current_context()
+        dist_cfg = dist_ctx.dist_config
+        _, tp_mode = dist_cfg.get_tp_by_layer('moe')
+        tp = 1 if enable_ep else tp
+        tp_rank = 0 if enable_ep else tp_rank
+        all_reduce = all_reduce if tp > 1 else False
+        all_reduce = False if enable_ep else all_reduce
+
+        self.tp = tp
+        self.tp_rank = tp_rank
+        self.tp_mode = tp_mode
         self.all_reduce = all_reduce
+        self.tp_group = dist_ctx.moe_tp_group.gpu_group
+        self.gather_group = dist_ctx.moe_tp_group.gpu_gather_group
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+
+            def __gemm_func(hidden_states, topk_weights, topk_ids):
+                return self.gemm(
+                    dict(
+                        hidden_states=hidden_states,
+                        topk_weights=topk_weights,
+                        topk_idx=topk_ids,
+                        moe_type=MoeType.Default,
+                    ))['hidden_states']
+
+            self.forward_dptp = MoEForwardDPTP(__gemm_func)
 
     def update_weights(self):
         """Update weights."""
@@ -568,7 +823,7 @@ class FusedMoEBlockedF8(nn.Module):
         self.gate_up.update_weight(gate_up_weights, gate_up_scale)
         self.down.update_weight(down_weights, down_scale)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
+    def forward_default(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
         state = {
             'hidden_states': hidden_states,
             'topk_idx': topk_idx,
@@ -579,6 +834,13 @@ class FusedMoEBlockedF8(nn.Module):
         gemm_state = self.gemm(recv_state)
         out_state = self.combine(gemm_state)
         return out_state['hidden_states']
+
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
+
+        if self.tp > 1 and self.tp_mode == TPMode.DP_TP:
+            return self.forward_dptp.forward(hidden_states, topk_weights, topk_idx)
+        else:
+            return self.forward_default(hidden_states, topk_weights, topk_idx)
 
     def before_dispatch(self, state: Dict):
         moe_type = state['moe_type']
@@ -642,8 +904,10 @@ class FusedMoEBlockedF8(nn.Module):
             else:
                 recv_state['hook'] = hook
         else:  # MoeType.Default
-            hidden_states, topk_weights, topk_idx = _moe_gather_inputs(state['hidden_states'], state['topk_weights'],
-                                                                       state['topk_idx'], False)
+            hidden_states, topk_weights, topk_idx = _moe_gather_inputs(state['hidden_states'],
+                                                                       state['topk_weights'],
+                                                                       state['topk_idx'],
+                                                                       group=self.gather_group)
             recv_state = {
                 'hidden_states': hidden_states,
                 'topk_idx': topk_idx,
@@ -681,9 +945,17 @@ class FusedMoEBlockedF8(nn.Module):
                 'moe_type': state['moe_type']
             }
         else:  # MoeType.Default
-            hidden_states = self.impl.forward(state['hidden_states'], state['topk_weights'], state['topk_idx'],
-                                              self.gate_up.weight, self.gate_up.weight_scale_inv, self.down.weight,
-                                              self.down.weight_scale_inv, self.expert_list)
+            hidden_states = self.impl.forward(state['hidden_states'],
+                                              state['topk_weights'],
+                                              state['topk_idx'],
+                                              self.gate_up.weight,
+                                              self.gate_up.weight_scale_inv,
+                                              self.down.weight,
+                                              self.down.weight_scale_inv,
+                                              gate_up_bias=self.gate_up.bias,
+                                              down_bias=self.down.bias,
+                                              expert_list=self.expert_list,
+                                              act_func=self.act_func)
             gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
         return gemm_state
 
@@ -721,7 +993,10 @@ class FusedMoEBlockedF8(nn.Module):
                 out_state['hook'] = hook
         else:  # MoeType.Default
             if self.all_reduce:
-                state['hidden_states'] = _moe_reduce(state['hidden_states'], False)
+                state['hidden_states'] = _moe_reduce(state['hidden_states'],
+                                                     rank=self.tp_rank,
+                                                     tp_mode=self.tp_mode,
+                                                     group=self.tp_group)
             out_state = {'hidden_states': state['hidden_states'], 'moe_type': state['moe_type']}
         return out_state
 
@@ -747,6 +1022,7 @@ def build_fused_moe(
     ffn_dim: int,
     num_experts: int,
     top_k: int,
+    bias: bool = False,
     renormalize: bool = False,
     dtype: Optional[torch.dtype] = None,
     device: Optional[torch.device] = None,
@@ -754,6 +1030,7 @@ def build_fused_moe(
     enable_ep: bool = False,
     quant_config: Any = None,
     layer_idx: int = 0,
+    act_func: Callable = None,
 ):
     """Fused moe builder."""
 
@@ -763,15 +1040,19 @@ def build_fused_moe(
             ffn_dim=ffn_dim,
             num_experts=num_experts,
             top_k=top_k,
+            bias=bias,
             renormalize=renormalize,
             dtype=dtype,
             device=device,
             all_reduce=all_reduce,
             enable_ep=enable_ep,
+            act_func=act_func,
         )
 
     quant_method = quant_config['quant_method']
     if quant_method == 'smooth_quant':
+        assert not bias, 'Quant model does not support bias for now.'
+        assert act_func is None, ('Quant model does not support activation function for now.')
         quant_dtype = eval('torch.' + quant_config.get('quant_dtype', 'int8'))
         return FusedMoEW8A8(
             hidden_dim=hidden_dim,
@@ -798,6 +1079,7 @@ def build_fused_moe(
             ffn_dim=ffn_dim,
             num_experts=num_experts,
             top_k=top_k,
+            bias=bias,
             renormalize=renormalize,
             fp8_dtype=fp8_dtype,
             dtype=dtype,
@@ -805,6 +1087,7 @@ def build_fused_moe(
             all_reduce=all_reduce,
             enable_ep=enable_ep,
             layer_idx=layer_idx,
+            act_func=act_func,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')

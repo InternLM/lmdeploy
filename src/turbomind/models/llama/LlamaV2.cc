@@ -90,7 +90,7 @@ LlamaV2::LlamaV2(DataType                     dtype,
 
     // using float to avoid data overflow
     dynamic_decode_ = std::make_unique<DynamicDecodeLayer>(
-        kFloat32, max_batch_size, model.tokenizer_size, vocab_size_padded_, stream_, &ctx.device_prop);
+        kFloat32, max_batch_size, vocab_size_, vocab_size_padded_, stream_, &ctx.device_prop);
 }
 
 void LlamaV2::updateEmbedding(char*            decoder_input,
@@ -162,6 +162,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                       Buffer_<int>     h_input_length,
                       Buffer_<int>     h_context_length,
                       Buffer           rope_base,
+                      MropeRope*       mrope,
                       Buffer           finished,
                       Buffer           local_token_nums,
                       Buffer           lora_mask,
@@ -230,8 +231,6 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                                       stream_);
             sync_check_cuda_error();
         }
-
-        TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
     }
 
     bool have_embeddings = false;
@@ -247,6 +246,8 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
         sync_check_cuda_error();
     }
 
+    TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
+
     TensorMap args{{"decoder_input", input_embeds},
                    {"decoder_output", hidden_states_out.view({-1, (int)hidden_units_}).borrow()},
                    {"last_token_hidden_units", decoder_out},
@@ -260,6 +261,12 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                    {"cu_block_nums", cu_block_nums},
                    {"kv_block_ptrs", kv_block_ptrs},
                    {"local_token_nums", local_token_nums}};
+
+    if (mrope != nullptr && mrope->position_ids) {
+        args.insert({"mrope_position_ids", mrope->position_ids});
+        args.insert({"mrope_position_delta", mrope->position_delta});
+        args.insert({"mrope_position_length", mrope->length});
+    }
 
     unified_decoder_->Forward(args, weights_->decoder_layer_weights);
 }
@@ -276,7 +283,7 @@ Tensor LlamaV2::postDecodeEmbedding(const Tensor& features, Buffer local_logits)
 
     if (tp_size_ == 1) {
         Tensor logits{local_logits, {bsz, (int)vocab_size_padded_}};
-        linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, logits);
+        linear_.Forward(features, weights_->post_decoder_embedding, logits);
         sync_check_cuda_error();
 
         TM_DEBUG_TENSOR(logits, "logits", 1);
@@ -285,7 +292,7 @@ Tensor LlamaV2::postDecodeEmbedding(const Tensor& features, Buffer local_logits)
     else if (use_allgather_2d_) {
         Tensor logits{local_logits, {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(1));
+        linear_.Forward(features, weights_->post_decoder_embedding, local.squeeze(1));
         sync_check_cuda_error();
         comm_->d_comm->AllGather2D(local.raw_data(),
                                    logits.raw_data(),
@@ -303,7 +310,7 @@ Tensor LlamaV2::postDecodeEmbedding(const Tensor& features, Buffer local_logits)
     else {
         Tensor logits{local_logits, {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(0));
+        linear_.Forward(features, weights_->post_decoder_embedding, local.squeeze(0));
         sync_check_cuda_error();
         comm_->d_comm->AllGather(
             local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_->d_tp_group, stream_);

@@ -2,7 +2,7 @@
 from logging import Logger
 from typing import List
 
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import can_colorize, get_logger
 
 RED_COLOR = '\033[31m'
 RESET_COLOR = '\033[0m'
@@ -10,6 +10,8 @@ RESET_COLOR = '\033[0m'
 
 def _red_text(text: str):
     """Red text."""
+    if not can_colorize():
+        return text
     return f'{RED_COLOR}{text}{RESET_COLOR}'
 
 

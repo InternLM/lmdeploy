@@ -26,8 +26,9 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
 
     def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
         """Update weights."""
-        if os.getenv('DLINER_LINEAR_USE_NN_LAYOUT', '0') == '1':
+        if os.getenv('DLINFER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
+            scale = scale.data.t().contiguous()
         return weight, scale, bias
 
     def forward(self,
@@ -35,7 +36,8 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
                 weight: torch.Tensor,
                 scale: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                all_reduce: bool = False,
+                group: Optional[torch.distributed.ProcessGroup] = None):
         """forward."""
         if isinstance(x, torch.Tensor):
             input_quant, input_scale = dynamic_quant(x, self.quant_dtype)
@@ -45,7 +47,7 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
 
         out = linear_w8a8(input_quant, weight, input_scale, scale, self.out_dtype, self.quant_dtype, bias)
         if all_reduce:
-            dist.all_reduce(out)
+            dist.all_reduce(out, group=group)
         return out
 
 

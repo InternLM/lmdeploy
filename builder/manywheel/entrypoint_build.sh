@@ -5,7 +5,6 @@ export PYTHON_VERSION=$PYTHON_VERSION
 export PLAT_NAME=$PLAT_NAME
 export USERID=${USERID}
 export GROUPID=${GROUPID}
-export CUDAVER=$(nvcc --version | sed -n 's/^.*release \([0-9]\+\).*$/\1/p')
 export NCCL_INCLUDE_DIR=/usr/local/cuda/include
 export NCCL_LIB_DIR=/usr/local/cuda/lib64
 
@@ -13,16 +12,12 @@ source /opt/conda/bin/activate
 conda activate $PYTHON_VERSION
 
 cd lmdeploy
-rm -rf lmdeploy/lib
-mkdir -p build && cd build && rm -rf *
-bash ../generate.sh make
-make -j$(nproc) && make install
-if [ $? != 0 ]; then
-    echo "build failed"
-    exit 1
-fi
-cd ..
-rm -rf build
-python setup.py bdist_wheel --cuda=${CUDAVER} --plat-name $PLAT_NAME -d /tmpbuild/
+pip install build change-wheel-version
+python -m build --wheel -o /tmpbuild/
+for file in $(find /tmpbuild/ -name "*.whl")
+do
+    platform_tag="$(basename $file | cut -d- -f3-4)-${PLAT_NAME}"
+    change_wheel_version /tmpbuild/*.whl --delete-old-wheel --platform-tag ${platform_tag}
+done
 chown ${USERID}:${GROUPID} /tmpbuild/*
 mv /tmpbuild/* /lmdeploy_build/

@@ -6,6 +6,8 @@
 #include <map>
 #include <string>
 
+#include <cuda_runtime.h>
+
 namespace turbomind {
 
 enum class RopeType
@@ -16,6 +18,7 @@ enum class RopeType
     kDynamic,
     kYarn,
     kLlama3,
+    kMrope,
 };
 
 inline RopeType GetRoPEType(const std::string& type)
@@ -24,7 +27,8 @@ inline RopeType GetRoPEType(const std::string& type)
                                               {"linear", RopeType::kLinear},
                                               {"dynamic", RopeType::kDynamic},
                                               {"yarn", RopeType::kYarn},
-                                              {"llama3", RopeType::kLlama3}};
+                                              {"llama3", RopeType::kLlama3},
+                                              {"mrope", RopeType::kMrope}};
     return lookup.at(type);
 }
 
@@ -40,6 +44,10 @@ struct Llama3RopeParam {
     int   original_max_position_embeddings;
 };
 
+struct MropeRopeParam {
+    int3 section;
+};
+
 struct RopeParam {
     RopeType type;
     // common
@@ -51,6 +59,7 @@ struct RopeParam {
     union {
         YarnRopeParam   yarn;
         Llama3RopeParam llama3;
+        MropeRopeParam  mrope;
     };
 };
 
@@ -67,6 +76,15 @@ struct Llama3RopeKernelParam {
     float beta;
 };
 
+struct MropeRopeKernelParam {
+    int3 section;
+
+    int  stride{};
+    int* position_ids{};
+    int* position_delta{};
+    int* length{};
+};
+
 struct RopeKernelParam {
     RopeType type;
 
@@ -77,13 +95,14 @@ struct RopeKernelParam {
 
     YarnRopeKernelParam   yarn;
     Llama3RopeKernelParam llama3;
+    MropeRopeKernelParam  mrope;
 };
 
 inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_kernel)
 {
     rope_kernel.type         = rope.type;
     rope_kernel.dim          = rope.dim;
-    rope_kernel.scale_factor = -std::log2f(rope.base) / rope.dim;
+    rope_kernel.scale_factor = -std::log2(rope.base) / rope.dim;
     if (rope.type == RopeType::kDynamic) {
         rope_kernel.inv_factor = 1.f;
     }
@@ -126,6 +145,14 @@ inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_
         float        inv_diff_freq_factor = 1.0 / (src.high_freq_factor - src.low_freq_factor);
         dst.alpha                         = src.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
         dst.beta                          = src.low_freq_factor * inv_diff_freq_factor;
+    }
+
+    else if (rope.type == RopeType::kMrope) {
+        auto& src     = rope.mrope;
+        auto& dst     = rope_kernel.mrope;
+        dst.section.x = src.section.x * 2;
+        dst.section.y = src.section.y * 2 + dst.section.x;
+        dst.section.z = src.section.z * 2 + dst.section.y;
     }
 }
 

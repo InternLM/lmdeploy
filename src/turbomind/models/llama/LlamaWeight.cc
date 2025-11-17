@@ -34,6 +34,10 @@ LlamaWeight::LlamaWeight(DataType           data_type,
                          const EngineParam& engine_param,
                          const LoraParam&   lora_param,
                          const MoeParam&    moe_param):
+    model_param_{model},
+    engine_param_{engine_param},
+    lora_param_{lora_param},
+    moe_param_{moe_param},
     hidden_units_(model.hidden_units),
     inter_size_(model.inter_size),
     vocab_size_(model.vocab_size),
@@ -54,32 +58,52 @@ LlamaWeight::LlamaWeight(DataType           data_type,
         TM_LOG_WARNING("pad embed size from %d to %d", embedding_size_, embedding_size_);
     }
     FT_CHECK(hidden_units_ % tp_size_ == 0);
+    TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);
+    TM_CHECK_EQ(hidden_units_ % tp_size_, 0);
 
     stream_ = core::Stream::create();
     alloca_ = core::Allocator{stream_, false};
 
+    initialize();
+}
+
+LlamaWeight::~LlamaWeight()
+{
+    release();
+}
+
+bool LlamaWeight::is_initialized() const
+{
+    return initialized_;
+}
+
+void LlamaWeight::initialize()
+{
     core::ContextGuard guard = context();
 
-    TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);
-    TM_CHECK_EQ(hidden_units_ % tp_size_, 0);
-
-    pre_decoder_embedding.emplace(embedding_size_, hidden_units_ / tp_size_, data_type, false, data_type, 1);
-    post_decoder_embedding.emplace(hidden_units_, vocab_size_padded_ / tp_size_, data_type, false, data_type, 1);
+    pre_decoder_embedding.emplace(embedding_size_, hidden_units_ / tp_size_, data_type_, false, data_type_, 1);
+    post_decoder_embedding.emplace(hidden_units_, vocab_size_padded_ / tp_size_, data_type_, false, data_type_, 1);
     register_module("tok_embeddings", pre_decoder_embedding, tp_rank_);
     register_module("output", post_decoder_embedding, tp_rank_);
+
+    /// Lower VRAM pressure on consumer grade GPUs
+    /// TODO: Support token embeds on pinned host memory
+    pre_decoder_embedding.weight  = empty_like(pre_decoder_embedding.weight, kCPU);
+    post_decoder_embedding.weight = empty_like(post_decoder_embedding.weight, kCPU);
 
     decoder_layer_weights.reserve(num_layer_);
     for (int i = 0; i < num_layer_; ++i) {
         decoder_layer_weights.emplace_back(
-            new LlamaDecoderLayerWeight(data_type, i, model, engine_param, lora_param, moe_param));
+            new LlamaDecoderLayerWeight(data_type_, i, model_param_, engine_param_, lora_param_, moe_param_));
         register_module("layers", *decoder_layer_weights.back(), i);
     }
 
     output_norm_weight = Tensor{{hidden_units_}, data_type_, kDEVICE};
     register_parameter("norm.weight", output_norm_weight);
+    initialized_ = true;
 }
 
-LlamaWeight::~LlamaWeight()
+void LlamaWeight::release()
 {
     core::ContextGuard guard = context();
 
@@ -92,9 +116,40 @@ LlamaWeight::~LlamaWeight()
     }
 
     decoder_layer_weights.clear();
+    pinned_weights_.clear();
 
     // Wait for deallocations
     core::Context::stream().Sync();
+
+    // release memory back to os
+    core::Context::device_alloc()->trim(0);
+    initialized_ = false;
+}
+
+void LlamaWeight::to_device(const core::Device& device)
+{
+    TM_CHECK(device.type == kCPU || device.type == kDEVICE);
+    core::ContextGuard guard{stream_, alloca_, Allocator{kCPUpinned}};
+
+    auto tensor_ptr_map = get_parameters();
+    for (auto& [name, tensor_ptr] : tensor_ptr_map) {
+        if (device.type == kCPU) {
+            if (pinned_weights_.find(name) == pinned_weights_.end()) {
+                pinned_weights_[name] = empty_like(*tensor_ptr, kCPUpinned);
+                Copy(*tensor_ptr, pinned_weights_[name]);
+            }
+            *tensor_ptr = {};
+        }
+        else {
+            TM_CHECK(pinned_weights_.find(name) != pinned_weights_.end());
+            *tensor_ptr = empty_like(pinned_weights_[name], kDEVICE);
+            Copy(pinned_weights_[name], *tensor_ptr);
+        }
+    }
+    core::Context::stream().Sync();
+    if (device.type == kCPU) {
+        core::Context::device_alloc()->trim(0);
+    }
 }
 
 core::ContextGuard LlamaWeight::context() const
@@ -114,6 +169,18 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
     for (auto& layer : decoder_layer_weights) {
         layer->prepare(prop, stream);
     }
+
+    auto to_device = [](Tensor& x) {
+        auto tmp = std::exchange(x, empty_like(x, kDEVICE));
+        Copy(tmp, x);
+        return tmp;
+    };
+
+    // Keep the host tensor until stream synchronization
+    auto tmp_token_embeds = to_device(pre_decoder_embedding.weight);
+    auto tmp_lm_head      = to_device(post_decoder_embedding.weight);
+
+    post_decoder_embedding.prepare();
 
     // Block until processing is done
     check_cuda_error(cudaStreamSynchronize(stream));

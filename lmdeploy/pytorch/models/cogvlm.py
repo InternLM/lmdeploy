@@ -19,7 +19,7 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwi
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin
+from .utils.model import DeployModelMixin, vlm_model
 
 
 class VisionExpertAttention(nn.Module):
@@ -487,6 +487,7 @@ class GLU(nn.Module):
         return x
 
 
+@vlm_model
 class EVA2CLIPModel(nn.Module):
     """Vision model."""
 
@@ -788,12 +789,20 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
 
+    def _get_model_metas(self, context: StepContext):
+        """Get model metas."""
+        model_metas = context.model_metas
+        if model_metas is None:
+            batch_size = context.q_seqlens.numel()
+            return [dict(num_img_tokens=0)] * batch_size
+        return [dict(num_img_tokens=0) if meta is None else meta for meta in model_metas]
+
     def update_model_metas(self,
                            past_key_values: List[List[torch.Tensor]],
                            inputs_embeds: Optional[torch.Tensor] = None,
                            context: StepContext = None):
         """Update model meta."""
-        model_metas = context.model_metas
+        model_metas = self._get_model_metas(context)
         input_multimodals = context.input_multimodals
         if input_multimodals is None:
             input_imgs = [[] for _ in model_metas]

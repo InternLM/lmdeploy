@@ -5,13 +5,14 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
-from lmdeploy.messages import EngineCoreEventType
+from lmdeploy.messages import EventType, ScheduleMetrics
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
-from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager
+from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager, SequenceMeta
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
+from .state_manager import StateManager
 
 logger = get_logger('lmdeploy')
 
@@ -36,7 +37,10 @@ class Scheduler:
         cache_config (CacheConfig): The config of cache info.
     """
 
-    def __init__(self, scheduler_config: SchedulerConfig, cache_config: CacheConfig) -> None:
+    def __init__(self,
+                 scheduler_config: SchedulerConfig,
+                 cache_config: CacheConfig,
+                 seq_meta: SequenceMeta = None) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
 
@@ -47,10 +51,13 @@ class Scheduler:
 
         self.block_manager = build_block_manager(cache_config)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
+        self.state_manager = StateManager(self.cache_config.num_state_caches)
+        self.is_ssm = len(self.cache_config.states_shapes) > 0
 
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
-        self.seq_manager = SequenceManager()
+        seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
+        self.seq_manager = SequenceManager(seq_meta)
 
     @property
     def waiting(self):
@@ -121,7 +128,7 @@ class Scheduler:
             session_id (int): New session id.
         """
         assert session_id not in self.sessions
-        session = SchedulerSession(session_id, self.cache_config.block_size, seq_manager=self.seq_manager)
+        session = SchedulerSession(session_id, seq_manager=self.seq_manager)
         self.sessions[session_id] = session
         return session
 
@@ -136,7 +143,7 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
-        seq.record_event(EngineCoreEventType.QUEUED)
+        seq.record_event(EventType.QUEUED)
 
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
@@ -179,7 +186,7 @@ class Scheduler:
         return running_migration
 
     @logging_timer('SchedulePrefilling', logger)
-    def _schedule_prefill(self):
+    def _schedule_prefill(self, prealloc_size: int = 0):
         """Schedule for prefilling."""
 
         max_batches = self.scheduler_config.max_batches - self.num_running() - self.num_locked()
@@ -203,7 +210,7 @@ class Scheduler:
             hanging = reversed(self.hanging)
             waiting = reversed(waiting)
             evictable = list(chain(hanging, waiting))
-            return eviction_helper.evict_for_seq(seq, evictable, 0)
+            return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
 
         def _reorder_waiting():
             """Reorder waiting."""
@@ -226,10 +233,12 @@ class Scheduler:
                 break
 
             # allocate session memory
-            self.block_manager.allocate(seq)
+            self.block_manager.allocate(seq, prealloc_size)
+            if self.is_ssm:
+                self.state_manager.allocate(seq)
             _to_running(seq)
 
-            seq.record_event(EngineCoreEventType.SCHEDULED)
+            seq.record_event(EventType.SCHEDULED)
 
         return running, swap_in_map, swap_out_map, copy_map
 
@@ -245,8 +254,15 @@ class Scheduler:
         swap_in_map: Dict[int, int] = dict()
         copy_map: Dict[int, int] = dict()
 
-        def __evict_for_seq(seq: SchedulerSequence):
+        def __evict_for_seq(seq: SchedulerSequence, num_required_blocks: int):
             """Evict until can append."""
+            if num_required_blocks == 0:
+                # No need to evict, just return True.
+                return True
+            elif num_required_blocks < self.block_manager.get_num_free_gpu_blocks():
+                # Enough free blocks, just return True.
+                return True
+
             from itertools import chain
             hanging = reversed(self.hanging)
             waiting = reversed(self.waiting)
@@ -257,7 +273,8 @@ class Scheduler:
         for seq in running:
             # token + n
 
-            if len(seq.logical_blocks) > self.block_manager.num_gpu_blocks:
+            num_required_blocks = self.block_manager.num_required_blocks(seq, prealloc_size)
+            if len(seq.logical_blocks) + num_required_blocks > self.block_manager.num_gpu_blocks:
                 # Reach max gpu cache size.
                 logger.warning(f'session[{seq.session_id}] '
                                f'sequence[{seq.seq_id}] '
@@ -267,7 +284,7 @@ class Scheduler:
                 seq.set_step(0)
                 continue
 
-            if not __evict_for_seq(seq):
+            if not __evict_for_seq(seq, num_required_blocks):
                 self._set_message_status(seq, MessageStatus.WAITING)
                 continue
 
@@ -279,7 +296,7 @@ class Scheduler:
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
-            output = self._schedule_prefill()
+            output = self._schedule_prefill(0)
         else:
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
@@ -314,6 +331,7 @@ class Scheduler:
             seq (SchedulerSequence): sequence to remove
         """
         self.block_manager.free(seq)
+        self.state_manager.free(seq)
         seq.set_step(0)
         seq.session.remove_sequence(seq)
 
@@ -339,6 +357,9 @@ class Scheduler:
     def has_waiting(self):
         return self.num_waiting() > 0
 
+    def has_to_be_migrated(self):
+        return self.num_to_be_migrated() > 0
+
     def has_migration_running(self):
         return self.num_running() > 0
 
@@ -359,6 +380,14 @@ class Scheduler:
     def num_waiting(self):
         """Num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING)
+
+    def num_to_be_migrated(self):
+        """Num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.TO_BE_MIGRATED)
+
+    def num_migration_locked(self):
+        """Num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_LOCKED)
 
     def num_migration_running(self):
         """Num migration running."""
@@ -404,12 +433,11 @@ class Scheduler:
         for seq in migration_done:
             self._set_message_status(seq, MessageStatus.RUNNING)
 
-    def make_stats(self):
-        """Make stats."""
-        return {
-            'running': self.num_running(),
-            'waiting': self.num_waiting(),
-            'locked': self.num_locked(),
-            'free_gpu_blocks': self.block_manager.get_num_free_gpu_blocks(),
-            'total_gpu_blocks': self.block_manager.num_gpu_blocks
-        }
+    @property
+    def schedule_metrics(self):
+        return ScheduleMetrics(
+            active_seqs=self.num_locked(),
+            waiting_seqs=self.num_waiting() + self.num_running(),
+            total_blocks=self.block_manager.num_gpu_blocks,
+            free_blocks=self.block_manager.get_num_free_gpu_blocks(),
+        )

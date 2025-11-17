@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
 from typing import Iterable, List, Optional, Tuple
 
 import torch
@@ -30,6 +31,10 @@ class DeployModelMixin:
         """Compute logits of the model output."""
         return hidden_states
 
+    def rename_weight(self, name: str) -> str:
+        """Rename weight."""
+        return name
+
     def update_weights(self):
         """Update weights."""
         pass
@@ -44,3 +49,22 @@ class DeployModelMixin:
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return None
+
+
+def vlm_model(vlm_cls):
+    if not issubclass(vlm_cls, torch.nn.Module):
+        raise ValueError('Only subclasses of nn.Module can be decorated with @vlm_model.')
+
+    @functools.wraps(vlm_cls)
+    def wrapper(*args, **kwargs):
+        from lmdeploy.pytorch.models.patch import get_build_model_context
+        bm_ctx = get_build_model_context()
+        disable_vision_encoder = bm_ctx.disable_vision_encoder
+        if disable_vision_encoder:
+            mod = torch.nn.Identity()
+            mod._is_dummy_mod = True
+            return mod
+        else:
+            return vlm_cls(*args, **kwargs)
+
+    return wrapper

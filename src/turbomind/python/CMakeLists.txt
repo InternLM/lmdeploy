@@ -16,14 +16,20 @@ pybind11_add_module(${PROJECT_NAME} bind.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE LlamaTritonBackend)
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_14)
 
-set(_INSTALL_CUDA_RPATH
-    "\$ORIGIN"
-    "\$ORIGIN/../../nvidia/nccl/lib/"
-    "\$ORIGIN/../../nvidia/cuda_runtime/lib/"
-    "\$ORIGIN/../../nvidia/cublas/lib/"
-    "\$ORIGIN/../../nvidia/curand/lib/"
-)
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    BUILD_RPATH "\$ORIGIN"
-    INSTALL_RPATH "${_INSTALL_CUDA_RPATH}"
-)
+pybind11_add_module(_xgrammar xgrammar_bind.cpp)
+target_link_libraries(_xgrammar PRIVATE core xgrammar)
+target_compile_features(_xgrammar PRIVATE cxx_std_14)
+
+if (CALL_FROM_SETUP_PY)
+  set(_INSTALL_CUDA_RPATH
+      "\$ORIGIN"
+      "\$ORIGIN/../../nvidia/nccl/lib/"
+      "\$ORIGIN/../../nvidia/cuda_runtime/lib/"
+      "\$ORIGIN/../../nvidia/cublas/lib/"
+      "\$ORIGIN/../../nvidia/curand/lib/"
+  )
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+      BUILD_RPATH "\$ORIGIN"
+      INSTALL_RPATH "${_INSTALL_CUDA_RPATH}"
+  )
+endif ()

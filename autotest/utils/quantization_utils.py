@@ -2,7 +2,7 @@ import os
 import subprocess
 from subprocess import PIPE
 
-from lmdeploy.utils import is_bf16_supported
+from utils.config_utils import _is_bf16_supported_by_device
 
 
 def quantization(config,
@@ -31,15 +31,20 @@ def quantization(config,
         return False, 'quantization type should in [awq, gptq, w8a8], \
             now the type is ' + quantization_type
 
+    # Add device option if specified in environment
+    device = os.environ.get('DEVICE', '')
+    if device == 'ascend':
+        quantization_cmd += ' --device npu '
+
     if cuda_prefix is not None:
         quantization_cmd = ' '.join([cuda_prefix, quantization_cmd])
 
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
 
-    if not is_bf16_supported() or quantization_type == 'gptq':
+    if not _is_bf16_supported_by_device() or quantization_type == 'gptq':
         quantization_cmd += ' --batch-size 8'
-    elif str(config.get('env_tag')) == '3090':
+    elif str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         quantization_cmd += ' --batch-size 8'
     else:
         quantization_cmd += ' --batch-size 32'
