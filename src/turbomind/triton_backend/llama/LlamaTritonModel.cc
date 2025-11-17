@@ -378,10 +378,8 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     engine_param_.devices = engine_reader["devices"].as<std::vector<int>>();
 
     // multi-node information
-    engine_param_.nnodes         = engine_reader["nnodes"].as<int>();
-    engine_param_.node_rank      = engine_reader["node_rank"].as<int>();
-    engine_param_.ngpus_per_node = engine_reader["ngpus_per_node"].as<int>();
-    FT_CHECK(engine_param_.devices.size() == engine_param_.ngpus_per_node);
+    engine_param_.nnodes    = engine_reader["nnodes"].as<int>();
+    engine_param_.node_rank = engine_reader["node_rank"].as<int>();
 
     {
         auto tp                             = engine_param_.attn_tp_size;
@@ -436,7 +434,7 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     group_ids_.resize(engine_param_.outer_dp_size);
     for (size_t i = 0; i < group_ids_.size(); ++i) {
         // TODO: fine-grained comm control
-        const std::string group_backend = (comm_size_ <= engine_param_.ngpus_per_node) ? "" : "gloo";
+        const std::string group_backend = (engine_param_.nnodes == 1) ? "" : "gloo";
 
         group_ids_[i] = comm::CreateHostGroupId(group_backend);
         group_ids_[i]->Initialize();
@@ -453,8 +451,8 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
         e.mlp_tp_rank   = i % comm_size_;
     }
 
-    for (int local_rank = 0, offset = engine_param_.ngpus_per_node * engine_param_.node_rank;
-         local_rank < engine_param_.ngpus_per_node;
+    for (int local_rank = 0, offset = engine_param_.devices.size() * engine_param_.node_rank;
+         local_rank < engine_param_.devices.size();
          ++local_rank) {
         auto& e = engine_params_[offset + local_rank];
         if (e.attn_tp_rank == 0) {

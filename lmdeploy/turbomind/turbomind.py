@@ -87,16 +87,10 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
-    if cfg.nnodes > 1:
-        assert cfg.ngpus_per_node is not None or cfg.devices is not None
-        cfg.devices = cfg.devices or list(range(cfg.ngpus_per_node))
-        cfg.ngpus_per_node = cfg.ngpus_per_node or len(cfg.devices)
-        cfg.device_num = cfg.device_num or len(cfg.devices) * cfg.nnodes
-
     if not complete_parallel_config(cfg):
         total = cfg.dp * cfg.tp
         if not cfg.device_num:
-            count = torch.cuda.device_count()
+            count = torch.cuda.device_count() * cfg.nnodes
             if total < count:
                 count = total
             cfg.device_num = count
@@ -112,12 +106,12 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
-    cfg.devices = cfg.devices or list(range(cfg.device_num))
 
     # update devices
-    if cfg.nnodes == 1:
-        cfg.devices = cfg.devices if cfg.devices else list(range(cfg.device_num))
-        cfg.ngpus_per_node = cfg.ngpus_per_node or len(cfg.devices)
+    cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
+    cfg.devices = cfg.devices[:cfg.device_num // cfg.nnodes]
+    assert len(cfg.devices) == cfg.device_num // cfg.nnodes
+
     # for simplicity, each node has dp
     assert cfg.outer_dp_size * cfg.attn_dp_size % cfg.nnodes == 0
 

@@ -111,7 +111,6 @@ struct EngineParam {
     // multi-node
     int nnodes;
     int node_rank;
-    int ngpus_per_node;
 
     std::vector<int> devices;
 };

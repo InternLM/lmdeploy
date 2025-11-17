@@ -210,12 +210,6 @@ class ArgumentHelper:
         return parser.add_argument('--nnodes', type=int, default=1, help='The total node nums')
 
     @staticmethod
-    def ngpus_per_node(parser):
-        """Add argument ngpus_per_node to parser."""
-
-        return parser.add_argument('--ngpus-per-node', type=int, default=None, help='The total gpu nums per node')
-
-    @staticmethod
     def session_id(parser):
         """Add argument session_id to parser."""
 
