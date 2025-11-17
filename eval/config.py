@@ -26,28 +26,26 @@ datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')), []) 
 
 TASK_TAG = ''
 API_SERVER_ADDR = 'http://<API_SERVER>'
-MODEL_PATH = ''
+SERVED_MODEL_PATH = ''
 
 models = [
-    dict(
-        abbr=TASK_TAG,
-        key='dummy',
-        openai_api_base=f'{API_SERVER_ADDR}/v1',
-        type=OpenAISDK,
-        path=MODEL_PATH,
-        temperature=0.6,
-        meta_template=dict(round=[
-            dict(role='HUMAN', api_role='HUMAN'),
-            dict(role='BOT', api_role='BOT', generate=True),
-        ], ),
-        query_per_second=10,
-        max_out_len=32768,
-        max_seq_len=32768,
-        batch_size=8,
-        retry=10,
-        pred_postprocessor=dict(type=extract_non_reasoning_content),
-        verbose=False,
-    )
+    dict(abbr=TASK_TAG,
+         key='dummy',
+         openai_api_base=f'{API_SERVER_ADDR}/v1',
+         type=OpenAISDK,
+         path=SERVED_MODEL_PATH,
+         temperature=0.6,
+         meta_template=dict(round=[
+             dict(role='HUMAN', api_role='HUMAN'),
+             dict(role='BOT', api_role='BOT', generate=True),
+         ], ),
+         query_per_second=10,
+         max_out_len=64000,
+         max_seq_len=65536,
+         batch_size=32,
+         retry=10,
+         pred_postprocessor=dict(type=extract_non_reasoning_content),
+         verbose=False)
 ]
 
 JUDGER_ADDR = 'http://<JUDGER_SERVER>'
@@ -66,7 +64,7 @@ judge_cfg = dict(
     batch_size=32,
     temperature=0.001,
     max_out_len=8192,
-    max_seq_len=64000,
+    max_seq_len=65536,
     mode='mid',
 )
 

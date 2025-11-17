@@ -1,7 +1,58 @@
 import argparse
 import os
+import signal
 import subprocess
+import sys
 from datetime import datetime
+
+
+class ProcessManager:
+    """Manager for subprocess execution with proper signal handling."""
+
+    def __init__(self):
+        self.process = None
+        self.original_handlers = {}
+
+    def __enter__(self):
+        """Context manager entry - setup signal handlers"""
+        # Save original signal handlers
+        self.original_handlers[signal.SIGINT] = signal.getsignal(signal.SIGINT)
+        self.original_handlers[signal.SIGTERM] = signal.getsignal(signal.SIGTERM)
+
+        # Register new signal handlers
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - restore original signal handlers"""
+        # Restore original signal handlers
+        for sig, handler in self.original_handlers.items():
+            signal.signal(sig, handler)
+
+    def _signal_handler(self, sig, frame):
+        """Handle termination signals."""
+        signal_name = 'SIGINT' if sig == signal.SIGINT else 'SIGTERM'
+        print(f'\nReceived {signal_name}, cleaning up subprocess...')
+        self.cleanup()
+        sys.exit(0)
+
+    def start_process(self, cmd):
+        self.process = subprocess.Popen(cmd)
+        return self.process
+
+    def cleanup(self):
+        if self.process and self.process.poll() is None:
+            print('Terminating subprocess...')
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+                print('Subprocess terminated successfully')
+            except subprocess.TimeoutExpired:
+                print('Subprocess did not terminate normally, forcing kill...')
+                self.process.kill()
+                self.process.wait()
+                print('Subprocess killed')
 
 
 def read_config():
@@ -102,16 +153,18 @@ def perform_evaluation(config, api_server, judger_server, mode, work_dir, reuse)
             config will not be saved and execution will not be performed.
         reuse (str): Whether to reuse existing results
     """
-    if mode in ['infer', 'all']:
+    if mode in ['infer', 'all', 'config']:
         served_model_name = get_model_name_from_server(api_server, 'api')
-        config = config.replace("MODEL_PATH = ''", f"MODEL_PATH = '{served_model_name}'")
-    if mode in ['eval', 'all']:
+        config = config.replace("SERVED_MODEL_PATH = ''", f"SERVED_MODEL_PATH = '{served_model_name}'")
+    if mode in ['eval', 'all', 'config']:
         judger_model_name = get_model_name_from_server(judger_server, 'judger')
         config = config.replace("JUDGER_MODEL_PATH = ''", f"JUDGER_MODEL_PATH = '{judger_model_name}'")
 
     # write updated config to work_dir
     if work_dir:
         save_config(work_dir, config)
+        if mode == 'config':
+            return
     else:
         print(config)
         return
@@ -128,10 +181,14 @@ def perform_evaluation(config, api_server, judger_server, mode, work_dir, reuse)
             raise ValueError(f'Invalid reuse timestamp format: {reuse}. Expected format: YYYYMMDD_HHMMSS') from e
     try:
         print(f'Executing command: {" ".join(cmd)}')
-        result = subprocess.run(cmd, text=True, check=True)
-        return result
+        # result = subprocess.run(cmd, text=True, check=True)
+        # return result
+        with ProcessManager() as manager:
+            process = manager.start_process(cmd)
+            result = process.wait()
+            return subprocess.CompletedProcess(cmd, result)
     except Exception as e:
-        print(f'命令执行失败！错误信息: {e}')
+        print(f'Executing commanded failed with {e}')
         return
 
 
@@ -200,26 +257,6 @@ def main():
     if judger_server:
         # update judger_server part of config according to args.judger_server
         config = config.replace("JUDGER_ADDR = 'http://<JUDGER_SERVER>'", f"JUDGER_ADDR = '{judger_server}'")
-
-    if mode == 'config':
-        try:
-            # if api_server is accessible, retrieve /v1/models to get model_name
-            served_model_name = get_model_name_from_server(api_server, 'api')
-            config = config.replace("MODEL_PATH = ''", f"MODEL_PATH = '{served_model_name}'")
-        finally:
-            pass
-        try:
-            # if judger_server is accessible, retrieve /v1/models to get model_name
-            judger_model_name = get_model_name_from_server(judger_server, 'judger')
-            config = config.replace("JUDGER_MODEL_PATH = ''", f"JUDGER_MODEL_PATH = '{judger_model_name}'")
-        finally:
-            pass
-        # write updated config to work_dir
-        if work_dir:
-            save_config(work_dir, config)
-        else:
-            print(config)
-            return
 
     # perform evaluation
     perform_evaluation(config, api_server, judger_server, mode, work_dir, args.reuse)
