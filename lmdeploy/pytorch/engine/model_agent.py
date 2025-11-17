@@ -959,8 +959,7 @@ class BaseModelAgent:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
         # for router replay
-        need_output = self.dist_config.dp > 1 or self.need_output
-        enable_return_routed_experts = self.misc_config.enable_return_routed_experts and need_output
+        enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
         build_model_ctx = BuildModelContext(
             disable_vision_encoder=self.misc_config.disable_vision_encoder,
