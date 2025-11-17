@@ -831,7 +831,7 @@ void LlamaBatch::AllocSymmBuffers()
     // for context parallel, we use symm_alloc_ and both prefill and decode stage have reduce process
     // w/o context parallel, we use common alloc and only decode stage has reduce process
     // perhaps it would be more appropriate to put this buffer in the unified_attention_layer.
-    Allocator     alloc          = param_.attn_cp_size > 1 ? symm_alloc_ : core::Context::alloc(kDEVICE);
+    Allocator     alloc          = param_.attn_cp_size > 1 ? symm_alloc_ : core::Context::device_alloc();
     const ssize_t attn_ws_tokens = param_.attn_cp_size > 1 ?
                                        UnifiedAttentionLayer::kMaxWorkspaceTokens + max_forward_token_num_ :
                                        UnifiedAttentionLayer::kMaxWorkspaceTokens;
