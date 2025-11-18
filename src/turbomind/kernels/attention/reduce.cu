@@ -59,8 +59,12 @@ __global__ void reduce(T*         out,
         const bool mask = cp_i < kCpUb && ki < split_cnt;  // cp, q, h, k, 2
         const int  index =
             offset_m + ((cp_i * query_num * head_num + (query_idx * head_num + head_idx)) * max_split_cnt + ki) * 2;
-        ML[i][0] = mask ? partial_ML[index] : -std::numeric_limits<float>::infinity();
-        ML[i][1] = mask ? partial_ML[index + 1] : 0.f;
+
+        Array<float, 2> temp_ML = {-std::numeric_limits<float>::infinity(), 0.f};
+        if (mask) {
+            Load(temp_ML, &partial_ML[index]);
+        }
+        Store(&ML[i][0], temp_ML);
 
         frag_M = (mask && warp_m == warp_id) ? ML[i][0] : frag_M;
     }
@@ -91,8 +95,7 @@ __global__ void reduce(T*         out,
 
     if constexpr (First && CP > 1) {
         if (lane_id == 0) {
-            s_ML[warp_id][0] = block_M;
-            s_ML[warp_id][1] = block_L;
+            Store(&s_ML[warp_id][0], Array<float, 2>{block_M, block_L});
         }
         __syncthreads();
 
@@ -108,8 +111,7 @@ __global__ void reduce(T*         out,
                 block_L += exp2f((s_ML[i][0] - block_M) * exp_scale) * s_ML[i][1];
             }
 
-            s_ML[0][0] = block_M;
-            s_ML[0][1] = block_L;
+            Store(&s_ML[0][0], Array<float, 2>{block_M, block_L});
         }
         __syncthreads();
 
@@ -122,8 +124,7 @@ __global__ void reduce(T*         out,
         const bool mask  = ki < split_cnt;  // q, h, k, 2
         const int  index = offset_r + ((query_idx * head_num + head_idx) * max_split_cnt + ki) * 2;
         if (mask) {
-            partial_ML[index]     = block_M;
-            partial_ML[index + 1] = block_L;
+            Store(&partial_ML[index], Array<float, 2>{block_M, block_L});
         }
     }
 

@@ -580,8 +580,7 @@ struct AttentionUniversal {
         Impl::ForeachML(frag_M, frag_L, [&](int hi, int qi, int ri, float M, float L) {
             const int index = get_index(hi, qi);
             if (qi_begin + qi < qi_end && ri == 0 && check_h(hi)) {
-                params.partial_ML[index * 2]     = M;
-                params.partial_ML[index * 2 + 1] = L;
+                Store(&params.partial_ML[index * 2], Array<float, 2>{M, L});
             }
         });
     }
