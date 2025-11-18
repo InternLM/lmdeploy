@@ -1158,6 +1158,11 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
 
+    def _update_dispatch_mode(self):
+        if isinstance(self.model.layers[0].mlp, DeepseekV2MoE):
+            if hasattr(self.model.layers[0].mlp.experts.impl, "update_dispatch_mode"):
+                self.model.layers[0].mlp.experts.impl.update_dispatch_mode()
+
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],
@@ -1169,11 +1174,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
 
-        from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
-        deepep_mode = DeepEPMode.NORMAL
-        if context.is_decoding:
-            deepep_mode = DeepEPMode.LOW_LATENCY
-        DeepEPBuffer.set_deepep_mode(deepep_mode)
+        self._update_dispatch_mode()
 
         return dict(
             input_ids=input_ids,
