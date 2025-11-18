@@ -475,9 +475,10 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
         try:
-            import deep_ep
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
-            self.use_deepep = True
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep
+            self.use_deepep = use_deepep
+            self.deepep_buffer = DeepEPBuffer
+            self.deepep_mode = DeepEPMode
         except ImportError:
             self.use_deepep = False
             logger.warning('For higher performance, please install DeepEP https://github.com/deepseek-ai/DeepEP')
@@ -601,11 +602,11 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
     def update_dispatch_mode(self):
         if self.use_deepep:
-            deepep_mode = DeepEPMode.NORMAL
+            deepep_mode_type = self.deepep_mode.NORMAL
             step_ctx = get_step_ctx_manager().current_context()
             if step_ctx.is_decoding:
-                deepep_mode = DeepEPMode.LOW_LATENCY
-            DeepEPBuffer.set_deepep_mode(deepep_mode)
+                deepep_mode_type = self.deepep_mode.LOW_LATENCY
+            self.deepep_buffer.set_deepep_mode(deepep_mode_type)
 
 
 class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):

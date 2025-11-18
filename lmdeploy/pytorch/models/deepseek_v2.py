@@ -1160,7 +1160,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
     def _update_dispatch_mode(self):
         if isinstance(self.model.layers[0].mlp, DeepseekV2MoE):
-            if hasattr(self.model.layers[0].mlp.experts.impl, "update_dispatch_mode"):
+            if hasattr(self.model.layers[0].mlp.experts.impl, 'update_dispatch_mode'):
                 self.model.layers[0].mlp.experts.impl.update_dispatch_mode()
 
     def prepare_inputs_for_generation(
