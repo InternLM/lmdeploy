@@ -401,29 +401,6 @@ class EncodeResponse(BaseModel):
     length: Union[int, List[int]]
 
 
-class GenerateRequest(BaseModel):
-    """Generate request."""
-    prompt: Union[str, List[Dict[str, Any]]]
-    image_url: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
-    session_id: int = -1
-    interactive_mode: bool = False
-    stream: bool = False
-    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
-    request_output_len: Optional[int] = Field(default=None, examples=[None])  # noqa
-    top_p: float = 0.8
-    top_k: int = 40
-    temperature: float = 0.8
-    repetition_penalty: float = 1.0
-    ignore_eos: bool = False
-    skip_special_tokens: Optional[bool] = True
-    spaces_between_special_tokens: Optional[bool] = True
-    cancel: Optional[bool] = False  # cancel a responding request
-    adapter_name: Optional[str] = Field(default=None, examples=[None])
-    seed: Optional[int] = None
-    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
-    min_p: float = 0.0
-
-
 class GenerateResponse(BaseModel):
     """Generate response."""
     text: str
@@ -436,6 +413,7 @@ class GenerateResponse(BaseModel):
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
     serialized_named_tensors: Union[str, List[str], Dict]
+    load_format: Optional[str] = None  # 'flattened_bucket' or None
     finished: bool = False
 
 
@@ -464,6 +442,7 @@ class GenerateReqInput(BaseModel):
     skip_special_tokens: Optional[bool] = True
     spaces_between_special_tokens: Optional[bool] = True
     include_stop_str_in_output: Optional[bool] = False
+    return_routed_experts: Optional[bool] = False
 
 
 class GenerateReqMetaOutput(BaseModel):
@@ -471,6 +450,7 @@ class GenerateReqMetaOutput(BaseModel):
     completion_tokens: Optional[int] = None
     finish_reason: Optional[Dict[str, Any]] = None
     output_token_logprobs: Optional[List[tuple[float, int]]] = None  # (logprob, token_id)
+    routed_experts: Optional[Union[List[List[List[int]]], str]] = None  # (num_token, num_layer, topk_expert)
 
 
 # /generate output

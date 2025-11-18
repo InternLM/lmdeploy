@@ -91,16 +91,6 @@ class CUDASingleGraphRunner:
         self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
 
-    def make_output_buffers(self, output):
-        """Make output buffers."""
-        output_buffers = dict(logits=output)
-        return output_buffers
-
-    def slice_output(self, output_buffers: Dict[str, Any], inputs: Dict[str, Any]):
-        """Slice output."""
-        num_tokens = inputs['input_ids'].size(-1)
-        return output_buffers['logits'][:, :num_tokens]
-
     @record_function('capture_cudagraph')
     def capture(self, **kwargs):
         """Capture graph."""
@@ -221,7 +211,8 @@ class CUDAGraphRunner(GraphRunner):
 
         if not enable_graph:
             with record_function('forward_eager'):
-                return self.model(**kwargs)
+                output = self.model(**kwargs)
+                return self.model.make_output_buffers(output)
 
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
@@ -277,7 +268,7 @@ class CUDAGraphRunner(GraphRunner):
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
             tp_size = self._get_capture_tokens(padding_batch_size)
-            dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
+            dp_meta.sync_tp_size(tp_size)
         return inputs
 
     def get_capture_batch_sizes(self) -> List[int]:

@@ -98,6 +98,7 @@ class SubCliServe:
         ArgumentHelper.dllm_unmasking_strategy(pt_group)
         ArgumentHelper.dllm_denoising_steps(pt_group)
         ArgumentHelper.dllm_confidence_threshold(pt_group)
+        ArgumentHelper.enable_return_routed_experts(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -232,6 +233,7 @@ class SubCliServe:
                 dllm_unmasking_strategy=args.dllm_unmasking_strategy,
                 dllm_denoising_steps=args.dllm_denoising_steps,
                 dllm_confidence_threshold=args.dllm_confidence_threshold,
+                enable_return_routed_experts=args.enable_return_routed_experts,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig

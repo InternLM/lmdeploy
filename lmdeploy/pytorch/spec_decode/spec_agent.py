@@ -45,7 +45,7 @@ class SpecModelAgent:
         self.cache_engine = None
         self.inputs_strategy = inputs_strategy
         self.agent_strategy = agent_strategy
-        self.to_runable = dist_ctx.dp > 1 or dist_ctx.rank % dist_ctx.tp == 0
+        self.to_runable = dist_ctx.rank % dist_ctx.dist_config.attn_tp == 0
         self.rejection_sampler = RejectionSampler()
 
     def set_cache_config(self, cache_config: CacheConfig):

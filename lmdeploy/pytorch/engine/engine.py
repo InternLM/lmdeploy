@@ -58,6 +58,9 @@ class InferOutput:
     # for logging
     req_metrics: RequestMetrics = None
 
+    # expert ids
+    routed_experts: torch.Tensor = None
+
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """Tensorlize block_offsets."""
@@ -135,12 +138,7 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
 
 def _build_dist_config(engine_config: PytorchEngineConfig):
     """Build dist config."""
-    dist_config = DistConfig(dp=engine_config.dp,
-                             tp=engine_config.tp,
-                             ep=engine_config.ep,
-                             dp_rank=engine_config.dp_rank,
-                             enable_microbatch=engine_config.enable_microbatch,
-                             enable_eplb=engine_config.enable_eplb)
+    dist_config = DistConfig.from_engine_config(engine_config=engine_config)
     return dist_config
 
 
@@ -647,7 +645,9 @@ class Engine(EngineBase):
             sampling_param = msg.sampling_param
             max_new_tokens = sampling_param.max_new_tokens
             num_all_tokens = msg.num_valid_ids
-            if max_new_tokens + num_all_tokens > max_session_len:
+            if self.engine_config.role == EngineRole.Prefill:
+                sampling_param.max_new_tokens = 1
+            elif max_new_tokens + num_all_tokens > max_session_len:
                 logger.warning(
                     f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
                     f'Update max_new_tokens={max_session_len - num_all_tokens}.')
@@ -701,7 +701,7 @@ class Engine(EngineBase):
 
     @property
     def gpu_count(self):
-        return self.tp * self.dp
+        return self.dist_config.world_size
 
     @property
     def torch_int_dtype(self):
@@ -914,8 +914,8 @@ class Engine(EngineBase):
             # logprobs
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
-            if num_logprobs >= 0:
-                cur_logprobs = (logprobs.vals[idx, :num_logprobs + 1], logprobs.indices[idx, :num_logprobs + 1])
+            if logprobs is not None:
+                cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
             # get spec stats info
             spec_info = None
             if self.specdecode_config is not None and is_decoding and self.engine_config.enable_metrics:
@@ -923,13 +923,18 @@ class Engine(EngineBase):
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
+            routed_experts = msg.routed_experts if msg.return_routed_experts and finish else None
+            if routed_experts is not None and self.engine_config.enable_transfer_obj_ref:
+                # only serialize for api server
+                routed_experts = self.executor.serialize(routed_experts)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
                               cache_block_ids=cache_block_ids,
                               req_metrics=req_metrics,
-                              logprobs=cur_logprobs)
+                              logprobs=cur_logprobs,
+                              routed_experts=routed_experts)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -944,6 +949,10 @@ class Engine(EngineBase):
             if self.specdecode_config is not None:
                 return True
             return any(seq.return_logits for seq in seqs)
+
+        def __need_routed_experts(seqs: SeqList):
+            """Need routed experts."""
+            return any(seq.return_routed_experts for seq in seqs)
 
         def __need_schedule_again(prefill: bool, scheduler_output):
             """Need schedule again."""
@@ -988,6 +997,7 @@ class Engine(EngineBase):
         inputs = self.create_model_inputs(running, prefill)
         sampling_inputs = self.sampling_strategy.make_sampling_inputs(running)
         return_logits = __need_logits(running)
+        return_routed_experts = __need_routed_experts(running)
         extra_inputs = self.model_agent_strategy.make_extra_inputs(running)
         stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
 
@@ -1005,6 +1015,7 @@ class Engine(EngineBase):
             is_dummy=False,
             sync_long_context=sync_long_context,
             extra_inputs=extra_inputs,
+            return_routed_experts=return_routed_experts,
         )
 
     async def _await_forward_event(self, forward_event: asyncio.Event):
@@ -1040,6 +1051,7 @@ class Engine(EngineBase):
                                      logits=out.logits,
                                      cache_block_ids=out.cache_block_ids,
                                      req_metrics=out.req_metrics,
+                                     routed_experts=out.routed_experts,
                                      logprobs=logprobs))
 
         def __update_logprobs(step_outputs: List[InferOutput]):

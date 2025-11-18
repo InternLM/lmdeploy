@@ -388,8 +388,9 @@ class NodeManager:
             node_url (str): the node url.
             start (int): the start time point. time.time()
         """
-        self.nodes[node_url].unfinished -= 1
-        self.nodes[node_url].latency.append(time.time() - start)
+        if node_url in self.nodes:
+            self.nodes[node_url].unfinished -= 1
+            self.nodes[node_url].latency.append(time.time() - start)
 
     def create_background_tasks(self, url: str, start: int):
         """To create a background task.
@@ -586,7 +587,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task)
+            return StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
             node_manager.post_call(node_url, start)
@@ -597,6 +598,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         # Prefill
         prefill_request_dict = copy.deepcopy(request_dict)
         prefill_request_dict['max_tokens'] = 1
+        prefill_request_dict['max_completion_tokens'] = 1
         prefill_request_dict['stream'] = False
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
@@ -647,7 +649,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
-            resp = StreamingResponse(response, background=background_task)
+            resp = StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/chat/completions')
             node_manager.post_call(d_url, start)
@@ -715,7 +717,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task)
+            return StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, node_url, '/v1/completions')
             node_manager.post_call(node_url, start)
@@ -791,7 +793,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
-            resp = StreamingResponse(response, background=background_task)
+            resp = StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/completions')
             node_manager.post_call(d_url, start)

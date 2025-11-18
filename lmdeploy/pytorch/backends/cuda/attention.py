@@ -93,7 +93,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.flash_attention_fwd = flash_attention_fwd
 
         # for alibi attention
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('attn')
         self.alibi_head_offset = self.num_heads * rank
         self.alibi_num_heads = self.num_heads * world_size
         self.block_sparse_size = block_sparse_size

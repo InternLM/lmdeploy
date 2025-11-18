@@ -668,7 +668,10 @@ class Qwen3NextSparseMoeBlock(nn.Module):
             is_tp=False,
         )
 
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.softmax_topk = SoftmaxTopK(
+            self.top_k,
+            n_groups=getattr(config, 'router_n_groups', -1),
+        )
 
         self.experts = build_fused_moe(
             self.hidden_dim,
@@ -695,8 +698,8 @@ class Qwen3NextSparseMoeBlock(nn.Module):
 
         # get all reduce
         dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dp
-        world_size = dist_ctx.world_size
+        dp = dist_ctx.dist_config.dp
+        world_size = dist_ctx.dist_config.moe_tp
         if dp == 1 and world_size > 1:
             self._all_reduce = True
         else:

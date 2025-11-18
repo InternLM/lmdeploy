@@ -6,7 +6,6 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
@@ -178,10 +177,11 @@ class SDARMoeSparseMoeBlock(nn.Module):
             is_tp=False,
         )
 
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.softmax_topk = SoftmaxTopK(
+            self.top_k,
+            n_groups=getattr(config, 'router_n_groups', -1),
+        )
 
-        world_size, _ = get_tp_world_rank()
-        _all_reduce = world_size > 1
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -191,7 +191,7 @@ class SDARMoeSparseMoeBlock(nn.Module):
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
-            all_reduce=_all_reduce,
+            all_reduce=True,
             layer_idx=layer_idx,
         )
 

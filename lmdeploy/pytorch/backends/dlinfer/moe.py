@@ -12,9 +12,11 @@ from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopK
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
     """Dlinfer softmax topk implementation."""
 
-    def __init__(self, top_k: int, dim: int = -1):
+    def __init__(self, top_k: int, dim: int = -1, n_groups: int = -1):
         self.top_k = top_k
         self.dim = dim
+        if n_groups != -1:
+            raise NotImplementedError('Group router not supported')
 
     def forward(self, x: torch.Tensor):
         routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k)

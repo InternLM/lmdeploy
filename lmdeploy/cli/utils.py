@@ -680,6 +680,15 @@ class ArgumentHelper:
                                    default=0.85,
                                    help='The confidence threshold for dllm.')
 
+    @staticmethod
+    def enable_return_routed_experts(parser):
+        """Add argument return routed experts to parser."""
+
+        return parser.add_argument('--enable-return-routed-experts',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to output routed expert ids for replay')
+
     def add_spec_group(parser):
         spec_group = parser.add_argument_group('Speculative decoding arguments')
         spec_group.add_argument('--speculative-algorithm',
