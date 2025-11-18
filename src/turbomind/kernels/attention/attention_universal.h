@@ -67,16 +67,6 @@ struct AttentionUniversal {
         }
     }
 
-    __device__ __host__ static bool need_separate_reduce(int max_split_cnt)
-    {
-        if constexpr (CTA_Q > 1) {
-            return max_split_cnt > 1;
-        }
-        else {
-            return max_split_cnt > 32;
-        }
-    }
-
     template<class VecQ, class VecKV>
     __device__ void ApplyBias(
         VecQ& vec_Q, VecKV& vec_K, VecKV& vec_V, const ParamType& params, int head_idx, int kv_head_idx, int2 offset)
@@ -499,8 +489,6 @@ struct AttentionUniversal {
                 }
             });
         }
-
-        const bool separate_reduce = need_separate_reduce(cta_map.split_count());
 
         if (split_cnt > 1 && iter_end == tile_count && head_idx == 0) {
             // Store actual split count, only used by separate reduction kernel

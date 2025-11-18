@@ -249,8 +249,6 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     Tensor attn{{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
     Tensor tmp_kv{{(int)local_kv_head_num_, 2, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
-    auto stream_ptr = streams_.data();
-
     auto CreateParams = [&](int offset, int batch_size, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
 
