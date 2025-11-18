@@ -17,11 +17,11 @@ def _apply_rotary_impl(x_l, x_h, cos_l, cos_h, sin_l, sin_h):
     # triton 3.4 would do fma 3 times to perform the above computation,
     # which causes higher numerical error. So we manually expand the
     # computation to avoid fma.
-    x_l_new = x_l * cos_l + 0
-    x_l_new -= x_h * sin_l + 0
-    x_h_new = x_h * cos_h + 0
-    x_h_new += x_l * sin_h + 0
-    return x_l_new, x_h_new
+    x_l_new0 = x_l * cos_l + 0
+    x_l_new1 = x_h * sin_l + 0
+    x_h_new0 = x_h * cos_h + 0
+    x_h_new1 = x_l * sin_h + 0
+    return x_l_new0 - x_l_new1, x_h_new0 + x_h_new1
 
 
 @triton.jit(do_not_specialize=('seq_len', ))
@@ -142,7 +142,6 @@ def apply_rotary_pos_emb(q: Tensor,
         k_embed = torch.empty_like(k)
 
     seq_len = cos.numel() // cos.size(-1)
-    BLOCK = 16
 
     if q.size(-1) == cos.size(-1):
         half_size = q.size(-1) // 2
@@ -156,8 +155,15 @@ def apply_rotary_pos_emb(q: Tensor,
     BLOCK_N = triton.next_power_of_2(half_size)
     num_heads_q = q.size(-2)
     num_heads_k = k.size(-2)
-    num_warps = 4
+    num_warps = 2
     num_stages = 1
+
+    # compute best BLOCK size
+    num_threads = num_warps * 32
+    elem_size = q.dtype.itemsize
+    elem_per_ldgv4 = 16 // elem_size
+    BLOCK = num_threads * elem_per_ldgv4 // BLOCK_N
+    BLOCK = max(1, BLOCK)
 
     grid = (
         num_heads_q + num_heads_k,
