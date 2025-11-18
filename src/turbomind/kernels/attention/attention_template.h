@@ -44,7 +44,7 @@ void invokeAttention(const typename Kernel::ParamType& params)
         return int2{sm_count, max_active_ctas};
     }();
 
-    const int max_cp_k_len    = (params.max_k_len + params.cp_size - 1) / params.cp_size;
+    const int max_cp_k_len    = cdiv(params.max_k_len, (int)params.cp_size);
     const int tile_count      = cdiv(std::min(max_cp_k_len, params.window_size), Kernel::CTA_S);
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
