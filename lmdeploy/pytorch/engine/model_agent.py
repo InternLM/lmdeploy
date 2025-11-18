@@ -58,7 +58,7 @@ class BatchedLogProbs:
         if isinstance(self.vals, torch.Tensor):
             vals = self.vals
         else:
-            vals = torch.from_numpy(vals)
+            vals = torch.from_numpy(self.vals)
         return BatchedLogProbs(vals=vals, indices=torch.from_numpy(self.indices))
 
 
@@ -729,7 +729,7 @@ class BaseModelAgent:
                 inputs,
                 return_logits=return_logits,
                 sync_long_context=sync_long_context,
-                return_routed_experts=return_routed_experts and need_output,
+                return_routed_experts=return_routed_experts and self.need_output,
             )
             logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
             seq_length = output.get('seq_length', inputs.seq_length)
@@ -959,8 +959,7 @@ class BaseModelAgent:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
         # for router replay
-        need_output = self.dist_ctx.dp > 1 or self.dist_ctx.rank % self.dist_ctx.tp == 0
-        enable_return_routed_experts = self.misc_config.enable_return_routed_experts and need_output
+        enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
         build_model_ctx = BuildModelContext(
             disable_vision_encoder=self.misc_config.disable_vision_encoder,
