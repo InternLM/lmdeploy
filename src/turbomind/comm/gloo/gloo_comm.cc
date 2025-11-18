@@ -72,9 +72,11 @@ public:
     std::string New()
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        TM_CHECK(std::getenv("LMDEPLOY_DIST_INIT_ADDR") != nullptr) << "LMDEPLOY_DIST_INIT_ADDR not set";
+        TM_CHECK(std::getenv("LMDEPLOY_DIST_INIT_PORT") != nullptr) << "LMDEPLOY_DIST_INIT_PORT not set";
 
-        std::string host = std::getenv("LMDEPLOY_DP_MASTER_ADDR");
-        int         port = std::stoi(std::getenv("LMDEPLOY_DP_MASTER_PORT"));
+        std::string host = std::getenv("LMDEPLOY_DIST_INIT_ADDR");
+        int         port = std::stoi(std::getenv("LMDEPLOY_DIST_INIT_PORT"));
 
         std::stringstream ss;
         ss << host << STORE_INFO_DELIM << port << STORE_INFO_DELIM << prefix_++;

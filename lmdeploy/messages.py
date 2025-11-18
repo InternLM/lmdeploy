@@ -246,6 +246,7 @@ class TurbomindEngineConfig:
     outer_dp_size: int = None
     nnodes: int = 1
     node_rank: int = 0
+    dist_init_addr: Optional[str] = None
     devices: List[int] = None
     session_len: Optional[int] = None
     max_batch_size: int = None

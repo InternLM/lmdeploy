@@ -144,6 +144,7 @@ class SubCliServe:
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
         ArgumentHelper.communicator(tb_group)
+        ArgumentHelper.dist_init_addr(tb_group)
 
         # vlm args
         vision_group = parser.add_argument_group('Vision model arguments')
@@ -241,6 +242,7 @@ class SubCliServe:
                                                    dp=args.dp,
                                                    nnodes=args.nnodes,
                                                    node_rank=args.node_rank,
+                                                   dist_init_addr=args.dist_init_addr,
                                                    max_batch_size=max_batch_size,
                                                    session_len=args.session_len,
                                                    model_format=args.model_format,

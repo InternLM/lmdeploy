@@ -87,6 +87,7 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
+    cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
     if not complete_parallel_config(cfg):
         total = cfg.dp * cfg.tp
         if not cfg.device_num:
@@ -149,13 +150,19 @@ class TurboMind:
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
         update_parallel_config(_engine_config)
-        if _engine_config.nnodes > 1 and _engine_config.node_rank == 0:
+        self._dist_group = None
+        if _engine_config.nnodes > 1:
+            logger.info(f'dist_init_addr={_engine_config.dist_init_addr}')
+            assert _engine_config.dist_init_addr is not None
+            hostname, port = _engine_config.dist_init_addr.split(':')
+            os.environ['LMDEPLOY_DIST_INIT_ADDR'] = hostname
+            os.environ['LMDEPLOY_DIST_INIT_PORT'] = port
+            # this will block the process and ignore signals until all ranks done
             from torch.distributed import TCPStore
-            master_addr = os.environ.get('LMDEPLOY_DP_MASTER_ADDR')
-            master_port = os.environ.get('LMDEPLOY_DP_MASTER_PORT')
-            assert master_addr is not None and master_port is not None, \
-                'LMDEPLOY_DP_MASTER_ADDR and LMDEPLOY_DP_MASTER_PORT should be set when using multi-node'
-            self.store = TCPStore(host_name=master_addr, port=int(master_port), is_master=True)
+            self.store = TCPStore(host_name=hostname,
+                                  port=int(port),
+                                  world_size=_engine_config.nnodes,
+                                  is_master=_engine_config.node_rank == 0)
 
         self.gpu_count = len(_engine_config.devices)
         self.devices = _engine_config.devices
