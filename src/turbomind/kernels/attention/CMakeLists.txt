@@ -6,6 +6,7 @@ add_library(attention STATIC
             reduce.cu
             kv_cache_utils_v2.cu
             utils.cc
+            cp_utils.cu
             codegen/attention_sm70_128_f16.cu
             codegen/attention_sm75_128_f16.cu
             codegen/attention_sm80_128_bf16.cu

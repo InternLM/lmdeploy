@@ -26,11 +26,11 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/kernels/attention/cp_utils.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/cp_utils.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
 

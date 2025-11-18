@@ -1,6 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/models/llama/cp_utils.h"
+#include "src/turbomind/kernels/attention/cp_utils.h"
 
 namespace turbomind {
 
