@@ -481,7 +481,7 @@ struct AttentionUniversal {
 
         Impl::Merge(frag_O, frag_M, frag_L, params.inv_sqrt_dh, storage);
 
-        if (params.sinks && iter_end == tile_count) {
+        if (params.sinks && iter_end == tile_count && params.cp_rank == 0) {
             Impl::ForeachML(frag_M, frag_L, [&](int hi, int qi, int ri, float& M, float& L) {
                 if (check_h(hi) && M != -std::numeric_limits<float>::infinity()) {
                     auto sink = (float)params.sinks[head_idx + hi];
