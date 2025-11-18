@@ -253,8 +253,8 @@ struct AttentionUniversal {
             const int qi = offset.y / CTA_H;
             const int ti = history_len;
 
-            int cp_quo, cp_rem;
-            cp_quo = params.cp_size.divmod(cp_rem, ti);
+            int local_ti, local_ti_rank;
+            local_ti = params.cp_size.divmod(local_ti_rank, ti);
 
             Array<T, 2> param_K[1];
             Array<T, 2> param_V[1];
@@ -276,8 +276,8 @@ struct AttentionUniversal {
             }
 
             iterator.block_head_.with(
-                iterator.block_ptrs_, cp_quo, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
-                    if (cp_rem != params.cp_rank) {
+                iterator.block_ptrs_, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+                    if (local_ti_rank != params.cp_rank) {
                         return;
                     }
                     PRAGMA_UNROLL
@@ -375,9 +375,9 @@ struct AttentionUniversal {
         const int history_len = context_len - input_len;
 
         auto get_cp_len = [&](int length, int rank) -> int {
-            int cp_quo, cp_rem;
-            cp_quo = params.cp_size.divmod(cp_rem, length);
-            return (cp_quo + (cp_rem > rank ? 1 : 0));
+            int local_ti, local_ti_rank;
+            local_ti = params.cp_size.divmod(local_ti_rank, length);
+            return (local_ti + (local_ti_rank > rank ? 1 : 0));
         };
 
         const int last_K = history_len + min(query_idx + CTA_Q, input_len);

@@ -156,7 +156,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
         }
     }
 
-    int cp_quo, cp_rem;
+    int local_ti, local_ti_rank;
 
     blocks += cu_block_num[batch_idx];
 
@@ -166,9 +166,9 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
     for (int s = 0; s < ITER_S; ++s) {
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
         const int ti = history_len + qi;                         // timestep
-        cp_quo       = cp_size.divmod(cp_rem, ti);
-        if (qi < q_len && cp_rem == cp_rank) {
-            block_head.with((char**)blocks, cp_quo, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+        local_ti     = cp_size.divmod(local_ti_rank, ti);
+        if (qi < q_len && local_ti_rank == cp_rank) {
+            block_head.with((char**)blocks, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
@@ -356,14 +356,14 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
     Array<T, 2> param_K[ITER_S];
     Array<T, 2> param_V[ITER_S];
 
-    int cp_quo, cp_rem;
+    int local_ti, local_ti_rank;
 
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int si = offset.y + s * Map::kDeltaS + token_idx;
-        cp_quo       = cp_size.divmod(cp_rem, si);
-        if (si < seq_len && cp_rem == cp_rank) {
-            block_head.with((char**)blocks, cp_quo, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+        local_ti     = cp_size.divmod(local_ti_rank, si);
+        if (si < seq_len && local_ti_rank == cp_rank) {
+            block_head.with((char**)blocks, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
@@ -409,10 +409,11 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
         for (int c = 0; c < ITER_C; ++c) {
             const int si = offset.y + s * Map::kDeltaS + token_idx;
             const int di = offset.x + c * Map::kDeltaC;
-            cp_quo       = cp_size.divmod(cp_rem, si);
-            if (si < seq_len && cp_rem == cp_rank) {
+            local_ti     = cp_size.divmod(local_ti_rank, si);
+            if (si < seq_len && local_ti_rank == cp_rank) {
                 const int64_t index =
-                    (batch_idx * stride_b + ti_beg * stride_c + cp_quo * stride_s + head_idx * stride_h) * HeadDim + di;
+                    (batch_idx * stride_b + ti_beg * stride_c + local_ti * stride_s + head_idx * stride_h) * HeadDim
+                    + di;
                 Store(&k[index], out_K[s][c]);
                 Store(&v[index], out_V[s][c]);
             }
