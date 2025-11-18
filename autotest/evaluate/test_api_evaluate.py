@@ -209,6 +209,17 @@ def test_pytorch_restful_tp8(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_16
+@pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('prepare_environment', get_pytorch_model_list(tp_num=16), indirect=True)
+def test_pytorch_restful_tp16(config, run_id, prepare_environment, worker_id):
+    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
+    assert result, msg
+
+
 @pytest.mark.eval
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_1
@@ -249,6 +260,17 @@ def test_pytorch_judgeeval_tp4(config, run_id, prepare_environment_judge_evaluat
 @pytest.mark.test_ascend
 @pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=8), indirect=True)
 def test_pytorch_judgeeval_tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
+    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
+    assert result, msg
+
+
+@pytest.mark.eval
+@pytest.mark.pytorch
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_16
+@pytest.mark.test_ascend
+@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=16), indirect=True)
+def test_pytorch_judgeeval_tp16(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
     assert result, msg
 

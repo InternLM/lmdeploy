@@ -165,7 +165,13 @@ def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool
             f.writelines('reproduce command: ' + cmd + '\n')
             print('reproduce command: ' + cmd)
 
-            benchmark_res = subprocess.run([cmd], stdout=f, stderr=PIPE, shell=True, text=True, encoding='utf-8')
+            benchmark_res = subprocess.run([cmd],
+                                           stdout=f,
+                                           stderr=PIPE,
+                                           shell=True,
+                                           text=True,
+                                           encoding='utf-8',
+                                           errors='replace')
             f.writelines(benchmark_res.stderr)
         allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
     if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
@@ -213,7 +219,13 @@ def restful_test_new(config, run_id, run_config, worker_id: str = '', is_smoke: 
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
 
-        benchmark_res = subprocess.run([cmd], stdout=f, stderr=PIPE, shell=True, text=True, encoding='utf-8')
+        benchmark_res = subprocess.run([cmd],
+                                       stdout=f,
+                                       stderr=PIPE,
+                                       shell=True,
+                                       text=True,
+                                       encoding='utf-8',
+                                       errors='replace')
         f.writelines(benchmark_res.stderr)
     allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
     if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):

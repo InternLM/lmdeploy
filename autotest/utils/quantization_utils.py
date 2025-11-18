@@ -66,7 +66,8 @@ def quantization(config,
                                          stderr=PIPE,
                                          shell=True,
                                          text=True,
-                                         encoding='utf-8')
+                                         encoding='utf-8',
+                                         errors='replace')
         f.writelines(quantizationRes.stderr)
         result = quantizationRes.returncode == 0
 

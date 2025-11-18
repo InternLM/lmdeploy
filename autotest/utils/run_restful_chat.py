@@ -91,7 +91,13 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     file = open(start_log, 'w')
 
-    startRes = subprocess.Popen([cmd], stdout=file, stderr=file, shell=True, text=True, encoding='utf-8')
+    startRes = subprocess.Popen([cmd],
+                                stdout=file,
+                                stderr=file,
+                                shell=True,
+                                text=True,
+                                encoding='utf-8',
+                                errors='replace')
     pid = startRes.pid
 
     http_url = BASE_HTTP_URL + ':' + str(port)
