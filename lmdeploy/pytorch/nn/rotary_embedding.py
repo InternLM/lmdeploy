@@ -96,9 +96,16 @@ def _get_llama3_parameters(config: PretrainedConfig):
 
 def _get_fope_parameters(config: PretrainedConfig):
     """Get fope parameters."""
+    # check if fope is used
+    rope_scaling = getattr(config, 'rope_scaling', dict())
+    fope_keys = ['fope_sep_head', 'fope_num_inv_freq']
+    is_fope = any(key in rope_scaling for key in fope_keys)
+    if not is_fope:
+        return dict()
+
     params = FopeParameters()
     rope_scaling = config.rope_scaling
-    params.num_inv_freq = rope_scaling['num_inv_freq']
+    params.num_inv_freq = rope_scaling.get('fope_num_inv_freq', rope_scaling.get('num_inv_freq', params.num_inv_freq))
     params.num_key_value_heads = config.num_key_value_heads
     params.fope_sep_head = rope_scaling['fope_sep_head']
     return dict(fope_params=params)
@@ -112,9 +119,8 @@ def build_rotary_params(config: PretrainedConfig):
     if rope_scaling is not None:
         # BC: "rope_type" was originally "type"
         rope_type_str = config.rope_scaling.get('rope_type', config.rope_scaling.get('type', 'default'))
-        if rope_type_str.startswith('fope'):
-            params.update(_get_fope_parameters(config))
-            rope_type_str = 'default' if rope_type_str == 'fope' else rope_type_str[5:]
+        if rope_type_str == 'fope':
+            rope_type_str = 'default'
         build_funcs = dict(default=_get_default_rope_parameters,
                            linear=_get_linear_scaling_rope_parameters,
                            dynamic=_get_dynamic_ntk_parameters,
@@ -123,6 +129,7 @@ def build_rotary_params(config: PretrainedConfig):
                            su=_get_longrope_parameters,
                            llama3=_get_llama3_parameters)
         params.update(build_funcs[rope_type_str](config))
+        params.update(_get_fope_parameters(config))
 
     # update partial_rotary_factor
     partial_rotary_factor = config.partial_rotary_factor if hasattr(config, 'partial_rotary_factor') else None
