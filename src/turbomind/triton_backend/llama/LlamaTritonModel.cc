@@ -377,6 +377,10 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
 
     engine_param_.devices = engine_reader["devices"].as<std::vector<int>>();
 
+    // multi-node information
+    engine_param_.nnodes    = engine_reader["nnodes"].as<int>();
+    engine_param_.node_rank = engine_reader["node_rank"].as<int>();
+
     {
         auto tp                             = engine_param_.attn_tp_size;
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + tp - 1) / tp * tp;
@@ -412,9 +416,6 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
 
     handleMissingParams();
 
-    gateway_ = std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory);
-    ffi_ctx_factory_ = ffi_ctx_factory;
-
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
     contexts_.resize(engine_param_.devices.size());
@@ -432,20 +433,35 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     // NOTE: This runs on Python main thread
     group_ids_.resize(engine_param_.outer_dp_size);
     for (size_t i = 0; i < group_ids_.size(); ++i) {
-        group_ids_[i] = comm::CreateHostGroupId("");
+        // TODO: fine-grained comm control
+        const std::string group_backend = (engine_param_.nnodes == 1) ? "" : "gloo";
+
+        group_ids_[i] = comm::CreateHostGroupId(group_backend);
         group_ids_[i]->Initialize();
     }
 
-    const int device_num = engine_param_.outer_dp_size * comm_size_;
+    const int device_per_node = engine_param_.devices.size();
+    const int device_offset   = device_per_node * engine_param_.node_rank;
 
-    engine_params_.resize(device_num, engine_param_);
-    for (int i = 0; i < device_num; ++i) {
+    engine_params_.resize(device_per_node, engine_param_);
+    for (int i = 0; i < device_per_node; ++i) {
         auto& e         = engine_params_[i];
-        e.outer_dp_rank = i / comm_size_;
-        e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
-        e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
-        e.mlp_tp_rank   = i % comm_size_;
+        e.outer_dp_rank = (i + device_offset) / comm_size_;
+        e.attn_tp_rank  = (i + device_offset) % comm_size_ % e.attn_tp_size;
+        e.attn_dp_rank  = (i + device_offset) % comm_size_ / e.attn_tp_size;
+        e.mlp_tp_rank   = (i + device_offset) % comm_size_;
     }
+
+    for (int local_rank = 0; local_rank < device_per_node; ++local_rank) {
+        auto& e = engine_params_[local_rank];
+        if (e.attn_tp_rank == 0) {
+            node_dp_ranks_.push_back(e.outer_dp_rank * e.attn_dp_size + e.attn_dp_rank);
+        }
+    }
+
+    gateway_ = std::make_shared<Gateway>(
+        engine_param_.outer_dp_size, engine_param_.attn_dp_size, node_dp_ranks_, ffi_ctx_factory);
+    ffi_ctx_factory_ = ffi_ctx_factory;
 
     TM_LOG_INFO("%s", toString().c_str());
 }
@@ -461,13 +477,13 @@ std::unique_ptr<ModelRequest> LlamaTritonModel::createModelInstance(int device_i
 void LlamaTritonModel::createSharedWeights(int device_id, int rank)
 {
     CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
-    weights_[rank] =
-        std::make_shared<LlamaWeight>(dtype_, model_param_, engine_params_.at(rank), lora_param_, moe_param_);
+    weights_[device_id] =
+        std::make_shared<LlamaWeight>(dtype_, model_param_, engine_params_.at(device_id), lora_param_, moe_param_);
 }
 
 TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 {
-    const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[rank])->get_parameters();
+    const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[device_id])->get_parameters();
     TensorMap   params;
     for (const auto& [name, tensor_ptr] : tensor_ptr_map) {
         params[name] = *tensor_ptr;
@@ -524,7 +540,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
     core::ContextGuard guard{ctx->core_stream, ctx->allocator, Allocator{kCPUpinned}};
 
-    const auto& engine_param = engine_params_.at(rank);
+    const auto& engine_param = engine_params_.at(device_id);
 
     // Get `h_comm` first as ctx will be moved later
     const auto h_comm = ctx->comm.h_comm;
@@ -633,8 +649,8 @@ void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tag
 
     if (keys.find("kv_cache") != keys.end()) {
         if (device_id == 0) {
-            gateway_ =
-                std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory_);
+            gateway_ = std::make_shared<Gateway>(
+                engine_param_.outer_dp_size, engine_param_.attn_dp_size, node_dp_ranks_, ffi_ctx_factory_);
         }
         TM_CHECK(contexts_[device_id] != nullptr);
         contexts_[device_id]->comm.h_comm->Sync();

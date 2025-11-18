@@ -45,6 +45,7 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 
+#include "src/turbomind/comm/serialize.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -1071,6 +1072,10 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
 void LlamaBatch::OutputLastHiddenState(const Tensor& hidden_states, int first, int last)
 {
+    if (tp_rank_ != 0) {
+        return;
+    }
+
     const auto& src_buf   = hidden_states.buffer();
     const auto  data_type = src_buf.dtype();
     int         base      = 0;
@@ -1334,6 +1339,74 @@ struct RequestData {
 
 }  // namespace
 
+#ifdef BUILD_MULTI_GPU
+namespace comm {
+
+void serialize(std::ostream& os, const RequestData& req)
+{
+    // std::vector<std::shared_ptr<Request>> infer;
+    serialize(os, (int)req.infer.size());
+    for (const auto& r : req.infer) {
+        serialize(os, *r);
+    }
+    // std::vector<std::shared_ptr<Request>> kill;
+    serialize(os, (int)req.kill.size());
+    for (const auto& r : req.kill) {
+        serialize(os, *r);
+    }
+
+    serialize(os, req.cancel);  // std::vector<int> cancel;
+    serialize(os, req.abort);   // bool             abort;
+}
+
+template<>
+void serialize(const std::shared_ptr<RequestData>* req, int n, std::vector<char>& vec)
+{
+    std::stringstream ss;
+    for (int i = 0; i < n; ++i) {
+        const auto& r = req[i];
+        if (r != nullptr) {
+            serialize(ss, *r);
+        }
+    }
+    vec = streambuf_to_vector(ss.rdbuf());
+}
+
+void deserialize(std::istream& is, RequestData& req)
+{
+    auto process = [](std::istream& is, std::vector<std::shared_ptr<Request>>& vec) {
+        int size;
+        deserialize(is, size);
+        vec.resize(size);
+        for (auto& r : vec) {
+            r = std::make_shared<Request>();
+            deserialize(is, *r);
+        }
+    };
+    process(is, req.infer);
+    process(is, req.kill);
+    deserialize(is, req.cancel);
+    deserialize(is, req.abort);
+}
+
+template<>
+void deserialize(std::shared_ptr<RequestData>* req, int n, const std::vector<char>& vec)
+{
+    std::stringstream ss;
+    ss.write(vec.data(), vec.size());
+    for (int i = 0; i < n; ++i) {
+        auto& r = req[i];
+        if (r == nullptr) {
+            r = std::make_shared<RequestData>();
+        }
+        deserialize(ss, *r);
+    }
+}
+
+}  // namespace comm
+
+#endif  // BUILD_MULTI_GPU
+
 void LlamaBatch::InternalThreadEntry()
 {
     // TM_LOG_INFO("[InternalThreadEntry] %d", (int)rank_);
@@ -1356,8 +1429,17 @@ void LlamaBatch::InternalThreadEntry()
                 NvtxScope  _("pop");
                 const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
                 const bool is_empty        = (free_slot_count == max_batch_size_);
-                // Block if batch is empty AND no silbings are ready
-                gateway_->pop(req->infer, req->kill, free_slot_count, is_empty, req->abort, dp_rank_);
+                // Block if batch is empty AND no silbings are ready AND comm in same node
+                const bool blocking = is_empty && comm_.h_comm->is_same_process();
+                int        wait     = 0;
+                do {
+                    gateway_->pop(req->infer, req->kill, free_slot_count, blocking, req->abort, dp_rank_);
+                    if (!comm_.h_comm->is_same_process()) {
+                        bool empty_pop = req->infer.size() == 0 && req->kill.size() == 0 && req->abort == false;
+                        wait           = is_empty && empty_pop;
+                        wait           = AllReduce(comm_.h_comm, wait, comm::RedOp::kSum) == comm_.h_comm->n_ranks();
+                    }
+                } while (wait);
             }
             // Mark reqs to the same session_id as invalid and also interactive-mode reqs when
             // prefix caching is enabled(which are dangerous to the engine)
@@ -1374,7 +1456,13 @@ void LlamaBatch::InternalThreadEntry()
 
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
-        Broadcast(comm_.h_tp_group, req, 0);
+        if (comm_.h_tp_group->n_ranks() > 1) {
+            Broadcast(comm_.h_tp_group, req, 0);
+        }
+
+        if (!comm_.h_comm->is_same_process()) {
+            req->abort = AllReduce(comm_.h_comm, (int)req->abort, comm::RedOp::kSum) > 0;
+        }
 
         if (req->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");
