@@ -75,27 +75,24 @@ class CudaGraphMixin:
                                                    dtype=torch.int64,
                                                    device=device)
         input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
-        seqlens_dtype = torch.int64
         use_flash_mla = getattr(self.config, 'use_flash_mla', False)
         # use fa3 decode kernel for spec decode
         use_flash_attn3_decoding = decode_query_len > 1 and not use_flash_mla
 
         if use_flash_mla is True:
             import flash_mla
-            if graph_meta.is_decoding:
-                seqlens_dtype = torch.int32
+
             # create buffers for flash mla
             input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
                 torch.ones(max_batches, dtype=torch.int32, device=device),
                 self.config.num_attention_heads * decode_query_len, 1)
 
         if use_flash_attn3_decoding is True:
-            seqlens_dtype = torch.int32
             input_buffers['scheduler_metadata'] = torch.zeros(max_batches + 1, dtype=torch.int32, device=device)
 
         # flash_mla requires block_offsets and kv_lens int32
-        input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks), dtype=seqlens_dtype, device=device)
-        input_buffers['qkv_lens'] = torch.zeros(3, max_batches, dtype=seqlens_dtype, device=device)
+        input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks), dtype=torch.int32, device=device)
+        input_buffers['qkv_lens'] = torch.zeros(3, max_batches, dtype=torch.int32, device=device)
 
         input_buffers['q_start_loc'] = input_buffers['qkv_lens'][0]
         input_buffers['q_seqlens'] = input_buffers['qkv_lens'][1]

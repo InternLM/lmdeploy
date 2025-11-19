@@ -25,7 +25,7 @@ from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
 from ..model_inputs import ModelInputs, step_ctx_manager
 from ..models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
-from ..spec_decode import SpecModelAgent
+from ..spec_decode import build_spec_agent
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from ..utils import get_gpu_memory
@@ -258,6 +258,9 @@ def model_forward(
                 model_metas = context.model_metas
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
+            # for draft model reuse
+            if output_position_ids:
+                output['position_ids'] = context.position_ids
             return output
 
 
@@ -381,17 +384,12 @@ class BaseModelAgent:
         self.agent_strategy = self.strategy_factory.build_model_agent_strategy()
 
         # spec decoding
-        self.spec_agent = None
-        self.specdecode_config = specdecode_config
-
-        # only support spec model with tp1
-        if specdecode_config is not None:
-            self.spec_agent = SpecModelAgent(specdecode_config,
-                                             backend_config,
-                                             dist_ctx,
-                                             self.inputs_strategy,
-                                             self.agent_strategy,
-                                             device=device)
+        self.spec_agent = build_spec_agent(specdecode_config,
+                                           backend_config,
+                                           dist_ctx,
+                                           self.inputs_strategy,
+                                           self.agent_strategy,
+                                           device=device)
 
     @contextmanager
     def all_context(self):
@@ -403,14 +401,12 @@ class BaseModelAgent:
     def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
         """Set all cache config."""
         self.cache_config = cache_config
-        if self.spec_agent is not None:
-            self.spec_agent.set_cache_config(spec_cache_config)
+        self.spec_agent.set_cache_config(spec_cache_config)
 
     def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
         """Set model config."""
         self.model_config = model_config
-        if self.spec_agent is not None:
-            self.spec_agent.set_model_config(spec_model_config)
+        self.spec_agent.set_model_config(spec_model_config)
 
     def get_free_mem(self):
         """Gather available memory."""
@@ -459,8 +455,7 @@ class BaseModelAgent:
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} done.')
 
             # warmup draft model
-            if self.spec_agent is not None:
-                self.spec_agent.warmup(max_batches, self.model_config)
+            self.spec_agent.warmup(max_batches, self.model_config)
 
     def _slice_outs(self, inputs: torch.Tensor, seq_length: torch.LongTensor):
         """Slice outputs."""
@@ -585,9 +580,9 @@ class BaseModelAgent:
             return tmp_out
 
         origin_inputs = inputs
+
         # make long context inputs
         is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
-
         max_seqlen = 0
         if is_long_context:
             seq_len = inputs.seq_length
@@ -620,10 +615,8 @@ class BaseModelAgent:
         for _ in range(dummy_loop):
             await __forward(dummy_inputs)
 
-        if self.spec_agent is not None:
-            hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, origin_inputs)
-        else:
-            hidden_states = ret.pop('hidden_states')
+        hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, origin_inputs)
+
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
         return ret
@@ -786,11 +779,8 @@ class BaseModelAgent:
             logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
             seq_length = output.get('seq_length', inputs.seq_length)
             last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
-            is_last_step = (idx == loop_count - 1)
-            extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs,
-                                                                  inputs,
-                                                                  output,
-                                                                  is_last_step=is_last_step)
+            last_loop_step = (idx == loop_count - 1)
+            extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
             model_metas = output.get('model_metas')
 
             # output empty for dummy inputs
@@ -812,10 +802,12 @@ class BaseModelAgent:
                 all_routed_experts = output.get('all_routed_experts', None)
 
                 # spec decoding
-                if self.spec_agent is not None:
-                    extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
-                                                                             sampling_inputs)
+                output_token_ids = next_token_ids
+                extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
+                                                                         sampling_inputs)
+                if self.spec_agent.is_enabled():
                     next_token_ids = extra_inputs.next_token_ids
+                    output_token_ids = extra_inputs.output_token_ids
                     logits = None
 
                 with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
@@ -829,17 +821,16 @@ class BaseModelAgent:
 
                     # send output
                     logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
-                    extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+                    extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs, last_loop_step=last_loop_step)
                     self._push_output(
-                        BatchedOutputs(
-                            next_token_ids=next_token_ids if self.spec_agent is None else extra_inputs.output_token_ids,
-                            logits=logits if return_logits else None,
-                            stopped=stopped,
-                            stop_pos=stop_pos,
-                            model_metas=model_metas,
-                            logprobs=logprobs,
-                            all_routed_experts=all_routed_experts,
-                            extra_outputs=extra_outputs))
+                        BatchedOutputs(next_token_ids=output_token_ids,
+                                       logits=logits if return_logits else None,
+                                       stopped=stopped,
+                                       stop_pos=stop_pos,
+                                       model_metas=model_metas,
+                                       logprobs=logprobs,
+                                       all_routed_experts=all_routed_experts,
+                                       extra_outputs=extra_outputs))
             else:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
@@ -1048,11 +1039,10 @@ class BaseModelAgent:
         """Build model api."""
         with self.all_context():
             self._build_model()
-            if self.spec_agent is not None:
-                self.spec_agent.build_model(self.misc_config.empty_init,
-                                            self.patched_model,
-                                            model_format=self.misc_config.model_format,
-                                            build_model_ctx=self.build_model_ctx)
+            self.spec_agent.build_model(self.misc_config.empty_init,
+                                        self.patched_model,
+                                        model_format=self.misc_config.model_format,
+                                        build_model_ctx=self.build_model_ctx)
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -1063,8 +1053,7 @@ class BaseModelAgent:
                                                             cache_config=self.cache_config,
                                                             backend_config=self.backend_config,
                                                             device=self.device)
-            if self.spec_agent is not None:
-                self.spec_agent.build_graph_runner()
+            self.spec_agent.build_graph_runner()
 
     def build_cache_engine(self):
         """Build cache engine."""
@@ -1081,8 +1070,7 @@ class BaseModelAgent:
                                             cache_stream=self.cache_stream)
             self.state_cache_engine = StateCacheEngine(self.cache_config)
 
-            if self.spec_agent is not None:
-                self.spec_agent.build_cache_engine(self.cache_stream)
+            self.spec_agent.build_cache_engine(self.cache_stream)
 
     def _forward_impl(self, inputs: ModelInputs):
         output = model_forward(
@@ -1091,7 +1079,7 @@ class BaseModelAgent:
             self.cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
-            output_position_ids=self.spec_agent is not None,
+            output_position_ids=self.spec_agent.is_enabled(),
         )
         return output
 
@@ -1121,9 +1109,7 @@ class BaseModelAgent:
         if hasattr(self.patched_model, 'reset'):
             self.patched_model.reset()
 
-        if self.spec_agent is not None:
-            if self.spec_agent.proposer.model is not None and hasattr(self.spec_agent.proposer.model, 'reset'):
-                self.spec_agent.proposer.model.reset()
+        self.spec_agent.reset_graph_runner()
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):

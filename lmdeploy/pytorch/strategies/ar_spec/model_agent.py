@@ -32,15 +32,13 @@ class ARSpecExtraInputs(ExtraInputs):
     output_draft_token_ids: torch.Tensor = None
     num_rejected_tokens: torch.Tensor = None
     output_token_ids: torch.Tensor = None
-    loop_last_step: bool = None
 
     def __repr__(self):
         return (f'ARSpecExtraInputs(next_token_ids={self.next_token_ids}, '
                 f'output_draft_token_ids={self.output_draft_token_ids}, '
                 f'last_token_indices={self.last_token_indices}, '
                 f'num_rejected_tokens={self.num_rejected_tokens}, '
-                f'output_token_ids={self.output_token_ids}, '
-                f'loop_last_step={self.loop_last_step})')
+                f'output_token_ids={self.output_token_ids})')
 
     def broadcast(self, src: int, group, async_op=False):
         dist.broadcast(self.output_draft_token_ids, src=src, group=group, async_op=async_op)
@@ -109,12 +107,8 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         last_idx = seq_length.cumsum(-1) - 1
         return inputs[last_idx]
 
-    def slice_extra_inputs(self,
-                           extra_inputs: ARSpecExtraInputs,
-                           model_inputs: ModelInputs,
-                           model_outputs: Dict[str, torch.Tensor],
-                           is_last_step: bool = None,
-                           **kwargs) -> ARSpecExtraInputs:
+    def slice_extra_inputs(self, extra_inputs: ARSpecExtraInputs, model_inputs: ModelInputs,
+                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ARSpecExtraInputs:
         """Slice outputs."""
         extra_inputs = ARSpecExtraInputs()
         extra_inputs.target_hidden_states = model_outputs.get('hidden_states')
@@ -123,9 +117,6 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
             batch_size = model_inputs.seq_length.size(0)
             logits = model_outputs['logits'][0]
             extra_inputs.target_logits = logits.unflatten(0, (batch_size, -1))[:, :-1]
-
-        # extra_inputs.
-        extra_inputs.loop_last_step = is_last_step
         return extra_inputs
 
     def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
@@ -148,11 +139,11 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         """Create extra inputs."""
         return ARSpecExtraInputs()
 
-    def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs) -> ARSpecExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs, last_loop_step: bool = False) -> ARSpecExtraOutputs:
         """Create extra outputs."""
         output = ARSpecExtraOutputs()
         # only output draft tokens to seq for last loop step
-        if extra_inputs.loop_last_step is True:
+        if last_loop_step:
             output.draft_token_ids = extra_inputs.output_draft_token_ids
         return output
 

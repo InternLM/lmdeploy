@@ -39,7 +39,7 @@ class ZMQMPEngine(MPEngine):
         self.shared_dict = None
         self.port = None
         self.proc = None
-        self._start_mp_proc(model_path, engine_config, speculative_config=speculative_config)
+        self._start_mp_proc(model_path, engine_config, speculative_config=speculative_config, **kwargs)
 
         self.rpc_client = AsyncRPCClient(port=self.port)
 
@@ -51,6 +51,7 @@ class ZMQMPEngine(MPEngine):
         model_path: str,
         engine_config: PytorchEngineConfig = None,
         speculative_config: SpeculativeConfig = None,
+        **kwargs,
     ):
         """Start mp proc."""
         logger.debug('Starting engine multi-process.')
@@ -59,15 +60,17 @@ class ZMQMPEngine(MPEngine):
             condition = manager.Condition()
             self.mp_ctx = mp.get_context('spawn')
             log_level = logger.level
+            target_kwargs = dict(
+                model_path=model_path,
+                engine_config=engine_config,
+                log_level=log_level,
+                speculative_config=speculative_config,
+            )
+            target_kwargs.update(kwargs)
             self.proc = self.mp_ctx.Process(
                 target=self._mp_proc,
                 args=(self.shared_dict, condition),
-                kwargs=(dict(
-                    model_path=model_path,
-                    engine_config=engine_config,
-                    log_level=log_level,
-                    speculative_config=speculative_config,
-                )),
+                kwargs=target_kwargs,
                 name='mp_engine_proc',
             )
             self.proc.start()
@@ -85,6 +88,7 @@ class ZMQMPEngine(MPEngine):
         engine_config: PytorchEngineConfig = None,
         log_level: str = 'WARNING',
         speculative_config: SpeculativeConfig = None,
+        **kwargs,
     ):
         """Mp process function."""
         from lmdeploy.pytorch.engine import Engine
@@ -106,6 +110,7 @@ class ZMQMPEngine(MPEngine):
             model_path,
             engine_config=engine_config,
             speculative_config=speculative_config,
+            **kwargs,
         )
 
         loop = asyncio.new_event_loop()

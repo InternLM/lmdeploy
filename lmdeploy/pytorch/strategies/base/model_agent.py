@@ -121,7 +121,7 @@ class ModelAgentStrategy(ABC):
         pass
 
     @abstractmethod
-    def make_extra_outputs(self, extra_inputs: ExtraInputs) -> ExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: ExtraInputs, **kwargs) -> ExtraOutputs:
         """Create extra outputs."""
         pass
 

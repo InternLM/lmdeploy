@@ -198,11 +198,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         if use_flash_mla or use_flash_attn3_decoding:
             step_context.block_offsets = step_context.block_offsets.to(torch.int32)
 
-        cu_seqlens_q = None
-        cu_seqlens_k = None
+        cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
+        cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
         if not step_context.is_decoding:
-            cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
-            cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
             kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
             kv_flatten_size = step_context.sum_kv_seqlen
 

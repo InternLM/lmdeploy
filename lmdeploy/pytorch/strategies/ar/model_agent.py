@@ -94,7 +94,7 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         """Create extra inputs."""
         return ARExtraInputs()
 
-    def make_extra_outputs(self, extra_inputs: ARExtraInputs) -> ARExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: ARExtraInputs, **kwargs) -> ARExtraOutputs:
         """Create extra outputs."""
         return ARExtraOutputs()
 

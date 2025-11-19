@@ -200,7 +200,9 @@ class CUDAGraphRunner(GraphRunner):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
         assert is_decoding
-        return self.cudagraph_strategy.get_max_tokens(max_batches, input_ids, q_seqlens)
+        origin_batch_size = q_seqlens.size(0)
+        num_tokens = input_ids.size(1)
+        return self.cudagraph_strategy.get_max_tokens(max_batches, origin_batch_size, num_tokens)
 
     def __call__(self, **kwargs):
         """call."""

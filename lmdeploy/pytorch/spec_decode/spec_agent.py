@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-from typing import Dict
 
 import torch
 
@@ -9,44 +8,42 @@ from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig, SpecDecodeConfig
-from ..distributed import DistContext
 from ..engine.cache_engine import CacheEngine
 from ..engine.logits_process import SamplingInputs
 from ..model_inputs import ModelInputs
 from ..strategies.ar_spec.model_agent import ARSpecExtraInputs
 from ..strategies.base.model_agent import ExtraInputs
+from .base import BaseSpecModelAgent
 from .proposers.base import build_specdecode_proposer
 from .reject_sampler import RejectionSampler
 
 logger = get_logger('lmdeploy')
 
 
-class SpecModelAgent:
+class SpecModelAgent(BaseSpecModelAgent):
     """Speculative model agent."""
 
     def __init__(
         self,
         specdecode_config: SpecDecodeConfig,
         backend_config: BackendConfig,
-        dist_ctx: DistContext,
         inputs_strategy,
         agent_strategy,
         device: str = 'cuda',
     ):
+        super().__init__(enable=True)
+
+        self.backend_config = backend_config
+        self.device = device
+        self.cache_engine = None
+        self.inputs_strategy = inputs_strategy
+        self.agent_strategy = agent_strategy
+        self.rejection_sampler = RejectionSampler()
+        self.proposer = build_specdecode_proposer(specdecode_config, device=device)
         self.method = specdecode_config.method
         self.model_config = specdecode_config.model_config
         self.cache_config = specdecode_config.cache_config
         self.num_spec_tokens = specdecode_config.num_speculative_tokens
-        self.backend_config = backend_config
-        self.device = device
-        self.dist_ctx = dist_ctx
-
-        self.proposer = build_specdecode_proposer(specdecode_config, device=device)
-        self.cache_engine = None
-        self.inputs_strategy = inputs_strategy
-        self.agent_strategy = agent_strategy
-        self.to_runable = dist_ctx.rank % dist_ctx.dist_config.attn_tp == 0
-        self.rejection_sampler = RejectionSampler()
 
     def set_cache_config(self, cache_config: CacheConfig):
         """Set all cache config."""
@@ -58,8 +55,6 @@ class SpecModelAgent:
 
     def build_model(self, empty_init: bool, target_model=None, model_format=None, build_model_ctx=None):
         """Build draft model."""
-        if not self.to_runable:
-            return
         self.proposer.build_model(empty_init,
                                   target_model=target_model,
                                   model_format=model_format,
@@ -67,8 +62,6 @@ class SpecModelAgent:
 
     def build_graph_runner(self):
         """Build graph runner."""
-        if not self.to_runable:
-            return
         backend = get_backend()
         self.proposer.model = backend.build_graph_runner(self.proposer.model,
                                                          model_config=self.model_config,
@@ -78,8 +71,6 @@ class SpecModelAgent:
 
     def build_cache_engine(self, cache_stream: torch.cuda.Stream):
         """Build cache engine."""
-        if not self.to_runable:
-            return
         if self.cache_config is not None:
             self.cache_engine = CacheEngine(self.cache_config,
                                             self.model_config,
@@ -88,7 +79,7 @@ class SpecModelAgent:
                                             world_size=1,
                                             cache_stream=cache_stream)
 
-    def rejection_sampling(self, next_token_ids, model_inputs: 'ModelInputs', extra_inputs: ExtraInputs):
+    def _rejection_sampling(self, next_token_ids, model_inputs: 'ModelInputs', extra_inputs: ExtraInputs):
         """Do rejection sampling."""
         num_rejected_tokens = None
         bonus_token_ids = output_token_ids = next_token_ids.unsqueeze(-1)
@@ -131,7 +122,6 @@ class SpecModelAgent:
             last_token_indices=last_token_indices,
             num_rejected_tokens=num_rejected_tokens,
             output_token_ids=output_token_ids,
-            loop_last_step=extra_inputs.loop_last_step,
         )
         return new_model_inputs, new_extra_inputs
 
@@ -140,7 +130,7 @@ class SpecModelAgent:
         output = self.proposer._forward(inputs, cache_engine=self.cache_engine)
         return output
 
-    async def async_forward(self, inputs: ModelInputs):
+    async def _async_forward(self, inputs: ModelInputs):
         """Model forward.
 
         Args:
@@ -164,7 +154,7 @@ class SpecModelAgent:
             model_metas = new_inputs[0].model_metas
             for inp in new_inputs:
                 inp.model_metas = model_metas
-                output = await self.async_forward(inp)
+                output = await self._async_forward(inp)
                 model_metas = output.get('model_metas')
             return output
 
@@ -178,7 +168,7 @@ class SpecModelAgent:
             inputs_li = inputs.split(max_prefill_token_num)
             outputs = await __long_context_single_forward(inputs_li)
         else:
-            outputs = await self.async_forward(inputs)
+            outputs = await self._async_forward(inputs)
 
         loop_count = self.num_spec_tokens - 1
         draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs, extra_inputs)
@@ -189,7 +179,7 @@ class SpecModelAgent:
             inputs = self.proposer.update_inputs_decoding(inputs, extra_inputs, draft_token_ids.transpose(0, 1),
                                                           target_hidden_states, model_metas)
             for loop_idx in range(loop_count):
-                outputs = await self.async_forward(inputs)
+                outputs = await self._async_forward(inputs)
                 draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs)
                 draft_tokens_li.append(draft_token_ids)
                 if loop_idx < loop_count - 1:
@@ -211,16 +201,13 @@ class SpecModelAgent:
         sampling_inputs: SamplingInputs,
     ):
         """Draft model forward."""
-        draft_model_inputs, draft_extra_inputs = self.rejection_sampling(next_token_ids, model_inputs, extra_inputs)
+        draft_model_inputs, draft_extra_inputs = self._rejection_sampling(next_token_ids, model_inputs, extra_inputs)
         next_draft_ids = await self._async_model_forward(draft_model_inputs, draft_extra_inputs, sampling_inputs)
         draft_extra_inputs.output_draft_token_ids = next_draft_ids
         return draft_extra_inputs
 
     def warmup(self, max_batches: int, target_model_config: ModelConfig):
         """warmup."""
-        if not self.to_runable:
-            return
-
         target_hidden_size = self.proposer.get_target_hidden_size(target_model_config)
 
         # warmup prefill
@@ -260,13 +247,7 @@ class SpecModelAgent:
             )
             self._forward_impl(inputs)
 
-    def update_main_model_outputs(self, output: Dict[str, torch.Tensor], model_inputs: ModelInputs):
-        """Update outputs of main model."""
-        hidden_states = output['hidden_states']
-        if not model_inputs.is_decoding:
-            logits_indices = model_inputs.seq_length.cumsum(0) - 1
-            hidden_states = hidden_states[:, logits_indices]
-        if 'aux_hidden_states' in output:
-            # replace with aux
-            output['hidden_states'] = output.pop('aux_hidden_states')
-        return hidden_states, output
+    def reset_graph_runner(self):
+        'reset graph runner'
+        if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
+            self.proposer.model.reset()
