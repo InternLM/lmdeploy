@@ -13,6 +13,8 @@
 
 namespace turbomind {
 
+using cutlass::FastDivmod;
+
 template<class Tkv, int CTA_S, int HeadDim, int WarpCnt, class T, class BlockLayout>
 __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                                                     const T*        k,
@@ -28,6 +30,8 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                                                     int64_t         stride_h,
                                                     int64_t         stride_s,
                                                     int             layer_id,
+                                                    int             cp_rank,
+                                                    FastDivmod      cp_size,
                                                     BlockLayout     block_layout)
 {
 
@@ -152,6 +156,8 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
         }
     }
 
+    int local_ti, local_ti_rank;
+
     blocks += cu_block_num[batch_idx];
 
     block::Head<T, Tkv, BlockLayout> block_head{block_layout, layer_id, head_idx};
@@ -159,9 +165,10 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
-        if (qi < q_len) {
-            const int ti = history_len + qi;  // timestep
-            block_head.with((char**)blocks, ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+        const int ti = history_len + qi;                         // timestep
+        local_ti     = cp_size.divmod(local_ti_rank, ti);
+        if (qi < q_len && local_ti_rank == cp_rank) {
+            block_head.with((char**)blocks, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
@@ -198,6 +205,8 @@ void invokeProcessKV_v2(char**                 blocks,
                         int64_t                stride_s,
                         int                    block_seq_len,
                         int                    layer_id,
+                        int                    cp_rank,
+                        FastDivmod             cp_size,
                         int                    max_q_len,
                         int                    head_num,
                         int                    head_dim,
@@ -233,6 +242,8 @@ void invokeProcessKV_v2(char**                 blocks,
                                                                               stride_h,
                                                                               stride_s,
                                                                               layer_id,
+                                                                              cp_rank,
+                                                                              cp_size,
                                                                               block_layout);
     };
 
@@ -276,6 +287,8 @@ void invokeProcessKV_v2(char**                 blocks,
                                      int64_t                stride_s,                                                  \
                                      int                    block_seq_len,                                             \
                                      int                    layer_id,                                                  \
+                                     int                    cp_rank,                                                   \
+                                     FastDivmod             cp_size,                                                   \
                                      int                    max_q_len,                                                 \
                                      int                    head_num,                                                  \
                                      int                    head_dim,                                                  \
@@ -300,6 +313,8 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
                                                     int64_t         stride_h,
                                                     int64_t         stride_s,
                                                     int             layer_id,
+                                                    int             cp_rank,
+                                                    FastDivmod      cp_size,
                                                     BlockLayout     block_layout)
 {
     constexpr int kVecSize = sizeof(uint4) / sizeof(T);
@@ -341,11 +356,14 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
     Array<T, 2> param_K[ITER_S];
     Array<T, 2> param_V[ITER_S];
 
+    int local_ti, local_ti_rank;
+
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         const int si = offset.y + s * Map::kDeltaS + token_idx;
-        if (si < seq_len) {
-            block_head.with((char**)blocks, si, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
+        local_ti     = cp_size.divmod(local_ti_rank, si);
+        if (si < seq_len && local_ti_rank == cp_rank) {
+            block_head.with((char**)blocks, local_ti, [&](auto k_cache, auto v_cache, T* k_param, T* v_param) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
                     int di = offset.x + c * Map::kDeltaC;
@@ -389,11 +407,13 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
     for (int s = 0; s < ITER_S; ++s) {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
-            const int     si = offset.y + s * Map::kDeltaS + token_idx;
-            const int     di = offset.x + c * Map::kDeltaC;
-            const int64_t index =
-                (batch_idx * stride_b + ti_beg * stride_c + si * stride_s + head_idx * stride_h) * HeadDim + di;
-            if (si < seq_len) {
+            const int si = offset.y + s * Map::kDeltaS + token_idx;
+            const int di = offset.x + c * Map::kDeltaC;
+            local_ti     = cp_size.divmod(local_ti_rank, si);
+            if (si < seq_len && local_ti_rank == cp_rank) {
+                const int64_t index =
+                    (batch_idx * stride_b + ti_beg * stride_c + local_ti * stride_s + head_idx * stride_h) * HeadDim
+                    + di;
                 Store(&k[index], out_K[s][c]);
                 Store(&v[index], out_V[s][c]);
             }
@@ -414,6 +434,8 @@ void invokeFlattenKV_v2(T*                     k,
                         int64_t                stride_s,
                         int                    block_seq_len,
                         int                    layer_id,
+                        int                    cp_rank,
+                        FastDivmod             cp_size,
                         int                    max_seq_len,
                         int                    head_num,
                         int                    head_dim,
@@ -446,6 +468,8 @@ void invokeFlattenKV_v2(T*                     k,
                                                                             stride_h,
                                                                             stride_s,
                                                                             layer_id,
+                                                                            cp_rank,
+                                                                            cp_size,
                                                                             block_layout);
     };
 
@@ -486,6 +510,8 @@ void invokeFlattenKV_v2(T*                     k,
                                      int64_t                stride_s,                                                  \
                                      int                    block_seq_len,                                             \
                                      int                    layer_id,                                                  \
+                                     int                    cp_rank,                                                   \
+                                     FastDivmod             cp_size,                                                   \
                                      int                    max_seq_len,                                               \
                                      int                    head_num,                                                  \
                                      int                    head_dim,                                                  \

@@ -105,6 +105,8 @@ struct EngineParam {
     int attn_dp_rank;
     int attn_tp_size;
     int attn_tp_rank;
+    int attn_cp_size;
+    int attn_cp_rank;
     int mlp_tp_size;
     int mlp_tp_rank;
 
