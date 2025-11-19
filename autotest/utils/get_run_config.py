@@ -1,7 +1,5 @@
 import os
 import random
-import re
-import subprocess
 from time import sleep
 
 import torch
@@ -205,65 +203,13 @@ class AscendDeviceHandler(DeviceHandler):
         return ascend_prefix
 
     def clear_cache(self):
-        try:
-            import torch_npu
-            torch_npu.npu.empty_cache()
-        except ImportError:
-            pass  # torch_npu not available
+        torch.npu.empty_cache()
 
     def get_available_devices(self):
-        """Get list of available Ascend devices by checking AICPU usage
-        rate."""
-        available_chips = []
-        try:
-            result = subprocess.run(['npu-smi', 'info', '-l'], capture_output=True, text=True, timeout=10)
-            if result.returncode != 0:
-                return available_chips
-
-            lines = result.stdout.split('\n')
-            device_info = []
-            current_device_id = None
-
-            for line in lines:
-                if 'NPU ID' in line:
-                    match = re.search(r'NPU ID\s*:\s*(\d+)', line)
-                    if match:
-                        current_device_id = int(match.group(1))
-                elif 'Chip Count' in line and current_device_id is not None:
-                    match = re.search(r'Chip Count\s*:\s*(\d+)', line)
-                    if match:
-                        chip_count = int(match.group(1))
-                        device_info.append((current_device_id, chip_count))
-                        current_device_id = None
-
-            for device_id, chip_count in device_info:
-                try:
-
-                    for chip_index in range(chip_count):
-                        result = subprocess.run(
-                            ['npu-smi', 'info', '-t', 'usages', '-i',
-                             str(device_id), '-c',
-                             str(chip_index)],
-                            capture_output=True,
-                            text=True,
-                            timeout=10)
-                        if result.returncode != 0:
-                            continue
-
-                        aicpu_usage = 100
-                        for line in result.stdout.split('\n'):
-                            if 'Aicpu Usage Rate(%)' in line:
-                                match = re.search(r'Aicpu Usage Rate\(%\)\s*:\s*(\d+)', line)
-                                if match:
-                                    aicpu_usage = int(match.group(1))
-                                    break
-
-                        if aicpu_usage == 0:
-                            chip_identifier = device_id * chip_count + chip_index
-                            available_chips.append(str(chip_identifier))
-                except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-                    continue
-
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
-            pass
-        return available_chips
+        devices = torch.npu.device_count()
+        available_npu = []
+        for i in range(devices):
+            if (torch.npu.utilization(i) > 5):
+                continue
+            available_npu.append(str(i))
+        return available_npu
