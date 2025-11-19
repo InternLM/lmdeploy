@@ -105,12 +105,14 @@ def longtext_throughput_test(config,
     for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', None),
                                                                     (1, 65536, 10, '64k', None),
                                                                     (198000, 1024, 3, '198k', 1)]:
+        session_len = input_len + out_len
         csv_path = f'{benchmark_path}/longtext_{case_name}_1th.csv'
         benchmark_log = os.path.join(
             log_path, f'benchmark_longtext_throughput_{case_name}' + model.split('/')[1] + worker_id + '.log')
         cmd = ' '.join([
             command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
-            f'--num-prompts {num_prompts}', '--stream-output', f'--csv {csv_path}'
+            f'--num-prompts {num_prompts}', '--stream-output', f'--session-len {session_len}', '--random-range-ratio 1',
+            f'--csv {csv_path}'
         ])
         if concurrency:
             cmd += f' --concurrency {concurrency}'
