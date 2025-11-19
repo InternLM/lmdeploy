@@ -7,6 +7,22 @@ from utils.pipeline_chat import run_pipeline_chat_test
 
 @pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
+@pytest.mark.prefix_cache_test
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, exclude_dup=True))
+def test_pipeline_chat_pytorch_prefix_cache_tp1(config, common_case_config, model, worker_id):
+    if 'gw' in worker_id:
+        set_device_env_variable(worker_id)
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'pytorch',
+                           worker_id,
+                           extra={'enable_prefix_caching': True})
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
@@ -55,6 +71,17 @@ def test_pipeline_chat_pytorch_tp4(config, common_case_config, model, worker_id)
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=8, exclude_dup=True))
 def test_pipeline_chat_pytorch_tp8(config, common_case_config, model, worker_id):
+    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.pipeline_chat_pytorch
+@pytest.mark.gpu_num_16
+@pytest.mark.test_ascend
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=16, exclude_dup=True))
+def test_pipeline_chat_pytorch_tp16(config, common_case_config, model, worker_id):
     run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
 
 

@@ -15,9 +15,9 @@ on:
         default: 'main'
       benchmark_type:
         required: true
-        description: 'Set benchmark type. Default is "["longtext", "throughput", "api_server"]"'
+        description: 'Set benchmark type. Default is "["longtext", "throughput", "api_server", "prefixcache"]"'
         type: string
-        default: "['apiserver', 'throughput', 'longtext']"
+        default: "['apiserver', 'throughput', 'longtext', 'prefixcache']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'

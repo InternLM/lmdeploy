@@ -2,6 +2,7 @@ allure-pytest
 coverage
 jsonschema
 nvidia-ml-py
+opencv-python<4.9
 pytest
 pytest-assume
 pytest-cov
