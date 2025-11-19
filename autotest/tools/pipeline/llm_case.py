@@ -58,8 +58,8 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
     if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
         backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
 
-    if extra is not None and 'enable_prefix_caching' in extra and extra.get('enable_prefix_caching'):
-        backend_config.enable_prefix_caching = extra.get('enable_prefix_caching')
+    if extra and extra.get('enable_prefix_caching', False):
+        backend_config.enable_prefix_caching = True
 
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'
