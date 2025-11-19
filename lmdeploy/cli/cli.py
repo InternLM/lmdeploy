@@ -77,6 +77,7 @@ class CLI(object):
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
+        ArgumentHelper.cp(tb_group)
 
         # speculative decoding
         ArgumentHelper.add_spec_group(parser)

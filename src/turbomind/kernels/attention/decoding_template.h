@@ -12,8 +12,7 @@ namespace turbomind {
 template<class Kernel>
 bool invokeDecoding(const typename Kernel::ParamType& params)
 {
-    static const size_t kSmemSize =
-        std::max(sizeof(typename Kernel::SharedStorage), sizeof(typename Kernel::ReduceOp::SharedStorage));
+    static const size_t kSmemSize = sizeof(typename Kernel::SharedStorage);
 
     if constexpr (1) {
         [[maybe_unused]] static const int _ = [&] {
@@ -25,7 +24,8 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
         }();
     }
 
-    const int tile_count      = cdiv(std::min(params.max_k_len, params.window_size), Kernel::CTA_S);
+    const int max_cp_k_len    = cdiv(params.max_k_len, (int)params.cp_size);
+    const int tile_count      = cdiv(std::min(max_cp_k_len, params.window_size), Kernel::CTA_S);
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
     using CtaMap = typename Kernel::CtaMap;
@@ -79,18 +79,23 @@ bool invokeDecoding(const typename Kernel::ParamType& params)
         std::abort();
     }
 
-    if (Kernel::need_separate_reduce(split_cnt)) {
-        attention::invokeReduce<Kernel::kHeadDim>(params.out,
-                                                  params.partial_M,
-                                                  params.partial_L,
-                                                  params.partial_O,
-                                                  params.split_cnt,
-                                                  params.max_split_k,
-                                                  split_cnt,
-                                                  params.token_num,
-                                                  params.num_heads,
-                                                  params.inv_sqrt_dh,
-                                                  params.stream);
+    if (params.cp_fn) {
+        params.cp_fn(params.cp_fn_ctx);
+    }
+
+    if (split_cnt > 1 || params.cp_size > 1) {
+        attention::invokeReduceV3<Kernel::kHeadDim>(params.out,
+                                                    params.partial_ML,
+                                                    params.partial_O,
+                                                    split_cnt > 1 ? params.split_cnt : nullptr,
+                                                    params.max_split_k,
+                                                    split_cnt,
+                                                    params.cp_size,
+                                                    params.cp_rank,
+                                                    params.token_num,
+                                                    params.num_heads,
+                                                    params.inv_sqrt_dh,
+                                                    params.stream);
     }
 
     return true;

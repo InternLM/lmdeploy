@@ -100,11 +100,12 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         inner_tp_size = cfg.tp // mlp_tp_size
         cfg.outer_dp_size = cfg.dp // attn_dp_size
         cfg.attn_dp_size = attn_dp_size
-        cfg.attn_tp_size = inner_tp_size
+        cfg.attn_tp_size = inner_tp_size // cfg.cp
+        cfg.attn_cp_size = cfg.cp
         cfg.mlp_dp_size = 1
         cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     cfg.devices = cfg.devices or list(range(cfg.device_num))
 
 

@@ -244,6 +244,9 @@ private:
     Tensor symm_hidden_states_buf_;
     Tensor symm_logits_buf_;
 
+    // context parallel
+    Tensor_<float> symm_partial_ML_;
+
     Tensor decoder_output_buf_;
 
     Tensor_<float> sampling_logits_;
