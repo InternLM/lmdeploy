@@ -433,6 +433,12 @@ class RayExecutor(ExecutorBase):
         outs = self.dag.execute(inputs)
         ray.get(outs)
 
+        # free ray.put inputs
+        try:
+            ray._private.internal_api.free(inputs)
+        except Exception as e:
+            logger.warning(f'Free input ref failed: {e}')
+
     async def get_output_async(self):
         """Get output async."""
         return await self.remote_outs.get()
