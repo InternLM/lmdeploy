@@ -226,7 +226,6 @@ def model_forward(
     cache_engine: CacheEngine,
     state_cache_engine: StateCacheEngine,
     stream: torch.cuda.Stream = None,
-    output_position_ids: bool = False,
 ):
     """Perform model forward."""
     stream = stream or torch.cuda.current_stream()
@@ -259,8 +258,7 @@ def model_forward(
             output['model_metas'] = model_metas
             output['seq_length'] = context.q_seqlens[:len(inputs.seq_length)]
             # for draft model reuse
-            if output_position_ids:
-                output['position_ids'] = context.position_ids
+            output['position_ids'] = context.position_ids
             return output
 
 
@@ -1079,7 +1077,6 @@ class BaseModelAgent:
             self.cache_engine,
             state_cache_engine=self.state_cache_engine,
             stream=self.stream,
-            output_position_ids=self.spec_agent.is_enabled(),
         )
         return output
 

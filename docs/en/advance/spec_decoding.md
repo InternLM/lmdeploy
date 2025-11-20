@@ -24,22 +24,22 @@ python setup.py install
 #### pipeline
 
 ```python
-from lmdeploy import pipeline, PytorchEngineConfig
+from lmdeploy import PytorchEngineConfig, pipeline
 from lmdeploy.messages import SpeculativeConfig
 
 
 if __name__ == '__main__':
 
     model_path = 'meta-llama/Llama-3.1-8B-Instruct'
-    spec_cfg = SpeculativeConfig(method='eagle3',
-                                    num_speculative_tokens=3,
-                                    model='yuhuili/EAGLE3-LLaMA3.1-Instruct-8B',
-                                    )
-    pipe = pipeline(model_path,
-                    backend_config=PytorchEngineConfig(max_batch_size=128),
-                    speculative_config=spec_cfg)
+    spec_cfg = SpeculativeConfig(
+        method='eagle3',
+        num_speculative_tokens=3,
+        model='yuhuili/EAGLE3-LLaMA3.1-Instruct-8B',
+    )
+    pipe = pipeline(model_path, backend_config=PytorchEngineConfig(max_batch_size=128), speculative_config=spec_cfg)
     response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
     print(response)
+
 ```
 
 ### serving
@@ -72,21 +72,23 @@ pip install -v .
 #### pipeline
 
 ```python
-from lmdeploy import pipeline, PytorchEngineConfig
+from lmdeploy import PytorchEngineConfig, pipeline
 from lmdeploy.messages import SpeculativeConfig
 
 
 if __name__ == '__main__':
 
     model_path = 'deepseek-ai/DeepSeek-V3'
-    spec_cfg = SpeculativeConfig(method='deepseek_mtp',
-                                    num_speculative_tokens=3,
-                                    )
+    spec_cfg = SpeculativeConfig(
+        method='deepseek_mtp',
+        num_speculative_tokens=3,
+    )
     pipe = pipeline(model_path,
                     backend_config=PytorchEngineConfig(tp=16, max_batch_size=128),
                     speculative_config=spec_cfg)
     response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
     print(response)
+
 ```
 
 ### serving
