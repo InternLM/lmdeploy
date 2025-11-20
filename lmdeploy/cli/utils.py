@@ -196,7 +196,7 @@ class ArgumentHelper:
             '--cp',
             type=int,
             default=1,
-            help='context parallelism size in attention for turbomind backend, tp % cp should be 0.')
+            help='context parallelism size in attention for turbomind backend, tp must be a multiple of cp.')
 
     @staticmethod
     def dp_rank(parser):
