@@ -261,7 +261,8 @@ class FopeRotaryEmbedding(nn.Module):
         from lmdeploy.pytorch.distributed import get_dist_manager
         dist_mgr = get_dist_manager()
         dist_ctx = dist_mgr.current_context()
-        tp = dist_ctx.dist_config.attn_config.tp
+        tp = dist_ctx.dist_config.attn_tp
+        # tp = dist_ctx.dist_config.attn_config.tp
         if tp > 1:
             num_key_value_heads = max(1, num_key_value_heads // tp)
         return num_key_value_heads, tp
