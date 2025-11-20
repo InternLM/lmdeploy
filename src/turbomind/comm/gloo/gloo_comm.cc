@@ -266,7 +266,6 @@ struct GlooCommImpl: public HostCommImpl {
     std::shared_ptr<Store>                       store_;
     int                                          rank_;
     int                                          n_ranks_;
-    uint32_t                                     tag_{};
 };
 
 class GlooGroupId: public HostGroupId {
