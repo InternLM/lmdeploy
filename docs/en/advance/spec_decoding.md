@@ -42,7 +42,7 @@ if __name__ == '__main__':
 
 ```
 
-### serving
+#### serving
 
 ```shell
 lmdeploy serve api_server \
@@ -91,7 +91,7 @@ if __name__ == '__main__':
 
 ```
 
-### serving
+#### serving
 
 ```shell
 lmdeploy serve api_server \
