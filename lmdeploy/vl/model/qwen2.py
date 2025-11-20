@@ -32,8 +32,8 @@ class Qwen2VLModel(VisonModel):
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         tokenizer = self.processor.tokenizer
-        image_token = self.processor.image_token
-        self.image_token_id = tokenizer.encode(image_token)[-1]
+        self.image_token = self.processor.image_token
+        self.image_token_id = tokenizer.encode(self.image_token)[-1]
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
@@ -124,33 +124,36 @@ class Qwen2VLModel(VisonModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(self, messages, chat_template, sequence_start):
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
-            if isinstance(message['content'], str):
+            if message['role'] in ['preprocess', 'forward']:
+                continue
+            role, content = message['role'], message['content']
+            if role == 'user' and isinstance(content, List):
+                _content = []
+                for item in content:
+                    if item['type'] == 'text':
+                        # backward compatibility
+                        text = item['text']
+                        if IMAGE_TOKEN in text:
+                            text = text.replace(IMAGE_TOKEN, self.image_token)
+                        _content.append(text)
+                    elif item['type'] in ['image', 'image_url']:
+                        _content.append(f'<|vision_start|>{self.image_token}<|vision_end|>')
+                    else:
+                        raise ValueError(f'Unsupported message type: {item["type"]}')
+                message = dict(role=role, content=''.join(_content))
                 prompt_messages.append(message)
-                continue
-            elif message['role'] in ['images', 'preprocess', 'forward']:
-                continue
-            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
-            content = [item['text'] for item in message['content'] if item['type'] == 'text']
-            prompt = content[0]
-            if IMAGE_TOKEN in prompt and '<|vision_start|>' not in prompt:
-                prompt = prompt.replace(IMAGE_TOKEN, f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>')
             else:
-                # Qwen2-VL-2B-Instruct will concat image and user prompt
-                # according to their order in the content list
-                # we insert image token before user prompt by default. The
-                # user can use custom image token position if they want the
-                # same decorated prompt as Qwen2-VL
-                prompt = f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>' * \
-                    n_images + prompt
-            prompt_messages.append(dict(role=message['role'], content=prompt))
+                if IMAGE_TOKEN in content and '<|vision_start|>' not in content:
+                    # backward compatibility
+                    content = content.replace(IMAGE_TOKEN, f'<|vision_start|>{self.image_token}<|vision_end|>')
+                prompt_messages.append(dict(role=role, content=content))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-        return prompt, IMAGE_TOKEN
+        return prompt, self.image_token
 
     @staticmethod
     def get_mrope_info(seq_len: int,

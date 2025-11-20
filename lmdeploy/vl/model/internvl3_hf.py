@@ -49,6 +49,7 @@ class InternVL3VisionModel(VisonModel):
     def build_preprocessor(self):
         self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
         tokenizer = self.processor.tokenizer
+        self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.context_image_token_id
         self.image_tokens_per_patch = self.processor.image_seq_length
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
@@ -146,26 +147,32 @@ class InternVL3VisionModel(VisonModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    def proc_internvl_hf_messages(self, content: List[Dict], IMAGE_TOKEN: str):
+    def proc_internvl_hf_messages(self, content: List[Dict]):
         """Process the content list of role 'user' for InternVL HF models."""
         res = []
         for item in content:
             if item['type'] == 'text':
-                res.append(item['text'])
+                # backward compatibility
+                text = item['text']
+                text = (text.replace('<IMAGE_TOKEN>', self.image_token) if '<IMAGE_TOKEN>' in text else text)
+                res.append(text)
             elif item['type'] in ['image', 'image_url']:
-                res.append(f'{IMAGE_TOKEN}\n')
+                res.append(f'{self.image_token}\n')
             else:
                 raise ValueError(f'Unsupported message type: {item["type"]}')
         return ''.join(res)
 
-    def proc_interns1_messages(self, content: List[Dict], IMAGE_TOKEN: str):
+    def proc_interns1_messages(self, content: List[Dict]):
         """Process the content list of role 'user' for InternS1 models."""
         res = []
         for item in content:
             if item['type'] == 'text':
-                res.append(item['text'])
+                # backward compatibility
+                text = item['text']
+                text = (text.replace('<IMAGE_TOKEN>', self.image_token) if '<IMAGE_TOKEN>' in text else text)
+                res.append(text)
             elif item['type'] in ['image', 'image_url']:
-                res.append(IMAGE_TOKEN)
+                res.append(f'{self.image_token}')
             else:
                 raise ValueError(f'Unsupported message type: {item["type"]}')
         return '\n'.join(res)
@@ -180,24 +187,28 @@ class InternVL3VisionModel(VisonModel):
     ):
         """Apply chat template to get the prompt."""
         prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
+
         for message in messages:
             if message['role'] in ['preprocess', 'forward']:
                 continue
             role, content = message['role'], message['content']
             if role == 'user' and isinstance(content, List):
-                content = (self.proc_internvl_hf_messages(content, IMAGE_TOKEN) if self.arch
-                           == 'InternVLForConditionalGeneration' else self.proc_interns1_messages(content, IMAGE_TOKEN))
+                content = (self.proc_internvl_hf_messages(content)
+                           if self.arch == 'InternVLForConditionalGeneration' else self.proc_interns1_messages(content))
                 message = dict(role=role, content=content)
                 prompt_messages.append(message)
             else:
+                # backward compatibility
+                content = (content.replace('<IMAGE_TOKEN>', self.image_token)
+                           if isinstance(content, str) and '<IMAGE_TOKEN>' in content else content)
+                message = dict(role=role, content=content)
                 prompt_messages.append(message)
 
         prompt = chat_template.messages2prompt(prompt_messages,
                                                sequence_start,
                                                tools=tools,
                                                enable_thinking=enable_thinking)
-        return prompt, IMAGE_TOKEN
+        return prompt, self.image_token
 
     def to_pytorch(self,
                    messages,
