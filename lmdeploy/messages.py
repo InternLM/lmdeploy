@@ -473,6 +473,33 @@ class Response:
     index: int = 0
     routed_experts: Any = None
 
+    def __str__(self):
+        fields = []
+
+        fields.append('text=')
+        fields.append(self.text if self.text is not None else 'None')
+        fields.append(f'input_token_len={self.input_token_len}')
+        fields.append(f'generate_token_len={self.generate_token_len}')
+        fields.append(f'finish_reason="{self.finish_reason}"')
+        fields.append(f'token_ids={self.token_ids}')
+        fields.append(f'logprobs={self.logprobs}')
+
+        # Helper function to format tensor information
+        def _format_tensor(name: str, tensor: Optional[torch.Tensor]) -> List[str]:
+            if tensor is None:
+                return [f'{name}=None']
+            return [f'{name}.shape={tensor.shape}', f'{name}={tensor}']
+
+        # Format tensor fields
+        fields.extend(_format_tensor('logits', self.logits))
+        fields.extend(_format_tensor('last_hidden_state', self.last_hidden_state))
+
+        if self.routed_experts is None:
+            fields.append('routed_experts=None')
+        else:
+            fields.append(f'routed_experts.shape={self.routed_experts.shape}')
+        return '\n'.join(fields)
+
     def __repr__(self):
         logits = 'logits=None' if self.logits is None else f'logits.shape={self.logits.shape}\nlogits={self.logits}'
         hidden_state = (

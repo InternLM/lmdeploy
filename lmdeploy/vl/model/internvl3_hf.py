@@ -44,7 +44,7 @@ class InternVL3VisionModel(VisonModel):
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
-        self.arch = hf_config.architectures[0]
+        self.arch = self.hf_config.architectures[0]
 
     def build_preprocessor(self):
         self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
@@ -146,8 +146,32 @@ class InternVL3VisionModel(VisonModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    @staticmethod
+    def proc_internvl_hf_messages(self, content: List[Dict], IMAGE_TOKEN: str):
+        """Process the content list of role 'user' for InternVL HF models."""
+        res = []
+        for item in content:
+            if item['type'] == 'text':
+                res.append(item['text'])
+            elif item['type'] in ['image', 'image_url']:
+                res.append(f'{IMAGE_TOKEN}\n')
+            else:
+                raise ValueError(f'Unsupported message type: {item["type"]}')
+        return ''.join(res)
+
+    def proc_interns1_messages(self, content: List[Dict], IMAGE_TOKEN: str):
+        """Process the content list of role 'user' for InternS1 models."""
+        res = []
+        for item in content:
+            if item['type'] == 'text':
+                res.append(item['text'])
+            elif item['type'] in ['image', 'image_url']:
+                res.append(IMAGE_TOKEN)
+            else:
+                raise ValueError(f'Unsupported message type: {item["type"]}')
+        return '\n'.join(res)
+
     def proc_messages(
+        self,
         messages,
         chat_template,
         sequence_start,
@@ -158,24 +182,17 @@ class InternVL3VisionModel(VisonModel):
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
-            if isinstance(message['content'], str):
+            if message['role'] in ['preprocess', 'forward']:
+                continue
+            role, content = message['role'], message['content']
+            if role == 'user' and isinstance(content, List):
+                content = (self.proc_internvl_hf_messages(content, IMAGE_TOKEN) if self.arch
+                           == 'InternVLForConditionalGeneration' else self.proc_interns1_messages(content, IMAGE_TOKEN))
+                message = dict(role=role, content=content)
                 prompt_messages.append(message)
-                continue
-            elif message['role'] in ['preprocess', 'forward']:
-                continue
-            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
-            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
-            prompt = content[0]
-            if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
-                prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{IMAGE_TOKEN}</img>')
-                prompt = prompt.replace('</img><img>', '')
-                prompt = prompt.replace('<img><img>', '<img>')
-                prompt = prompt.replace('</img></img>', '</img>')
-            elif IMAGE_TOKEN not in prompt:
-                prompt = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + prompt
             else:
-                pass
-            prompt_messages.append(dict(role='user', content=prompt))
+                prompt_messages.append(message)
+
         prompt = chat_template.messages2prompt(prompt_messages,
                                                sequence_start,
                                                tools=tools,
