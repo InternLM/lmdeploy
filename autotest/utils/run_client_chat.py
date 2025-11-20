@@ -47,8 +47,6 @@ def hf_command_line_test(config,
     device = os.environ.get('DEVICE', '')
     if device:
         cmd += f' --device {device} '
-        if device == 'ascend':
-            cmd += '--eager-mode '
 
     return command_test(config, [cmd], model_case, '_'.join(['hf', type, case]), case_info, True)
 

@@ -951,6 +951,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         skip_special_tokens=request.skip_special_tokens,
         spaces_between_special_tokens=request.spaces_between_special_tokens,
         include_stop_str_in_output=request.include_stop_str_in_output,
+        return_routed_experts=request.return_routed_experts,
     )
 
     result_generator = VariableInterface.async_engine.generate(
@@ -964,23 +965,33 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         do_preprocess=False,
     )
 
-    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason):
+    def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
+        # only output router experts in last chunk
+        routed_experts = None if finish_reason is None else routed_experts
         meta = GenerateReqMetaOutput(finish_reason=dict(type=finish_reason) if finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
+                                     routed_experts=routed_experts,
                                      completion_tokens=res.generate_token_len)
-        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
+
+        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta, routed_experts=routed_experts)
         return response.model_dump_json()
 
     async def generate_stream_generator():
         async for res in result_generator:
             text = res.response or ''
             output_ids = res.token_ids
+            routed_experts = res.routed_experts
             logprobs = []
             if res.logprobs:
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                     logprobs.append((tok_logprobs[tok], tok))
-            response_json = create_generate_response_json(res, text, output_ids, logprobs, res.finish_reason)
+            response_json = create_generate_response_json(res,
+                                                          text,
+                                                          output_ids,
+                                                          logprobs,
+                                                          res.finish_reason,
+                                                          routed_experts=routed_experts)
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -1007,6 +1018,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
                                      output_token_logprobs=logprobs or None,
                                      prompt_tokens=res.input_token_len,
+                                     routed_experts=res.routed_experts,
                                      completion_tokens=res.generate_token_len)
         response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 
@@ -1427,6 +1439,9 @@ def serve(model_path: str,
     _, pipeline_class = get_task(model_path)
     if isinstance(backend_config, PytorchEngineConfig):
         backend_config.enable_mp_engine = True
+        # router replay
+        if backend_config.enable_return_routed_experts:
+            backend_config.enable_transfer_obj_ref = True
     VariableInterface.async_engine = pipeline_class(model_path=model_path,
                                                     model_name=model_name,
                                                     backend=backend,

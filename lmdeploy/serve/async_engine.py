@@ -98,6 +98,8 @@ class GenOut:
     # for disaggregation
     cache_block_ids: List[int] = None
 
+    routed_experts: Any = None
+
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
     return Response(text=out.response,
@@ -108,6 +110,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     logprobs=out.logprobs,
                     last_hidden_state=out.last_hidden_state,
                     logits=out.logits,
+                    routed_experts=out.routed_experts,
                     index=index)
 
 
@@ -125,6 +128,7 @@ def _append_response(dst: Response, src: Response):
     if src.logprobs:
         dst.logprobs = dst.logprobs or []
         dst.logprobs += src.logprobs
+    dst.routed_experts = src.routed_experts
     return dst
 
 
@@ -903,6 +907,7 @@ class AsyncEngine(LogitsMixin):
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
+                                 routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
@@ -933,6 +938,13 @@ class AsyncEngine(LogitsMixin):
                         logits = outputs.logits[-1:] if outputs.logits else None
                         last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
                         logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
+                        gen_len += 1
+
+                    # router replay
+                    routed_experts = outputs.routed_experts
+                    if routed_experts is not None and not isinstance(routed_experts, str) and (
+                            not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
+                        routed_experts = routed_experts[:-1]
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
@@ -946,6 +958,7 @@ class AsyncEngine(LogitsMixin):
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
+                                 routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     # Update a session's sequence only when it is in finished status
                     if outputs.status == ResponseType.FINISH:

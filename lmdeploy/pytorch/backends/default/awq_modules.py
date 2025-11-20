@@ -62,7 +62,8 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
                 scales: torch.Tensor,
                 qzeros: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                all_reduce: bool = False,
+                group: Optional[torch.distributed.ProcessGroup] = None):
         """forward."""
         out_shape = x.shape[:-1] + (self.out_features, )
         input_dtype = x.dtype
@@ -77,7 +78,7 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
         if input_dtype != torch.float16:
             out = out.to(dtype=input_dtype)
         if all_reduce:
-            dist.all_reduce(out)
+            dist.all_reduce(out, group=group)
         return out
 
 

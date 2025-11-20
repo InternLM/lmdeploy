@@ -57,6 +57,7 @@ def run_pipeline_chat_test(config,
                                       capture_output=True,
                                       text=True,
                                       encoding='utf-8',
+                                      errors='replace',
                                       env=env,
                                       timeout=900)
         except subprocess.TimeoutExpired as e:
@@ -132,6 +133,7 @@ def run_pipeline_vl_chat_test(config,
                                       capture_output=True,
                                       text=True,
                                       encoding='utf-8',
+                                      errors='replace',
                                       env=env,
                                       timeout=900)
         except subprocess.TimeoutExpired as e:

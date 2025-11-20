@@ -97,6 +97,7 @@ class SubCliServe:
         ArgumentHelper.dllm_unmasking_strategy(pt_group)
         ArgumentHelper.dllm_denoising_steps(pt_group)
         ArgumentHelper.dllm_confidence_threshold(pt_group)
+        ArgumentHelper.enable_return_routed_experts(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -111,7 +112,7 @@ class SubCliServe:
         model_format = ArgumentHelper.model_format(pt_group)
         hf_overrides = ArgumentHelper.hf_overrides(pt_group)
         disable_metrics = ArgumentHelper.disable_metrics(pt_group)
-        ArgumentHelper.dp(pt_group)
+        dp = ArgumentHelper.dp(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
         ArgumentHelper.enable_eplb(pt_group)
@@ -136,6 +137,8 @@ class SubCliServe:
         tb_group._group_actions.append(model_format)
         tb_group._group_actions.append(hf_overrides)
         tb_group._group_actions.append(disable_metrics)
+        tb_group._group_actions.append(dp)
+        ArgumentHelper.cp(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
@@ -228,11 +231,14 @@ class SubCliServe:
                 dllm_unmasking_strategy=args.dllm_unmasking_strategy,
                 dllm_denoising_steps=args.dllm_denoising_steps,
                 dllm_confidence_threshold=args.dllm_confidence_threshold,
+                enable_return_routed_experts=args.enable_return_routed_experts,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
+                                                   dp=args.dp,
+                                                   cp=args.cp,
                                                    max_batch_size=max_batch_size,
                                                    session_len=args.session_len,
                                                    model_format=args.model_format,
@@ -251,7 +257,7 @@ class SubCliServe:
 
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)
-        if args.dp == 1:
+        if args.dp == 1 or backend == 'turbomind':
             from lmdeploy.serve.openai.api_server import serve as run_api_server
 
             run_api_server(args.model_path,
