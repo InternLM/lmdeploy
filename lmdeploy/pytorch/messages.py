@@ -445,6 +445,8 @@ class HistoryRouterExperts:
         """Set size."""
         assert size <= self._num_real
         self._num_real = size
+        if self._expert_ids is not None:
+            self._expert_ids = self._expert_ids[:size].copy()
 
     def append(self, expert_ids: np.ndarray):
         """Append token ids."""
