@@ -155,7 +155,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
         dtype = dtype or torch.float16
         # init distributed tp arguments
         self.block_size = 128
-        self.init_tp_args(all_reduce)
+        self.init_dist_args(all_reduce)
 
         super().__init__(
             tp=self.tp,

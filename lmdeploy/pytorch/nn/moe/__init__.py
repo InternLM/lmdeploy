@@ -35,6 +35,7 @@ def build_fused_moe(
             dtype=dtype,
             device=device,
             all_reduce=all_reduce,
+            layer_idx=layer_idx,
             act_func=act_func,
         )
 

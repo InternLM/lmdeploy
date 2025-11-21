@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 import torch
 
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from .base import FusedMoEBase, MoEForwardDPTP, MoeType, moe_gather_inputs, moe_reduce, update_dims
 from .default import LinearWeights
@@ -83,12 +83,10 @@ class FusedMoEW8A8(FusedMoEBase):
         device = device or torch.device('cpu')
         dtype = dtype or torch.float16
         # init distributed tp arguments
-        self.init_tp_args(all_reduce)
+        self.init_dist_args(all_reduce)
 
         # check ep
-        dist_ctx = get_dist_manager().current_context()
-        dist_cfg = dist_ctx.dist_config
-        if dist_cfg.ep > 1:
+        if self.ep > 1:
             raise RuntimeError('FusedMoEW8A8 does not support EP mode now.')
 
         super().__init__(

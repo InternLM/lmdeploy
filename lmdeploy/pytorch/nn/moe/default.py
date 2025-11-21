@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 
 from .base import DispatchInputs, FusedMoEBase, MoEForwardDPTP, MoeType, moe_gather_inputs, moe_reduce, update_dims
 
@@ -118,12 +118,13 @@ class FusedMoE(FusedMoEBase):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
+                 layer_idx: int = 0,
                  act_func: Callable = None):
 
         device = device or torch.device('cpu')
         dtype = dtype or torch.float16
         # init distributed tp arguments
-        self.init_tp_args(all_reduce)
+        self.init_dist_args(all_reduce)
 
         super().__init__(
             tp=self.tp,
@@ -132,12 +133,26 @@ class FusedMoE(FusedMoEBase):
         )
 
         # create implementation
+        dist_ctx = get_dist_manager().current_context()
+        self.ep_size, rank = get_ep_world_rank()
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoE)
-        self.impl = impl_builder.build(top_k, num_experts, renormalize)
+        self.impl = impl_builder.build(
+            top_k,
+            num_experts,
+            renormalize,
+            hidden_dim=hidden_dim,
+            ep_size=self.ep_size,
+            ep_group=dist_ctx.ep_gpu_group,
+            layer_idx=layer_idx,
+        )
 
         # create weights
-        hidden_dim, ffn_dim = update_dims(hidden_dim, ffn_dim)
-        expert_list = None
+        if self.ep_size:
+            expert_list = self.impl.ep_expert_list(self.ep_size, rank)
+            num_experts = len(expert_list)
+        else:
+            hidden_dim, ffn_dim = update_dims(hidden_dim, ffn_dim)
+            expert_list = None
         self.expert_list = expert_list
         self.gate_up = LinearWeights(num_experts,
                                      hidden_dim,
@@ -173,12 +188,69 @@ class FusedMoE(FusedMoEBase):
 
     def before_dispatch(self, state: DispatchInputs):
         """Before dispatch."""
-        raise NotImplementedError
+        if not isinstance(state, Dict):
+            state = state.to_dict()
+
+        moe_type = state['moe_type']
+        if moe_type == MoeType.DSAsyncPrefill:
+            fusedmoe = self.fusedmoe_build(low_latency_mode=False)
+            state['fusedmoe'] = fusedmoe
+            previous_event = fusedmoe.capture()
+            state['previous_event'] = previous_event
+        return state
 
     def dispatch(self, state: Dict):
         """dispatch."""
         moe_type = state['moe_type']
-        if moe_type == MoeType.Default:
+        if moe_type == MoeType.DSAsyncPrefill:
+            fusedmoe = state['fusedmoe']
+            previous_event = state['previous_event']
+            (
+                recv_hidden_states,
+                recv_topk_idx,
+                recv_topk_weights,
+                recv_tokens_per_expert,
+                handle,
+                event,
+            ) = fusedmoe.dispatch_async(state['hidden_states'],
+                                        state['topk_idx'],
+                                        state['topk_weights'],
+                                        previous_event=previous_event,
+                                        async_finish=True)
+            recv_state = {
+                'fusedmoe': fusedmoe,
+                'recv_hidden_states': recv_hidden_states,
+                'recv_topk_idx': recv_topk_idx,
+                'recv_topk_weights': recv_topk_weights,
+                'recv_tokens_per_expert': recv_tokens_per_expert,
+                'handle': handle,
+                'event': event,
+                'num_experts': self.num_experts,
+                'moe_type': state['moe_type']
+            }
+        elif moe_type == MoeType.DSAsyncDecode:
+            fusedmoe = self.fusedmoe_build(low_latency_mode=True)
+            use_event = False
+            (recv_hidden_states, recv_expert_count, handle, event,
+             hook) = fusedmoe.dispatch_async(state['hidden_states'],
+                                             state['topk_idx'],
+                                             use_fp8=False,
+                                             async_finish=use_event)
+            recv_state = {
+                'fusedmoe': fusedmoe,
+                'recv_hidden_states': recv_hidden_states,
+                'recv_expert_count': recv_expert_count,
+                'topk_idx': state['topk_idx'],
+                'topk_weights': state['topk_weights'],
+                'raw_hidden_shape': state['raw_hidden_shape'],
+                'handle': handle,
+                'moe_type': state['moe_type']
+            }
+            if use_event:
+                recv_state['event'] = event
+            else:
+                recv_state['hook'] = hook
+        elif moe_type == MoeType.Default:
             hidden_states, topk_weights, topk_idx = moe_gather_inputs(state['hidden_states'],
                                                                       state['topk_weights'],
                                                                       state['topk_idx'],
@@ -195,25 +267,84 @@ class FusedMoE(FusedMoEBase):
 
     def gemm(self, state: Dict):
         """gemm."""
-        hidden_states = state['hidden_states']
-        topk_weights = state['topk_weights']
-        topk_ids = state['topk_idx']
+        moe_type = state['moe_type']
+        if moe_type == MoeType.DSAsyncPrefill:
+            if (state['recv_hidden_states'][0]
+                    if isinstance(state['recv_hidden_states'], tuple) else state['recv_hidden_states']).shape[0] > 0:
+                state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
+                                                                                 self.gate_up.weight_scale_inv,
+                                                                                 self.down.weight,
+                                                                                 self.down.weight_scale_inv)
+            gemm_state = {
+                'fusedmoe': state['fusedmoe'],
+                'hidden_states': state['recv_hidden_states'],
+                'handle': state['handle'],
+                'moe_type': state['moe_type']
+            }
+        elif moe_type == MoeType.DSAsyncDecode:
+            state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
+                                                                             self.gate_up.weight_scale_inv,
+                                                                             self.down.weight,
+                                                                             self.down.weight_scale_inv)
+            gemm_state = {
+                'fusedmoe': state['fusedmoe'],
+                'hidden_states': state['recv_hidden_states'],
+                'topk_idx': state['topk_idx'],
+                'topk_weights': state['topk_weights'],
+                'handle': state['handle'],
+                'moe_type': state['moe_type']
+            }
+        else:
+            hidden_states = state['hidden_states']
+            topk_weights = state['topk_weights']
+            topk_ids = state['topk_idx']
 
-        ret = self.impl.forward(hidden_states,
-                                topk_weights,
-                                topk_ids,
-                                self.gate_up.weight,
-                                self.down.weight,
-                                self.gate_up.bias,
-                                self.down.bias,
-                                self.expert_list,
-                                act_func=self.act_func)
-        return dict(hidden_states=ret, moe_type=state['moe_type'])
+            hidden_states = self.impl.forward(hidden_states,
+                                              topk_weights,
+                                              topk_ids,
+                                              self.gate_up.weight,
+                                              self.down.weight,
+                                              self.gate_up.bias,
+                                              self.down.bias,
+                                              self.expert_list,
+                                              act_func=self.act_func)
+            gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
+        return gemm_state
 
     def combine(self, state: Dict):
         """combine."""
         moe_type = state['moe_type']
-        if moe_type == MoeType.Default:
+        if moe_type == MoeType.DSAsyncPrefill:
+            fusedmoe = state['fusedmoe']
+            previous_event = fusedmoe.capture()
+            out_hidden_states, event = fusedmoe.combine_async(state['hidden_states'],
+                                                              state['handle'],
+                                                              previous_event=previous_event,
+                                                              async_finish=True)
+            out_state = {
+                'fusedmoe': state['fusedmoe'],
+                'hidden_states': out_hidden_states,
+                'event': event,
+                'moe_type': state['moe_type']
+            }
+        elif moe_type == MoeType.DSAsyncDecode:
+            fusedmoe = state['fusedmoe']
+            use_event = False
+            out_hidden_states, event, hook = fusedmoe.combine_async(state['hidden_states'],
+                                                                    state['topk_idx'],
+                                                                    state['topk_weights'],
+                                                                    state['handle'],
+                                                                    async_finish=use_event)
+            out_state = {
+                'fusedmoe': state['fusedmoe'],
+                'hidden_states': out_hidden_states,
+                'moe_type': state['moe_type']
+            }
+            if use_event:
+                out_state['event'] = event
+            else:
+                out_state['hook'] = hook
+        elif moe_type == MoeType.Default:
             if self.all_reduce:
                 state['hidden_states'] = moe_reduce(state['hidden_states'],
                                                     rank=self.tp_rank,
@@ -226,9 +357,19 @@ class FusedMoE(FusedMoEBase):
 
     def wait(self, state: Dict):
         """wait."""
-        raise NotImplementedError
+        if state.get('event', None) is not None:
+            state['fusedmoe'].wait(state['event'])
+            return True
+        elif state.get('hook', None) is not None:
+            state['hook']()
+            return True
+        else:
+            return False
 
     @property
     def forward_dptp(self) -> MoEForwardDPTP:
         """Forward dptp."""
         return self._forward_dptp
+
+    def fusedmoe_build(self, low_latency_mode: bool = False):
+        return self.impl.fusedmoe_build(low_latency_mode)
