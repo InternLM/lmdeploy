@@ -758,6 +758,6 @@ class SchedulerSequence:
         """Update token ids, old token ids will be added to history."""
         raise NotImplementedError('NotImplemented')
 
-    def set_step(self, step: int):
+    def set_step(self, step: int, routed_experts: np.ndarray = None):
         """Set step."""
         raise NotImplementedError('NotImplemented')
