@@ -47,10 +47,8 @@ jobs:
         uses: actions/checkout@v5
       - name: Install lmdeploy
         run: |
-          # python3 -m pip install packaging protobuf transformers_stream_generator matplotlib
           python3 -m pip install -r requirements/test.txt
-          export PYTHONPATH=$(pwd):$PYTHONPATH
-          # python3 -m pip install -e .
+          python3 -m pip install -e .
       - name: Check env
         run: |
           python3 -m pip list
