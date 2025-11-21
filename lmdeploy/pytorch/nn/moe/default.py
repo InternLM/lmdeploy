@@ -147,7 +147,7 @@ class FusedMoE(FusedMoEBase):
         )
 
         # create weights
-        if self.ep_size:
+        if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
             num_experts = len(expert_list)
         else:
