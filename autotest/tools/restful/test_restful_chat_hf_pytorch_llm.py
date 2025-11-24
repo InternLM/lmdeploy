@@ -1,8 +1,13 @@
+import os
+import time
+
 import pytest
 from utils.config_utils import get_torch_model_list, get_workerid
+from utils.distributed_utils import worker_node_wait
 from utils.run_restful_chat import run_all_step, run_reasoning_case, run_tools_case, start_restful_api, stop_restful_api
 
 DEFAULT_PORT = 23333
+PROXY_PORT = 8000
 
 
 @pytest.fixture(scope='function', autouse=True)
@@ -31,6 +36,34 @@ def getPrefixCacheModelList(tp_num):
         'tp_num': tp_num,
         'extra': '--enable-prefix-caching'
     } for item in get_torch_model_list(tp_num, exclude_dup=True)]
+
+
+def _run_distributed_test(
+        config,
+        model_param,
+        common_case_config,
+        worker_id,
+        manager=None,  # ← New parameter: pass in shared manager
+):
+    """Universal distributed test executor (using shared Ray cluster)"""
+    assert manager is not None, 'Manager instance must be provided'
+
+    if manager.is_master:
+        model_name = model_param['model']
+        model_path = os.path.join(config['model_path'], model_name)
+
+        # Start API Server for current model (master node starts/stops, worker nodes verify)
+        manager.start_lmdeploy_api_server(model_path=model_path, model_param=model_param)
+
+        try:
+            run_all_step(config, common_case_config, worker_id=worker_id, port=PROXY_PORT)
+
+        finally:
+            # Clean up API Server for current model (worker nodes skip)
+            manager.cleanup(force=False)
+    else:
+        time.sleep(10)
+        worker_node_wait(manager, timeout_minutes=4880)
 
 
 @pytest.mark.order(7)
@@ -109,6 +142,18 @@ def test_restful_chat_tp16(config, common_case_config, worker_id):
         run_all_step(config, common_case_config)
     else:
         run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api_pytorch
+@pytest.mark.parametrize('model_param', getModelList(tp_num=16))
+def test_restful_chat_distributed_tp16(shared_ray_manager, config, model_param, common_case_config, worker_id):
+    _run_distributed_test(config=config,
+                          model_param=model_param,
+                          common_case_config=common_case_config,
+                          worker_id=worker_id,
+                          manager=shared_ray_manager)
 
 
 def getKvintModelList(tp_num, quant_policy):
