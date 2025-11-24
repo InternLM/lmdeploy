@@ -14,7 +14,7 @@ def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
 
     var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
     out = xf * tl.math.rsqrt(var + eps)
-    out = (w * out).to(x.dtype)
+    out = w * out.to(x.dtype)
     return out
 
 
@@ -27,7 +27,7 @@ def rms_norm_kernel(input, weight, output, seq_len, input_row_stride: tl.constex
     offsets = tl.arange(0, BLOCK_N)
     mask = offsets < N_COLS
 
-    w = tl.load(weight + offsets, mask=mask).to(tl.float32)
+    w = tl.load(weight + offsets, mask=mask)
 
     x_ptr = input + prog_id * input_row_stride + offsets
     out_ptr = output + prog_id * input_row_stride + offsets
@@ -50,7 +50,7 @@ def add_rms_norm_kernel(input, weight, residual, output, out_residual, seq_len, 
     offsets = tl.arange(0, BLOCK_N)
     mask = offsets < N_COLS
 
-    w = tl.load(weight + offsets, mask=mask).to(tl.float32)
+    w = tl.load(weight + offsets, mask=mask)
 
     x_ptr = input + prog_id * input_row_stride + offsets
     res_ptr = residual + prog_id * residual_row_stride + offsets

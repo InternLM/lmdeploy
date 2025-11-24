@@ -12,6 +12,7 @@ from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager, SequenceMeta
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
+from .state_manager import StateManager
 
 logger = get_logger('lmdeploy')
 
@@ -50,6 +51,8 @@ class Scheduler:
 
         self.block_manager = build_block_manager(cache_config)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
+        self.state_manager = StateManager(self.cache_config.num_state_caches)
+        self.is_ssm = len(self.cache_config.states_shapes) > 0
 
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
@@ -231,6 +234,8 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq, prealloc_size)
+            if self.is_ssm:
+                self.state_manager.allocate(seq)
             _to_running(seq)
 
             seq.record_event(EventType.SCHEDULED)
@@ -326,6 +331,7 @@ class Scheduler:
             seq (SchedulerSequence): sequence to remove
         """
         self.block_manager.free(seq)
+        self.state_manager.free(seq)
         seq.set_step(0)
         seq.session.remove_sequence(seq)
 

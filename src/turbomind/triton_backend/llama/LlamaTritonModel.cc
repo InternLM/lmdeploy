@@ -200,12 +200,6 @@ void LlamaTritonModel::handleMissingParams()
                        (int)model_param_.vocab_size);
     }
 
-    if (model_param_.tokenizer_size == 0) {
-        model_param_.tokenizer_size = model_param_.vocab_size;
-        TM_LOG_WARNING("[LlamaTritonModel] `tokenizer_size` is not set, default to `vocab_size` (%d).",
-                       (int)model_param_.vocab_size);
-    }
-
     if (!attn_param_.max_position_embeddings) {
         attn_param_.max_position_embeddings = 2048;
         TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
@@ -322,7 +316,6 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     model_param_.layer_num          = model_reader["num_layer"].as<int>();
     model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
     model_param_.embedding_size     = model_reader["embedding_size"].as<int>();
-    model_param_.tokenizer_size     = model_reader["tokenizer_size"].as<int>(0);
     model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
     model_param_.tune_layer_num     = model_reader["tune_layer_num"].as<int>(1);
     model_param_.mla.q_lora_rank    = model_reader["q_lora_rank"].as<int>();
@@ -379,17 +372,19 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     engine_param_.attn_dp_rank  = 0;
     engine_param_.attn_tp_size  = engine_reader["attn_tp_size"].as<int>();
     engine_param_.attn_tp_rank  = 0;
+    engine_param_.attn_cp_size  = engine_reader["attn_cp_size"].as<int>();
+    engine_param_.attn_cp_rank  = 0;
     engine_param_.mlp_tp_size   = engine_reader["mlp_tp_size"].as<int>();
     engine_param_.mlp_tp_rank   = 0;
 
     engine_param_.devices = engine_reader["devices"].as<std::vector<int>>();
 
     {
-        auto tp                             = engine_param_.attn_tp_size;
+        auto tp                             = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + tp - 1) / tp * tp;
     }
 
-    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size;
+    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
     FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
 
     communicator_ = engine_reader["communicator"].as<std::string>();
@@ -444,13 +439,16 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     }
 
     const int device_num = engine_param_.outer_dp_size * comm_size_;
+    const int tp_cp_size = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
 
+    // comm layout: outer_dp x inner(dp, tp, cp)
     engine_params_.resize(device_num, engine_param_);
     for (int i = 0; i < device_num; ++i) {
         auto& e         = engine_params_[i];
         e.outer_dp_rank = i / comm_size_;
-        e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
-        e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
+        e.attn_cp_rank  = i % comm_size_ % e.attn_cp_size;
+        e.attn_tp_rank  = i % tp_cp_size / e.attn_cp_size;
+        e.attn_dp_rank  = i % comm_size_ / tp_cp_size;
         e.mlp_tp_rank   = i % comm_size_;
     }
 
@@ -501,17 +499,26 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
     const int outer_rank = rank / comm_size_;
     const int inner_rank = rank % comm_size_;
 
+    const int tp_cp_size = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
+    const int color_tp   = inner_rank / tp_cp_size;
+    const int color_cp   = inner_rank / engine_param_.attn_cp_size;
+    const int color_dp   = inner_rank % tp_cp_size;
+
     comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
 
-    comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
-    comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
+    comm.h_tp_group = comm.h_comm->Split(color_tp, 0);
+    comm.h_dp_group = comm.h_comm->Split(color_dp, 0);
 
     if (comm_size_ > 1) {
         comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
         //
         comm.d_tp_group = 0;
-        if (engine_param_.attn_tp_size != comm_size_) {
-            comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+        comm.d_cp_group = 0;
+        if (engine_param_.attn_dp_size > 1) {  // has attn_dp
+            comm.d_tp_group = comm.d_comm->Split(color_tp, 0, 0);
+        }
+        if (engine_param_.attn_cp_size > 1) {  // has attn_cp
+            comm.d_cp_group = comm.d_comm->Split(color_cp, 0, 0);
         }
     }
 

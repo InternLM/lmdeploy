@@ -14,8 +14,16 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
+
+        # for multi-modal models, get the language model config to build model config
+        if hasattr(hf_config, 'text_config'):
+            hf_config = hf_config.text_config
+        elif hasattr(hf_config, 'llm_config'):
+            hf_config = hf_config.llm_config
+
         head_dim = getattr(hf_config, 'head_dim', None)
         head_dim = head_dim or hf_config.hidden_size // hf_config.num_attention_heads
+
         # head_dim should not be None
         hf_config.head_dim = head_dim
         num_attention_heads = hf_config.num_attention_heads
@@ -37,6 +45,8 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
             eos_token_id=hf_config.eos_token_id,
             sliding_window=sliding_window,
             head_dim=head_dim,
+            k_head_dim=head_dim,
+            v_head_dim=head_dim,
             vocab_size=hf_config.vocab_size,
             llm_config=hf_config,
         )

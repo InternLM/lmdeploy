@@ -64,8 +64,6 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
     device = os.environ.get('DEVICE', '')
     if device:
         backend_config.device_type = device
-        if device == 'ascend':
-            backend_config.eager_mode = True
 
     if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
         backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
@@ -206,15 +204,26 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
         return frame_indices
 
     def load_video(video_path, bound=None, num_segments=32):
-        from decord import VideoReader, cpu
-        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
-        max_frame = len(vr) - 1
-        fps = float(vr.get_avg_fps())
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f'Cannot open video file: {video_path}')
+
+        max_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1
+        fps = cap.get(cv2.CAP_PROP_FPS)
+
         frame_indices = get_index(bound, fps, max_frame, first_idx=0, num_segments=num_segments)
         imgs = []
+
         for frame_index in frame_indices:
-            img = Image.fromarray(vr[frame_index].asnumpy()).convert('RGB')
-            imgs.append(img)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ret, frame = cap.read()
+            if ret:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(rgb_frame).convert('RGB')
+                imgs.append(img)
+
+        cap.release()
         return imgs
 
     video_path = resource_path + '/red-panda.mp4'
@@ -309,14 +318,28 @@ def MiniCPM_vl_testcase(pipe, resource_path):
             idxs = [int(i * gap + gap / 2) for i in range(n)]
             return [length[i] for i in idxs]
 
-        from decord import VideoReader, cpu
-        vr = VideoReader(video_path, ctx=cpu(0))
-        sample_fps = round(vr.get_avg_fps() / 1)  # FPS
-        frame_idx = [i for i in range(0, len(vr), sample_fps)]
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f'Cannot open video file: {video_path}')
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        sample_fps = round(fps / 1)  # FPS
+        frame_idx = [i for i in range(0, total_frames, sample_fps)]
         if len(frame_idx) > MAX_NUM_FRAMES:
             frame_idx = uniform_sample(frame_idx, MAX_NUM_FRAMES)
-        frames = vr.get_batch(frame_idx).asnumpy()
-        frames = [Image.fromarray(v.astype('uint8')) for v in frames]
+
+        frames = []
+        for idx in frame_idx:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(Image.fromarray(rgb_frame.astype('uint8')).convert('RGB'))
+
+        cap.release()
         print('num frames:', len(frames))
         return frames
 

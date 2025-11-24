@@ -178,7 +178,7 @@ class Engine:
                                                       stream_output=stream_output)
             try:
                 async for outputs in generator:
-                    n_token += outputs.num_token
+                    n_token += len(outputs.token_ids)
                     token_ids += outputs.token_ids
                     if not skip_detokenize:
                         _, state = self.tokenizer.detokenize_incrementally(token_ids, state)
@@ -327,6 +327,7 @@ def parse_args():
     tb_group._group_actions.append(dtype_act)
 
     ArgumentHelper.dp(tb_group)
+    ArgumentHelper.cp(tb_group)
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
@@ -344,6 +345,7 @@ def main():
             max_batch_size=args.concurrency // args.dp,
             tp=args.tp,
             dp=args.dp,
+            cp=args.cp,
             cache_max_entry_count=args.cache_max_entry_count,
             cache_block_seq_len=args.cache_block_seq_len,
             model_format=args.model_format,

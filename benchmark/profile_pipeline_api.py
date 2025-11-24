@@ -134,7 +134,7 @@ class Engine:
     def __init__(self, model_path: str, engine_config, csv: str):
         self.pipe = pipeline(model_path, backend_config=engine_config, log_level='ERROR')
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
+        self.return_routed_experts = getattr(self.pipe.backend_config, 'enable_return_routed_experts', False)
         self.csv = csv
 
     def process_request(self, requests, profiler: Profiler, temperature, top_p, top_k, stream_output):
@@ -146,6 +146,7 @@ class Engine:
                              top_k=top_k,
                              ignore_eos=True,
                              do_sample=False,
+                             return_routed_experts=self.return_routed_experts,
                              max_new_tokens=output_len) for _, _, output_len in requests
         ]
 
@@ -254,9 +255,11 @@ def parse_args():
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
     ArgumentHelper.eager_mode(pt_group)
+    ArgumentHelper.enable_return_routed_experts(pt_group)
 
     tp_act = ArgumentHelper.tp(pt_group)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
+    session_len_act = ArgumentHelper.session_len(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
 
@@ -264,6 +267,7 @@ def parse_args():
     tb_group = parser.add_argument_group('TurboMind engine argument')
     tb_group._group_actions.append(tp_act)
     tb_group._group_actions.append(cache_count_act)
+    tb_group._group_actions.append(session_len_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
     ArgumentHelper.model_format(tb_group, default='hf')
@@ -285,6 +289,7 @@ def main():
             max_batch_size=args.concurrency,
             tp=args.tp,
             cache_max_entry_count=args.cache_max_entry_count,
+            session_len=args.session_len,
             cache_block_seq_len=args.cache_block_seq_len,
             model_format=args.model_format,
             quant_policy=args.quant_policy,
@@ -296,12 +301,14 @@ def main():
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
             cache_max_entry_count=args.cache_max_entry_count,
+            session_len=args.session_len,
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
             thread_safe=False,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
+            enable_return_routed_experts=args.enable_return_routed_experts,
         )
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)

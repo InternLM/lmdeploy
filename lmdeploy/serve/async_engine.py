@@ -98,6 +98,8 @@ class GenOut:
     # for disaggregation
     cache_block_ids: List[int] = None
 
+    routed_experts: Any = None
+
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
     return Response(text=out.response,
@@ -108,6 +110,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     logprobs=out.logprobs,
                     last_hidden_state=out.last_hidden_state,
                     logits=out.logits,
+                    routed_experts=out.routed_experts,
                     index=index)
 
 
@@ -125,6 +128,7 @@ def _append_response(dst: Response, src: Response):
     if src.logprobs:
         dst.logprobs = dst.logprobs or []
         dst.logprobs += src.logprobs
+    dst.routed_experts = src.routed_experts
     return dst
 
 
@@ -332,6 +336,8 @@ class AsyncEngine(LogitsMixin):
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config
+        self.is_sleeping = backend_config.empty_init
+        self.sleeping_tags: set[str] = set() if not backend_config.empty_init else {'weights', 'kv_cache'}
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
@@ -444,12 +450,26 @@ class AsyncEngine(LogitsMixin):
         for stat_logger in self.stat_loggers:
             stat_logger.log()
 
+    async def stop_all_session(self):
+        """Stop all running sessions."""
+        logger.info('stop all sessions')
+        tasks = []
+        session_ids = []
+        for session_id in list(self.id2inst.keys()):
+            generator = self.id2inst.get(session_id)
+            if generator:
+                session_ids.append(session_id)
+                tasks.append(generator.async_cancel(session_id))
+        await asyncio.gather(*tasks)
+        logger.info(f'all {len(session_ids)} sessions stopped')
+
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         logger.info(f'stop session {session_id}')
         generator = self.id2inst.get(session_id)
         if generator:
             await generator.async_cancel(session_id)
+            logger.info(f'session {session_id} stopped')
         # else it's not running at all
 
     async def end_session(self, session_id: int):
@@ -477,6 +497,8 @@ class AsyncEngine(LogitsMixin):
                 discard both the model weights and the kv cache.
         """
         self.engine.sleep(level)
+        self.sleeping_tags = {'weights', 'kv_cache'}
+        self.is_sleeping = True
 
     def wakeup(self, tags: Optional[List[str]] = None):
         """Wake up the model.
@@ -488,11 +510,17 @@ class AsyncEngine(LogitsMixin):
                 wake_up should be called with all tags (or None) before the
                 engine is used again.
         """
+        tags = tags or list(self.sleeping_tags)
+        if any(tag not in self.sleeping_tags for tag in tags):
+            logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
+            return
         self.engine.wakeup(tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instance
-        if self.backend == 'turbomind' and (tags is None or 'kv_cache' in tags):
+        if self.backend == 'turbomind' and 'kv_cache' in tags:
             self.instances = [self.engine.create_instance() for _ in range(self.instance_num)]
             self.free_insts = None
+        self.sleeping_tags = self.sleeping_tags - set(tags)
+        self.is_sleeping = bool(self.sleeping_tags)
 
     def _get_limiter(self):
         if not self.limiter:
@@ -854,8 +882,8 @@ class AsyncEngine(LogitsMixin):
                     if is_error(outputs.status):
                         break
 
-                    output_len = outputs.num_token
-                    if hit_stop_token:
+                    output_len = len(outputs.token_ids)
+                    if hit_stop_token or output_len == 0:
                         continue
 
                     # This assumes the engine will stop when stop token is hit
@@ -879,6 +907,7 @@ class AsyncEngine(LogitsMixin):
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
+                                 routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
@@ -892,7 +921,11 @@ class AsyncEngine(LogitsMixin):
                 metrics_processor.increment_finished_requests()
 
                 if not is_error(outputs.status):
-                    finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+                    if outputs.status == ResponseType.CANCEL:
+                        finish_reason = 'abort'
+                    else:
+                        finish_reason = 'stop' if outputs.token_ids[-1] in stop_ids else 'length'
+
                     # utf-8 char at the end means it's a potential unfinished byte sequence
                     if not response.endswith('�'):
                         # avoid returning the last response twice
@@ -905,6 +938,13 @@ class AsyncEngine(LogitsMixin):
                         logits = outputs.logits[-1:] if outputs.logits else None
                         last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
                         logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
+                        gen_len += 1
+
+                    # router replay
+                    routed_experts = outputs.routed_experts
+                    if routed_experts is not None and not isinstance(routed_experts, str) and (
+                            not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
+                        routed_experts = routed_experts[:-1]
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
@@ -918,6 +958,7 @@ class AsyncEngine(LogitsMixin):
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
+                                 routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
                     # Update a session's sequence only when it is in finished status
                     if outputs.status == ResponseType.FINISH:
@@ -926,7 +967,7 @@ class AsyncEngine(LogitsMixin):
                             output_len = gen_len
                         self.id2step[session_id] += input_len + output_len
                 else:
-                    logger.error(f'session {session_id} finished, '
+                    logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')
                     yield GenOut(response=f'internal error happened, status code {outputs.status}',
                                  history_token_len=self.id2step[session_id],

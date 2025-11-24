@@ -100,11 +100,12 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         inner_tp_size = cfg.tp // mlp_tp_size
         cfg.outer_dp_size = cfg.dp // attn_dp_size
         cfg.attn_dp_size = attn_dp_size
-        cfg.attn_tp_size = inner_tp_size
+        cfg.attn_tp_size = inner_tp_size // cfg.cp
+        cfg.attn_cp_size = cfg.cp
         cfg.mlp_dp_size = 1
         cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
-    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     cfg.devices = cfg.devices or list(range(cfg.device_num))
 
 
@@ -213,6 +214,7 @@ class TurboMind:
 
         model_comm = self.model_comm
         tm_params = self._tm_model.tm_params
+        tm_params.clear()
 
         def _get_params(device_id, que):
             rank = self.node_id * self.gpu_count + device_id
@@ -720,7 +722,12 @@ class TurboMindInstance:
             try:
                 tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
                 decode_grammar_type = gen_config.response_format['type']
-                decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
+                if decode_grammar_type == 'json_schema':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
+                elif decode_grammar_type == 'regex_schema':
+                    decode_grammar = gen_config.response_format[decode_grammar_type]
+                elif decode_grammar_type == 'json_object':
+                    decode_grammar = '{"type" : "object", "additionalProperties": true}'
 
                 compiler = _xgr.GrammarCompiler(tokenizer_info)
 
@@ -730,9 +737,12 @@ class TurboMindInstance:
                 elif decode_grammar_type == 'regex_schema':
                     decode_grammar = str(decode_grammar)
                     grammar = compiler.compile_regex(decode_grammar)
+                elif decode_grammar_type == 'json_object':
+                    decode_grammar = str(decode_grammar)
+                    grammar = compiler.compile_json_schema(decode_grammar)
                 else:
                     assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema"]'
+                                   '["json_schema", "regex_schema", "json_object"]'
 
                 self.model_inst.set_grammar(grammar)
             except ValueError as e:
@@ -760,7 +770,6 @@ class TurboMindInstance:
         state = None
 
         output_ids = []
-        output_len = 0
         prev_len = step + input_len
         try:
             while True:
@@ -782,8 +791,7 @@ class TurboMindInstance:
                     continue
 
                 output_ids = output_ids_buf[prev_len:seq_len].tolist()
-                output_len = seq_len - prev_len
-                output = EngineOutput(ret_status, output_ids, output_len)
+                output = EngineOutput(ret_status, output_ids)
 
                 for f in extra_fs:
                     f(output, seq_len)
@@ -811,7 +819,7 @@ class TurboMindInstance:
             logger.info(f'[async_stream_infer] session {session_id} done')
 
     def _get_error_output(self, status):
-        return EngineOutput(status=self.errcode_map[status], token_ids=[], num_token=0)
+        return EngineOutput(status=self.errcode_map[status], token_ids=[])
 
     def _get_generation_config(self, cfg: GenerationConfig):
         c = _tm.GenerationConfig()

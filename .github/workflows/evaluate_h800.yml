@@ -53,7 +53,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.4
+      DOCKER_TAG: cuda12.8
       OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
     steps:
       - name: Checkout repository

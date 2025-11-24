@@ -54,9 +54,6 @@ class ModelConfig:
     # Therefore, we add a new attr "embedding_size" to represent the vocab dim
     # of token_embedding
     embedding_size: int = 0
-    # for some models like qwen2.5, the vocab size of the model is larger than
-    # the vocab size of the tokenizer.
-    tokenizer_size: int = None
     num_layer: int = None
     inter_size: List[int] = None
     norm_eps: float = None
@@ -72,6 +69,7 @@ class ModelConfig:
     expert_weight_type: str = None
     session_len: int = None
     attn_tp_size: int = 1
+    attn_cp_size: int = 1
     mlp_tp_size: int = 1
     model_format: str = 'hf'
     expert_num: List[int] = ()

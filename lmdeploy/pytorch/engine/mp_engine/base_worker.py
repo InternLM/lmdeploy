@@ -20,7 +20,8 @@ class EngineInstancePool:
     def __init__(self, engine):
         from lmdeploy.pytorch.engine import Engine
         self.engine: Engine = engine
-        self.num_instance = self.engine.engine_config.max_batch_size
+        # enlarge `num_instance`, otherwise an sequence cannot be stopped in time
+        self.num_instance = self.engine.engine_config.max_batch_size * 2
         self.pool = None
 
     def create_instance_pool(self, num_instance: int):
@@ -138,7 +139,7 @@ class EngineOutputGather:
 
     def get(self, stream_id):
         if stream_id not in self._output:
-            self._output[stream_id] = EngineOutput(status=None, token_ids=[], num_token=0, logprobs=[])
+            self._output[stream_id] = EngineOutput(status=None, token_ids=[], logprobs=[])
         return self._output[stream_id]
 
     def add(self, stream_id, result):
@@ -154,5 +155,4 @@ class EngineOutputGather:
         output = self._output.pop(stream_id)
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs or None
-        result.num_token = len(output.token_ids)
         return result

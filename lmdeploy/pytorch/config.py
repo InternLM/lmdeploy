@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from dataclasses import dataclass
-from typing import Any, Dict, List, Literal
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Literal, Tuple
 
 import torch
 
@@ -28,9 +28,9 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         config.dtype = torch.float16
         return config
 
-    torch_dtype = getattr(config.hf_config, 'dtype', None)
+    torch_dtype = getattr(config.llm_config, 'dtype', None)
     if torch_dtype is None:
-        torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+        torch_dtype = getattr(config.llm_config, 'torch_dtype', None)
 
     # deal with case when torch_dtype is not string but torch.dtype
     if isinstance(torch_dtype, torch.dtype):
@@ -86,6 +86,8 @@ class CacheConfig:
     enable_prefix_caching: bool = False
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
+    num_state_caches: int = None
+    states_shapes: List[Tuple] = field(default_factory=list)
 
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
@@ -100,35 +102,105 @@ class CacheConfig:
             self.enable_prefix_caching = False
 
 
+class TPMode(enum.Enum):
+    """TP Mode."""
+    DEFAULT = enum.auto()
+    DP_TP = enum.auto()
+
+
 @dataclass
 class DistConfig:
     dp: int = 1
-    tp: int = 1
     ep: int = 1
     dp_rank: int = 0
     enable_microbatch: bool = False
     enable_eplb: bool = False
-    world_size: int = None
-    attn_config: 'DistConfig' = None
+    world_size: int = 1
+
+    # tp
+    tp: int = 1  # default tp, equal to attn_tp
+    attn_tp: int = None  # tp for attention
+    mlp_tp: int = None  # tp for mlp
+    moe_tp: int = None  # tp for moe
+
+    # tp mode
+    mlp_tp_mode: TPMode = TPMode.DEFAULT
+    moe_tp_mode: TPMode = TPMode.DEFAULT
 
     def __post_init__(self):
         """Post init."""
         assert self.dp_rank < self.dp
         assert self.dp >= 1
-        if self.dp == 1:
-            world_size = max(self.tp, self.ep)
-            attn_config = self
-        else:
-            world_size = self.dp
-            attn_config = DistConfig(dp=1, tp=1, ep=1, dp_rank=0)
-        self.world_size = world_size
-        self.attn_config = attn_config
 
-    def need_dummy_batch(self):
-        """Need dummy batch."""
-        if self.dp == 1:
-            return False
-        return self.tp > 1 or self.ep > 1
+        dp = self.dp
+        tp = self.tp
+        ep = self.ep
+
+        # ignore layer to for dp==1
+        if dp == 1:
+            self.mlp_tp = None
+            self.attn_tp = None
+            self.moe_tp = None
+
+        # mlp and moe tp
+        self.mlp_tp = self.mlp_tp or tp
+        self.moe_tp = self.moe_tp or (1 if ep > 1 else self.mlp_tp)
+
+        # world_size
+        world_size = ep if ep > 1 else max(self.mlp_tp, self.moe_tp)
+        self.world_size = world_size
+        assert (world_size >= dp and world_size % dp == 0), (f'world_size {world_size}, dp {dp}')
+        assert (world_size >= ep and world_size % ep == 0), (f'world_size {world_size}, ep {ep}')
+        assert (world_size >= self.mlp_tp
+                and world_size % self.mlp_tp == 0), (f'world_size {world_size}, mlp_tp {self.mlp_tp}')
+        assert (world_size >= self.moe_tp
+                and world_size % self.moe_tp == 0), (f'world_size {world_size}, moe_tp {self.moe_tp}')
+
+        # attn tp
+        self.attn_tp = self.attn_tp or self.world_size // dp
+        self.tp = self.attn_tp
+        if self.mlp_tp > 1:
+            assert (self.mlp_tp >= self.attn_tp
+                    and self.mlp_tp % self.attn_tp == 0), (f'mlp_tp {self.mlp_tp}, attn_tp {self.attn_tp}')
+        if self.moe_tp > 1:
+            assert (self.moe_tp >= self.attn_tp
+                    and self.moe_tp % self.attn_tp == 0), (f'moe_tp {self.moe_tp}, attn_tp {self.attn_tp}')
+        assert (world_size >= self.attn_tp
+                and world_size % self.attn_tp == 0), (f'world_size {world_size}, attn_tp {self.attn_tp}')
+
+        # tp mode
+        self.mlp_tp_mode = TPMode.DEFAULT if (self.mlp_tp in [1, self.attn_tp]) else TPMode.DP_TP
+        self.moe_tp_mode = TPMode.DEFAULT if (self.moe_tp in [1, self.attn_tp]) else TPMode.DP_TP
+
+    def get_tp_by_layer(self, layer_type: str):
+        """Get tp by layer type."""
+        if layer_type == 'attn':
+            return self.attn_tp, TPMode.DEFAULT
+        elif layer_type == 'mlp':
+            return self.mlp_tp, self.mlp_tp_mode
+        elif layer_type == 'moe':
+            return self.moe_tp, self.moe_tp_mode
+        elif layer_type is None:
+            # for some layer that we don't need tp
+            return 1, TPMode.DEFAULT
+        else:
+            raise ValueError(f'Unknown layer type: {layer_type}')
+
+    @classmethod
+    def from_engine_config(cls, engine_config: PytorchEngineConfig):
+        """From engine config."""
+        dist_config = cls(
+            dp=engine_config.dp,
+            ep=engine_config.ep,
+            dp_rank=engine_config.dp_rank,
+            enable_microbatch=engine_config.enable_microbatch,
+            enable_eplb=engine_config.enable_eplb,
+            tp=engine_config.tp,
+            attn_tp=engine_config.attn_tp_size,
+            mlp_tp=engine_config.mlp_tp_size,
+            moe_tp=engine_config.moe_tp_size,
+        )
+        return dist_config
 
 
 def _override_hf_config_dict(hf_config: dict, key: str, hf_overrides):
@@ -183,6 +255,10 @@ def override_hf_config(hf_config: Any, hf_overrides: Dict[str, Any]):
         _override_hf_config(hf_config, k, v)
 
 
+def _default_check_env(device: str):
+    pass
+
+
 @dataclass
 class ModelConfig:
     """Config of model."""
@@ -207,6 +283,13 @@ class ModelConfig:
     model_paradigm: str = 'ar'
     dllm_mask_token: int = 0
     dllm_block_length: int = None
+
+    # added for qwen3_next
+    # could used for any SSM model.
+    states_shapes: List[Tuple[Tuple[int], torch.dtype]] = field(default_factory=list)
+
+    # check env for model-device combination
+    check_env_func: Callable = _default_check_env
 
     def get_head_size(self):
         """Get head size."""
@@ -261,10 +344,7 @@ class ModelConfig:
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
         if dist_config is None:
             dist_config = DistConfig()
-        if dist_config.dp == 1:
-            tp = dist_config.tp
-        else:
-            tp = 1
+        tp = dist_config.attn_tp
 
         model_config = AutoModelConfigBuilder.build(hf_config, model_path, tp=tp)
 
@@ -334,6 +414,7 @@ class MiscConfig:
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
+    enable_return_routed_experts: bool = False
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -343,12 +424,15 @@ class MiscConfig:
                                  unmasking_strategy=dllm_unmasking_strategy,
                                  denoising_steps=engine_config.dllm_denoising_steps,
                                  confidence_threshold=engine_config.dllm_confidence_threshold)
-        misc_config = cls(custom_module_map=engine_config.custom_module_map,
-                          empty_init=engine_config.empty_init,
-                          prefill_interval=engine_config.prefill_interval,
-                          model_format=engine_config.model_format,
-                          hf_overrides=engine_config.hf_overrides,
-                          disable_vision_encoder=engine_config.disable_vision_encoder,
-                          logprobs_mode=engine_config.logprobs_mode,
-                          dllm_config=dllm_config)
+        misc_config = cls(
+            custom_module_map=engine_config.custom_module_map,
+            empty_init=engine_config.empty_init,
+            prefill_interval=engine_config.prefill_interval,
+            model_format=engine_config.model_format,
+            hf_overrides=engine_config.hf_overrides,
+            disable_vision_encoder=engine_config.disable_vision_encoder,
+            logprobs_mode=engine_config.logprobs_mode,
+            dllm_config=dllm_config,
+            enable_return_routed_experts=engine_config.enable_return_routed_experts,
+        )
         return misc_config

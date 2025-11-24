@@ -46,8 +46,8 @@ LlamaWeight::LlamaWeight(DataType           data_type,
     num_layer_(model.layer_num),
     data_type_{data_type},
     weight_type_{model.weight_type},
-    tp_size_(engine_param.attn_tp_size),
-    tp_rank_(engine_param.attn_tp_rank)
+    tp_size_(engine_param.attn_tp_size * engine_param.attn_cp_size),
+    tp_rank_(engine_param.attn_tp_rank * engine_param.attn_cp_size + engine_param.attn_cp_rank)
 {
     if (vocab_size_padded_ % tp_size_ != 0) {
         vocab_size_padded_ = (vocab_size_ + tp_size_ - 1) / tp_size_ * tp_size_;
@@ -116,6 +116,7 @@ void LlamaWeight::release()
     }
 
     decoder_layer_weights.clear();
+    pinned_weights_.clear();
 
     // Wait for deallocations
     core::Context::stream().Sync();
@@ -127,21 +128,22 @@ void LlamaWeight::release()
 
 void LlamaWeight::to_device(const core::Device& device)
 {
-    core::ContextGuard guard = context();
-
-    auto to_device = [&](Tensor& x) -> Tensor {
-        auto tmp = std::exchange(x, empty_like(x, device));
-        Copy(tmp, x);
-        return tmp;
-    };
-
-    std::vector<Tensor> tmp_cpu_tensors;
+    TM_CHECK(device.type == kCPU || device.type == kDEVICE);
+    core::ContextGuard guard{stream_, alloca_, Allocator{kCPUpinned}};
 
     auto tensor_ptr_map = get_parameters();
     for (auto& [name, tensor_ptr] : tensor_ptr_map) {
-        auto tmp_tensor = to_device(*tensor_ptr);
-        if (tmp_tensor.device().type != kDEVICE) {
-            tmp_cpu_tensors.push_back(tmp_tensor);
+        if (device.type == kCPU) {
+            if (pinned_weights_.find(name) == pinned_weights_.end()) {
+                pinned_weights_[name] = empty_like(*tensor_ptr, kCPUpinned);
+                Copy(*tensor_ptr, pinned_weights_[name]);
+            }
+            *tensor_ptr = {};
+        }
+        else {
+            TM_CHECK(pinned_weights_.find(name) != pinned_weights_.end());
+            *tensor_ptr = empty_like(pinned_weights_[name], kDEVICE);
+            Copy(pinned_weights_[name], *tensor_ptr);
         }
     }
     core::Context::stream().Sync();

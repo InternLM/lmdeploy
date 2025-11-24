@@ -64,8 +64,8 @@ LlamaV2::LlamaV2(DataType                     dtype,
     attn_param_(attn),
     lora_param_(lora),
     comm_(&ctx.comm),
-    tp_size_(engine.attn_tp_size),
-    tp_rank_(engine.attn_tp_rank),
+    tp_size_(engine.attn_tp_size * engine.attn_cp_size),
+    tp_rank_(engine.attn_tp_rank * engine.attn_cp_size + engine.attn_cp_rank),
     head_num_(model.head_num),
     size_per_head_(model.head_dim),
     hidden_units_(model.hidden_units),
@@ -90,7 +90,7 @@ LlamaV2::LlamaV2(DataType                     dtype,
 
     // using float to avoid data overflow
     dynamic_decode_ = std::make_unique<DynamicDecodeLayer>(
-        kFloat32, max_batch_size, model.tokenizer_size, vocab_size_padded_, stream_, &ctx.device_prop);
+        kFloat32, max_batch_size, vocab_size_, vocab_size_padded_, stream_, &ctx.device_prop);
 }
 
 void LlamaV2::updateEmbedding(char*            decoder_input,
@@ -163,6 +163,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                       Buffer_<int>     h_context_length,
                       Buffer           rope_base,
                       MropeRope*       mrope,
+                      Tensor           partial_ML,
                       Buffer           finished,
                       Buffer           local_token_nums,
                       Buffer           lora_mask,
@@ -258,6 +259,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                    {"decode_num", Buffer{&decode_num, 1, kCPU}},
                    {"prefil_num", Buffer{&prefil_num, 1, kCPU}},
                    {"rope_base", rope_base},
+                   {"partial_ML", partial_ML},
                    {"cu_block_nums", cu_block_nums},
                    {"kv_block_ptrs", kv_block_ptrs},
                    {"local_token_nums", local_token_nums}};

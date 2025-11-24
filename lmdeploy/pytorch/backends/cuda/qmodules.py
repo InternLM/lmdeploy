@@ -63,7 +63,8 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
                 weight: torch.Tensor,
                 scale: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                all_reduce: bool = False,
+                group: Optional[torch.distributed.ProcessGroup] = None):
         """forward."""
         if isinstance(x, torch.Tensor):
             input_quant, input_scale = per_token_quant_int8(x, 1e-7, quant_dtype=self.quant_dtype)
@@ -79,7 +80,7 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
                                           bias=bias)
 
         if all_reduce:
-            dist.all_reduce(out)
+            dist.all_reduce(out, group=group)
         return out
 
 

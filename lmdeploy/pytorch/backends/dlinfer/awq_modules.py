@@ -23,7 +23,8 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
                 scales: torch.Tensor,
                 qzeros: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
-                all_reduce: bool = False):
+                all_reduce: bool = False,
+                group: Optional[torch.distributed.ProcessGroup] = None):
         """forward."""
         out = awq_linear(x, qweight, scales, qzeros, bias, all_reduce, self.group_size)
         return out

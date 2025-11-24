@@ -189,6 +189,16 @@ class ArgumentHelper:
                                    help='expert parallelism. dp is required when pytorch engine is used.')
 
     @staticmethod
+    def cp(parser):
+        """Add argument cp to parser."""
+
+        return parser.add_argument(
+            '--cp',
+            type=int,
+            default=1,
+            help='context parallelism size in attention for turbomind backend, tp must be a multiple of cp.')
+
+    @staticmethod
     def dp_rank(parser):
         """Add argument dp_rank to parser."""
 
@@ -455,6 +465,16 @@ class ArgumentHelper:
                                    help='Enable server to be terminated by request from client')
 
     @staticmethod
+    def enable_abort_handling(parser):
+        """Add --enable-abort-handling argument to configure server abort
+        request processing."""
+
+        return parser.add_argument('--enable-abort-handling',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable server to handle client abort requests')
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
@@ -584,9 +604,12 @@ class ArgumentHelper:
         return parser.add_argument('--enable-eplb', action='store_true', help='enable eplb for specified model')
 
     @staticmethod
-    def enable_metrics(parser):
-        """Add argument enable_metrics to parser."""
-        return parser.add_argument('--enable-metrics', action='store_true', default=False, help='enable metrics system')
+    def disable_metrics(parser):
+        """Add argument disable_metrics to parser."""
+        return parser.add_argument('--disable-metrics',
+                                   action='store_true',
+                                   default=False,
+                                   help='disable metrics system')
 
     # For Disaggregation
     @staticmethod
@@ -613,7 +636,7 @@ class ArgumentHelper:
         return parser.add_argument('--disable-vision-encoder',
                                    action='store_true',
                                    default=False,
-                                   help='enable metrics system')
+                                   help='disable multimodal encoder')
 
     @staticmethod
     def logprobs_mode(parser):
@@ -653,6 +676,15 @@ class ArgumentHelper:
                                    type=float,
                                    default=0.85,
                                    help='The confidence threshold for dllm.')
+
+    @staticmethod
+    def enable_return_routed_experts(parser):
+        """Add argument return routed experts to parser."""
+
+        return parser.add_argument('--enable-return-routed-experts',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to output routed expert ids for replay')
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

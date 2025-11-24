@@ -37,9 +37,8 @@ on:
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
-  OUTPUT_FOLDER: cuda11.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/evaluation-reports/allure_report/${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: '--lf'
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
@@ -62,9 +61,21 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda12.4
-      OUTPUT_FOLDER: cuda12.4_dist_${{ github.run_id }}
+      DOCKER_TAG: cuda12.8
+      OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
     steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
@@ -98,7 +109,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
     container:
-      image: openmmlab/lmdeploy:latest-cu12
+      image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -106,10 +117,9 @@ jobs:
         - /nvme/github-actions/resources:/root/resources
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/nvme/qa_test_models
-        - /mnt/shared:/mnt/shared
-        - /mnt/bigdisk:/mnt/bigdisk
+        - /nvme/huggingface_hub:/nvme/huggingface_hub
+        - /mnt/121:/mnt/121
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-        - /mnt/187:/mnt/187
     steps:
       - name: Create and change to _wk directory
         run: |
@@ -138,9 +148,8 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-          rm -rf allure-results
-          mkdir -p ${{ env.REPORT_DIR }}/.pytest_cache
-          ln -s ${{ env.REPORT_DIR }}/.pytest_cache autotest
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Setup paths for evaluation
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind')
         run: |
@@ -161,5 +170,6 @@ jobs:
       - name: Clear workspace
         if: always()
         run: |
+          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           export workdir=$(pwd)
           rm -rf $workdir/*
