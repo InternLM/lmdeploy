@@ -25,13 +25,23 @@ popd >/dev/null
 if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     apt-get install -y --no-install-recommends cuda-minimal-build-11-8
 elif [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-12-4 cuda-nvrtc-12-4
+    apt-get install -y --no-install-recommends cuda-minimal-build-12-4 cuda-nvrtc-12-4 build-essential devscripts debhelper fakeroot pkg-config dkms
 elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-12-8 cuda-nvrtc-12-8
+    apt-get install -y --no-install-recommends cuda-minimal-build-12-8 cuda-nvrtc-12-8 build-essential devscripts debhelper fakeroot pkg-config dkms
 fi
 
 apt-get clean -y
 rm -rf /var/lib/apt/lists/*
+
+# install GDRCopy
+GDRCOPY_VERSION=2.5.1
+mkdir -p /tmp/gdrcopy && cd /tmp \
+ && wget -q https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v${GDRCOPY_VERSION}.tar.gz \
+ && tar -xzf v${GDRCOPY_VERSION}.tar.gz && rm v${GDRCOPY_VERSION}.tar.gz \
+ && cd gdrcopy-${GDRCOPY_VERSION}/packages \
+ && CUDA=/usr/local/cuda ./build-deb-packages.sh \
+ && dpkg -i gdrdrv-dkms_*.deb libgdrapi_*.deb gdrcopy-tests_*.deb gdrcopy_*.deb \
+ && cd / && rm -rf /tmp/gdrcopy
 
 # install python packages
 export PATH=/opt/py3/bin:$PATH
