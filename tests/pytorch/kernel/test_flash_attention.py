@@ -90,7 +90,13 @@ def _naive_attention(batched_q, batched_kv, bias, sinks=None):
 
 
 def _naive_window_attention(q, k, v, seqlens_q, seqlens_k, window_size):
-    from flash_attn import flash_attn_varlen_func
+    try:
+        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
+    except Exception:
+        try:
+            from flash_attn import flash_attn_varlen_func
+        except Exception:
+            pytest.skip('Skip window attention test since flash attention is not available.')
 
     def _make_cu_seqlens(seqlens):
         cu_seqlens = seqlens.cumsum(0)
