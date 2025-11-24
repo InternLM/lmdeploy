@@ -243,18 +243,10 @@ class InternVLVisionModel(VisonModel):
                 if role != 'user' or isinstance(content, str):
                     prompt_messages.append(message)
                     continue
-                n_images = len([1 for x in content if x['type'] == 'image'])
+                # n_images = len([1 for x in content if x['type'] == 'image'])
                 content = [x['text'] for x in content if x['type'] == 'text']
                 prompt = '\n'.join(content)
-                if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
-                    prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{self.image_token}</img>')
-                    prompt = prompt.replace('</img><img>', '')
-                    prompt = prompt.replace('<img><img>', '<img>')
-                    prompt = prompt.replace('</img></img>', '</img>')
-                elif IMAGE_TOKEN not in prompt:
-                    prompt = f'<img>{self.image_token * n_images}</img>\n' + prompt
-                else:
-                    pass
+                prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{self.image_token}</img>')
                 prompt_messages.append(dict(role='user', content=prompt))
         else:
             for message in messages:
