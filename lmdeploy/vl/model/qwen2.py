@@ -128,30 +128,34 @@ class Qwen2VLModel(VisonModel):
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for message in messages:
-            if message['role'] in ['preprocess', 'forward']:
-                continue
-            role, content = message['role'], message['content']
-            if role == 'user' and isinstance(content, List):
+        messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
+        if VisonModel.IMAGE_TOKEN_included(messages):
+            # backward compatibility
+            for message in messages:
+                role, content = message['role'], message['content']
+                if role != 'user' or isinstance(content, str):
+                    prompt_messages.append(message)
+                    continue
+                content = [x['text'] for x in content if x['type'] == 'text']
+                prompt = ''.join(content)
+                prompt = prompt.replace(IMAGE_TOKEN, f'<|vision_start|>{self.image_token}<|vision_end|>')
+                prompt_messages.append(dict(role='user', content=prompt))
+        else:
+            for message in messages:
+                role, content = message['role'], message['content']
+                if role != 'user' or isinstance(content, str):
+                    prompt_messages.append(message)
+                    continue
                 _content = []
                 for item in content:
                     if item['type'] == 'text':
-                        # backward compatibility
-                        text = item['text']
-                        if IMAGE_TOKEN in text:
-                            text = text.replace(IMAGE_TOKEN, self.image_token)
-                        _content.append(text)
+                        _content.append(item['text'])
                     elif item['type'] in ['image', 'image_url']:
                         _content.append(f'<|vision_start|>{self.image_token}<|vision_end|>')
                     else:
                         raise ValueError(f'Unsupported message type: {item["type"]}')
                 message = dict(role=role, content=''.join(_content))
                 prompt_messages.append(message)
-            else:
-                if IMAGE_TOKEN in content and '<|vision_start|>' not in content:
-                    # backward compatibility
-                    content = content.replace(IMAGE_TOKEN, f'<|vision_start|>{self.image_token}<|vision_end|>')
-                prompt_messages.append(dict(role=role, content=content))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, self.image_token
 
