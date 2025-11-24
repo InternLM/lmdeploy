@@ -334,18 +334,24 @@ class FusedMoEBlockedF8(FusedMoEBase):
                 'moe_type': state['moe_type']
             }
         else:  # MoeType.Default
-            hidden_states = self.impl.forward(state['hidden_states'],
-                                              state['topk_weights'],
-                                              state['topk_idx'],
-                                              self.gate_up.weight,
-                                              self.gate_up.weight_scale_inv,
-                                              self.down.weight,
-                                              self.down.weight_scale_inv,
-                                              gate_up_bias=self.gate_up.bias,
-                                              down_bias=self.down.bias,
-                                              expert_list=self.expert_list,
-                                              act_func=self.act_func)
-            gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
+            if self.gate_up.weight.numel() == 0:
+                # current rank get no expert chunk
+                # create a zero tensor with the same shape as hidden_states
+                gemm_state = {'hidden_states': torch.zeros_like(state['hidden_states']), 'moe_type': state['moe_type']}
+            else:
+                # default fused moe
+                hidden_states = self.impl.forward(state['hidden_states'],
+                                                  state['topk_weights'],
+                                                  state['topk_idx'],
+                                                  self.gate_up.weight,
+                                                  self.gate_up.weight_scale_inv,
+                                                  self.down.weight,
+                                                  self.down.weight_scale_inv,
+                                                  gate_up_bias=self.gate_up.bias,
+                                                  down_bias=self.down.bias,
+                                                  expert_list=self.expert_list,
+                                                  act_func=self.act_func)
+                gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
         return gemm_state
 
     def combine(self, state: Dict):

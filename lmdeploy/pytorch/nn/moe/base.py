@@ -44,7 +44,6 @@ def update_dims(hidden_dim: int, ffn_dim: int):
 
 def split_size(size: int, world_size: int, align: int):
     size = size // align
-    assert size >= world_size
     base = size // world_size
     remain = size % world_size
     split_size = [base + 1] * remain + [base] * (world_size - remain)
