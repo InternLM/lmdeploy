@@ -21,7 +21,7 @@ try:
     from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
     use_deepep = True
 except ImportError:
-    logger.warning('Currently not using DeepEP, please install DeepEP and DLBLas properly')
+    logger.warning('Currently not using DeepEP, please install DeepEP and DLBLas properly.')
     use_deepep = False
 
 
@@ -251,9 +251,7 @@ class CUDAGraphRunner(GraphRunner):
         """Prepare inputs."""
 
         if use_deepep:
-            deepep_mode = DeepEPMode.NORMAL
-            if context.is_decoding:
-                deepep_mode = DeepEPMode.LOW_LATENCY
+            deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
             DeepEPBuffer.set_deepep_mode(deepep_mode)
 
         return self.model.prepare_inputs_for_generation(
