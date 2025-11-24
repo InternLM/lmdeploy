@@ -5,7 +5,8 @@ export PATH=/opt/py3/bin:$PATH
 if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     TORCH_VERSION="<2.7"
 else
-    TORCH_VERSION=""
+    # pin torch version to avoid build and runtime mismatch, o.w. deep_gemm undefined symbol error
+    TORCH_VERSION="==2.8.0"
 fi
 
 pip install "cmake<4.0" wheel ninja setuptools packaging
@@ -21,19 +22,18 @@ fi
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
 
-    if [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
-        FLASH_MLA_VERSION=9edee0c
-    else
-        FLASH_MLA_VERSION=c759027
-    fi
+    DEEP_EP_VERSION=9af0e0d  # v1.2.1
+    DEEP_GEMM_VERSION=c9f8b34  # v2.1.1.post3
+    FLASH_MLA_VERSION=1408756  # no release, pick the latest commit
 
-    # The current EP implementation uses dlblas, which is incompatible with the latest deep_gemm APIs.
-    # To ensure compatibility, we pin deep_gemm to an older version.
-    DEEP_GEMM_VERSION=03d0be3
-    DEEP_EP_VERSION=26cf250
+    # DeepEP
     pip install nvidia-nvshmem-cu12
-
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
-    pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
+
+    # DeepGEMM
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepGEMM.git@${DEEP_GEMM_VERSION}"
+
+    # FlashMLA
+    # sm100 compilation for Flash MLA requires NVCC 12.9 or higher
+    FLASH_MLA_DISABLE_SM100=1 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
 fi
