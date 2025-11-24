@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
+from lmdeploy.pytorch.utils import singleton
+
 
 @dataclass
 class DeviceContext:
@@ -13,6 +15,7 @@ class DeviceContext:
 DefaultContext = DeviceContext()
 
 
+@singleton
 class DeviceManager:
 
     def __init__(self):
@@ -51,12 +54,6 @@ class DeviceManager:
         self.set_context(origin_context)
 
 
-_DEVICE_MANAGER: DeviceManager = None
-
-
 def get_device_manager():
     """Get device manager."""
-    global _DEVICE_MANAGER
-    if _DEVICE_MANAGER is None:
-        _DEVICE_MANAGER = DeviceManager()
-    return _DEVICE_MANAGER
+    return DeviceManager()

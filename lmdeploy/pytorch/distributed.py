@@ -9,6 +9,8 @@ import torch
 from torch import distributed as dist
 from torch.distributed import ProcessGroup, ReduceOp, Work  # noqa: F401
 
+from lmdeploy.pytorch.utils import singleton
+
 from .config import DistConfig, TPMode
 
 
@@ -273,6 +275,7 @@ class DistContext:
 DefaultContext = DistContext.build()
 
 
+@singleton
 class DistManager:
     """Distributed context manager."""
 
@@ -301,15 +304,9 @@ class DistManager:
         self.set_context(origin_context)
 
 
-_DIST_MANAGER: DistManager = None
-
-
 def get_dist_manager():
     """Get device manager."""
-    global _DIST_MANAGER
-    if _DIST_MANAGER is None:
-        _DIST_MANAGER = DistManager()
-    return _DIST_MANAGER
+    return DistManager()
 
 
 def get_world_rank():

@@ -27,3 +27,21 @@ def bind_sigature(input_names: str, args: Sequence, kwargs: Dict):
     sig = Signature([Parameter(name, kind) for name in input_names])
     bind = sig.bind(*args, **kwargs)
     return bind.arguments
+
+
+def singleton(cls):
+    """Singleton decorator."""
+    import multiprocessing as mp
+
+    from lmdeploy.utils import get_logger
+    logger = get_logger('lmdeploy')
+    instances = {}
+
+    def get_instance(*args, **kwargs):
+        if cls not in instances:
+            pid = mp.current_process().pid
+            logger.debug(f'pid:{pid} - Creating instance of singleton class {cls.__name__}')
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+
+    return get_instance
