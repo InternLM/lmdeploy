@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import threading
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import List, Optional
@@ -9,7 +7,7 @@ import torch
 from torch import distributed as dist
 from torch.distributed import ProcessGroup, ReduceOp, Work  # noqa: F401
 
-from lmdeploy.pytorch.utils import singleton
+from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 from .config import DistConfig, TPMode
 
@@ -276,32 +274,15 @@ DefaultContext = DistContext.build()
 
 
 @singleton
-class DistManager:
+class DistManager(CtxMgrBase[DistContext]):
     """Distributed context manager."""
 
     def __init__(self):
-        self.t_local = threading.local()
-        self.t_local.device_context = DefaultContext
-
-    def current_context(self) -> DistContext:
-        """Get current context."""
-        return getattr(self.t_local, 'device_context', DefaultContext)
-
-    def set_context(self, context: DistContext):
-        """Set current context."""
-        self.t_local.device_context = context
+        super().__init__(DefaultContext)
 
     def current_config(self) -> DistConfig:
         """Get current dist config."""
         return self.current_context().dist_config
-
-    @contextmanager
-    def context(self, context: DistContext):
-        """Context manager."""
-        origin_context = self.current_context()
-        self.set_context(context)
-        yield self
-        self.set_context(origin_context)
 
 
 def get_dist_manager():

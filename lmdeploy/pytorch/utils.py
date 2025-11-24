@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import inspect
+from contextlib import contextmanager
 from inspect import Parameter, Signature
-from typing import Dict, Sequence
+from typing import Dict, Generic, Optional, Sequence, TypeVar
 
 import psutil
 
@@ -45,3 +46,31 @@ def singleton(cls):
         return instances[cls]
 
     return get_instance
+
+
+T = TypeVar('T')
+
+
+class CtxMgrBase(Generic[T]):
+    """Context manager base class."""
+
+    def __init__(self, default: Optional[T] = None):
+        self._context = default
+
+    def current_context(self) -> Optional[T]:
+        """Get current context."""
+        return self._context
+
+    def set_context(self, context: Optional[T]):
+        """Set current context."""
+        self._context = context
+
+    @contextmanager
+    def context(self, context: T):
+        """Context manager."""
+        origin_context = self.current_context()
+        self.set_context(context)
+        try:
+            yield self
+        finally:
+            self.set_context(origin_context)
