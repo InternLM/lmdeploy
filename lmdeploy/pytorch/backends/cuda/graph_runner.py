@@ -17,6 +17,13 @@ from .attention import TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
+try:
+    from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
+    use_deepep = True
+except ImportError:
+    logger.warning('Currently not using DeepEP, please install DeepEP and DLBLas properly')
+    use_deepep = False
+
 
 def next_power_of_2(n: int):
     """Return the smallest power of 2 greater than or equal to n."""
@@ -242,6 +249,13 @@ class CUDAGraphRunner(GraphRunner):
         context: StepContext = None,
     ):
         """Prepare inputs."""
+
+        if use_deepep:
+            deepep_mode = DeepEPMode.NORMAL
+            if context.is_decoding:
+                deepep_mode = DeepEPMode.LOW_LATENCY
+            DeepEPBuffer.set_deepep_mode(deepep_mode)
+
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
