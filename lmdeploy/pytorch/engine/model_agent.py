@@ -545,7 +545,7 @@ class BaseModelAgent:
                                         self._output.numel() // self._output.size(-1),
                                         device=self._output.device,
                                         dtype=self._output.dtype)
-                    return strategy.slice_outputs(self._output, seqlen), self._aux_output
+                    output_hidden_states = strategy.slice_outputs(self._output, seqlen)
                 return output_hidden_states, self._routed_experts, aux_hidden_states
 
         async def __forward(inputs):
