@@ -28,6 +28,8 @@ elif [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
     apt-get install -y --no-install-recommends cuda-minimal-build-12-4 cuda-nvrtc-12-4 build-essential devscripts debhelper fakeroot pkg-config dkms
 elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
     apt-get install -y --no-install-recommends cuda-minimal-build-12-8 cuda-nvrtc-12-8 build-essential devscripts debhelper fakeroot pkg-config dkms
+elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    apt-get install -y --no-install-recommends cuda-minimal-build-13-0 cuda-nvrtc-13-0 build-essential devscripts debhelper fakeroot pkg-config dkms
 fi
 
 apt-get clean -y
@@ -57,7 +59,9 @@ fi
 
 pip install -U pip wheel setuptools
 
-if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    pip install nvidia-nvshmem-cu13
+elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     pip install nvidia-nvshmem-cu12
 fi
 

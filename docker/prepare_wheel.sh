@@ -27,7 +27,12 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     FLASH_MLA_VERSION=1408756  # no release, pick the latest commit
 
     # DeepEP
-    pip install nvidia-nvshmem-cu12
+    if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+        export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl":${CPLUS_INCLUDE_PATH}
+        pip install nvidia-nvshmem-cu13
+    else
+        pip install nvidia-nvshmem-cu12
+    fi
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
 
     # DeepGEMM
