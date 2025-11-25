@@ -160,6 +160,7 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
         - /mnt/bigdisk:/mnt/bigdisk
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
@@ -248,6 +249,7 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
         - /mnt/bigdisk:/mnt/bigdisk
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
@@ -356,6 +358,7 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -445,6 +448,8 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -506,6 +511,8 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
