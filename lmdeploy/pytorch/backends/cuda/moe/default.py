@@ -342,7 +342,6 @@ def build_deepep_moe(
     hidden_dim: int,
     top_k: int,
     layer_idx: int = 0,
-    chunk_size: Optional[int] = 32 * 1024,
     out_dtype: torch.dtype = torch.bfloat16,
 ):
     if low_latency_mode:
@@ -439,7 +438,6 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
                                       self.hidden_dim,
                                       self.top_k,
                                       layer_idx=self.layer_idx,
-                                      chunk_size=16 * 1024,
                                       out_dtype=self.out_dtype)
         return deepep_moe
 
