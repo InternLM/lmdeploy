@@ -2,11 +2,8 @@
 try:
     from deep_ep import Buffer
 
-    from lmdeploy.pytorch.envs import env_to_int
+    from lmdeploy.pytorch.envs import deep_ep_buffer_num_sms
 
-    # default value refers to DeepEP code
-    # https://github.com/deepseek-ai/DeepEP/blob/bfded34800dfec415b71503f8205181de90b2480/deep_ep/buffer.py#L30
-    deep_ep_buffer_num_sms = env_to_int(env_var='DEEPEP_BUFFER_NUM_SMS', default=20)
     Buffer.set_num_sms(deep_ep_buffer_num_sms)
     use_deepep = True
 except ImportError:
