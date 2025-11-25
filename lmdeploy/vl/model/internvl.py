@@ -243,9 +243,8 @@ class InternVLVisionModel(VisonModel):
                 if role != 'user' or isinstance(content, str):
                     prompt_messages.append(message)
                     continue
-                # n_images = len([1 for x in content if x['type'] == 'image'])
                 content = [x['text'] for x in content if x['type'] == 'text']
-                prompt = '\n'.join(content)
+                prompt = ''.join(content)
                 prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{self.image_token}</img>')
                 prompt_messages.append(dict(role='user', content=prompt))
         else:
@@ -260,10 +259,10 @@ class InternVLVisionModel(VisonModel):
                     if item_type == 'text':
                         _content.append(item['text'])
                     elif item_type in ['image', 'image_url']:
-                        _content.append(f'<img>{self.image_token}</img>')
+                        _content.append(f'<img>{self.image_token}</img>\n')
                     else:
                         raise ValueError(f'Unsupported message type: {item["type"]}')
-                prompt_messages.append(dict(role='user', content='\n'.join(_content)))
+                prompt_messages.append(dict(role='user', content=''.join(_content)))
         prompt = chat_template.messages2prompt(prompt_messages,
                                                sequence_start,
                                                tools=tools,

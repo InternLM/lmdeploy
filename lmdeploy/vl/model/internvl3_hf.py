@@ -6,7 +6,7 @@ from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoProces
 from transformers.processing_utils import ImagesKwargs, ProcessingKwargs
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.internvl import VISION_MODELS, InternVLVisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
@@ -32,7 +32,7 @@ class InternVLProcessorKwargs(ProcessingKwargs, total=False):
 
 
 @VISION_MODELS.register_module()
-class InternVL3VisionModel(VisonModel):
+class InternVL3VisionModel(InternVLVisionModel):
     """Internvl3 vision model."""
 
     _arch = ['InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration']
@@ -147,36 +147,6 @@ class InternVL3VisionModel(VisonModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    def proc_internvl_hf_messages(self, content: List[Dict]):
-        """Process the content list of role 'user' for InternVL HF models."""
-        res = []
-        for item in content:
-            if item['type'] == 'text':
-                # backward compatibility
-                text = item['text']
-                text = (text.replace('<IMAGE_TOKEN>', self.image_token) if '<IMAGE_TOKEN>' in text else text)
-                res.append(text)
-            elif item['type'] in ['image', 'image_url']:
-                res.append(f'{self.image_token}\n')
-            else:
-                raise ValueError(f'Unsupported message type: {item["type"]}')
-        return ''.join(res)
-
-    def proc_interns1_messages(self, content: List[Dict]):
-        """Process the content list of role 'user' for InternS1 models."""
-        res = []
-        for item in content:
-            if item['type'] == 'text':
-                # backward compatibility
-                text = item['text']
-                text = (text.replace('<IMAGE_TOKEN>', self.image_token) if '<IMAGE_TOKEN>' in text else text)
-                res.append(text)
-            elif item['type'] in ['image', 'image_url']:
-                res.append(f'{self.image_token}')
-            else:
-                raise ValueError(f'Unsupported message type: {item["type"]}')
-        return '\n'.join(res)
-
     def proc_messages(
         self,
         messages,
@@ -186,29 +156,12 @@ class InternVL3VisionModel(VisonModel):
         enable_thinking: Optional[bool] = None,
     ):
         """Apply chat template to get the prompt."""
-        prompt_messages = []
-
-        for message in messages:
-            if message['role'] in ['preprocess', 'forward']:
-                continue
-            role, content = message['role'], message['content']
-            if role == 'user' and isinstance(content, List):
-                content = (self.proc_internvl_hf_messages(content)
-                           if self.arch == 'InternVLForConditionalGeneration' else self.proc_interns1_messages(content))
-                message = dict(role=role, content=content)
-                prompt_messages.append(message)
-            else:
-                # backward compatibility
-                content = (content.replace('<IMAGE_TOKEN>', self.image_token)
-                           if isinstance(content, str) and '<IMAGE_TOKEN>' in content else content)
-                message = dict(role=role, content=content)
-                prompt_messages.append(message)
-
-        prompt = chat_template.messages2prompt(prompt_messages,
-                                               sequence_start,
-                                               tools=tools,
-                                               enable_thinking=enable_thinking)
-        return prompt, self.image_token
+        # the same with InternVL models with arch being InternVLChatModel
+        return super().proc_messages(messages,
+                                     chat_template,
+                                     sequence_start,
+                                     tools=tools,
+                                     enable_thinking=enable_thinking)
 
     def to_pytorch(self,
                    messages,

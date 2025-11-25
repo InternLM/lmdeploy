@@ -20,7 +20,41 @@ def get_model_and_chat_template(model_path):
     return model, chat_template
 
 
-class TestVLHFChatTemplate:
+@pytest.fixture(scope='module')
+def mock_messages():
+    return [
+        dict(role='user',
+             content=[
+                 dict(type='text', text='Describe the following images in detail'),
+                 dict(type='image', url=dict(url='http://images.cocodataset.org/val2017/000000039769.jpg')),
+                 dict(type='image', url=dict(url='http://images.cocodataset.org/val2017/000000039769.jpg')),
+                 dict(type='text', text='How many cats are there in total?')
+             ]),
+    ]
+
+
+@pytest.fixture(scope='module')
+def mock_pure_img_messages():
+    return [
+        dict(role='user',
+             content=[
+                 dict(type='image', url=dict(url='http://images.cocodataset.org/val2017/000000039769.jpg')),
+             ]),
+    ]
+
+
+@pytest.fixture(scope='module')
+def mock_pure_text_messages():
+    return [
+        dict(role='user',
+             content=[
+                 dict(type='text', text='Describe the following images in detail'),
+                 dict(type='text', text='How many cats are there in total?'),
+             ]),
+    ]
+
+
+class TestInternVLHFChatTemplate:
 
     @pytest.fixture(scope='module')
     def models(self):
@@ -33,8 +67,50 @@ class TestVLHFChatTemplate:
             'OpenGVLab/InternVL3_5-38B-HF',
             'OpenGVLab/InternVL3_5-30B-A3B-HF',
             'OpenGVLab/InternVL3_5-241B-A28B-HF',
-            'internlm/Intern-S1-mini',
-            'internlm/Intern-S1',
+        ]
+        models = [get_model_and_chat_template(model_path) for model_path in model_list]
+        return models
+
+    def test_proc_messages(self, models, mock_messages):
+        for model, chat_template in models:
+            model.build_preprocessor()
+            reference = model.processor.apply_chat_template(mock_messages,
+                                                            add_generation_prompt=True,
+                                                            tokenize=False,
+                                                            return_dict=True)
+            # InternVL-HF and InternS1 models pad <img> and </img> internally
+            reference = reference.replace('<IMG_CONTEXT>', '<img><IMG_CONTEXT></img>')
+            prompt, _ = model.proc_messages(mock_messages, chat_template, sequence_start=True)
+            assert prompt == reference
+
+    def test_proc_pure_img_messages(self, models, mock_pure_img_messages):
+        for model, chat_template in models:
+            model.build_preprocessor()
+            reference = model.processor.apply_chat_template(mock_pure_img_messages,
+                                                            add_generation_prompt=True,
+                                                            tokenize=False,
+                                                            return_dict=True)
+            # InternVL-HF and InternS1 models pad <img> and </img> internally
+            reference = reference.replace('<IMG_CONTEXT>', '<img><IMG_CONTEXT></img>')
+            prompt, _ = model.proc_messages(mock_pure_img_messages, chat_template, sequence_start=True)
+            assert prompt == reference
+
+    def test_proc_pure_text_messages(self, models, mock_pure_text_messages):
+        for model, chat_template in models:
+            model.build_preprocessor()
+            reference = model.processor.apply_chat_template(mock_pure_text_messages,
+                                                            add_generation_prompt=True,
+                                                            tokenize=False,
+                                                            return_dict=True)
+            prompt, _ = model.proc_messages(mock_pure_text_messages, chat_template, sequence_start=True)
+            assert prompt == reference
+
+
+class TestQwenVLChatTemplate:
+
+    @pytest.fixture(scope='module')
+    def models(self):
+        model_list = [
             'Qwen/Qwen2-VL-2B-Instruct',
             'Qwen/Qwen2-VL-7B-Instruct',
             'Qwen/Qwen2-VL-72B-Instruct',
@@ -58,18 +134,6 @@ class TestVLHFChatTemplate:
         models = [get_model_and_chat_template(model_path) for model_path in model_list]
         return models
 
-    @pytest.fixture(scope='module')
-    def mock_messages(self):
-        return [
-            dict(role='user',
-                 content=[
-                     dict(type='text', text='Describe the following images in detail'),
-                     dict(type='image', url=dict(url='http://images.cocodataset.org/val2017/000000039769.jpg')),
-                     dict(type='image', url=dict(url='http://images.cocodataset.org/val2017/000000039769.jpg')),
-                     dict(type='text', text='How many cats are there in total?')
-                 ]),
-        ]
-
     def test_proc_messages(self, models, mock_messages):
         for model, chat_template in models:
             model.build_preprocessor()
@@ -80,18 +144,22 @@ class TestVLHFChatTemplate:
             prompt, _ = model.proc_messages(mock_messages, chat_template, sequence_start=True)
             assert prompt == reference
 
-    def test_none_text(self, models):
+    def test_pure_img_messages(self, models, mock_pure_img_messages):
         for model, chat_template in models:
             model.build_preprocessor()
-            messages = [
-                dict(role='user',
-                     content=[
-                         dict(type='image', url=dict(url='http://images.cocodataset.org/val2017/000000039769.jpg')),
-                     ]),
-            ]
-            reference = model.processor.apply_chat_template(messages,
+            reference = model.processor.apply_chat_template(mock_pure_img_messages,
                                                             add_generation_prompt=True,
                                                             tokenize=False,
                                                             return_dict=True)
-            prompt, _ = model.proc_messages(messages, chat_template, sequence_start=True)
+            prompt, _ = model.proc_messages(mock_pure_img_messages, chat_template, sequence_start=True)
+            assert prompt == reference
+
+    def test_pure_text_messages(self, models, mock_pure_text_messages):
+        for model, chat_template in models:
+            model.build_preprocessor()
+            reference = model.processor.apply_chat_template(mock_pure_text_messages,
+                                                            add_generation_prompt=True,
+                                                            tokenize=False,
+                                                            return_dict=True)
+            prompt, _ = model.proc_messages(mock_pure_text_messages, chat_template, sequence_start=True)
             assert prompt == reference
