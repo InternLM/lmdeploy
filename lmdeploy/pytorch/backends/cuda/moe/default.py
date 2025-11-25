@@ -79,7 +79,6 @@ class FusedMoENormal:
         hidden_dim: int,
         layer_index: int = 0,
         top_k: int = 8,
-        chunk_size: Optional[int] = 32 * 1024,
         out_dtype: torch.dtype = torch.bfloat16,
     ):
         from dlblas.layers.moe.token_dispatcher import DeepEPTokenDispatcherNormal
@@ -360,7 +359,6 @@ def build_deepep_moe(
                               hidden_dim=hidden_dim,
                               layer_index=layer_idx,
                               top_k=top_k,
-                              chunk_size=chunk_size,
                               out_dtype=out_dtype)
 
 
