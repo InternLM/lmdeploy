@@ -474,10 +474,13 @@ class Response:
     routed_experts: Any = None
 
     def __str__(self):
-        fields = []
+        return f'text={self.text}\n{self._format_none_text_fields()}'
 
-        fields.append('text=')
-        fields.append(self.text if self.text is not None else 'None')
+    def __repr__(self):
+        return f'text={self.text!r}\n{self._format_none_text_fields()}'
+
+    def _format_none_text_fields(self):
+        fields = []
         fields.append(f'input_token_len={self.input_token_len}')
         fields.append(f'generate_token_len={self.generate_token_len}')
         fields.append(f'finish_reason="{self.finish_reason}"')
@@ -499,18 +502,6 @@ class Response:
         else:
             fields.append(f'routed_experts.shape={self.routed_experts.shape}')
         return '\n'.join(fields)
-
-    def __repr__(self):
-        logits = 'logits=None' if self.logits is None else f'logits.shape={self.logits.shape}\nlogits={self.logits}'
-        hidden_state = (
-            'last_hidden_state=None' if self.last_hidden_state is None else
-            f'last_hidden_state.shape={self.last_hidden_state.shape}\nlast_hidden_state={self.last_hidden_state}')
-        routed_experts = 'routed_experts=None' if self.routed_experts is None else \
-            f'routed_experts.shape={self.routed_experts.shape}'
-
-        s = (f'text={self.text!r}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
-             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}\n{routed_experts}')
-        return s
 
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
