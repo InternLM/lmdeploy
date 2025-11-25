@@ -269,8 +269,6 @@ class AscendOpsBackend(DlinferOpsBackend):
                     else:
                         raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
                     kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
-            if not is_unpaged_prefill and AscendOpsBackend.enable_aclgraph():
-                kv_seqlens = kv_seqlens.cpu().to(torch.int32)
         else:
             if step_context.is_decoding:
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu().to(torch.int32)

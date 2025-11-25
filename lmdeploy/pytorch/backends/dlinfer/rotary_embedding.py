@@ -40,7 +40,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
 class DlinferRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
     """Base rotary embedding."""
 
-    def __init__(self, dim: int, base: float = 10000.0, scaling_factor: float = 1.0):
+    def __init__(self, dim: int, base: int = 10000, scaling_factor: float = 1.0):
         super().__init__()
         self.scaling_factor = scaling_factor
         self.dim = dim
