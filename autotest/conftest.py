@@ -2,7 +2,8 @@ import os
 
 import pytest
 import yaml
-from utils.distributed_utils import RayLMDeployManager
+from utils.proxy_distributed_utils import ProxyDistributedManager
+from utils.ray_distributed_utils import RayLMDeployManager
 
 cli_prompt_case_file = 'autotest/chat_prompt_case.yaml'
 common_prompt_case_file = 'autotest/prompt_case.yaml'
@@ -69,6 +70,38 @@ def shared_ray_manager():
 
     if manager.is_master:
         print('🎯 Master node: Ray cluster started, waiting for worker nodes to join...')
+
+    yield manager
+
+    print(f'\n[Final Cleanup] Node {manager.node_rank} performing final resource cleanup...')
+    manager.cleanup(force=True)
+
+
+@pytest.fixture(scope='session')
+def shared_proxy_manager():
+    master_addr = os.getenv('MASTER_ADDR', 'localhost')
+    device = os.environ.get('DEVICE', '')
+
+    # Load device-specific or default config
+    if device:
+        device_config_path = f'autotest/config-{device}.yaml'
+        if os.path.exists(device_config_path):
+            config_path = device_config_path
+        else:
+            config_path = config_file
+    else:
+        config_path = config_file
+
+    with open(config_path) as f:
+        env_config = yaml.load(f, Loader=yaml.SafeLoader)
+    log_dir = env_config.get('log_path', '/tmp/lmdeploy_test')
+
+    # Initialize manager (master starts proxy automatically)
+    manager = ProxyDistributedManager(health_check=True, proxy_port=PROXY_PORT, log_dir=log_dir)
+
+    if manager.is_master:
+        print(f'🎯 Master node: LMDeploy Proxy started on {master_addr}:{PROXY_PORT}')
+        print('⏳ Waiting for worker nodes to connect (they will register when starting api_server)...')
 
     yield manager
 
