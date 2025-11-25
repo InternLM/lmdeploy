@@ -3,7 +3,7 @@ from multiprocessing import Process
 import pydantic
 import pytest
 from utils.config_utils import _is_bf16_supported_by_device, set_device_env_variable, unset_device_env_variable
-from utils.get_run_config import _clear_device_cache
+from utils.get_run_config import close_pipeline
 from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_batch_stream_return,
                                  assert_pipeline_common_log, assert_pipeline_single_return,
                                  assert_pipeline_single_stream_return, save_pipeline_common_log)
@@ -30,8 +30,7 @@ def test_return_with_prompt(config, model, backend, worker_id):
         response = pipe('Hi, pls intro yourself')
         result, msg = assert_pipeline_single_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -59,8 +58,7 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
             response.append(item)
         result, msg = assert_pipeline_single_stream_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -86,8 +84,7 @@ def test_return_with_multi_prompt(config, model, backend, worker_id):
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
         result, msg = assert_pipeline_batch_return(response, 2)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -115,8 +112,7 @@ def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
             response.append(item)
         result, msg = assert_pipeline_batch_stream_return(response, 2)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -143,8 +139,7 @@ def test_return_with_message(config, model, backend, worker_id):
         print(response)
         result, msg = assert_pipeline_batch_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -172,8 +167,7 @@ def test_return_with_message_stream(config, model, backend, worker_id):
             response.append(item)
         result, msg = assert_pipeline_single_stream_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -206,8 +200,7 @@ def test_return_with_message_batch(config, model, backend, worker_id):
         print(response)
         result, msg = assert_pipeline_batch_return(response, 2)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -241,8 +234,7 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
             response.append(item)
         result, msg = assert_pipeline_batch_stream_return(response, 2)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -269,8 +261,7 @@ def test_return_check_logprobs(config, model, backend, worker_id):
         response = pipe('Hi, pls intro yourself', gen_config=gen_config)
         result, msg = assert_pipeline_single_return(response, logprobs_num=10)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -299,8 +290,7 @@ def test_return_check_logprobs_stream(config, model, backend, worker_id):
             response.append(item)
         result, msg = assert_pipeline_single_stream_return(response, logprobs_num=10)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -331,8 +321,7 @@ def test_backend_config_session_len(config, model, backend, worker_id):
             result &= response[i].generate_token_len == 0
             result &= response[i].text == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -363,8 +352,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
             result &= response[i].finish_reason == 'length'
             result &= response[i].index == i
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_min_new_tokens_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -396,8 +384,7 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
             result &= ' and' not in response[i].text and ' to ' not in response[i].text
             result &= response[i].finish_reason == 'stop' and response[i].generate_token_len < 50
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_stop_words_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -427,8 +414,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
         for i in range(2):
             result &= '浦' not in response[i].text and ' and' not in response[i].text and ' to ' not in response[i].text
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_bad_words_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -465,8 +451,7 @@ def test_gen_config_special_words_false(config, model, backend, worker_id):
         response = pipe(prompt, gen_config=gen_config)
         result = '<|action_start|><|interpreter|>' in response.text
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_special_words_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -503,8 +488,7 @@ def test_gen_config_special_words_true(config, model, backend, worker_id):
         response = pipe(prompt, gen_config=gen_config)
         result = '<|action_start|><|interpreter|>' not in response.text
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_special_words_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -533,8 +517,7 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id
 
         result = get_repeat_times(response.text, 'is a name') > 5 or get_repeat_times(response.text, 'Shanghai is') > 5
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_repetition_penalty_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -562,8 +545,7 @@ def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend, wor
         response = pipe('Shanghai is', gen_config=gen_config)
         result, msg = assert_pipeline_single_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_repetition_penalty_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -591,8 +573,7 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
         response = pipe('Shanghai is', gen_config=gen_config)
         result, msg = assert_pipeline_single_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -622,8 +603,7 @@ def test_gen_config_minimun_topk(config, model, backend, worker_id):
             response_list.append(pipe('Shanghai is', gen_config=gen_config))
         result = response_list[0].text == response_list[1].text and response_list[1].text == response_list[2].text
         save_pipeline_common_log(config, file_name, result, response_list)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -652,8 +632,7 @@ def test_gen_config_diff_random_seed(config, model, backend, worker_id):
             response_list.append(pipe('Shanghai is', gen_config=gen_config))
         result = response_list[0].text != response_list[1].text and response_list[1].text != response_list[2].text
         save_pipeline_common_log(config, file_name, result, response_list)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -682,8 +661,7 @@ def test_gen_config_same_random_seed(config, model, backend, worker_id):
             response_list.append(pipe('Shanghai is', gen_config=gen_config))
         result = response_list[0].text == response_list[1].text and response_list[1].text == response_list[2].text
         save_pipeline_common_log(config, file_name, result, response_list)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -710,8 +688,7 @@ def test_gen_config_do_sample_batch(config, model, backend, worker_id):
         response = pipe(['Shanghai is'] * 3, gen_config=gen_config)
         result = response[0].text != response[1].text and response[1].text != response[2].text
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -742,8 +719,7 @@ def test_gen_config_max_new_tokens(config, model, backend, worker_id):
             result &= response[i].finish_reason == 'length'
             result &= response[i].generate_token_len == 6 or response[i].generate_token_len == 5
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_max_new_tokens_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -774,8 +750,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
             result &= response[i].finish_reason == 'length'
             result &= response[i].generate_token_len == 257 or response[i].generate_token_len == 256
         save_pipeline_common_log(config, file_name, result, response)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
 
     file_name = f'pipeline_log_ignore_eos_{worker_id}.txt'
     if 'gw' in worker_id:
@@ -821,8 +796,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
         gen_config = GenerationConfig(n=-1)
         pipe('Shanghai is', gen_config=gen_config)
 
-    del pipe
-    _clear_device_cache()
+    close_pipeline(pipe)
     if 'gw' in worker_id:
         unset_device_env_variable()
 
@@ -904,7 +878,6 @@ def test_backend_config_tp(config, model, backend, worker_id):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=100)
         pipe = init_pipeline(model_path, backend_config=backend_config)
-        del pipe
-        _clear_device_cache()
+        close_pipeline(pipe)
         if 'gw' in worker_id:
             unset_device_env_variable()

@@ -102,8 +102,8 @@ def longtext_throughput_test(config,
             command += ' --model-format awq'
         command = command + f' --quant-policy {quant_policy}'
 
-    for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', None),
-                                                                    (1, 65536, 10, '64k', None),
+    for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', 256),
+                                                                    (1, 65536, 10, '64k', 128),
                                                                     (198000, 1024, 3, '198k', 1)]:
         session_len = input_len + out_len
         csv_path = f'{benchmark_path}/longtext_{case_name}_1th.csv'
@@ -269,7 +269,7 @@ def prefixcache_throughput_test(config,
     else:
         base_command = base_command + f' --quant-policy {quant_policy}'
 
-    test_configs = [(16384, 16384, 100, '16k', None)]
+    test_configs = [(16384, 1024, 10, '16k', None)]
 
     for enable_prefix_caching in [False, True]:
         suffix = '_cache' if enable_prefix_caching else '_no_cache'
