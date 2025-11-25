@@ -95,16 +95,25 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
         backend_config = TurbomindEngineConfig(session_len=session_len,
                                                max_batch_size=1,
                                                cache_max_entry_count=0.7,
-                                               tp=tp_num)
+                                               tp=tp_num,
+                                               hf_overrides={
+                                                   'rope_scaling': {
+                                                       'rope_type': 'yarn',
+                                                       'factor': 4.0,
+                                                       'original_max_position_embeddings': 32768
+                                                   }
+                                               })
     else:
-        backend_config = PytorchEngineConfig(session_len=session_len, tp=tp_num, max_batch_size=1)
-    backend_config['hf_overrides'] = {
-        'rope_scaling': {
-            'rope_type': 'yarn',
-            'factor': 4.0,
-            'original_max_position_embeddings': 32768
-        }
-    }
+        backend_config = PytorchEngineConfig(session_len=session_len,
+                                             tp=tp_num,
+                                             max_batch_size=1,
+                                             hf_overrides={
+                                                 'rope_scaling': {
+                                                     'rope_type': 'yarn',
+                                                     'factor': 4.0,
+                                                     'original_max_position_embeddings': 32768
+                                                 }
+                                             })
 
     pipe = pipeline(model_path, backend_config=backend_config)
 
