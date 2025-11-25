@@ -105,6 +105,7 @@ LMDeploy 工具箱提供以下核心功能：
    advance/pytorch_profiling.md
    advance/metrics.md
    advance/context_parallel.md
+   advance/update_weights.md
 
 .. toctree::
    :maxdepth: 1

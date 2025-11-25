@@ -98,6 +98,7 @@ class SubCliServe:
         ArgumentHelper.dllm_denoising_steps(pt_group)
         ArgumentHelper.dllm_confidence_threshold(pt_group)
         ArgumentHelper.enable_return_routed_experts(pt_group)
+        ArgumentHelper.distributed_executor_backend(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)

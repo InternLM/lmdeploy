@@ -686,6 +686,15 @@ class ArgumentHelper:
                                    default=False,
                                    help='Whether to output routed expert ids for replay')
 
+    @staticmethod
+    def distributed_executor_backend(parser):
+        """Distributed_executor_backend."""
+        return parser.add_argument('--distributed-executor-backend',
+                                   type=str,
+                                   default=None,
+                                   choices=['uni', 'mp', 'ray'],
+                                   help='The distributed executor backend for pytorch engine.')
+
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
 class FlexibleArgumentParser(argparse.ArgumentParser):
