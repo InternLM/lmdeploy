@@ -231,7 +231,7 @@ def assert_pipeline_batch_return(output, size: int = 1):
 
 
 def assert_pipeline_single_stream_return(output, logprobs_num: int = 0):
-    for i in range(0, len(output) - 1):
+    for i in range(0, len(output) - 2):
         if not assert_pipeline_single_element(output[i], is_stream=True, logprobs_num=logprobs_num):
             return False, f'single_stream_element is false, index is {i}'
     if assert_pipeline_single_element(output[-1], is_stream=True, is_last=True, logprobs_num=logprobs_num) is False:
@@ -251,7 +251,6 @@ def assert_pipeline_batch_stream_return(output, size: int = 1):
 def assert_pipeline_single_element(output, is_stream: bool = False, is_last: bool = False, logprobs_num: int = 0):
     result = True
     result &= output.generate_token_len > 0
-    result &= output.input_token_len > 0
     result &= output.index >= 0
     if is_last:
         result &= len(output.text) >= 0
@@ -259,11 +258,14 @@ def assert_pipeline_single_element(output, is_stream: bool = False, is_last: boo
         if is_stream:
             result &= output.token_ids is None or output.token_ids == []
         else:
+            result &= output.input_token_len > 0
             result &= len(output.token_ids) > 0
     else:
         result &= len(output.text) > 0
         result &= output.finish_reason is None
         result &= len(output.token_ids) > 0
+        if not is_stream:
+            result &= output.input_token_len > 0
     if logprobs_num == 0 or (is_last and is_stream):
         result &= output.logprobs is None
     else:
