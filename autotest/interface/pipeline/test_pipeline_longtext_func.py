@@ -69,8 +69,10 @@ def stream_infer_basic(config, model, log_name):
 
 
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize(
-    'model', ['internlm/Intern-S1-mini', 'Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'])
+@pytest.mark.parametrize('model', [
+    'internlm/Intern-S1-mini', 'internlm/internlm2_5-7b-chat', 'internlm/internlm2_5-7b-chat-inner-4bits',
+    'Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'
+])
 @pytest.mark.parametrize('backend', ['turbomind', 'pytorch'])
 def test_long_test_passkey_tp1(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
@@ -113,66 +115,48 @@ def test_long_test_passkey_tp8(config, model, backend, worker_id):
     passkey_retrival(config, model, backend, log_name, 8, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
 
 
+YARN_CONFIG = {'rope_scaling': {'rope_type': 'yarn', 'factor': 4.0, 'original_max_position_embeddings': 32768}}
+
+NTK_CONFIG = {
+    'rope_scaling': {
+        'type': 'dynamic',
+        'factor': 2.0
+    },
+}
+
+
 def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_128K):
     model_path = '/'.join([config.get('model_path'), model])
     if backend == 'turbomind':
-        if 'llama' in model.lower():
+        if 'qwen' in model.lower():
             backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num,
-                                                   hf_overrides={
-                                                       'rope_scaling': {
-                                                           'factor': 8.0,
-                                                           'low_freq_factor': 1.0,
-                                                           'high_freq_factor': 4.0,
-                                                           'original_max_position_embeddings': 8192,
-                                                           'rope_type': 'llama3'
-                                                       }
-                                                   })
-        elif 'qwen' in model.lower():
+                                                   hf_overrides=YARN_CONFIG)
+        elif 'intern-s1' in model.lower():
             backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num,
-                                                   hf_overrides={
-                                                       'rope_scaling': {
-                                                           'rope_type': 'yarn',
-                                                           'factor': 4.0,
-                                                           'original_max_position_embeddings': 32768
-                                                       }
-                                                   })
+                                                   hf_overrides={'text_config': NTK_CONFIG})
         else:
             backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num)
     else:
-        if 'llama' in model.lower():
+        if 'qwen' in model.lower():
+            backend_config = PytorchEngineConfig(session_len=session_len,
+                                                 tp=tp_num,
+                                                 max_batch_size=1,
+                                                 hf_overrides=YARN_CONFIG)
+        elif 'intern-s1' in model.lower():
             backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num,
-                                                   hf_overrides={
-                                                       'rope_scaling': {
-                                                           'factor': 8.0,
-                                                           'low_freq_factor': 1.0,
-                                                           'high_freq_factor': 4.0,
-                                                           'original_max_position_embeddings': 8192,
-                                                           'rope_type': 'llama3'
-                                                       }
-                                                   })
-        elif 'qwen' in model.lower():
-            backend_config = PytorchEngineConfig(session_len=session_len,
-                                                 tp=tp_num,
-                                                 max_batch_size=1,
-                                                 hf_overrides={
-                                                     'rope_scaling': {
-                                                         'rope_type': 'yarn',
-                                                         'factor': 4.0,
-                                                         'original_max_position_embeddings': 32768
-                                                     }
-                                                 })
+                                                   hf_overrides={'text_config': NTK_CONFIG})
         else:
             backend_config = PytorchEngineConfig(session_len=session_len, tp=tp_num, max_batch_size=1)
 
