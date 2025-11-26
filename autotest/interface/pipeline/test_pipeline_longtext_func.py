@@ -94,7 +94,7 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
     if 'llama-3' in model.lower():
         session_len = 128000
     if backend == 'turbomind':
-        if 'qwen' in model.lower() and 'intern-s1' in model.lower():
+        if 'qwen' in model.lower() or 'intern-s1' in model.lower():
             backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
@@ -112,7 +112,7 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num)
     else:
-        if 'qwen' in model.lower() and 'intern-s1' in model.lower():
+        if 'qwen' in model.lower() or 'intern-s1' in model.lower():
             backend_config = PytorchEngineConfig(session_len=session_len,
                                                  tp=tp_num,
                                                  max_batch_size=1,
