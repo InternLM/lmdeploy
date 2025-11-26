@@ -10,6 +10,13 @@ def _bf16_mark():
 
 class TestRMSNorm:
 
+    @pytest.fixture(autouse=True, scope='class')
+    def initialize(self):
+        seed = 42
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        yield
+
     @pytest.fixture(scope='class')
     def dtype(self, request):
         yield request.param
@@ -38,7 +45,7 @@ class TestRMSNorm:
     def gt(self, input, weight, eps):
         input_dtype = input.dtype
         input = input.to(torch.float32)
-        variance = input.pow(2).mean(-1, keepdim=True)
+        variance = (input * input).mean(-1, keepdim=True)
         input = input * torch.rsqrt(variance + eps)
         return weight * input.to(input_dtype)
 
@@ -61,7 +68,7 @@ class TestRMSNorm:
         out_res = input
         input_dtype = input.dtype
         input = input.to(torch.float32)
-        variance = input.pow(2).mean(-1, keepdim=True)
+        variance = (input * input).mean(-1, keepdim=True)
         input = input * torch.rsqrt(variance + eps)
         return weight * input.to(input_dtype), out_res
 
