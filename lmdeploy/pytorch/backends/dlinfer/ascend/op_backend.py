@@ -146,8 +146,15 @@ class AscendOpsBackend(DlinferOpsBackend):
             raise ValueError(f"unsupported ASCEND_GRAPH_MODE: {os.getenv('ASCEND_GRAPH_MODE')}")
 
     @classmethod
+    def deal_dummy(cls, step_context):
+        if torch.all(step_context.kv_seqlens == 0):
+            step_context.kv_seqlens = torch.ones_like(step_context.kv_seqlens)
+
+    @classmethod
     def update_step_context(cls, step_context):
         """Update step context."""
+
+        AscendOpsBackend.deal_dummy(step_context)
 
         def get_total_slots():
             if cls.total_slots is None:
