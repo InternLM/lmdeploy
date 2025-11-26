@@ -129,7 +129,6 @@ struct GlooCommImpl: public HostCommImpl {
     GlooCommImpl(std::shared_ptr<Store> store, int n_ranks, int rank):
         store_{std::move(store)}, rank_{rank}, n_ranks_{n_ranks}
     {
-        // TM_LOG_INFO("[GlooCommImpl] rank=%d, n_ranks=%d, prefix=%s", rank_, n_ranks_, store_->prefix_.c_str());
         device_  = createGlooDevice();
         context_ = std::make_shared<::gloo::rendezvous::Context>(rank_, n_ranks_);
         context_->connectFullMesh(store_, device_);
@@ -174,7 +173,7 @@ struct GlooCommImpl: public HostCommImpl {
     void Sync(bool blocking) override
     {
         ::gloo::BarrierOptions opts(context_);
-        opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
+        opts.setTimeout(kTimeOut);
         ::gloo::barrier(opts);
     }
 
@@ -182,7 +181,7 @@ struct GlooCommImpl: public HostCommImpl {
     {
         ::gloo::BroadcastOptions opts(context_);
         opts.setRoot(root);
-        opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
+        opts.setTimeout(kTimeOut);
         opts.setOutput((char*)data, count);
         ::gloo::broadcast(opts);
     }
@@ -190,7 +189,7 @@ struct GlooCommImpl: public HostCommImpl {
     void AllGather(void* data, int count, DataType dtype, copy_fn copy) override
     {
         ::gloo::AllgatherOptions opts(context_);
-        opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
+        opts.setTimeout(kTimeOut);
         opts.setOutput((char*)data, count * n_ranks_);
         ::gloo::allgather(opts);
     }
@@ -239,7 +238,7 @@ struct GlooCommImpl: public HostCommImpl {
     void AllReduce(void* data, int count, DataType dtype, RedOp red_op) override
     {
         ::gloo::AllreduceOptions opts(context_);
-        opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
+        opts.setTimeout(kTimeOut);
         opts.setReduceFunction(getReduceFunc(dtype, red_op));
         switch (dtype) {
             case kInt32:
@@ -260,6 +259,8 @@ struct GlooCommImpl: public HostCommImpl {
         ::gloo::allreduce(opts);
     }
 
+    static constexpr std::chrono::milliseconds kTimeOut = std::chrono::milliseconds(1000 * 60 * 30);  // 30 minutes
+
     int                                          n_split_{};
     std::shared_ptr<::gloo::transport::Device>   device_;
     std::shared_ptr<::gloo::rendezvous::Context> context_;
@@ -273,7 +274,7 @@ class GlooGroupId: public HostGroupId {
     void Initialize() override
     {
         info_ = GlobalStoreFactory::Instance().New();
-        // TM_LOG_ERROR("[GlooGroupId][Initialize] info=%s", info_.c_str());
+        TM_LOG_INFO("[TM][COMM] GlooGroupId=%s", info_.c_str());
     }
 
     void Export(std::ostream& os) override

@@ -92,15 +92,15 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
         }
         else {
             try {
-                // buf may have different size on different ranks
                 std::vector<char> buf;
-                serialize(data, n, buf);
+                if (comm->rank() == root) {
+                    serialize(data, n, buf);
+                }
                 size_t size = buf.size();
                 Broadcast(comm, &size, 1, root);
                 buf.resize(size);
-                comm->Broadcast(buf.data(), buf.size(), data_type_v<uint8_t>, root, detail::copy_fn<char>);
+                Broadcast(comm, buf.data(), buf.size(), root);  // trivially_copyable
                 if (comm->rank() != root) {
-                    // some field in data may be not shared by all rank
                     deserialize(data, n, buf);
                 }
             }

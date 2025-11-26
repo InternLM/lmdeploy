@@ -148,7 +148,7 @@ TCPStore::TCPStore(const std::string& host, int port)
             }
         }
         catch (const std::exception& e) {
-            TM_LOG_WARNING("[TCPStore] Failed to connect to store after %d retries: %s", retry, e.what());
+            TM_LOG_WARNING("[TM][COMM] Failed to connect to store after %d retries: %s", retry, e.what());
             std::this_thread::sleep_for(std::chrono::seconds(1));
             retry += 1;
         }
