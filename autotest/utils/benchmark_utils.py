@@ -125,6 +125,7 @@ def longtext_throughput_test(config,
             return False, 'result is empty'
         if returncode != 0:
             return returncode == 0, stderr
+    return True, ''
 
 
 def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
@@ -268,6 +269,8 @@ def prefixcache_throughput_test(config,
         if not _is_bf16_supported_by_device():
             base_command += ' --dtype float16'
     else:
+        if '4bit' in model:
+            base_command += ' --model-format awq'
         base_command = base_command + f' --quant-policy {quant_policy}'
 
     test_configs = [(16384, 1024, 10, '16k', None)]

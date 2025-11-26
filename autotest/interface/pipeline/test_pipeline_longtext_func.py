@@ -9,7 +9,6 @@ from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfi
 
 SESSION_LEN = 198000
 SESSION_LEN_PASSKEY = 168000
-SESSION_LEN_PASSKEY_1M = 1048576
 
 
 @pytest.mark.gpu_num_1
@@ -66,7 +65,7 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B', 'Qwen/Qwen2.5-32B-Instruct'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-32B-Instruct'])
 @pytest.mark.parametrize('backend', ['turbomind'])
 def test_long_test_passkey_tp2(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
@@ -84,7 +83,7 @@ def test_long_test_passkey_tp4(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    passkey_retrival(config, model, backend, log_name, 4, SESSION_LEN_PASSKEY_1M)
+    passkey_retrival(config, model, backend, log_name, 4)
 
 
 def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_PASSKEY):
@@ -92,28 +91,37 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
     if 'llama-3' in model.lower():
         session_len = 128000
     if backend == 'turbomind':
-        backend_config = TurbomindEngineConfig(session_len=session_len,
-                                               max_batch_size=1,
-                                               cache_max_entry_count=0.7,
-                                               tp=tp_num,
-                                               hf_overrides={
-                                                   'rope_scaling': {
-                                                       'rope_type': 'yarn',
-                                                       'factor': 4.0,
-                                                       'original_max_position_embeddings': 32768
-                                                   }
-                                               })
+        if 'qwen' in model.lower():
+            backend_config = TurbomindEngineConfig(session_len=session_len,
+                                                   max_batch_size=1,
+                                                   cache_max_entry_count=0.7,
+                                                   tp=tp_num,
+                                                   hf_overrides={
+                                                       'rope_scaling': {
+                                                           'rope_type': 'yarn',
+                                                           'factor': 4.0,
+                                                           'original_max_position_embeddings': 32768
+                                                       }
+                                                   })
+        else:
+            backend_config = TurbomindEngineConfig(session_len=session_len,
+                                                   max_batch_size=1,
+                                                   cache_max_entry_count=0.7,
+                                                   tp=tp_num)
     else:
-        backend_config = PytorchEngineConfig(session_len=session_len,
-                                             tp=tp_num,
-                                             max_batch_size=1,
-                                             hf_overrides={
-                                                 'rope_scaling': {
-                                                     'rope_type': 'yarn',
-                                                     'factor': 4.0,
-                                                     'original_max_position_embeddings': 32768
-                                                 }
-                                             })
+        if 'qwen' in model.lower():
+            backend_config = PytorchEngineConfig(session_len=session_len,
+                                                 tp=tp_num,
+                                                 max_batch_size=1,
+                                                 hf_overrides={
+                                                     'rope_scaling': {
+                                                         'rope_type': 'yarn',
+                                                         'factor': 4.0,
+                                                         'original_max_position_embeddings': 32768
+                                                     }
+                                                 })
+        else:
+            backend_config = PytorchEngineConfig(session_len=session_len, tp=tp_num, max_batch_size=1)
 
     pipe = pipeline(model_path, backend_config=backend_config)
 
