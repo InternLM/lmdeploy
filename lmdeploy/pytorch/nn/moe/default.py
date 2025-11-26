@@ -8,7 +8,7 @@ from torch import nn
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 
-from .base import DispatchInputs, FusedMoEBase, MoEForwardDPTP, MoeType, moe_gather_inputs, moe_reduce, update_dims
+from .base import DispatchInputs, FusedMoEBase, MoeType, moe_gather_inputs, moe_reduce, update_dims
 
 
 class LinearWeights(nn.Module):
@@ -365,11 +365,6 @@ class FusedMoE(FusedMoEBase):
             return True
         else:
             return False
-
-    @property
-    def forward_dptp(self) -> MoEForwardDPTP:
-        """Forward dptp."""
-        return self._forward_dptp
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
         return self.impl.fusedmoe_build(low_latency_mode)

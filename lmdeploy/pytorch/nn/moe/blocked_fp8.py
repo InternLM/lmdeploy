@@ -8,7 +8,7 @@ from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, ge
 
 from ..quant_utils import quant_blocked_fp8
 from ..utils import div_up
-from .base import DispatchInputs, FusedMoEBase, MoEForwardDPTP, MoeType, moe_gather_inputs, moe_reduce
+from .base import DispatchInputs, FusedMoEBase, MoeType, moe_gather_inputs, moe_reduce
 from .base import split_size as _split_size
 from .default import LinearWeights
 
@@ -404,11 +404,6 @@ class FusedMoEBlockedF8(FusedMoEBase):
             return True
         else:
             return False
-
-    @property
-    def forward_dptp(self) -> MoEForwardDPTP:
-        """Forward dptp."""
-        return self._forward_dptp
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
         return self.impl.fusedmoe_build(low_latency_mode)

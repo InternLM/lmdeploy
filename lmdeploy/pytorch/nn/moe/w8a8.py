@@ -6,7 +6,7 @@ import torch
 from lmdeploy.pytorch.backends import OpType, get_backend
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 
-from .base import FusedMoEBase, MoEForwardDPTP, MoeType, moe_gather_inputs, moe_reduce, update_dims
+from .base import FusedMoEBase, MoeType, moe_gather_inputs, moe_reduce, update_dims
 from .default import LinearWeights
 
 
@@ -178,8 +178,3 @@ class FusedMoEW8A8(FusedMoEBase):
     def wait(self, state: Dict):
         """wait."""
         raise NotImplementedError
-
-    @property
-    def forward_dptp(self) -> MoEForwardDPTP:
-        """Forward dptp."""
-        return self._forward_dptp

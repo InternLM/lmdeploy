@@ -294,7 +294,7 @@ class FusedMoEBase(nn.Module):
     @property
     def forward_dptp(self) -> MoEForwardDPTP:
         """Forward dptp."""
-        raise NotImplementedError
+        return self._forward_dptp
 
     def forward_default(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
         """Default forward."""
