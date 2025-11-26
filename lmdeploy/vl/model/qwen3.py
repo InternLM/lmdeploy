@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import torch
 
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS
+from lmdeploy.vl.model.qwen2 import Qwen2VLModel
 
 
 def check_transformers():
@@ -15,7 +16,7 @@ def check_transformers():
 
 
 @VISION_MODELS.register_module()
-class Qwen3VLModel(VisonModel):
+class Qwen3VLModel(Qwen2VLModel):
     """Qwen3VL model."""
 
     _arch = ['Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration']
@@ -25,8 +26,8 @@ class Qwen3VLModel(VisonModel):
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         tokenizer = self.processor.tokenizer
-        image_token = self.processor.image_token
-        self.image_token_id = tokenizer.encode(image_token)[-1]
+        self.image_token = self.processor.image_token
+        self.image_token_id = tokenizer.encode(self.image_token)[-1]
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
@@ -64,64 +65,6 @@ class Qwen3VLModel(VisonModel):
         """
         # TODO: implement for turbomind
         pass
-
-    @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
-        """Apply chat template to get the prompt."""
-        prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for message in messages:
-            if isinstance(message['content'], str):
-                prompt_messages.append(message)
-                continue
-            elif message['role'] in ['images', 'preprocess', 'forward']:
-                continue
-            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
-            content = [item['text'] for item in message['content'] if item['type'] == 'text']
-            prompt = content[0]
-            if IMAGE_TOKEN in prompt and '<|vision_start|>' not in prompt:
-                prompt = prompt.replace(IMAGE_TOKEN, f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>')
-            else:
-                # Qwen2-VL-2B-Instruct will concat image and user prompt
-                # according to their order in the content list
-                # we insert image token before user prompt by default. The
-                # user can use custom image token position if they want the
-                # same decorated prompt as Qwen2-VL
-                prompt = f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>' * \
-                    n_images + prompt
-            prompt_messages.append(dict(role=message['role'], content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-        return prompt, IMAGE_TOKEN
-
-    @staticmethod
-    def get_mrope_info(seq_len: int,
-                       grid_thws: List[Tuple[int, int, int]] = None,
-                       ranges: List[Tuple[int, int]] = None):
-        mrope_position_ids = [torch.arange(ranges[0][0]).expand(3, -1)]
-        st_idx = ranges[0][0]
-        for i, (grid_thw, embedding_range) in enumerate(zip(grid_thws, ranges)):
-            llm_grid_t, llm_grid_h, llm_grid_w = grid_thw
-            llm_grid_h //= 2
-            llm_grid_w //= 2
-            t_index = torch.arange(llm_grid_t).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten()
-            h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
-            w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
-            mrope_position_ids.append(torch.stack([t_index, h_index, w_index]) + st_idx)
-            st_idx += max(llm_grid_h, llm_grid_w)
-            if i < len(ranges) - 1:
-                text_len = ranges[i + 1][0] - ranges[i][1]
-            else:
-                text_len = seq_len - embedding_range[1]
-            mrope_position_ids.append(torch.arange(text_len).expand(3, -1) + st_idx)
-            st_idx += text_len
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=-1)
-        mrope_position_delta = torch.tensor([st_idx - seq_len], dtype=torch.long)
-        return mrope_position_ids, mrope_position_delta
-
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        """Return to the information needed by pytorch engine."""
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
         # TODO: implement for turbomind
