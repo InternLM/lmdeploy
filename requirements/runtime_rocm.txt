@@ -1,4 +1,5 @@
 accelerate>=0.29.3
+cloudpickle
 einops
 fastapi
 fire

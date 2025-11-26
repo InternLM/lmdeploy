@@ -37,13 +37,14 @@ class Scheduler:
         cache_config (CacheConfig): The config of cache info.
     """
 
-    def __init__(self,
-                 scheduler_config: SchedulerConfig,
-                 cache_config: CacheConfig,
-                 seq_meta: SequenceMeta = None) -> None:
+    def __init__(
+        self,
+        scheduler_config: SchedulerConfig,
+        cache_config: CacheConfig,
+        seq_meta: SequenceMeta = None,
+    ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
-
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         # For Disaggregation
@@ -296,7 +297,7 @@ class Scheduler:
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
         if is_prefill:
-            output = self._schedule_prefill(0)
+            output = self._schedule_prefill(prealloc_size)
         else:
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output

@@ -442,8 +442,12 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         # router replay
         all_routed_experts = None
         if self.enable_return_routed_experts:
-            all_routed_experts = input_ids.new_empty(
-                (input_ids.size(1), self.config.num_hidden_layers, self.config.num_experts_per_tok), dtype=torch.uint16)
+            if inputs_embeds is not None:
+                num_tokens = inputs_embeds.size(1)
+            else:
+                num_tokens = input_ids.size(1)
+            all_routed_experts = position_ids.new_empty(
+                (num_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok), dtype=torch.uint16)
 
         hidden_states = self.model(
             input_ids=input_ids,
@@ -464,15 +468,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
     def get_input_embeddings(self):
         """Get input embeddings."""
         return self.model.get_input_embeddings()
-
-    def get_outputs_cudagraph(self, output_buffers: Dict[str, torch.Tensor], input_ids: torch.Tensor, **kwargs):
-        """Get outputs from buffers."""
-        num_tokens = input_ids.size(-1)
-        outputs = dict()
-        outputs['hidden_states'] = output_buffers['hidden_states'][:, :num_tokens]
-        if self.enable_return_routed_experts:
-            outputs['all_routed_experts'] = output_buffers['all_routed_experts'][:num_tokens, ...].clone()
-        return outputs
 
     def prepare_inputs_for_generation(
         self,

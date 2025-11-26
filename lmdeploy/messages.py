@@ -540,6 +540,7 @@ class RequestMetrics:
     """
     token_timestamp: float = 0.0
     engine_events: List[EngineEvent] = field(default_factory=list)
+    spec_info: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -579,3 +580,17 @@ class VisionConfig:
     """
     max_batch_size: int = 1
     thread_safe: bool = False
+
+
+@dataclass
+class SpeculativeConfig:
+    """Speculative decoding config.
+
+    Args:
+        method (str): the speculative decoding method.
+        model (str): the path of speculative model.
+        num_speculative_tokens (int): number of generated token of draft model per step
+    """
+    method: str
+    model: str = ''
+    num_speculative_tokens: int = 1

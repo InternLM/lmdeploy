@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 cmake_minimum_required(VERSION 3.8)
-project(_turbomind)
+project(_turbomind LANGUAGES CXX CUDA)
 
 find_package(pybind11 CONFIG)
 if(NOT pybind11_FOUND)
@@ -21,13 +21,24 @@ target_link_libraries(_xgrammar PRIVATE core xgrammar)
 target_compile_features(_xgrammar PRIVATE cxx_std_14)
 
 if (CALL_FROM_SETUP_PY)
-  set(_INSTALL_CUDA_RPATH
-      "\$ORIGIN"
-      "\$ORIGIN/../../nvidia/nccl/lib/"
-      "\$ORIGIN/../../nvidia/cuda_runtime/lib/"
-      "\$ORIGIN/../../nvidia/cublas/lib/"
-      "\$ORIGIN/../../nvidia/curand/lib/"
-  )
+  string(REPLACE "." ";" _ver ${CMAKE_CUDA_COMPILER_VERSION})
+  list(GET _ver 0 CUDA_MAJOR)
+
+  if(CUDA_MAJOR GREATER_EQUAL "13")
+    set(_INSTALL_CUDA_RPATH
+        "\$ORIGIN"
+        "\$ORIGIN/../../nvidia/nccl/lib/"
+        "\$ORIGIN/../../nvidia/cu${CUDA_MAJOR}/lib/"
+    )
+  else()
+    set(_INSTALL_CUDA_RPATH
+        "\$ORIGIN"
+        "\$ORIGIN/../../nvidia/nccl/lib/"
+        "\$ORIGIN/../../nvidia/cuda_runtime/lib/"
+        "\$ORIGIN/../../nvidia/cublas/lib/"
+        "\$ORIGIN/../../nvidia/curand/lib/"
+    )
+  endif()
   set_target_properties(${PROJECT_NAME} PROPERTIES
       BUILD_RPATH "\$ORIGIN"
       INSTALL_RPATH "${_INSTALL_CUDA_RPATH}"
