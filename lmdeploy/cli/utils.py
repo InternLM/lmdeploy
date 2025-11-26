@@ -699,6 +699,7 @@ class ArgumentHelper:
                                    default=False,
                                    help='Whether to output routed expert ids for replay')
 
+    @staticmethod
     def add_spec_group(parser):
         spec_group = parser.add_argument_group('Speculative decoding arguments')
         spec_group.add_argument('--speculative-algorithm',
@@ -718,6 +719,15 @@ class ArgumentHelper:
                                 help='The number of speculative tokens to generate per step')
 
         return spec_group
+
+    @staticmethod
+    def distributed_executor_backend(parser):
+        """Distributed_executor_backend."""
+        return parser.add_argument('--distributed-executor-backend',
+                                   type=str,
+                                   default=None,
+                                   choices=['uni', 'mp', 'ray'],
+                                   help='The distributed executor backend for pytorch engine.')
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py
