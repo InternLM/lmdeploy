@@ -12,7 +12,10 @@ SESSION_LEN_PASSKEY = 168000
 
 
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', ['internlm/Intern-S1-mini'])
+@pytest.mark.parametrize('model', [
+    'internlm/Intern-S1-mini', 'internlm/Intern-S1-mini-inner-4bits', 'internlm/internlm2_5-7b-chat',
+    'internlm/internlm2_5-7b-chat-inner-4bits'
+])
 def test_history_issue_tp1(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
@@ -21,7 +24,7 @@ def test_history_issue_tp1(config, model, worker_id):
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', ['Qwen/Qwen3-32B', 'Qwen/Qwen3-30B-A3B'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen3-32B', 'Qwen/Qwen3-32B-inner-4bits', 'Qwen/Qwen3-30B-A3B'])
 def test_history_issue_tp2(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
@@ -91,7 +94,7 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
     if 'llama-3' in model.lower():
         session_len = 128000
     if backend == 'turbomind':
-        if 'qwen' in model.lower():
+        if 'qwen' in model.lower() and 'intern-s1' in model.lower():
             backend_config = TurbomindEngineConfig(session_len=session_len,
                                                    max_batch_size=1,
                                                    cache_max_entry_count=0.7,
@@ -109,7 +112,7 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
                                                    cache_max_entry_count=0.7,
                                                    tp=tp_num)
     else:
-        if 'qwen' in model.lower():
+        if 'qwen' in model.lower() and 'intern-s1' in model.lower():
             backend_config = PytorchEngineConfig(session_len=session_len,
                                                  tp=tp_num,
                                                  max_batch_size=1,
