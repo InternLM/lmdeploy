@@ -3,7 +3,8 @@
 import os
 
 from ..version import __version__
-from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, FlexibleArgumentParser, convert_args
+from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter, FlexibleArgumentParser, convert_args,
+                    get_speculative_config)
 
 
 class CLI(object):
@@ -44,12 +45,12 @@ class CLI(object):
                             ', "baichuan-inc/baichuan2-7b-chat" and so on')
         # common args
         ArgumentHelper.backend(parser)
-        # # chat template args
+        # chat template args
         ArgumentHelper.chat_template(parser)
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
-        #
+
         # pytorch engine args
         pt_group = parser.add_argument_group('PyTorch engine arguments')
         ArgumentHelper.adapters(pt_group)
@@ -77,6 +78,9 @@ class CLI(object):
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
         ArgumentHelper.cp(tb_group)
+
+        # speculative decoding
+        ArgumentHelper.add_spec_group(parser)
 
     @staticmethod
     def add_parser_checkenv():
@@ -169,7 +173,13 @@ class CLI(object):
     @staticmethod
     def chat(args):
         from .chat import main
+
         kwargs = convert_args(args)
+        speculative_config = get_speculative_config(args)
+        to_remove = ['speculative_algorithm', 'speculative_draft_model', 'speculative_num_draft_tokens']
+        for key in to_remove:
+            kwargs.pop(key)
+        kwargs['speculative_config'] = speculative_config
         main(**kwargs)
 
     @staticmethod
