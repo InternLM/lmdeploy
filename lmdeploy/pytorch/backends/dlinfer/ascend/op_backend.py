@@ -154,7 +154,7 @@ class AscendOpsBackend(DlinferOpsBackend):
     def update_step_context(cls, step_context):
         """Update step context."""
 
-        AscendOpsBackend.deal_dummy(step_context)
+        cls.deal_dummy(step_context)
 
         def get_total_slots():
             if cls.total_slots is None:
