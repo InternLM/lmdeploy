@@ -491,16 +491,16 @@ class Response:
         def _format_tensor(name: str, tensor: Optional[torch.Tensor]) -> List[str]:
             if tensor is None:
                 return [f'{name}=None']
-            return [f'{name}.shape={tensor.shape}', f'{name}={tensor}']
+            try:
+                return [f'{name}.shape={tensor.shape}', f'{name}={tensor}']
+            except:  # noqa
+                # in case tensor is not torch.Tensor or has no shape
+                return [f'{name}={tensor}']
 
         # Format tensor fields
         fields.extend(_format_tensor('logits', self.logits))
         fields.extend(_format_tensor('last_hidden_state', self.last_hidden_state))
-
-        if self.routed_experts is None:
-            fields.append('routed_experts=None')
-        else:
-            fields.append(f'routed_experts.shape={self.routed_experts.shape}')
+        fields.extend(_format_tensor('routed_experts', self.routed_experts))
         return '\n'.join(fields)
 
 
