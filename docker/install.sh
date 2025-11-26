@@ -51,6 +51,9 @@ export PATH=/opt/py3/bin:$PATH
 if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     FA_VERSION=2.7.3
     TORCH_VERSION="<2.7"
+elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    FA_VERSION=2.8.3
+    TORCH_VERSION="==2.9.0"
 else
     FA_VERSION=2.8.3
     # pin torch version to avoid build and runtime mismatch, o.w. deep_gemm undefined symbol error
