@@ -10,9 +10,9 @@ For pytorch backend you have to add `--distributed-executor-backend ray`.
 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --distributed-executor-backend ray # for pytorch backend
 ```
 
-## Step 2: Sleep server
+## Step 2: Offloads weights & kv cache
 
-Before update model weights, the server should in sleep mode.
+Before update model weights, the server should offloads weights and kv cache.
 
 ```python
 from lmdeploy.utils import serialize_state_dict
@@ -26,7 +26,12 @@ headers = {
                 "Authorization": f"Bearer {api_key}",
             }
 
-response = requests.post(f"{BASE_URL}/sleep", headers=headers, params=dict(tags=['weights', 'kv_cache'], level=1))
+# offloads weights and kv cache with level=2
+response = requests.post(f"{BASE_URL}/sleep", headers=headers, params=dict(tags=['weights', 'kv_cache'], level=2))
+assert response.status_code == 200, response.status_code
+
+# wake up weights, the server is ready for update weights
+response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags=['weights']))
 assert response.status_code == 200, response.status_code
 ```
 
@@ -65,9 +70,9 @@ for seg_idx in range(num_segment):
 
 ## Step 4: Wakeup server
 
-After update model weights, the server should wakeup and provide serving again with the new updated weights.
+After update model weights, the server should onloads kv cache and provide serving again with the new updated weights.
 
 ```python
-response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags=['weights', 'kv_cache']))
+response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags=['kv_cache']))
 assert response.status_code == 200, response.status_code
 ```

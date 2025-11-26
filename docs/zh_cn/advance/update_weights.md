@@ -10,9 +10,9 @@ For pytorch backend you have to add `--distributed-executor-backend ray`.
 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --distributed-executor-backend ray # for pytorch backend
 ```
 
-## 步骤 2: 睡眠模式
+## 步骤 2: 卸载权重和KV缓存
 
-在权重更新前，需要调用API使推理引擎处于睡眠模式：
+在权重更新前，需要调用API卸载权重和KV缓存，使推理引擎处于可更新状态：
 
 ```python
 from lmdeploy.utils import serialize_state_dict
@@ -26,7 +26,12 @@ headers = {
                 "Authorization": f"Bearer {api_key}",
             }
 
-response = requests.post(f"{BASE_URL}/sleep", headers=headers, params=dict(tags=['weights', 'kv_cache'], level=1))
+# offloads weights and kv cache with level=2
+response = requests.post(f"{BASE_URL}/sleep", headers=headers, params=dict(tags=['weights', 'kv_cache'], level=2))
+assert response.status_code == 200, response.status_code
+
+# wake up weights, the server is ready for update weights
+response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags=['weights']))
 assert response.status_code == 200, response.status_code
 ```
 
@@ -65,9 +70,9 @@ for seg_idx in range(num_segment):
 
 ## 步骤 4: 唤醒引擎
 
-权重更新后，调用API唤醒引擎，重新提供推理服务。
+权重更新后，调用API构建KV缓存，唤醒引擎，重新提供推理服务。
 
 ```python
-response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags=['weights', 'kv_cache']))
+response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags=['kv_cache']))
 assert response.status_code == 200, response.status_code
 ```
