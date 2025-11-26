@@ -58,7 +58,7 @@ class BatchedLogProbs:
         if isinstance(self.vals, torch.Tensor):
             vals = self.vals
         else:
-            vals = torch.from_numpy(vals)
+            vals = torch.from_numpy(self.vals)
         return BatchedLogProbs(vals=vals, indices=torch.from_numpy(self.indices))
 
 

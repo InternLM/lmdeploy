@@ -189,6 +189,16 @@ class ArgumentHelper:
                                    help='expert parallelism. dp is required when pytorch engine is used.')
 
     @staticmethod
+    def cp(parser):
+        """Add argument cp to parser."""
+
+        return parser.add_argument(
+            '--cp',
+            type=int,
+            default=1,
+            help='context parallelism size in attention for turbomind backend, tp must be a multiple of cp.')
+
+    @staticmethod
     def dp_rank(parser):
         """Add argument dp_rank to parser."""
 

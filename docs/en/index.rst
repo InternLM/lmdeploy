@@ -103,6 +103,7 @@ Documentation
    advance/pytorch_multinodes.md
    advance/pytorch_profiling.md
    advance/metrics.md
+   advance/context_parallel.md
 
 .. toctree::
    :maxdepth: 1

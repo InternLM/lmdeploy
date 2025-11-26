@@ -824,16 +824,27 @@ void LlamaBatch::AllocSymmBuffers()
     const ssize_t vocab_size_padded = model_->vocab_size_padded_;
 
     // Native comm fuses allreduce & rmsnorm in token granularity
-    TM_CHECK(max_forward_token_num_ % tp_size_ == 0);
+    TM_CHECK(max_forward_token_num_ % tp_size_ == 0) << max_forward_token_num_ << " vs " << tp_size_;
 
     symm_hidden_states_buf_ = {{max_forward_token_num_ * param_.attn_dp_size, hidden_units}, data_type_, symm_alloc_};
     symm_logits_buf_        = {{max_batch_size_, vocab_size_padded}, data_type_, symm_alloc_};
+
+    // for context parallel, we use symm_alloc_ and both prefill and decode stage have reduce process
+    // w/o context parallel, we use common alloc and only decode stage has reduce process
+    // perhaps it would be more appropriate to put this buffer in the unified_attention_layer.
+    Allocator     alloc          = param_.attn_cp_size > 1 ? symm_alloc_ : core::Context::device_alloc();
+    const ssize_t attn_ws_tokens = param_.attn_cp_size > 1 ?
+                                       UnifiedAttentionLayer::kMaxWorkspaceTokens + max_forward_token_num_ :
+                                       UnifiedAttentionLayer::kMaxWorkspaceTokens;
+    symm_partial_ML_             = {{param_.attn_cp_size, attn_ws_tokens, (int)model_->local_head_num_, 2}, alloc};
 }
 
 void LlamaBatch::FreeSymmBuffers()
 {
     symm_hidden_states_buf_ = {};
     symm_logits_buf_        = {};
+
+    symm_partial_ML_ = {};
 }
 
 LlamaBatch::~LlamaBatch()
@@ -1660,6 +1671,7 @@ bool LlamaBatch::Forward(GenerationState& g)
                         state_->h_context_length.slice(first, mini_batch_size),
                         rope_theta_.slice(first, mini_batch_size),
                         &mrope,
+                        symm_partial_ML_,
                         finished_buf_.slice(first, mini_batch_size),
                         Buffer(local_token_nums.data(), local_token_nums.size(), kCPU),
                         lora_mask_buf_,
@@ -1852,6 +1864,7 @@ void LlamaBatch::Warmup()
                             Buffer{&input_length, 1, kCPU},
                             rope_theta_.slice(0, bsz),
                             nullptr,  // mrope
+                            symm_partial_ML_,
                             finished_buf_.slice(0, bsz),
                             Buffer{local_token_nums.data(), (int)local_token_nums.size(), kCPU},
                             Buffer{},
@@ -1913,10 +1926,11 @@ void LlamaBatch::InitializeBufferAndKVCache()
                                                 param_.cache_chunk_size,
                                                 param_.enable_prefix_caching,
                                                 tp_rank_,
+                                                param_.attn_cp_size,
                                                 core::Context::alloc(kDEVICE),
                                                 get_free_size});
 
-    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
+    const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len * param_.attn_cp_size;
     if (max_session_len < session_len_) {
         if (tp_rank_ == 0) {
             TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",

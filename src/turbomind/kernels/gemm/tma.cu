@@ -7,6 +7,11 @@ namespace turbomind::gemm {
 
 #if __CUDACC_VER_MAJOR__ >= 12
 
+#if (CUDA_VERSION >= 13000) && (!defined(PFN_cuTensorMapEncodeTiled))
+// PFN_cuTensorMapEncodeTiled not defined in cuda 13 headers.
+#define PFN_cuTensorMapEncodeTiled PFN_cuTensorMapEncodeTiled_v12000
+#endif
+
 namespace {
 
 PFN_cuTensorMapEncodeTiled get_cuTensorMapEncodeTiled()

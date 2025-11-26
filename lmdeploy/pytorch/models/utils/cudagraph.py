@@ -194,4 +194,6 @@ class CudaGraphMixin:
         num_tokens = input_ids.size(-1)
         outputs = dict()
         outputs['hidden_states'] = output_buffers['hidden_states'][:, :num_tokens]
+        if output_buffers.get('all_routed_experts', None) is not None:
+            outputs['all_routed_experts'] = output_buffers['all_routed_experts'][:num_tokens, ...].clone()
         return outputs

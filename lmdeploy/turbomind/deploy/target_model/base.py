@@ -51,6 +51,7 @@ class BaseOutputModel(ABC):
         self.attention_config = cfg.attention_config
         self.lora_config = cfg.lora_config
         self.attn_tp_size = self.model_config.attn_tp_size
+        self.attn_cp_size = self.model_config.attn_cp_size
         self.mlp_tp_size = self.model_config.mlp_tp_size
         self.out_dir = out_dir
         self.to_file = True if out_dir else False

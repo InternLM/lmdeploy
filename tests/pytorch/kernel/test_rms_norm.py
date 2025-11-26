@@ -15,12 +15,16 @@ class TestRMSNorm:
         yield request.param
 
     @pytest.fixture(scope='class')
-    def input(self, dtype):
-        yield torch.rand(4, 8, dtype=dtype, device='cuda')
+    def hidden_size(self):
+        yield 4096
 
     @pytest.fixture(scope='class')
-    def weight(self, dtype):
-        yield torch.rand(8, dtype=dtype, device='cuda')
+    def input(self, dtype, hidden_size):
+        yield torch.randn(4, hidden_size, dtype=dtype, device='cuda')
+
+    @pytest.fixture(scope='class')
+    def weight(self, dtype, hidden_size):
+        yield torch.randn(hidden_size, dtype=dtype, device='cuda')
 
     @pytest.fixture(scope='class')
     def eps(self):
