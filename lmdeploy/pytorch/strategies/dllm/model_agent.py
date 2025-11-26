@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -154,9 +154,10 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         inputs = inputs[index]
         return inputs
 
-    def slice_extra_inputs(self, extra_inputs: DLLMExtraInputs, seq_length: torch.LongTensor) -> DLLMExtraInputs:
+    def slice_extra_inputs(self, extra_inputs: DLLMExtraInputs, model_inputs: ModelInputs,
+                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> DLLMExtraInputs:
         """Slice outputs."""
-        dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, seq_length)
+        dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, model_inputs.seq_length)
         return DLLMExtraInputs(dllm_mask=dllm_mask)
 
     def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
@@ -196,7 +197,7 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         dllm_masks = torch.as_tensor(np.concatenate(dllm_masks))
         return DLLMExtraInputs(dllm_mask=dllm_masks)
 
-    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs) -> DLLMExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs, **kwargs) -> DLLMExtraOutputs:
         """Create extra outputs."""
         dllm_mask = extra_inputs.dllm_mask
         return DLLMExtraOutputs(dllm_mask=dllm_mask)

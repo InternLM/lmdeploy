@@ -3,7 +3,8 @@ from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
-from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args, get_chat_template, get_lora_adapters
+from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args, get_chat_template, get_lora_adapters,
+                    get_speculative_config)
 
 
 class SubCliServe:
@@ -98,6 +99,7 @@ class SubCliServe:
         ArgumentHelper.dllm_denoising_steps(pt_group)
         ArgumentHelper.dllm_confidence_threshold(pt_group)
         ArgumentHelper.enable_return_routed_experts(pt_group)
+        ArgumentHelper.distributed_executor_backend(pt_group)
 
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
@@ -147,6 +149,9 @@ class SubCliServe:
         # vlm args
         vision_group = parser.add_argument_group('Vision model arguments')
         ArgumentHelper.vision_max_batch_size(vision_group)
+
+        # spec decode
+        ArgumentHelper.add_spec_group(parser)
 
     @staticmethod
     def add_parser_proxy():
@@ -254,63 +259,70 @@ class SubCliServe:
                                                    enable_metrics=not args.disable_metrics,
                                                    hf_overrides=args.hf_overrides)
         chat_template_config = get_chat_template(args.chat_template, args.model_path)
+        speculative_config = get_speculative_config(args)
 
         from lmdeploy.messages import VisionConfig
         vision_config = VisionConfig(args.vision_max_batch_size)
         if args.dp == 1 or backend == 'turbomind':
             from lmdeploy.serve.openai.api_server import serve as run_api_server
 
-            run_api_server(args.model_path,
-                           model_name=args.model_name,
-                           backend=backend,
-                           backend_config=backend_config,
-                           chat_template_config=chat_template_config,
-                           vision_config=vision_config,
-                           server_name=args.server_name,
-                           server_port=args.server_port,
-                           allow_origins=args.allow_origins,
-                           allow_credentials=args.allow_credentials,
-                           allow_methods=args.allow_methods,
-                           allow_headers=args.allow_headers,
-                           allow_terminate_by_client=args.allow_terminate_by_client,
-                           enable_abort_handling=args.enable_abort_handling,
-                           log_level=args.log_level.upper(),
-                           api_keys=args.api_keys,
-                           ssl=args.ssl,
-                           proxy_url=args.proxy_url,
-                           max_log_len=args.max_log_len,
-                           disable_fastapi_docs=args.disable_fastapi_docs,
-                           max_concurrent_requests=args.max_concurrent_requests,
-                           reasoning_parser=args.reasoning_parser,
-                           tool_call_parser=args.tool_call_parser)
+            run_api_server(
+                args.model_path,
+                model_name=args.model_name,
+                backend=backend,
+                backend_config=backend_config,
+                chat_template_config=chat_template_config,
+                vision_config=vision_config,
+                server_name=args.server_name,
+                server_port=args.server_port,
+                allow_origins=args.allow_origins,
+                allow_credentials=args.allow_credentials,
+                allow_methods=args.allow_methods,
+                allow_headers=args.allow_headers,
+                allow_terminate_by_client=args.allow_terminate_by_client,
+                enable_abort_handling=args.enable_abort_handling,
+                log_level=args.log_level.upper(),
+                api_keys=args.api_keys,
+                ssl=args.ssl,
+                proxy_url=args.proxy_url,
+                max_log_len=args.max_log_len,
+                disable_fastapi_docs=args.disable_fastapi_docs,
+                max_concurrent_requests=args.max_concurrent_requests,
+                reasoning_parser=args.reasoning_parser,
+                tool_call_parser=args.tool_call_parser,
+                speculative_config=speculative_config,
+            )
         else:
             from lmdeploy.serve.openai.launch_server import launch_server
 
-            launch_server(args.nnodes,
-                          args.node_rank,
-                          args.model_path,
-                          model_name=args.model_name,
-                          backend=backend,
-                          backend_config=backend_config,
-                          chat_template_config=chat_template_config,
-                          vision_config=vision_config,
-                          server_name=args.server_name,
-                          server_port=args.server_port,
-                          allow_origins=args.allow_origins,
-                          allow_credentials=args.allow_credentials,
-                          allow_methods=args.allow_methods,
-                          allow_headers=args.allow_headers,
-                          allow_terminate_by_client=args.allow_terminate_by_client,
-                          enable_abort_handling=args.enable_abort_handling,
-                          log_level=args.log_level.upper(),
-                          api_keys=args.api_keys,
-                          ssl=args.ssl,
-                          proxy_url=args.proxy_url,
-                          max_log_len=args.max_log_len,
-                          disable_fastapi_docs=args.disable_fastapi_docs,
-                          max_concurrent_requests=args.max_concurrent_requests,
-                          reasoning_parser=args.reasoning_parser,
-                          tool_call_parser=args.tool_call_parser)
+            launch_server(
+                args.nnodes,
+                args.node_rank,
+                args.model_path,
+                model_name=args.model_name,
+                backend=backend,
+                backend_config=backend_config,
+                chat_template_config=chat_template_config,
+                vision_config=vision_config,
+                server_name=args.server_name,
+                server_port=args.server_port,
+                allow_origins=args.allow_origins,
+                allow_credentials=args.allow_credentials,
+                allow_methods=args.allow_methods,
+                allow_headers=args.allow_headers,
+                allow_terminate_by_client=args.allow_terminate_by_client,
+                enable_abort_handling=args.enable_abort_handling,
+                log_level=args.log_level.upper(),
+                api_keys=args.api_keys,
+                ssl=args.ssl,
+                proxy_url=args.proxy_url,
+                max_log_len=args.max_log_len,
+                disable_fastapi_docs=args.disable_fastapi_docs,
+                max_concurrent_requests=args.max_concurrent_requests,
+                reasoning_parser=args.reasoning_parser,
+                tool_call_parser=args.tool_call_parser,
+                speculative_config=speculative_config,
+            )
 
     @staticmethod
     def proxy(args):
