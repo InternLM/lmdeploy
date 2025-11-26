@@ -2,7 +2,7 @@
 import asyncio
 from typing import Dict, List
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -17,14 +17,17 @@ logger = get_logger('lmdeploy')
 class UniExecutor(ExecutorBase):
     """Single node single device Executor."""
 
-    def __init__(self,
-                 model_path: str,
-                 model_config: ModelConfig,
-                 cache_config: CacheConfig,
-                 backend_config: BackendConfig,
-                 misc_config: MiscConfig,
-                 adapters: Dict[str, str] = None,
-                 device_type: str = 'cuda'):
+    def __init__(
+        self,
+        model_path: str,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        backend_config: BackendConfig,
+        misc_config: MiscConfig,
+        adapters: Dict[str, str] = None,
+        device_type: str = 'cuda',
+        specdecode_config: SpecDecodeConfig = None,
+    ):
         """Initialize Executor."""
         super().__init__(model_path=model_path,
                          model_config=model_config,
@@ -33,16 +36,20 @@ class UniExecutor(ExecutorBase):
                          dist_config=DistConfig(),
                          misc_config=misc_config,
                          adapters=adapters,
-                         device_type=device_type)
+                         device_type=device_type,
+                         specdecode_config=specdecode_config)
 
         self.device_ctx = DeviceContext(device_type=device_type)
-        self.model_agent = build_model_agent(model_path=model_path,
-                                             model_config=model_config,
-                                             cache_config=cache_config,
-                                             backend_config=backend_config,
-                                             misc_config=misc_config,
-                                             device_ctx=self.device_ctx,
-                                             adapters=adapters)
+        self.model_agent = build_model_agent(
+            model_path=model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            misc_config=misc_config,
+            device_ctx=self.device_ctx,
+            adapters=adapters,
+            specdecode_config=specdecode_config,
+        )
 
     def download_models(self):
         """Download model."""
@@ -56,13 +63,13 @@ class UniExecutor(ExecutorBase):
         """Gather available memory."""
         return [self.model_agent.get_free_mem()]
 
-    def set_cache_config(self, cache_config: CacheConfig):
+    def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
         """Set all cache config."""
-        self.model_agent.set_cache_config(cache_config)
+        self.model_agent.set_cache_config(cache_config, spec_cache_config)
 
-    def set_model_config(self, model_config: ModelConfig):
+    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig):
         """Set all cache config."""
-        self.model_agent.set_model_config(model_config)
+        self.model_agent.set_model_config(model_config, spec_model_config)
 
     def build_graph_runner(self):
         """Build graph runner."""

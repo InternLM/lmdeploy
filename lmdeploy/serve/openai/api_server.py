@@ -22,7 +22,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount
 
 from lmdeploy.archs import get_task
-from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.messages import (GenerationConfig, LogitsProcessor, PytorchEngineConfig, SpeculativeConfig,
+                               TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
@@ -1366,6 +1367,7 @@ def serve(model_path: str,
           tool_call_parser: Optional[str] = None,
           allow_terminate_by_client: bool = False,
           enable_abort_handling: bool = False,
+          speculative_config: Optional[SpeculativeConfig] = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1448,6 +1450,7 @@ def serve(model_path: str,
                                                     backend_config=backend_config,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
+                                                    speculative_config=speculative_config,
                                                     **kwargs)
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)

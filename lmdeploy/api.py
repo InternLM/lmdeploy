@@ -3,7 +3,7 @@ import os
 from typing import List, Literal, Optional, Union
 
 from .archs import autoget_backend_config, get_task
-from .messages import PytorchEngineConfig, TurbomindEngineConfig
+from .messages import PytorchEngineConfig, SpeculativeConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
 
 
@@ -12,6 +12,7 @@ def pipeline(model_path: str,
              chat_template_config: Optional[ChatTemplateConfig] = None,
              log_level: str = 'WARNING',
              max_log_len: int = None,
+             speculative_config: SpeculativeConfig = None,
              **kwargs):
     """
     Args:
@@ -68,6 +69,12 @@ def pipeline(model_path: str,
             if backend_config is not None else None
         model_path = get_model(model_path, download_dir, revision)
 
+    # spec model
+    if speculative_config is not None and speculative_config.model and not os.path.exists(speculative_config.model):
+        download_dir = backend_config.download_dir \
+            if backend_config is not None else None
+        speculative_config.model = get_model(speculative_config.model, download_dir)
+
     _, pipeline_class = get_task(model_path)
     if not isinstance(backend_config, PytorchEngineConfig):
         # set auto backend mode
@@ -80,6 +87,7 @@ def pipeline(model_path: str,
                           backend_config=backend_config,
                           chat_template_config=chat_template_config,
                           max_log_len=max_log_len,
+                          speculative_config=speculative_config,
                           **kwargs)
 
 
