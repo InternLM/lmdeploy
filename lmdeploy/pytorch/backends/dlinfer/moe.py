@@ -27,9 +27,9 @@ class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
     """Dlinfer softmax topk implementation builder."""
 
     @staticmethod
-    def build(top_k: int, dim: int = -1):
+    def build(top_k: int, dim: int = -1, n_groups: int = -1):
         """build."""
-        return DlinferSoftmaxTopKImpl(top_k, dim)
+        return DlinferSoftmaxTopKImpl(top_k, dim, n_groups)
 
 
 class DlinferFusedMoEImpl(FusedMoEImpl):

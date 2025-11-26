@@ -76,9 +76,9 @@ class InternVLVisionModel(VisonModel):
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
-        IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
+        self.image_token = '<IMG_CONTEXT>'
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
-        self.image_token_id = tokenizer.convert_tokens_to_ids(IMG_CONTEXT_TOKEN)
+        self.image_token_id = tokenizer.convert_tokens_to_ids(self.image_token)
 
     def build_preprocessor(self):
         self.config = self.hf_config
@@ -224,8 +224,8 @@ class InternVLVisionModel(VisonModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    @staticmethod
     def proc_messages(
+        self,
         messages,
         chat_template,
         sequence_start,
@@ -235,32 +235,39 @@ class InternVLVisionModel(VisonModel):
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for message in messages:
-            if isinstance(message['content'], str):
-                prompt_messages.append(message)
-                continue
-            elif message['role'] in ['preprocess', 'forward']:
-                continue
-            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
-            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
-            if len(content) == 0:
-                content.append('')
-            prompt = content[0]
-            if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
-                prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{IMAGE_TOKEN}</img>')
-                prompt = prompt.replace('</img><img>', '')
-                prompt = prompt.replace('<img><img>', '<img>')
-                prompt = prompt.replace('</img></img>', '</img>')
-            elif IMAGE_TOKEN not in prompt:
-                prompt = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + prompt
-            else:
-                pass
-            prompt_messages.append(dict(role='user', content=prompt))
+        messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
+        if VisonModel.IMAGE_TOKEN_included(messages):
+            # backward compatibility
+            for message in messages:
+                role, content = message['role'], message['content']
+                if role != 'user' or isinstance(content, str):
+                    prompt_messages.append(message)
+                    continue
+                content = [x['text'] for x in content if x['type'] == 'text']
+                prompt = ''.join(content)
+                prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{self.image_token}</img>')
+                prompt_messages.append(dict(role='user', content=prompt))
+        else:
+            for message in messages:
+                role, content = message['role'], message['content']
+                if role != 'user' or isinstance(content, str):
+                    prompt_messages.append(message)
+                    continue
+                _content = []
+                for item in content:
+                    item_type = item['type']
+                    if item_type == 'text':
+                        _content.append(item['text'])
+                    elif item_type in ['image', 'image_url']:
+                        _content.append(f'<img>{self.image_token}</img>\n')
+                    else:
+                        raise ValueError(f'Unsupported message type: {item["type"]}')
+                prompt_messages.append(dict(role='user', content=''.join(_content)))
         prompt = chat_template.messages2prompt(prompt_messages,
                                                sequence_start,
                                                tools=tools,
                                                enable_thinking=enable_thinking)
-        return prompt, IMAGE_TOKEN
+        return prompt, self.image_token
 
     def to_pytorch(self,
                    messages,

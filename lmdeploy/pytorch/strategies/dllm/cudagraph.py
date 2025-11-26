@@ -8,6 +8,6 @@ class DLLMCudagraphStrategy(CudagraphStrategy):
         super().__init__()
         self.block_size = block_size
 
-    def get_max_tokens(self, batch_size: int) -> int:
+    def get_max_tokens(self, batch_size: int, origin_batch_size: int, num_tokens: int) -> int:
         """Get max tokens."""
         return batch_size * self.block_size

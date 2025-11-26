@@ -18,9 +18,10 @@ import tqdm
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, ResponseType, SpeculativeConfig,
+                               TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
-from lmdeploy.metrics.stats import IterationStats, RequestState
+from lmdeploy.metrics.stats import IterationStats, RequestState, SpeculativeDecodingStats
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
@@ -304,10 +305,11 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  max_log_len: int = None,
+                 speculative_config: SpeculativeConfig = None,
                  **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
-
+        logger.info(f'speculative_config={speculative_config}')
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
         self.model_name = model_name if model_name else model_path
@@ -326,12 +328,17 @@ class AsyncEngine(LogitsMixin):
         self.session_len = (_get_and_verify_max_len(cfg, None)
                             if backend_config.session_len is None else backend_config.session_len)
         backend_config.session_len = self.session_len
+        if speculative_config is not None and backend == 'turbomind':
+            logger.warning('speculative decoding is not supported by turbomind ')
         # build backend engine
         if backend == 'turbomind':
             self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
             self.hf_tm_cfg = self.engine.config
         elif backend == 'pytorch':
-            self.engine = self._build_pytorch(model_path=model_path, backend_config=backend_config, **kwargs)
+            self.engine = self._build_pytorch(model_path=model_path,
+                                              backend_config=backend_config,
+                                              speculative_config=speculative_config,
+                                              **kwargs)
             self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
         else:
             raise ValueError(f'unsupported backend {backend}')
@@ -354,6 +361,8 @@ class AsyncEngine(LogitsMixin):
         self.request_logger = RequestLogger(max_log_len)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
+        self.num_spec_token = 0 if backend == 'turbomind' or speculative_config is None \
+            else speculative_config.num_speculative_tokens
 
         # build stat loggers
         self._build_stat_loggers()
@@ -389,10 +398,11 @@ class AsyncEngine(LogitsMixin):
     def _build_pytorch(self,
                        model_path: str,
                        backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+                       speculative_config: SpeculativeConfig = None,
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        return Engine.from_pretrained(model_path, engine_config=backend_config)
+        return Engine.from_pretrained(model_path, engine_config=backend_config, speculative_config=speculative_config)
 
     def _build_stat_loggers(self):
         self.stat_loggers = []
@@ -832,7 +842,12 @@ class AsyncEngine(LogitsMixin):
             gen_config.max_new_tokens = max(0, self.session_len - self.id2step[session_id] - len(input_ids))
             if gen_config.max_new_tokens == 0:
                 logger.error(f'run out of tokens. session={session_id}.')
-                yield GenOut('', self.id2step[session_id], len(input_ids), 0, 'length')
+                yield GenOut(response='run out of tokens',
+                             history_token_len=self.id2step[session_id],
+                             input_token_len=len(input_ids),
+                             generate_token_len=0,
+                             finish_reason='length',
+                             token_ids=[])
                 if sequence_end is True and sequence_start is False:
                     await self.end_session(session_id)
                 return
@@ -877,7 +892,9 @@ class AsyncEngine(LogitsMixin):
                 req_state = RequestState(prompt_tokens=input_len)  # per-requst state
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
-                    metrics_processor.queue_update((outputs, req_state, iteration_stats))
+                    specdecode_stats = SpeculativeDecodingStats(
+                        self.num_spec_token) if self.num_spec_token > 0 else None
+                    metrics_processor.queue_update((outputs, req_state, iteration_stats, specdecode_stats))
                     # decode res
                     if is_error(outputs.status):
                         break

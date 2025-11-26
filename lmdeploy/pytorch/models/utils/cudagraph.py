@@ -34,6 +34,7 @@ class CudaGraphMeta:
     input_buffers: BuffType = None
     output_buffers: BuffType = None
     vocab_size: int = 1
+    decode_query_len: int = 1
 
 
 class CudaGraphMixin:
@@ -66,6 +67,7 @@ class CudaGraphMixin:
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
         device = graph_meta.device
+        decode_query_len = graph_meta.decode_query_len
 
         input_buffers: BuffType = dict()
         input_buffers['input_ids'] = torch.randint(0,
@@ -73,12 +75,20 @@ class CudaGraphMixin:
                                                    dtype=torch.int64,
                                                    device=device)
         input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
-        if getattr(self.config, 'use_flash_mla', False) is True:
+        use_flash_mla = getattr(self.config, 'use_flash_mla', False)
+        # use fa3 decode kernel for spec decode
+        use_flash_attn3_decoding = decode_query_len > 1 and not use_flash_mla
+
+        if use_flash_mla is True:
             import flash_mla
 
             # create buffers for flash mla
             input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
-                torch.ones(max_batches, dtype=torch.int32, device=device), self.config.num_attention_heads, 1)
+                torch.ones(max_batches, dtype=torch.int32, device=device),
+                self.config.num_attention_heads * decode_query_len, 1)
+
+        if use_flash_attn3_decoding is True:
+            input_buffers['scheduler_metadata'] = torch.zeros(max_batches + 1, dtype=torch.int32, device=device)
 
         # flash_mla requires block_offsets and kv_lens int32
         input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks), dtype=torch.int32, device=device)
@@ -102,7 +112,6 @@ class CudaGraphMixin:
                                **kwargs) -> Dict[str, Tensor]:
         """Fill cudagraph buffers from forward inputs."""
 
-        is_decoding = graph_meta.is_decoding
         block_offsets: Tensor = attn_metadata.block_offsets
         q_start_loc: Tensor = attn_metadata.q_start_loc
         q_seqlens: Tensor = attn_metadata.q_seqlens
@@ -111,7 +120,7 @@ class CudaGraphMixin:
 
         batch_size, num_blocks = block_offsets.size()
         num_tokens = input_ids.size(-1)
-
+        decode_query_len = graph_meta.decode_query_len
         # fill buffer
         input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
         input_buffers['input_ids'][:, :num_tokens] = input_ids
@@ -139,15 +148,37 @@ class CudaGraphMixin:
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
         attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
         attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
-        if getattr(self.config, 'use_flash_mla', False) is True:
+
+        use_flash_mla = getattr(self.config, 'use_flash_mla', False)
+        if use_flash_mla is True:
             import flash_mla
-            tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
-                                                                             self.config.num_attention_heads, 1)
+            tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
+                attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads * decode_query_len, 1)
             # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
             input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
             input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])
             attn_metadata.tile_scheduler_metadata = input_buffers['tile_scheduler_metadata']
             attn_metadata.num_splits = input_buffers['num_splits']
+
+        # use fa3 decode kernel for spec decode
+        use_flash_attn3_decoding = decode_query_len > 1 and not use_flash_mla
+        if use_flash_attn3_decoding:
+            from flash_attn_interface import get_scheduler_metadata
+            block_size = past_key_values[0][0].size(1)
+            scheduler_metadata = get_scheduler_metadata(
+                batch_size=batch_size,
+                max_seqlen_q=decode_query_len,
+                max_seqlen_k=attn_metadata.max_kv_seqlen,
+                num_heads_q=self.config.num_attention_heads,
+                num_heads_kv=self.config.num_key_value_heads,
+                headdim=self.config.head_dim,
+                cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
+                qkv_dtype=self.config.torch_dtype,
+                page_size=block_size,
+            )
+            input_buffers['scheduler_metadata'].zero_()
+            input_buffers['scheduler_metadata'][:batch_size + 1].copy_(scheduler_metadata[:batch_size + 1])
+            attn_metadata.scheduler_metadata = input_buffers['scheduler_metadata']
 
         new_inputs = dict(
             past_key_values=past_key_values,
@@ -159,18 +190,11 @@ class CudaGraphMixin:
             # TODO: update cross_attn_metadata here
             new_inputs['cross_attn_metadata'] = cross_attn_metadata
 
-        if is_decoding:
-            new_inputs['input_ids'] = input_buffers['input_ids']
-            new_inputs['position_ids'] = input_buffers['position_ids']
-        else:
-            new_inputs['input_ids'] = input_buffers['input_ids']
-            new_inputs['position_ids'] = input_buffers['position_ids']
+        new_inputs['input_ids'] = input_buffers['input_ids']
+        new_inputs['position_ids'] = input_buffers['position_ids']
 
         if inputs_embeds is not None:
-            if is_decoding:
-                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
-            else:
-                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
+            new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
 
         new_inputs.update(kwargs)
         return new_inputs
@@ -194,4 +218,6 @@ class CudaGraphMixin:
         num_tokens = input_ids.size(-1)
         outputs = dict()
         outputs['hidden_states'] = output_buffers['hidden_states'][:, :num_tokens]
+        if output_buffers.get('all_routed_experts', None) is not None:
+            outputs['all_routed_experts'] = output_buffers['all_routed_experts'][:num_tokens, ...].clone()
         return outputs
