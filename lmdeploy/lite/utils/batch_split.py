@@ -73,7 +73,7 @@ def concat_decoder_layer_outputs(batch_outputs: List[Any]) -> Any:
     output_is_tuple = True
     if not isinstance(batch_outputs[0], tuple):
         output_is_tuple = False
-        batch_outputs = [(output,) for output in batch_outputs]
+        batch_outputs = [(output, ) for output in batch_outputs]
 
     num_returns = len(batch_outputs[0])
 
