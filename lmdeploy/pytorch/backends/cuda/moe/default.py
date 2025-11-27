@@ -392,8 +392,6 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         self.fusedmoe_build(True)
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
-        # gate_up_weights = gate_up_weights.transpose(1, 2).contiguous().transpose(1, 2)
-        # down_weights = down_weights.transpose(1, 2).contiguous().transpose(1, 2)
         return gate_up_weights, down_weights
 
     def forward(self,

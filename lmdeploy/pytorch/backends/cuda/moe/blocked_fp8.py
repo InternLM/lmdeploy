@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import contextlib
 from typing import Callable, List
 
 import torch
@@ -82,41 +81,6 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                                        act_func=act_func)
         output = output.unflatten(0, input_size[:-1])
         return output
-
-
-@contextlib.contextmanager
-def monk_deep_gemm():
-    from dlblas.kernels.fused_moe_v3 import use_deep_gemm
-    if use_deep_gemm:
-        yield
-        return
-
-    # patch deep_gemm
-    import deep_gemm
-    import dlblas
-
-    from lmdeploy.pytorch.third_party import deep_gemm as patched_deep_gemm
-    func0_ = getattr(deep_gemm, 'get_col_major_tma_aligned_tensor', None)
-    func1_ = getattr(deep_gemm, 'm_grouped_gemm_fp8_fp8_bf16_nt_masked', None)
-    deep_gemm.get_col_major_tma_aligned_tensor = patched_deep_gemm.get_mn_major_tma_aligned_tensor
-    deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked = patched_deep_gemm.m_grouped_fp8_gemm_nt_masked
-
-    # patch dlblas
-    dlblas.kernels.fused_moe_v3.use_deep_gemm = True
-    dlblas.kernels.fused_moe_v3.m_grouped_gemm_fp8_fp8_bf16_nt_contiguous = \
-        patched_deep_gemm.m_grouped_fp8_gemm_nt_contiguous
-    yield
-
-    # unpatch dlblas
-    dlblas.kernels.fused_moe_v3.use_deep_gemm = False
-
-    # unpatch deep_gemm
-    if func0_ is not None:
-        deep_gemm.get_col_major_tma_aligned_tensor = func0_
-        deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked = func1_
-    else:
-        del deep_gemm.get_col_major_tma_aligned_tensor
-        del deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked
 
 
 class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
@@ -204,24 +168,6 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                                       self.out_dtype,
                                       layer_idx=self.layer_idx,
                                       chunk_size=16 * 1024)
-
-        # patch forward
-        _origin_forward = deepep_moe.forward
-        _origin_fusedmoe_forward = deepep_moe.fusedmoe_forward
-
-        def _patched_forward(*args, **kwargs):
-            with monk_deep_gemm():
-                out = _origin_forward(*args, **kwargs)
-                return out
-
-        def _patched_fusedmoe_forward(*args, **kwargs):
-            with monk_deep_gemm():
-                out = _origin_fusedmoe_forward(*args, **kwargs)
-                return out
-
-        deepep_moe.forward = _patched_forward
-        deepep_moe.fusedmoe_forward = _patched_fusedmoe_forward
-
         return deepep_moe
 
 
