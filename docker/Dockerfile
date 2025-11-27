@@ -69,9 +69,11 @@ COPY docker/install.sh /tmp/install.sh
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/wheels,from=builder,source=/wheels \
     --mount=type=cache,target=/nccl,from=builder,source=/nccl \
+    --mount=type=cache,target=/debs,from=builder,source=/debs \
     /tmp/install.sh
 
 # explicitly set ptxas path for triton
 ENV PATH=/opt/py3/bin:$PATH
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 ENV LD_LIBRARY_PATH=/nccl/lib:$LD_LIBRARY_PATH
+FROM ${IMAGE_TYPE}

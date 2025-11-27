@@ -43,4 +43,15 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     # FlashMLA
     # sm100 compilation for Flash MLA requires NVCC 12.9 or higher
     FLASH_MLA_DISABLE_SM100=1 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
+
+    # GDRCopy debs
+    apt-get update -y
+    apt-get install -y --no-install-recommends build-essential devscripts debhelper fakeroot pkg-config dkms
+
+    GDRCOPY_VERSION=2.5.1
+    wget -q https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v${GDRCOPY_VERSION}.tar.gz \
+    && tar -xzf v${GDRCOPY_VERSION}.tar.gz && rm v${GDRCOPY_VERSION}.tar.gz \
+    && cd gdrcopy-${GDRCOPY_VERSION}/packages \
+    && CUDA=/usr/local/cuda ./build-deb-packages.sh \
+    && mv ./*.deb /debs/
 fi
