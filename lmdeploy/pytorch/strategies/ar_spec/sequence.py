@@ -179,11 +179,11 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
             msg = running[idx]
             stop = stopped[idx]
             model_meta = model_metas[idx]
-            if msg.status != MessageStatus.LOCKED:
+            if msg.status != MessageStatus.RUNNING:
                 continue
             cur_draft_tokens = draft_token_ids[idx]
             # fill token
             msg.update_token_ids(token, draft_token_ids=cur_draft_tokens, model_meta=model_meta, mode=update_mode)
             if stop:
                 msg.set_stop_pos(stop_pos[idx])
-                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
+                msg.state.finish()
