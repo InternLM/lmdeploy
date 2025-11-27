@@ -8,7 +8,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ParallelEmbedding, RMSNorm, SiluAndMul,
+                                 build_rotary_embedding_from_config)
 from lmdeploy.pytorch.nn.eplb import EPLBManager
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
@@ -16,6 +17,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import get_build_model_context
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1
 
 
 class Qwen3MoeAttention(nn.Module):
@@ -317,11 +319,13 @@ class Qwen3MoeModel(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = ParallelEmbedding(config.vocab_size,
+                                      config.hidden_size,
+                                      self.padding_idx,
+                                      dtype=dtype,
+                                      device=device,
+                                      force_dtype=torch.float32 if getattr(config, 'enforce_fp32_head') else None,
+                                      )
 
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size, _ = get_ep_world_rank()
@@ -388,7 +392,7 @@ class Qwen3MoeModel(nn.Module):
         return self.embed_tokens
 
 
-class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
+class Qwen3MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -415,11 +419,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         # build model
         self.model = Qwen3MoeModel(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
         # for router replay
         bm_ctx = get_build_model_context()
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
@@ -456,10 +456,6 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
         if all_routed_experts is None:
             return hidden_states
         return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """Get input embeddings."""

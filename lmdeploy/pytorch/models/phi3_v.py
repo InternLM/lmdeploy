@@ -9,11 +9,10 @@ from transformers import CLIPVisionConfig, CLIPVisionModel, PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .phi3 import Phi3ForCausalLM, Phi3Model
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import vlm_model
 
 CLIP_VIT_LARGE_PATCH14_336_CONFIG = CLIPVisionConfig(attention_dropout=0.0,
                                                      dropout=0.0,
@@ -264,7 +263,7 @@ class Phi3VModel(Phi3Model):
         )
 
 
-class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
+class Phi3VForCausalLM(Phi3ForCausalLM):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -277,11 +276,7 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
         # build model
         self.model = Phi3VModel(config, dtype=dtype, device=device)
         # build lm_head
-        self.lm_head = build_rowwise_linear(config.hidden_size,
-                                            config.vocab_size,
-                                            bias=False,
-                                            dtype=dtype,
-                                            device=device)
+        self.lm_head = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
         self.input_processor = Phi3VInputProcessor(config, dtype)
 

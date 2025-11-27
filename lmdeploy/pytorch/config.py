@@ -347,12 +347,18 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
         )
-
+        enforce_fp32_head = False
         if hf_overrides is not None:
             logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
             override_hf_config(model_config.hf_config, hf_overrides)
+            enforce_fp32_head = hf_overrides.get('enforce_fp32_head', False)
 
+        # deal with fp32_head
+        setattr(model_config.hf_config, 'enforce_fp32_head', enforce_fp32_head)
+        if hasattr(model_config.hf_config, 'text_config'):
+            setattr(model_config.hf_config.text_config, 'enforce_fp32_head', enforce_fp32_head)
+                
         # for serialization of transformers modules
         maybe_register_config_serialize_by_value(trust_remote_code)
 

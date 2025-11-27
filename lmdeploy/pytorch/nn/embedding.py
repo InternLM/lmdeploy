@@ -24,7 +24,9 @@ class ParallelEmbedding(nn.Module):
                  device: torch.device = None,
                  is_tp: bool = False,
                  padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
-                 layer_type: str = 'attn'):
+                 layer_type: str = 'attn',
+                 force_dtype: torch.dtype=None,
+                 ):
         self.dist_ctx = get_dist_manager().current_context()
         super().__init__()
 
@@ -52,9 +54,11 @@ class ParallelEmbedding(nn.Module):
         else:
             self.vocab_size_padded = self.vocab_size
 
+        self.out_dtype = dtype
         self.start_index = self.rank * self.vocab_size_padded
         self.end_index = (self.rank + 1) * self.vocab_size_padded
-        self.register_parameter('weight', self.create_weight(self.vocab_size_padded, hidden_size, dtype, device))
+        weight_dtype = force_dtype or dtype
+        self.register_parameter('weight', self.create_weight(self.vocab_size_padded, hidden_size, weight_dtype, device))
         self.weight.weight_loader = self.weight_loader
 
         backend = get_backend()
@@ -98,4 +102,7 @@ class ParallelEmbedding(nn.Module):
                 self.weight[self.padding_idx - self.start_index] = 0
 
     def forward(self, x: torch.Tensor):
-        return self.impl.forward(x, self.weight, all_reduce=self.all_reduce, group=self.tp_group)
+        embeddings = self.impl.forward(x, self.weight, all_reduce=self.all_reduce, group=self.tp_group)
+        if self.out_dtype is not None and embeddings.dtype != self.out_dtype:
+            embeddings = embeddings.to(dtype=self.out_dtype)
+        return embeddings
