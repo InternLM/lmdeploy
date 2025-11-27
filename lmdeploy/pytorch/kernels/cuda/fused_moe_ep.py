@@ -10,7 +10,7 @@ from .activation import silu_and_mul
 
 
 @triton.jit
-def _fwd_kernel_ep_scatter_1(
+def _fwd_kernel_ep_scatter_step1(
     num_recv_tokens_per_expert,
     expert_start_loc,
     m_indices,
@@ -39,7 +39,7 @@ def _fwd_kernel_ep_scatter_1(
 
 
 @triton.jit
-def _fwd_kernel_ep_scatter_2(
+def _fwd_kernel_ep_scatter_step2(
     total_token_num,
     expert_start_loc,
     recv_x,
@@ -88,10 +88,9 @@ def ep_scatter(
     num_warps = 8
     num_experts = num_recv_tokens_per_expert.shape[0]
     hidden_size = recv_x.shape[1]
-    # grid = (triton.cdiv(hidden_size, BLOCK_D), num_experts)
     grid = num_experts
     assert m_indices.shape[0] % BLOCK_E == 0
-    _fwd_kernel_ep_scatter_1[(grid, )](
+    _fwd_kernel_ep_scatter_step1[(grid, )](
         num_recv_tokens_per_expert,
         expert_start_loc,
         m_indices,
@@ -101,7 +100,7 @@ def ep_scatter(
         BLOCK_EXPERT_NUM=triton.next_power_of_2(num_experts),
     )
     grid = min(recv_topk.shape[0], 1024 * 8)
-    _fwd_kernel_ep_scatter_2[(grid, )](
+    _fwd_kernel_ep_scatter_step2[(grid, )](
         recv_topk.shape[0],
         expert_start_loc,
         recv_x,
