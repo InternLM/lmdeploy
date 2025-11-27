@@ -119,6 +119,8 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
+        - /mnt/104:/mnt/104
+        - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Create and change to _wk directory
