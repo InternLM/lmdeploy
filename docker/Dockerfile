@@ -51,19 +51,15 @@ RUN --mount=type=cache,target=/root/.cache \
 # Runtime image
 FROM nvidia/cuda:13.0.2-base-ubuntu22.04 AS cu13-base
 ENV CUDA_VERSION_SHORT=cu130
-ARG CUDA_COMPAT_PATH=/usr/local/cuda-13.0/compat
 
 FROM nvidia/cuda:12.8.1-base-ubuntu22.04 AS cu12.8-base
 ENV CUDA_VERSION_SHORT=cu128
-ARG CUDA_COMPAT_PATH=/usr/local/cuda-12.8/compat
 
 FROM nvidia/cuda:12.4.1-base-ubuntu22.04 AS cu12-base
 ENV CUDA_VERSION_SHORT=cu124
-ARG CUDA_COMPAT_PATH=/usr/local/cuda-12.4/compat
 
 FROM nvidia/cuda:11.8.0-base-ubuntu22.04 AS cu11-base
 ENV CUDA_VERSION_SHORT=cu118
-ARG CUDA_COMPAT_PATH=""
 
 FROM ${CUDA_VERSION}-base AS final
 ARG PYTHON_VERSION=3.10
@@ -79,7 +75,3 @@ RUN --mount=type=cache,target=/root/.cache \
 ENV PATH=/opt/py3/bin:$PATH
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 ENV LD_LIBRARY_PATH=/nccl/lib:$LD_LIBRARY_PATH
-
-# set path for deep_gemm
-ENV LD_LIBRARY_PATH=/opt/py3/lib/python${PYTHON_VERSION}/site-packages/torch/lib:$LD_LIBRARY_PATH
-ENV LD_LIBRARY_PATH=${CUDA_COMPAT_PATH}:$LD_LIBRARY_PATH
