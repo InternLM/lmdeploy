@@ -61,41 +61,54 @@ class Scheduler:
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         self.seq_manager = SequenceManager(seq_meta)
 
-    @property
-    def waiting(self):
-        """Get waiting sequence."""
-        seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING)
-        return list(seq_map.values())
+    @staticmethod
+    def create_status_list_property(status: MessageStatus):
+        """Create status list property."""
 
-    @property
-    def ready(self):
-        """Get waiting sequence."""
-        seq_map = self.seq_manager.get_sequences(MessageStatus.READY)
-        return list(seq_map.values())
+        def _get_status_list(self):
+            seq_map = self.seq_manager.get_sequences(status)
+            return list(seq_map.values())
 
-    @property
-    def hanging(self):
-        """Get waiting sequence."""
-        seq_map = self.seq_manager.get_sequences(MessageStatus.STOPPED)
-        return list(seq_map.values())
+        return property(_get_status_list)
 
-    @property
-    def running(self):
-        """Get waiting sequence."""
-        seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING)
-        return list(seq_map.values())
+    @staticmethod
+    def create_num_status_method(status: MessageStatus):
+        """Create num status method."""
 
-    @property
-    def migration_waiting(self):
-        """Get migration sequence."""
-        seq_map = self.seq_manager.get_sequences(MessageStatus.MIGRATION_WAITING)
-        return list(seq_map.values())
+        def _num_status(self):
+            return self.seq_manager.num_sequences(status)
 
-    @property
-    def migration_done(self):
-        """Get waiting sequence."""
-        seq_map = self.seq_manager.get_sequences(MessageStatus.MIGRATION_DONE)
-        return list(seq_map.values())
+        return _num_status
+
+    @staticmethod
+    def create_has_status_method(status: MessageStatus):
+        """Create has status method."""
+
+        def _has_status(self):
+            return self.seq_manager.num_sequences(status) > 0
+
+        return _has_status
+
+    # status list properties
+    waiting = create_status_list_property(MessageStatus.WAITING)
+    ready = create_status_list_property(MessageStatus.READY)
+    hanging = create_status_list_property(MessageStatus.STOPPED)
+    running = create_status_list_property(MessageStatus.RUNNING)
+    migration_waiting = create_status_list_property(MessageStatus.MIGRATION_WAITING)
+    migration_done = create_status_list_property(MessageStatus.MIGRATION_DONE)
+
+    # num status methods
+    num_waiting = create_num_status_method(MessageStatus.WAITING)
+    num_ready = create_num_status_method(MessageStatus.READY)
+    num_running = create_num_status_method(MessageStatus.RUNNING)
+    num_migration_waiting = create_num_status_method(MessageStatus.MIGRATION_WAITING)
+    num_migration_done = create_num_status_method(MessageStatus.MIGRATION_DONE)
+
+    # has status methods
+    has_waiting = create_has_status_method(MessageStatus.WAITING)
+    has_ready = create_has_status_method(MessageStatus.READY)
+    has_migration_waiting = create_has_status_method(MessageStatus.MIGRATION_WAITING)
+    has_migration_done = create_has_status_method(MessageStatus.MIGRATION_DONE)
 
     def add_session(self, session_id: int):
         """Add new session.
@@ -274,6 +287,7 @@ class Scheduler:
         session = self.sessions[session_id]
         seqs = list(session.sequences.values())
         for seq in seqs:
+            # stop session so it won't get scheduled again
             seq.state.stop()
             session.remove_sequence(seq)
         self.sessions.pop(session_id)
@@ -282,41 +296,9 @@ class Scheduler:
         """Check if there are any unfinished message."""
         return self.has_ready() or self.has_waiting() or self.has_migration_done()
 
-    def has_ready(self):
-        return self.num_ready() > 0
-
-    def has_waiting(self):
-        return self.num_waiting() > 0
-
-    def has_migration_waiting(self):
-        return self.num_migration_waiting() > 0
-
-    def has_migration_done(self):
-        return self.num_migration_done() > 0
-
     def get_block_tables(self, seqs: SeqList):
         """Get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
-
-    def num_ready(self):
-        """Num running."""
-        return self.seq_manager.num_sequences(MessageStatus.READY)
-
-    def num_waiting(self):
-        """Num waiting."""
-        return self.seq_manager.num_sequences(MessageStatus.WAITING)
-
-    def num_migration_done(self):
-        """Num migration done."""
-        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_DONE)
-
-    def num_migration_waiting(self):
-        """Num waiting."""
-        return self.seq_manager.num_sequences(MessageStatus.MIGRATION_WAITING)
-
-    def num_running(self):
-        """Num locked."""
-        return self.seq_manager.num_sequences(MessageStatus.RUNNING)
 
     def active_seqs(self, running: SeqList):
         """Lock running sequence."""

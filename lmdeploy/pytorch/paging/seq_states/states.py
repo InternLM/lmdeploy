@@ -122,6 +122,9 @@ class ToBeMigratedState(StateBase):
     """State for to be migrated sequences."""
     status = MessageStatus.TO_BE_MIGRATED
 
+    def finish(self):
+        self.to_state(StoppedState)
+
 
 class MigrationWaitingState(StateBase):
     """State for migration waiting sequences."""
@@ -149,6 +152,9 @@ class MigrationDoneState(StateBase):
     """State for migration done sequences."""
     status = MessageStatus.MIGRATION_DONE
 
+    def activate(self):
+        self.to_state(ReadyState)
+
     def finish(self):
         self.to_state(ReadyState)
 
@@ -156,6 +162,9 @@ class MigrationDoneState(StateBase):
 class MigrationRunningState(StateBase):
     """State for migration running sequences."""
     status = MessageStatus.MIGRATION_RUNNING
+
+    def deactivate(self):
+        self.to_state(MigrationDoneState)
 
     def finish(self):
         self.to_state(MigrationDoneState)
