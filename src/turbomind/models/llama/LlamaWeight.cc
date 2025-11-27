@@ -46,8 +46,8 @@ LlamaWeight::LlamaWeight(DataType           data_type,
     num_layer_(model.layer_num),
     data_type_{data_type},
     weight_type_{model.weight_type},
-    tp_size_(engine_param.attn_tp_size),
-    tp_rank_(engine_param.attn_tp_rank)
+    tp_size_(engine_param.attn_tp_size * engine_param.attn_cp_size),
+    tp_rank_(engine_param.attn_tp_rank * engine_param.attn_cp_size + engine_param.attn_cp_rank)
 {
     if (vocab_size_padded_ % tp_size_ != 0) {
         vocab_size_padded_ = (vocab_size_ + tp_size_ - 1) / tp_size_ * tp_size_;

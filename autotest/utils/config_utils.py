@@ -244,10 +244,12 @@ def get_evaluate_turbomind_model_list(tp_num, is_longtext: bool = False, kvint_l
     quatization_case_config = config.get('turbomind_quatization')
 
     case_list = copy.deepcopy(case_list_base)
-    for key in case_list_base:
-        if key in config.get('turbomind_chat_model') and key not in quatization_case_config.get(
-                'no_awq') and not is_quantization_model(key):
-            case_list.append(key + '-inner-4bits')
+    # Check if quatization_case_config exists before accessing its keys
+    if quatization_case_config:
+        for key in case_list_base:
+            if key in config.get('turbomind_chat_model', []) and key not in quatization_case_config.get(
+                    'no_awq', []) and not is_quantization_model(key):
+                case_list.append(key + '-inner-4bits')
 
     model_list = [item for item in case_list if get_tp_num(config, item) == tp_num]
 
@@ -260,8 +262,8 @@ def get_evaluate_turbomind_model_list(tp_num, is_longtext: bool = False, kvint_l
             communicators = ['cuda-ipc']
         for communicator in communicators:
             for item in model_list:
-                if item.replace('-inner-4bits', '') in config.get('turbomind_chat_model') or item.replace(
-                        '-inner-4bits', '') in config.get('turbomind_base_model'):
+                if item.replace('-inner-4bits', '') in config.get('turbomind_chat_model', []) or item.replace(
+                        '-inner-4bits', '') in config.get('turbomind_base_model', []):
                     model_config = {
                         'model': item,
                         'backend': 'turbomind',
@@ -272,18 +274,19 @@ def get_evaluate_turbomind_model_list(tp_num, is_longtext: bool = False, kvint_l
                     }
                     result.append(model_config)
 
-        for kvint in kvint_list:
-            for item in model_list:
-                if item.replace('-inner-4bits', '') in config.get('turbomind_chat_model') and item.replace(
-                        '-inner-4bits', '') not in quatization_case_config.get('no_kvint' + str(kvint)):
-                    model_config = {
-                        'model': item,
-                        'backend': 'turbomind',
-                        'quant_policy': kvint,
-                        'tp_num': tp_num,
-                        'extra': ''
-                    }
-                    result.append(model_config)
+        if quatization_case_config:
+            for kvint in kvint_list:
+                for item in model_list:
+                    if item.replace('-inner-4bits', '') in config.get('turbomind_chat_model', []) and item.replace(
+                            '-inner-4bits', '') not in quatization_case_config.get('no_kvint' + str(kvint), []):
+                        model_config = {
+                            'model': item,
+                            'backend': 'turbomind',
+                            'quant_policy': kvint,
+                            'tp_num': tp_num,
+                            'extra': ''
+                        }
+                        result.append(model_config)
     return result
 
 
@@ -298,18 +301,19 @@ def get_evaluate_pytorch_model_list(tp_num, is_longtext: bool = False, kvint_lis
 
     case_list = copy.deepcopy(case_list_base)
 
-    for key in case_list_base:
-        if key in config.get('pytorch_chat_model') and key in pytorch_quatization_case_config.get(
-                'w8a8') and not is_quantization_model(key):
-            case_list.append(key + '-inner-w8a8')
+    if pytorch_quatization_case_config:
+        for key in case_list_base:
+            if key in config.get('pytorch_chat_model', []) and key in pytorch_quatization_case_config.get(
+                    'w8a8', []) and not is_quantization_model(key):
+                case_list.append(key + '-inner-w8a8')
 
     model_list = [item for item in case_list if get_tp_num(config, item) == tp_num]
 
     result = []
     if len(model_list) > 0:
         for item in model_list:
-            if '4bits' not in item and (item.replace('-inner-w8a8', '') in config.get('pytorch_chat_model')
-                                        or item.replace('-inner-w8a8', '') in config.get('pytorch_base_model')):
+            if '4bits' not in item and (item.replace('-inner-w8a8', '') in config.get('pytorch_chat_model', [])
+                                        or item.replace('-inner-w8a8', '') in config.get('pytorch_base_model', [])):
                 model_config = {'model': item, 'backend': 'pytorch', 'tp_num': tp_num, 'extra': ''}
                 result.append(model_config)
     return result

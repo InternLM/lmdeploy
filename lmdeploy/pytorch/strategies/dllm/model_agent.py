@@ -1,13 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 
-import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch import consts
 from lmdeploy.pytorch.config import DLLMConfig
 from lmdeploy.pytorch.distributed import DistContext
@@ -154,9 +154,10 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         inputs = inputs[index]
         return inputs
 
-    def slice_extra_inputs(self, extra_inputs: DLLMExtraInputs, seq_length: torch.LongTensor) -> DLLMExtraInputs:
+    def slice_extra_inputs(self, extra_inputs: DLLMExtraInputs, model_inputs: ModelInputs,
+                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> DLLMExtraInputs:
         """Slice outputs."""
-        dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, seq_length)
+        dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, model_inputs.seq_length)
         return DLLMExtraInputs(dllm_mask=dllm_mask)
 
     def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
@@ -196,7 +197,7 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         dllm_masks = torch.as_tensor(np.concatenate(dllm_masks))
         return DLLMExtraInputs(dllm_mask=dllm_masks)
 
-    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs) -> DLLMExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs, **kwargs) -> DLLMExtraOutputs:
         """Create extra outputs."""
         dllm_mask = extra_inputs.dllm_mask
         return DLLMExtraOutputs(dllm_mask=dllm_mask)
@@ -236,8 +237,9 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
     @contextmanager
     def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: DLLMExtraInputs, dist_ctx: DistContext):
         """Broadcast next token ids and extra inputs."""
-        tp_gpu_group = dist_ctx.tp_gpu_group
-        dist.broadcast(next_token_ids, src=0, group=tp_gpu_group, async_op=True)
-        handle = extra_inputs.broadcast(src=0, group=tp_gpu_group, async_op=True)
+        tp_gpu_group = dist_ctx.attn_tp_group.gpu_group
+        rank = dist.get_global_rank(tp_gpu_group, 0)
+        dist.broadcast(next_token_ids, src=rank, group=tp_gpu_group, async_op=True)
+        handle = extra_inputs.broadcast(src=rank, group=tp_gpu_group, async_op=True)
         yield
         handle.wait()

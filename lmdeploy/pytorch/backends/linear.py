@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 import torch
+import torch.distributed as dist
 
 
 class LinearImpl(ABC):
@@ -18,6 +19,7 @@ class LinearImpl(ABC):
                 weight: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False,
+                group: dist.ProcessGroup = None,
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""

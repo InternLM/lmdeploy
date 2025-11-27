@@ -42,6 +42,9 @@ class TritonAttentionMetadata(AttentionMetadata):
     num_splits: torch.Tensor = None
     cu_seqlens_q: torch.Tensor = None
     cu_seqlens_k: torch.Tensor = None
+    # flash attn
+    scheduler_metadata: torch.Tensor = None
+    max_kv_seqlen: int = None
 
 
 def _cdiv(a, b):
@@ -90,7 +93,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.flash_attention_fwd = flash_attention_fwd
 
         # for alibi attention
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('attn')
         self.alibi_head_offset = self.num_heads * rank
         self.alibi_num_heads = self.num_heads * world_size
         self.block_sparse_size = block_sparse_size
@@ -291,10 +294,11 @@ class FlashMLAImpl(TritonAttentionImpl):
         kv_seqlens = attn_metadata.kv_seqlens
         kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
+        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        batch_size = q_seqlens.size(0)
         if attn_metadata.is_decoding:
-            max_q_seqlen = 1
-        else:
-            max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+            max_q_seqlen = max_q_seqlen // batch_size
+
         fill_max_q_seqlen = max_q_seqlen
         if attn_metadata.fill_seqlens is not None:
             fill_seqlens = attn_metadata.fill_seqlens
@@ -323,7 +327,7 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         is_decoding = attn_metadata.is_decoding
         if is_decoding:
-            query = query.unsqueeze(1)
+            query = query.unflatten(0, (batch_size, max_q_seqlen))
             if kv_seqlens.dtype == torch.int64:
                 kv_seqlens = kv_seqlens.to(torch.int32)
             attn_output = self.flash_mla_fwd(query,
@@ -421,8 +425,9 @@ class FA3Impl(TritonAttentionImpl):
             causal=causal,
             **kwargs,
         )
-        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
+        from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func, flash_attn_with_kvcache
         self.flash_attn_varlen_func_v3 = flash_attn_varlen_func
+        self.flash_attn_with_kvcache_v3 = flash_attn_with_kvcache
 
     def forward(
         self,
@@ -447,10 +452,12 @@ class FA3Impl(TritonAttentionImpl):
         kv_seqlens = attn_metadata.kv_seqlens
         kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
+        batch_size = q_seqlens.size(0)
+
+        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         if attn_metadata.is_decoding:
-            max_q_seqlen = 1
-        else:
-            max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+            max_q_seqlen = max_q_seqlen // batch_size
+
         fill_max_q_seqlen = max_q_seqlen
         if attn_metadata.fill_seqlens is not None:
             fill_seqlens = attn_metadata.fill_seqlens
@@ -473,26 +480,44 @@ class FA3Impl(TritonAttentionImpl):
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
             )
-
-        q_shape = query.shape
-        o_shape = q_shape[:-1] + (self.v_head_size, )
-        attn_output = query.new_empty(o_shape)
-
         if is_decoding:
-            self.paged_attention_fwd(
-                query,
-                k_cache,
-                v_cache,
-                attn_output,
-                block_offsets,
-                kv_seqlens=kv_seqlens,
-                k_scales_zeros=k_scales_zeros,
-                v_scales_zeros=v_scales_zeros,
-                quant_policy=quant_policy,
-                window_size=self.sliding_window,
-                sm_scale=self.scale,
-                logit_softcapping=self.logit_softcapping,
-            )
+            # spec decoding
+            if max_q_seqlen > 1:
+                sliding_window = (-1, -1) if self.sliding_window is None else self.sliding_window
+                if isinstance(sliding_window, int):
+                    sliding_window = (sliding_window, sliding_window)
+                query = query.unflatten(0, (-1, max_q_seqlen))
+                attn_output = self.flash_attn_with_kvcache_v3(
+                    query,
+                    k_cache,
+                    v_cache,
+                    cache_seqlens=attn_metadata.kv_seqlens.to(torch.int32),
+                    max_seqlen_q=max_q_seqlen,
+                    scheduler_metadata=attn_metadata.scheduler_metadata,
+                    page_table=block_offsets,
+                    softmax_scale=self.scale,
+                    causal=self.causal,
+                    window_size=sliding_window,
+                    softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
+                )
+            else:
+                q_shape = query.shape
+                o_shape = q_shape[:-1] + (self.v_head_size, )
+                attn_output = query.new_empty(o_shape)
+                self.paged_attention_fwd(
+                    query,
+                    k_cache,
+                    v_cache,
+                    attn_output,
+                    block_offsets,
+                    kv_seqlens=kv_seqlens,
+                    k_scales_zeros=k_scales_zeros,
+                    v_scales_zeros=v_scales_zeros,
+                    quant_policy=quant_policy,
+                    window_size=self.sliding_window,
+                    sm_scale=self.scale,
+                    logit_softcapping=self.logit_softcapping,
+                )
         else:
             flatten_k, flatten_v = self.flatten_kv_cache(
                 k_cache,

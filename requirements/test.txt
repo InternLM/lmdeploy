@@ -1,7 +1,9 @@
 allure-pytest
 coverage
 jsonschema
+matplotlib
 nvidia-ml-py
+opencv-python-headless
 pytest
 pytest-assume
 pytest-cov
@@ -10,4 +12,5 @@ pytest-rerunfailures
 pytest-sugar
 pytest-xdist
 pyyaml
+qwen_vl_utils
 timm

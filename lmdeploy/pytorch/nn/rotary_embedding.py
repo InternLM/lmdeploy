@@ -2,11 +2,13 @@
 
 import math
 
+import torch
 from torch import Tensor, nn
 from transformers import PretrainedConfig
 
 from ..backends import OpType, get_backend
-from ..backends.rotary_embedding import Llama3Parameters, LongRoPEScalingParameters, RopeType, YarnParameters
+from ..backends.rotary_embedding import (FopeParameters, Llama3Parameters, LongRoPEScalingParameters, RopeType,
+                                         YarnParameters)
 
 
 def _get_default_rope_parameters(config: PretrainedConfig):
@@ -92,6 +94,23 @@ def _get_llama3_parameters(config: PretrainedConfig):
     return dict(emb_type=RopeType.Llama3, scaling_factor=scaling_factor, llama3_params=params)
 
 
+def _get_fope_parameters(config: PretrainedConfig):
+    """Get fope parameters."""
+    # check if fope is used
+    rope_scaling = getattr(config, 'rope_scaling', dict())
+    fope_keys = ['fope_sep_head', 'fope_num_inv_freq']
+    is_fope = any(key in rope_scaling for key in fope_keys)
+    if not is_fope:
+        return dict()
+
+    params = FopeParameters()
+    rope_scaling = config.rope_scaling
+    params.num_inv_freq = rope_scaling.get('fope_num_inv_freq', rope_scaling.get('num_inv_freq', params.num_inv_freq))
+    params.num_key_value_heads = config.num_key_value_heads
+    params.fope_sep_head = rope_scaling['fope_sep_head']
+    return dict(fope_params=params)
+
+
 def build_rotary_params(config: PretrainedConfig):
     """Get scaling_factor rotary params, and emb_type."""
     params = dict(emb_type=RopeType.Default)
@@ -100,6 +119,8 @@ def build_rotary_params(config: PretrainedConfig):
     if rope_scaling is not None:
         # BC: "rope_type" was originally "type"
         rope_type_str = config.rope_scaling.get('rope_type', config.rope_scaling.get('type', 'default'))
+        if rope_type_str == 'fope':
+            rope_type_str = 'default'
         build_funcs = dict(default=_get_default_rope_parameters,
                            linear=_get_linear_scaling_rope_parameters,
                            dynamic=_get_dynamic_ntk_parameters,
@@ -108,6 +129,7 @@ def build_rotary_params(config: PretrainedConfig):
                            su=_get_longrope_parameters,
                            llama3=_get_llama3_parameters)
         params.update(build_funcs[rope_type_str](config))
+        params.update(_get_fope_parameters(config))
 
     # update partial_rotary_factor
     partial_rotary_factor = config.partial_rotary_factor if hasattr(config, 'partial_rotary_factor') else None
@@ -124,6 +146,7 @@ def build_rotary_embedding(dim: int,
                            yarn_params: YarnParameters = None,
                            longrope_params: LongRoPEScalingParameters = None,
                            llama3_params: Llama3Parameters = None,
+                           fope_params: FopeParameters = None,
                            emb_type: RopeType = RopeType.Default,
                            partial_rotary_factor: float = None) -> nn.Module:
     """Build rotary embedding op."""
@@ -134,7 +157,7 @@ def build_rotary_embedding(dim: int,
     # update rope_dim
     if partial_rotary_factor is not None:
         dim = int(dim * partial_rotary_factor)
-    return builder.build(dim,
+    impl = builder.build(dim,
                          max_position_embeddings,
                          base,
                          scaling_factor,
@@ -142,6 +165,14 @@ def build_rotary_embedding(dim: int,
                          longrope_params=longrope_params,
                          llama3_params=llama3_params,
                          emb_type=emb_type)
+
+    if fope_params is not None:
+        inv_freq = impl.inv_freq
+        fope_params.inv_freq = inv_freq
+        fope = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params)
+        return fope
+
+    return impl
 
 
 def build_rotary_embedding_from_config(config: PretrainedConfig) -> nn.Module:
@@ -169,4 +200,87 @@ class ApplyRotaryEmb(nn.Module):
 
     def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
         """forward."""
-        return self.impl.forward(query, key, cos, sin, inplace)
+
+        assert query.dim() == key.dim() == 3, 'Expected query key (seq_len, heads, head_dim)'
+        assert cos.dim() <= 3 and sin.dim() <= 3
+
+        need_reshape = False
+        if cos.dim() == 3:
+            # for fope
+            need_reshape = True
+            query_shape = query.shape
+            key_shape = key.shape
+            cos = cos.flatten(0, 1)
+            sin = sin.flatten(0, 1)
+            seq_len = cos.size(0)
+            query = query.view(seq_len, -1, query.size(-1))
+            key = key.view(seq_len, -1, key.size(-1))
+
+        query, key = self.impl.forward(query, key, cos, sin, inplace)
+
+        if need_reshape:
+            query = query.view(query_shape)
+            key = key.view(key_shape)
+        return query, key
+
+
+class FopeRotaryEmbedding(nn.Module):
+    """Fope rotary embedding."""
+
+    def __init__(self, dim: int, max_position_embeddings: int, attention_scaling: float, params: FopeParameters):
+        super().__init__()
+
+        num_key_value_heads, tp = self.update_num_kv_heads(params.num_key_value_heads)
+        self.tp = tp
+        params.num_key_value_heads = num_key_value_heads
+
+        # build impl
+        backend = get_backend()
+        builder = backend.get_layer_impl_builder(OpType.RotaryEmbedding)
+        self.impl = builder.build(dim,
+                                  max_position_embeddings=max_position_embeddings,
+                                  scaling_factor=attention_scaling,
+                                  fope_params=params,
+                                  emb_type=RopeType.Fope)
+
+        # setup params
+        inv_freq = self.impl.inv_freq
+        self.input_dim = inv_freq.shape[-1]
+        self.output_dim = inv_freq.shape[-1]
+        self.cos_coef = nn.Parameter(torch.empty(num_key_value_heads, self.input_dim, self.output_dim),
+                                     requires_grad=False)
+        self.sin_coef = nn.Parameter(torch.empty(num_key_value_heads, self.input_dim, self.output_dim),
+                                     requires_grad=False)
+        if self.tp:
+            self.cos_coef.weight_loader = self.weight_loader
+            self.sin_coef.weight_loader = self.weight_loader
+
+    @staticmethod
+    def update_num_kv_heads(num_key_value_heads: int):
+        """Update num_key_value_heads."""
+        from lmdeploy.pytorch.distributed import get_dist_manager
+        dist_mgr = get_dist_manager()
+        dist_ctx = dist_mgr.current_context()
+        tp = dist_ctx.dist_config.attn_tp
+        # tp = dist_ctx.dist_config.attn_config.tp
+        if tp > 1:
+            num_key_value_heads = max(1, num_key_value_heads // tp)
+        return num_key_value_heads, tp
+
+    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
+        """Weight loader."""
+        from lmdeploy.pytorch.distributed import get_tp_world_rank
+        world_size, rank = get_tp_world_rank()
+        num_key_value_heads = loaded_weight.size(0)
+
+        if num_key_value_heads < world_size:
+            n_replicate = world_size // num_key_value_heads
+            world_size = num_key_value_heads
+            rank = rank // n_replicate
+
+        loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank]
+        param.copy_(loaded_weight)
+
+    def forward(self, x: Tensor, position_ids: Tensor):
+        """forward."""
+        return self.impl.forward(x, position_ids, sin_coef=self.sin_coef, cos_coef=self.cos_coef)

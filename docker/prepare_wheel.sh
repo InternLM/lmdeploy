@@ -30,7 +30,13 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     fi
 
     DEEP_EP_VERSION=26cf250
-    pip install nvidia-nvshmem-cu12
+
+    if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+        export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl":${CPLUS_INCLUDE_PATH}
+        pip install nvidia-nvshmem-cu13
+    else
+        pip install nvidia-nvshmem-cu12
+    fi
 
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"

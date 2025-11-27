@@ -7,6 +7,7 @@ import torch
 
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
+from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 
 
 def _update_torch_dtype(config: 'ModelConfig', dtype: str):
@@ -102,35 +103,105 @@ class CacheConfig:
             self.enable_prefix_caching = False
 
 
+class TPMode(enum.Enum):
+    """TP Mode."""
+    DEFAULT = enum.auto()
+    DP_TP = enum.auto()
+
+
 @dataclass
 class DistConfig:
     dp: int = 1
-    tp: int = 1
     ep: int = 1
     dp_rank: int = 0
     enable_microbatch: bool = False
     enable_eplb: bool = False
-    world_size: int = None
-    attn_config: 'DistConfig' = None
+    world_size: int = 1
+
+    # tp
+    tp: int = 1  # default tp, equal to attn_tp
+    attn_tp: int = None  # tp for attention
+    mlp_tp: int = None  # tp for mlp
+    moe_tp: int = None  # tp for moe
+
+    # tp mode
+    mlp_tp_mode: TPMode = TPMode.DEFAULT
+    moe_tp_mode: TPMode = TPMode.DEFAULT
 
     def __post_init__(self):
         """Post init."""
         assert self.dp_rank < self.dp
         assert self.dp >= 1
-        if self.dp == 1:
-            world_size = max(self.tp, self.ep)
-            attn_config = self
-        else:
-            world_size = self.dp
-            attn_config = DistConfig(dp=1, tp=1, ep=1, dp_rank=0)
-        self.world_size = world_size
-        self.attn_config = attn_config
 
-    def need_dummy_batch(self):
-        """Need dummy batch."""
-        if self.dp == 1:
-            return False
-        return self.tp > 1 or self.ep > 1
+        dp = self.dp
+        tp = self.tp
+        ep = self.ep
+
+        # ignore layer to for dp==1
+        if dp == 1:
+            self.mlp_tp = None
+            self.attn_tp = None
+            self.moe_tp = None
+
+        # mlp and moe tp
+        self.mlp_tp = self.mlp_tp or tp
+        self.moe_tp = self.moe_tp or (1 if ep > 1 else self.mlp_tp)
+
+        # world_size
+        world_size = ep if ep > 1 else max(self.mlp_tp, self.moe_tp)
+        self.world_size = world_size
+        assert (world_size >= dp and world_size % dp == 0), (f'world_size {world_size}, dp {dp}')
+        assert (world_size >= ep and world_size % ep == 0), (f'world_size {world_size}, ep {ep}')
+        assert (world_size >= self.mlp_tp
+                and world_size % self.mlp_tp == 0), (f'world_size {world_size}, mlp_tp {self.mlp_tp}')
+        assert (world_size >= self.moe_tp
+                and world_size % self.moe_tp == 0), (f'world_size {world_size}, moe_tp {self.moe_tp}')
+
+        # attn tp
+        self.attn_tp = self.attn_tp or self.world_size // dp
+        self.tp = self.attn_tp
+        if self.mlp_tp > 1:
+            assert (self.mlp_tp >= self.attn_tp
+                    and self.mlp_tp % self.attn_tp == 0), (f'mlp_tp {self.mlp_tp}, attn_tp {self.attn_tp}')
+        if self.moe_tp > 1:
+            assert (self.moe_tp >= self.attn_tp
+                    and self.moe_tp % self.attn_tp == 0), (f'moe_tp {self.moe_tp}, attn_tp {self.attn_tp}')
+        assert (world_size >= self.attn_tp
+                and world_size % self.attn_tp == 0), (f'world_size {world_size}, attn_tp {self.attn_tp}')
+
+        # tp mode
+        self.mlp_tp_mode = TPMode.DEFAULT if (self.mlp_tp in [1, self.attn_tp]) else TPMode.DP_TP
+        self.moe_tp_mode = TPMode.DEFAULT if (self.moe_tp in [1, self.attn_tp]) else TPMode.DP_TP
+
+    def get_tp_by_layer(self, layer_type: str):
+        """Get tp by layer type."""
+        if layer_type == 'attn':
+            return self.attn_tp, TPMode.DEFAULT
+        elif layer_type == 'mlp':
+            return self.mlp_tp, self.mlp_tp_mode
+        elif layer_type == 'moe':
+            return self.moe_tp, self.moe_tp_mode
+        elif layer_type is None:
+            # for some layer that we don't need tp
+            return 1, TPMode.DEFAULT
+        else:
+            raise ValueError(f'Unknown layer type: {layer_type}')
+
+    @classmethod
+    def from_engine_config(cls, engine_config: PytorchEngineConfig):
+        """From engine config."""
+        dist_config = cls(
+            dp=engine_config.dp,
+            ep=engine_config.ep,
+            dp_rank=engine_config.dp_rank,
+            enable_microbatch=engine_config.enable_microbatch,
+            enable_eplb=engine_config.enable_eplb,
+            tp=engine_config.tp,
+            attn_tp=engine_config.attn_tp_size,
+            mlp_tp=engine_config.mlp_tp_size,
+            moe_tp=engine_config.moe_tp_size,
+        )
+        return dist_config
 
 
 def _override_hf_config_dict(hf_config: dict, key: str, hf_overrides):
@@ -226,12 +297,16 @@ class ModelConfig:
         return self.head_dim
 
     @classmethod
-    def from_pretrained(cls,
-                        pretrained_model_name_or_path: str,
-                        trust_remote_code: bool = True,
-                        dtype: str = 'auto',
-                        dist_config: DistConfig = None,
-                        hf_overrides: Dict[str, Any] = None):
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str,
+        trust_remote_code: bool = True,
+        dtype: str = 'auto',
+        dist_config: DistConfig = None,
+        hf_overrides: Dict[str, Any] = None,
+        is_draft_model: bool = False,
+        spec_method: str = None,
+    ):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -252,34 +327,46 @@ class ModelConfig:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
 
-        model_config = cls.from_hf_config(hf_config,
-                                          pretrained_model_name_or_path,
-                                          dtype=dtype,
-                                          dist_config=dist_config)
+        model_config = cls.from_hf_config(
+            hf_config,
+            pretrained_model_name_or_path,
+            dtype=dtype,
+            dist_config=dist_config,
+            is_draft_model=is_draft_model,
+            spec_method=spec_method,
+        )
 
         if hf_overrides is not None:
             logger = get_logger('lmdeploy')
             logger.warning(f'Overriding HF config with {hf_overrides}')
             override_hf_config(model_config.hf_config, hf_overrides)
 
+        # for serialization of transformers modules
+        maybe_register_config_serialize_by_value(trust_remote_code)
+
         return model_config
 
     @classmethod
-    def from_hf_config(cls,
-                       hf_config: Any,
-                       model_path: str = None,
-                       dtype: str = 'auto',
-                       dist_config: DistConfig = None):
+    def from_hf_config(
+        cls,
+        hf_config: Any,
+        model_path: str = None,
+        dtype: str = 'auto',
+        dist_config: DistConfig = None,
+        is_draft_model: bool = False,
+        spec_method: str = None,
+    ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
         if dist_config is None:
             dist_config = DistConfig()
-        if dist_config.dp == 1:
-            tp = dist_config.tp
-        else:
-            tp = 1
+        tp = dist_config.attn_tp
 
-        model_config = AutoModelConfigBuilder.build(hf_config, model_path, tp=tp)
+        model_config = AutoModelConfigBuilder.build(hf_config,
+                                                    model_path,
+                                                    tp=tp,
+                                                    is_draft_model=is_draft_model,
+                                                    spec_method=spec_method)
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
@@ -369,3 +456,49 @@ class MiscConfig:
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
         )
         return misc_config
+
+
+@dataclass
+class SpecDecodeConfig:
+    model: str
+    method: str
+    cache_config: CacheConfig = None
+    num_speculative_tokens: int = 1
+    model_config: ModelConfig = None
+
+    @classmethod
+    def from_config(
+        cls,
+        method: str,
+        num_speculative_tokens: int,
+        model: str,
+        target_cache_cfg: CacheConfig,
+        target_model: str = None,
+        dtype: str = 'auto',
+    ):
+        model = model or target_model
+        model_config = ModelConfig.from_pretrained(model,
+                                                   trust_remote_code=True,
+                                                   dtype=dtype,
+                                                   is_draft_model=True,
+                                                   spec_method=method)
+        cache_config = None
+        # include medusa
+        no_caches = ['medusa']
+        if method not in no_caches:
+            cache_config = CacheConfig(max_batches=target_cache_cfg.max_batches,
+                                       block_size=target_cache_cfg.block_size,
+                                       num_cpu_blocks=target_cache_cfg.num_cpu_blocks,
+                                       num_gpu_blocks=target_cache_cfg.num_gpu_blocks,
+                                       cache_max_entry_count=target_cache_cfg.cache_max_entry_count,
+                                       max_prefill_token_num=target_cache_cfg.max_prefill_token_num,
+                                       device_type=target_cache_cfg.device_type,
+                                       migration_backend=target_cache_cfg.migration_backend)
+        obj = cls(
+            model=model,
+            method=method,
+            cache_config=cache_config,
+            model_config=model_config,
+            num_speculative_tokens=num_speculative_tokens,
+        )
+        return obj

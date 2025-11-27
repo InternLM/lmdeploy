@@ -19,22 +19,45 @@ if TYPE_CHECKING:
 @dataclass
 class DPMeta:
     tp_sizes: List[int] = None
-    ep_sizes: List[int] = None
+    moe_tp_sizes: List[int] = None
+
+    @staticmethod
+    def _gather_tp_sizes(tp: int, seqlen: int, dist_ctx: dist.DistContext, layer_type: str):
+        """Gather tp size."""
+        attn_tp = dist_ctx.dist_config.attn_tp
+        if tp > 1 and tp != attn_tp:
+            dist_group = dist.get_dist_group(layer_type=layer_type)
+            gather_group = dist_group.gpu_gather_group
+            rank = gather_group.rank()
+            tp_size_tensor = torch.zeros(gather_group.size(), dtype=torch.int32, device='cuda')
+            tp_size_tensor[rank].fill_(seqlen)
+            dist.all_gather_into_tensor(tp_size_tensor, tp_size_tensor[rank], group=gather_group)
+            tp_sizes = tp_size_tensor.tolist()
+            assert all(size >= 0 for size in tp_sizes), (f'seqlen: {seqlen}, Invalid tp sizes: {tp_sizes}')
+        else:
+            tp_sizes = [seqlen]
+        return tp_sizes
 
     @classmethod
     def build(cls, seqlen: int):
         """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
+        dist_config = dist_ctx.dist_config
 
-        tp = dist_ctx.tp
-        if tp > 1:
-            tp_sizes = [None for _ in range(tp)]
-            tp_group = dist.get_tp_group('gpu')
-            dist.all_gather_object(tp_sizes, seqlen, group=tp_group)
+        mlp_tp = dist_config.mlp_tp
+        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, dist_ctx, layer_type='mlp')
+
+        moe_tp = dist_config.moe_tp
+        if moe_tp == mlp_tp:
+            moe_tp_sizes = tp_sizes
         else:
-            tp_sizes = [seqlen]
+            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, dist_ctx, layer_type='moe')
 
-        return DPMeta(tp_sizes=tp_sizes, )
+        return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
+
+    def sync_tp_size(self, tp_size: int):
+        self.tp_sizes = [tp_size] * len(self.tp_sizes)
+        self.moe_tp_sizes = [tp_size] * len(self.moe_tp_sizes)
 
 
 @dataclass
@@ -144,7 +167,10 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    is_dummy: bool = False
     state_offsets: torch.LongTensor = None
+    target_hidden_states: torch.Tensor = None
+    target_position_ids: torch.Tensor = None
 
     def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -243,6 +269,10 @@ class ModelInputs:
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
             max_kv_seqlen += max_q_seqlen
+            target_hidden_states = self.target_hidden_states[:, start:
+                                                             end] if self.target_hidden_states is not None else None
+            target_position_ids = self.target_position_ids[:,
+                                                           start:end] if self.target_position_ids is not None else None
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -259,6 +289,8 @@ class ModelInputs:
                 cross_length=cross_length,
                 history_cross_length=history_cross_length,
                 state_offsets=self.state_offsets,
+                target_hidden_states=target_hidden_states,
+                target_position_ids=target_position_ids,
             )
             ret.append(inp)
             history_cross_length = cross_length
@@ -310,6 +342,7 @@ class StepContext:
     kv_caches: List
     is_decoding: bool
     sum_kv_seqlen: int
+    max_kv_seqlen: int = None
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
@@ -323,6 +356,8 @@ class StepContext:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
     enable_microbatch: bool = False
+    # for draft model
+    target_hidden_states: torch.Tensor = None
 
     # states for ssm
     state_caches: List = None
@@ -360,7 +395,6 @@ class StepContext:
 
         # position ids
         attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
-        position_ids = position_ids[None]  # [num_tokens] -> [1, num_tokens]
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
         # cross
@@ -372,6 +406,8 @@ class StepContext:
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
+        if inputs.is_dummy:
+            kv_seqlens = torch.zeros_like(kv_seqlens)
 
         ret = StepContext(
             input_ids=inputs.input_ids,
@@ -388,6 +424,7 @@ class StepContext:
             kv_caches=kv_caches,
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
+            max_kv_seqlen=inputs.max_kv_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
@@ -398,6 +435,7 @@ class StepContext:
             enable_microbatch=inputs.enable_microbatch,
             state_caches=state_caches,
             state_offsets=inputs.state_offsets,
+            target_hidden_states=inputs.target_hidden_states,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -409,12 +447,14 @@ class StepContext:
         q_seqlens = inputs.seq_length
         history_seqlens = inputs.history_lengths
         max_q_seqlen = inputs.max_q_seqlen
-
+        target_position_ids = inputs.target_position_ids
         # decoding
         if max_q_seqlen == 1:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
-            position_ids = history_seqlens.unsqueeze(-1).clone()
-            position_ids = position_ids.flatten()
+            if target_position_ids is not None:
+                position_ids = target_position_ids
+            else:
+                position_ids = history_seqlens.unsqueeze(0).clone()
             return attention_mask, position_ids
 
         num_tokens = inputs.input_ids.numel()
@@ -427,11 +467,13 @@ class StepContext:
             ranges = torch.arange(0, max_q_seqlen, device=device)
             position_ids = history_seqlens[:, None] + ranges[None, :]
             position_ids = position_ids.flatten()
-            return attention_mask, position_ids
+            return attention_mask, position_ids[None]
 
         # get mask
         mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
         attention_mask = (mask_range < q_seqlens[:, None]).long()
+        if target_position_ids is not None:
+            return attention_mask, target_position_ids
 
         # position_ids
         indices = attention_mask.long().cumsum(-1) - 1
@@ -439,7 +481,8 @@ class StepContext:
         indices[1:] += q_seqlens.cumsum(0)[:-1, None]
         position_ids_1d = position_ids.new_empty(num_tokens)
         position_ids_1d[indices.flatten()] = position_ids.flatten()
-        return attention_mask, position_ids_1d
+        position_ids = position_ids_1d[None]
+        return attention_mask, position_ids
 
 
 @dataclass

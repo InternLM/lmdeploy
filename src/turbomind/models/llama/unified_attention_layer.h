@@ -26,6 +26,7 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/kernels/attention/cp_utils.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -87,6 +88,7 @@ private:
     const int local_kv_head_num_;
 
     const AttentionParam param_;
+    const EngineParam    engine_param_;
     const ModelParam     model_param_;
     const LoraParam      lora_param_;
     const Context&       context_;
@@ -110,11 +112,12 @@ private:
     int decode_num_;
     int prefil_num_;
 
-    Tensor_<float> partial_M_;
-    Tensor_<float> partial_L_;
+    Tensor_<float> partial_ML_;
     Tensor_<float> partial_O_;
     Tensor_<int>   split_cnt_;
-    Tensor_<int>   barriers_;  // always zero
+
+    // context parallel
+    CpPostContext cp_fn_ctx_;
 
     Event event_;
 

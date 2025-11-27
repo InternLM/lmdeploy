@@ -10,8 +10,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+from torch.profiler import record_function
 
-from lmdeploy.messages import PytorchEngineConfig, RequestMetrics, ResponseType
+from lmdeploy.messages import PytorchEngineConfig, RequestMetrics, ResponseType, SpeculativeConfig
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
@@ -20,7 +21,7 @@ from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
-from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig, SpecDecodeConfig
 from ..messages import MessageStatus, SchedulerSequence, UpdateTokenMode
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -137,12 +138,7 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
 
 def _build_dist_config(engine_config: PytorchEngineConfig):
     """Build dist config."""
-    dist_config = DistConfig(dp=engine_config.dp,
-                             tp=engine_config.tp,
-                             ep=engine_config.ep,
-                             dp_rank=engine_config.dp_rank,
-                             enable_microbatch=engine_config.enable_microbatch,
-                             enable_eplb=engine_config.enable_eplb)
+    dist_config = DistConfig.from_engine_config(engine_config=engine_config)
     return dist_config
 
 
@@ -150,6 +146,26 @@ def _build_misc_config(engine_config: PytorchEngineConfig):
     """Build misc config."""
     misc_config = MiscConfig.from_engine_config(engine_config)
     return misc_config
+
+
+def _build_specdecode_config(target_model, speculative_config: SpeculativeConfig, engine_config: PytorchEngineConfig,
+                             cache_config: CacheConfig):
+    """Build spec decode config."""
+    specdecode_config = None
+    if speculative_config is not None:
+        draft_model = speculative_config.model
+        if draft_model and not os.path.exists(speculative_config.model):
+            draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)
+
+        specdecode_config = SpecDecodeConfig.from_config(
+            method=speculative_config.method,
+            num_speculative_tokens=speculative_config.num_speculative_tokens,
+            model=draft_model,
+            target_model=target_model,
+            target_cache_cfg=cache_config,
+            dtype=engine_config.dtype,
+        )
+    return specdecode_config
 
 
 def _build_seq_meta(cache_config: CacheConfig, strategy: Any):
@@ -245,6 +261,7 @@ class InputsMakerAsync(InputsMakerBase):
         super().__init__(engine)
         self.scheduler = self.engine.scheduler
         self.forward_inputs = None
+        self.spec_decoding = engine.specdecode_config is not None
 
         self.dp = self.engine.dist_config.dp
         self.role = self.engine.cache_config.role
@@ -313,7 +330,7 @@ class InputsMakerAsync(InputsMakerBase):
         else:
             num_running = scheduler.num_running()
             is_decoding = self.forward_inputs['inputs'].is_decoding
-            running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding else 0
+            running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding or self.spec_decoding else 0
 
             if num_running > running_threshold:
                 enable = True
@@ -340,10 +357,13 @@ class Engine(EngineBase):
         trust_remote_code (bool): Trust remote code.
     """
 
-    def __init__(self,
-                 model_path: str,
-                 engine_config: PytorchEngineConfig = None,
-                 trust_remote_code: bool = True) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        engine_config: PytorchEngineConfig = None,
+        trust_remote_code: bool = True,
+        speculative_config: SpeculativeConfig = None,
+    ) -> None:
         # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
 
@@ -379,20 +399,27 @@ class Engine(EngineBase):
         dist_config = _build_dist_config(engine_config)
         misc_config = _build_misc_config(engine_config)
 
+        # spec decode
+        self.specdecode_config = _build_specdecode_config(model_path, speculative_config, engine_config, cache_config)
+
         # build model agent
-        self.executor = build_executor(model_path,
-                                       cache_config=cache_config,
-                                       backend_config=backend_config,
-                                       dist_config=dist_config,
-                                       misc_config=misc_config,
-                                       adapters=adapters,
-                                       device_type=engine_config.device_type,
-                                       distributed_executor_backend=engine_config.distributed_executor_backend,
-                                       dtype=engine_config.dtype)
+        self.executor = build_executor(
+            model_path,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            dist_config=dist_config,
+            misc_config=misc_config,
+            adapters=adapters,
+            device_type=engine_config.device_type,
+            distributed_executor_backend=engine_config.distributed_executor_backend,
+            dtype=engine_config.dtype,
+            specdecode_config=self.specdecode_config,
+        )
         self.executor.init()
 
         # strategies
-        self.strategy_factory = build_strategy_factory(self.model_config, self.executor.misc_config)
+        self.strategy_factory = build_strategy_factory(self.model_config, self.executor.misc_config,
+                                                       self.specdecode_config)
         self.sampling_strategy = self.strategy_factory.build_sampling_strategy()
         self.model_agent_strategy = self.strategy_factory.build_model_agent_strategy()
         self.engine_strategy = self.strategy_factory.build_engine_strategy(cache_config=cache_config,
@@ -436,6 +463,7 @@ class Engine(EngineBase):
                         pretrained_model_name_or_path: str,
                         engine_config: PytorchEngineConfig = None,
                         trust_remote_code: bool = True,
+                        speculative_config: SpeculativeConfig = None,
                         **kwargs):
         """Lmdeploy python inference engine.
 
@@ -456,15 +484,21 @@ class Engine(EngineBase):
         if engine_config is not None and engine_config.enable_mp_engine:
             from .mp_engine import build_mp_engine
             backend = engine_config.mp_engine_backend
-            return build_mp_engine(backend=backend,
-                                   model_path=pretrained_model_name_or_path,
-                                   engine_config=engine_config,
-                                   trust_remote_code=trust_remote_code)
+            return build_mp_engine(
+                backend=backend,
+                model_path=pretrained_model_name_or_path,
+                engine_config=engine_config,
+                trust_remote_code=trust_remote_code,
+                speculative_config=speculative_config,
+            )
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
-        return cls(model_path=pretrained_model_name_or_path,
-                   engine_config=engine_config,
-                   trust_remote_code=trust_remote_code)
+        return cls(
+            model_path=pretrained_model_name_or_path,
+            engine_config=engine_config,
+            trust_remote_code=trust_remote_code,
+            speculative_config=speculative_config,
+        )
 
     def _download_adapters(self, adapters: Dict[str, str], engine_config: PytorchEngineConfig):
         """Download adapters."""
@@ -611,7 +645,9 @@ class Engine(EngineBase):
             sampling_param = msg.sampling_param
             max_new_tokens = sampling_param.max_new_tokens
             num_all_tokens = msg.num_valid_ids
-            if max_new_tokens + num_all_tokens > max_session_len:
+            if self.engine_config.role == EngineRole.Prefill:
+                sampling_param.max_new_tokens = 1
+            elif max_new_tokens + num_all_tokens > max_session_len:
                 logger.warning(
                     f'session[{msg.session_id}]: num tokens is larger than max session len {max_session_len}. '
                     f'Update max_new_tokens={max_session_len - num_all_tokens}.')
@@ -665,7 +701,7 @@ class Engine(EngineBase):
 
     @property
     def gpu_count(self):
-        return self.tp * self.dp
+        return self.dist_config.world_size
 
     @property
     def torch_int_dtype(self):
@@ -740,6 +776,7 @@ class Engine(EngineBase):
 
     @torch.inference_mode()
     @logging_timer('CreateModelInputs', logger)
+    @record_function('CreateModelInputs')
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """Create model inputs from messages.
 
@@ -752,6 +789,7 @@ class Engine(EngineBase):
 
         # input ids
         token_ids = [msg.token_ids for msg in messages]
+
         input_ids = torch.as_tensor(np.concatenate(token_ids))[None]
 
         # seqlens
@@ -834,6 +872,7 @@ class Engine(EngineBase):
                 msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
                 msg.status = MessageStatus.STOPPED
 
+    @record_function('make_infer_outputs')
     def _make_infer_outputs(
         self,
         batched_outputs: BatchedOutputs,
@@ -877,8 +916,13 @@ class Engine(EngineBase):
             cur_logprobs = None
             if logprobs is not None:
                 cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
-
-            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events)
+            # get spec stats info
+            spec_info = None
+            if self.specdecode_config is not None and is_decoding and self.engine_config.enable_metrics:
+                num_draft_tokens = self.specdecode_config.num_speculative_tokens
+                num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
+                spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
+            req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
             routed_experts = msg.routed_experts if msg.return_routed_experts and finish else None
             if routed_experts is not None and self.engine_config.enable_transfer_obj_ref:
                 # only serialize for api server
@@ -902,6 +946,8 @@ class Engine(EngineBase):
 
         def __need_logits(seqs: SeqList):
             """Need logits."""
+            if self.specdecode_config is not None:
+                return True
             return any(seq.return_logits for seq in seqs)
 
         def __need_routed_experts(seqs: SeqList):
@@ -1163,7 +1209,6 @@ class Engine(EngineBase):
                 if idx == num_loops - 1:
                     scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
-
                 # send output
                 out = await self.executor.get_output_async()
                 if out is not None:

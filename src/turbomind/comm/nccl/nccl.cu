@@ -65,7 +65,7 @@ static NcclApis& nccl_apis()
     static auto value = [] {
         int version{};
         ncclGetVersion(&version);
-        auto     handle = dlopen(nullptr, RTLD_LAZY);
+        auto     handle = dlopen("libnccl.so.2", RTLD_LAZY);
         NcclApis apis{};
         if (!handle) {
             return apis;

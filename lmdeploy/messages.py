@@ -238,8 +238,10 @@ class TurbomindEngineConfig:
     model_format: Optional[str] = None
     tp: int = 1
     dp: int = 1
+    cp: int = 1
     device_num: int = None
     attn_tp_size: int = None
+    attn_cp_size: int = None
     attn_dp_size: int = None
     mlp_tp_size: int = None
     mlp_dp_size: int = None
@@ -292,6 +294,9 @@ class PytorchEngineConfig:
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
+        attn_tp_size (int): tp size for attention, only works for dp>1
+        mlp_tp_size (int): tp size for mlp, only works for dp>1
+        moe_tp_size (int): tp size for moe, only works for dp>1
         cache_max_entry_count (float): the percentage of gpu memory occupied
             by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
             it defaults to 0.8, signifying the percentage of FREE GPU memory
@@ -353,6 +358,9 @@ class PytorchEngineConfig:
     ep: int = 1
     session_len: int = None
     max_batch_size: int = None
+    attn_tp_size: int = None
+    mlp_tp_size: int = None
+    moe_tp_size: int = None
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64
@@ -465,17 +473,35 @@ class Response:
     index: int = 0
     routed_experts: Any = None
 
-    def __repr__(self):
-        logits = 'logits=None' if self.logits is None else f'logits.shape={self.logits.shape}\nlogits={self.logits}'
-        hidden_state = (
-            'last_hidden_state=None' if self.last_hidden_state is None else
-            f'last_hidden_state.shape={self.last_hidden_state.shape}\nlast_hidden_state={self.last_hidden_state}')
-        routed_experts = 'routed_experts=None' if self.routed_experts is None else \
-            f'routed_experts.shape={self.routed_experts.shape}'
+    def __str__(self):
+        return f'text={self.text}\n{self._format_none_text_fields()}'
 
-        s = (f'text={self.text!r}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
-             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}\n{routed_experts}')
-        return s
+    def __repr__(self):
+        return f'text={self.text!r}\n{self._format_none_text_fields()}'
+
+    def _format_none_text_fields(self):
+        fields = []
+        fields.append(f'input_token_len={self.input_token_len}')
+        fields.append(f'generate_token_len={self.generate_token_len}')
+        fields.append(f'finish_reason="{self.finish_reason}"')
+        fields.append(f'token_ids={self.token_ids}')
+        fields.append(f'logprobs={self.logprobs}')
+
+        # Helper function to format tensor information
+        def _format_tensor(name: str, tensor: Optional[torch.Tensor]) -> List[str]:
+            if tensor is None:
+                return [f'{name}=None']
+            try:
+                return [f'{name}.shape={tensor.shape}', f'{name}={tensor}']
+            except:  # noqa
+                # in case tensor is not torch.Tensor or has no shape
+                return [f'{name}={tensor}']
+
+        # Format tensor fields
+        fields.extend(_format_tensor('logits', self.logits))
+        fields.extend(_format_tensor('last_hidden_state', self.last_hidden_state))
+        fields.extend(_format_tensor('routed_experts', self.routed_experts))
+        return '\n'.join(fields)
 
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
@@ -532,6 +558,7 @@ class RequestMetrics:
     """
     token_timestamp: float = 0.0
     engine_events: List[EngineEvent] = field(default_factory=list)
+    spec_info: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -571,3 +598,17 @@ class VisionConfig:
     """
     max_batch_size: int = 1
     thread_safe: bool = False
+
+
+@dataclass
+class SpeculativeConfig:
+    """Speculative decoding config.
+
+    Args:
+        method (str): the speculative decoding method.
+        model (str): the path of speculative model.
+        num_speculative_tokens (int): number of generated token of draft model per step
+    """
+    method: str
+    model: str = ''
+    num_speculative_tokens: int = 1

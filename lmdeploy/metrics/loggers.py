@@ -6,7 +6,9 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List
 
-from lmdeploy.metrics.stats import FinishedRequestStats, IterationStats, SchedulerStats
+import numpy as np
+
+from lmdeploy.metrics.stats import FinishedRequestStats, IterationStats, SchedulerStats, SpeculativeDecodingStats
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -20,6 +22,10 @@ class StatLoggerBase(ABC):
 
     @abstractmethod
     def record_iteration(self, stats: IterationStats) -> None:
+        ...
+
+    @abstractmethod
+    def record_specdecode(self, stats: SpeculativeDecodingStats) -> None:
         ...
 
     def log(self):  # noqa
@@ -37,6 +43,11 @@ class LoggingStatLogger(StatLoggerBase):
         self.last_log_time = now
         self.total_prompt_tokens = 0
         self.total_generation_tokens = 0
+        # spec decode
+        self.num_drafts: int = 0
+        self.num_draft_tokens: int = 0
+        self.num_accepted_tokens: int = 0
+        self.num_accepted_tokens_per_pos: np.ndarray = None
 
     def record_schedule(self, stats: SchedulerStats):
         self.last_scheduler_stats = stats
@@ -48,8 +59,41 @@ class LoggingStatLogger(StatLoggerBase):
         self.total_prompt_tokens += stats.prompt_tokens
         self.total_generation_tokens += stats.new_generation_tokens
 
+    def record_specdecode(self, stats: SpeculativeDecodingStats):
+        """Record spec decoding stats."""
+        if stats.num_drafts <= 0:
+            return
+        if self.num_accepted_tokens_per_pos is None:
+            self.num_accepted_tokens_per_pos = np.zeros(stats.num_spec_tokens)
+        self.num_drafts += stats.num_drafts
+        self.num_draft_tokens += stats.num_draft_tokens
+        self.num_accepted_tokens += stats.num_accepted_tokens
+        self.num_accepted_tokens_per_pos += stats.num_accepted_tokens_per_pos
+
     def record_finish(self, stats: FinishedRequestStats):
         pass
+
+    def _get_log_spec_msg(self):
+        """Get spec decoding logging msg."""
+        if self.num_drafts == 0:
+            return ''
+
+        draft_acceptance_rate = (self.num_accepted_tokens / self.num_draft_tokens *
+                                 100 if self.num_draft_tokens > 0 else float('nan'))
+
+        # Conventionally, mean acceptance length includes the bonus token
+        mean_acceptance_length = 1 + (self.num_accepted_tokens / self.num_drafts)
+
+        acceptance_rates = self.num_accepted_tokens_per_pos / self.num_drafts
+        rates_str = ', '.join(f'{p:.3f}' for p in acceptance_rates)
+
+        log_msg = ('SpecDecoding metrics: '
+                   f'Draft acceptance rate: {draft_acceptance_rate:.2f}%, '
+                   f'Mean acceptance length: {mean_acceptance_length:.2f}, '
+                   f'Accepted: {self.num_accepted_tokens} tokens, '
+                   f'Drafted: {self.num_draft_tokens} tokens, '
+                   f'Per-position acceptance rate: {rates_str}')
+        return log_msg
 
     def log(self):
         now = time.perf_counter()
@@ -61,6 +105,7 @@ class LoggingStatLogger(StatLoggerBase):
         prompt_throughput = self.total_prompt_tokens / (now - self.last_log_time)
         generation_throughput = self.total_generation_tokens / (now - self.last_log_time)
 
+        spec_log_msg = self._get_log_spec_msg()
         self._reset(now)
 
         scheduler_stats = self.last_scheduler_stats
@@ -74,7 +119,9 @@ class LoggingStatLogger(StatLoggerBase):
                    f'Running: {scheduler_stats.num_running_reqs} reqs, '
                    f'Waiting: {scheduler_stats.num_waiting_reqs} reqs, '
                    f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%')
-        print(log_msg)
+        print(log_msg, flush=True)
+        if spec_log_msg:
+            print(spec_log_msg, flush=True)
 
 
 class PrometheusStatLogger(StatLoggerBase):
@@ -281,6 +328,9 @@ class PrometheusStatLogger(StatLoggerBase):
         self.histogram_decode_time_request.observe(stats.decode_time)
         self.histogram_num_prompt_tokens_request.observe(stats.prompt_tokens)
         self.histogram_num_generation_tokens_request.observe(stats.generation_tokens)
+
+    def record_specdecode(self, stats: SpeculativeDecodingStats) -> None:
+        pass
 
 
 def build_buckets(mantissa_lst: List[int], max_value: int) -> List[int]:
