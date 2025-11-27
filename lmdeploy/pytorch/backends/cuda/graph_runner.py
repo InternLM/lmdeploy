@@ -75,15 +75,19 @@ class CUDASingleGraphRunner:
         self.ctx_mgr = model.ctx_mgr
         self.model_config = model_config
 
-        self.meta = CudaGraphMeta(max_batchs=max_batches,
-                                  max_tokens=max_tokens,
-                                  num_blocks=num_blocks,
-                                  is_decoding=is_decoding,
-                                  device=device,
-                                  input_buffers=dict(),
-                                  output_buffers=dict(),
-                                  vocab_size=self.model_config.vocab_size,
-                                  decode_query_len=decode_query_len)
+        self.meta = CudaGraphMeta(
+            max_batchs=max_batches,
+            max_tokens=max_tokens,
+            num_blocks=num_blocks,
+            is_decoding=is_decoding,
+            device=device,
+            input_buffers=dict(),
+            output_buffers=dict(),
+            vocab_size=self.model_config.vocab_size,
+            decode_query_len=decode_query_len,
+            use_flash_mla=model_config.use_flash_mla,
+            use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
+        )
         self.device = device
         self.max_batches = max_batches
         self.max_tokens = max_tokens
