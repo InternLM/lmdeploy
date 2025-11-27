@@ -6,6 +6,7 @@ from typing import Callable, List
 import torch
 import torch.distributed as dist
 
+from lmdeploy.pytorch.backends.deepep_moe_checker import moe_backend
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
@@ -474,6 +475,12 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         except ImportError:
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
+
+        try:
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep
+            moe_backend.set_deepep_moe_backend()
+        except ImportError:
+            logger.warning('For higher performance, please install DeepEP https://github.com/deepseek-ai/DeepEP')
 
         # pre-allocate buffer
         self.fusedmoe_build(True)
