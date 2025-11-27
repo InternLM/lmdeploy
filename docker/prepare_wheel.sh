@@ -53,5 +53,6 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     && tar -xzf v${GDRCOPY_VERSION}.tar.gz && rm v${GDRCOPY_VERSION}.tar.gz \
     && cd gdrcopy-${GDRCOPY_VERSION}/packages \
     && CUDA=/usr/local/cuda ./build-deb-packages.sh \
+    && mkdir -p /debs \
     && mv ./*.deb /debs/
 fi
