@@ -5,6 +5,7 @@ from typing import Callable, List, Optional
 import torch
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
 from lmdeploy.pytorch.backends.moe import FusedMoEBuilder, FusedMoEImpl
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe
@@ -387,6 +388,12 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
             import deep_gemm  # noqa: F401
         except ImportError:
             logger.exception('DeepGEMM is required for DeepEP MoE implementation.')
+
+        try:
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep  # noqa: F401
+            get_moe_backend().set_deepep_moe_backend()
+        except ImportError:
+            logger.warning('For higher performance, please install DeepEP https://github.com/deepseek-ai/DeepEP')
 
         # pre-allocate buffer
         self.fusedmoe_build(True)

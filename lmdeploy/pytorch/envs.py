@@ -130,6 +130,9 @@ with set_envs():
     os.getenv('DEEPEP_ENABLE_MNNVL', None)
     os.getenv('DEEPEP_MODE', 'auto')
 
+    # deepep
+    deep_ep_buffer_num_sms = env_to_int('DEEPEP_BUFFER_NUM_SMS', 20)
+
     # deepgemm
     os.getenv('DG_JIT_DEBUG', '0')
     os.getenv('DG_JIT_PRINT_COMPILER_COMMAND', '0')

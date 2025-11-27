@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
@@ -250,6 +251,12 @@ class CUDAGraphRunner(GraphRunner):
         context: StepContext = None,
     ):
         """Prepare inputs."""
+
+        if get_moe_backend().use_deepep_moe_backend():
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
+            deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
+            DeepEPBuffer.set_deepep_mode(deepep_mode)
+
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
