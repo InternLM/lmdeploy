@@ -175,9 +175,9 @@ class TestScheduler:
         seq2.update_token_ids(torch.tensor([1] * block_size))
         assert len(scheduler.running) == 2
         scheduler.schedule(is_prefill=False)
-        # seq1: 1 waiting cpu
-        # seq2: 4 running gpu
+        # seq1: 2 running gpu
+        # seq2: 4 waiting cpu
         # seq3: 3 nan
-        assert seq1.status == MessageStatus.WAITING
-        assert seq2.status == MessageStatus.RUNNING
-        assert block_manager.get_num_free_gpu_blocks() == 0
+        assert seq1.status == MessageStatus.RUNNING
+        assert seq2.status == MessageStatus.WAITING
+        assert block_manager.get_num_free_gpu_blocks() == 2
