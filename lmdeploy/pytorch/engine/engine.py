@@ -545,7 +545,8 @@ class Engine(EngineBase):
     def _get_max_session_len(self):
         """Get max session len."""
         session_len = self.scheduler_config.max_session_len
-        max_tokens = (self.cache_config.num_gpu_blocks * self.cache_config.block_size)
+        num_gpu_blocks = self.cache_config.num_gpu_blocks - self.cache_config.num_reserved_gpu_blocks
+        max_tokens = (num_gpu_blocks * self.cache_config.block_size)
         window_size = self.cache_config.window_size
         if window_size > 0 and window_size <= max_tokens:
             max_tokens = (1 << 63) - 1
