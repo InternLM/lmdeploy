@@ -252,13 +252,13 @@ def assert_pipeline_single_element(output, is_stream: bool = False, is_last: boo
     result = True
     result &= output.generate_token_len > 0
     result &= output.index >= 0
+    result &= output.input_token_len > 0
     if is_last:
         result &= len(output.text) >= 0
         result &= output.finish_reason in ['stop', 'length']
         if is_stream:
             result &= output.token_ids is None or output.token_ids == []
         else:
-            result &= output.input_token_len > 0
             result &= len(output.token_ids) > 0
     else:
         result &= len(output.text) > 0

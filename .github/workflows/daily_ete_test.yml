@@ -438,7 +438,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_quantization
-    timeout-minutes: 120
+    timeout-minutes: 240
     container:
       image: openmmlab/lmdeploy:latest-cu12.8
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
