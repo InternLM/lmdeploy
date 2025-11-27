@@ -477,7 +477,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
         try:
-            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode, use_deepep  # noqa: F401
             moe_backend.set_deepep_moe_backend()
         except ImportError:
             logger.warning('For higher performance, please install DeepEP https://github.com/deepseek-ai/DeepEP')

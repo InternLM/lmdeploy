@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Tuple
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.backends.deepep_moe_checker import moe_backend
+from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -17,6 +17,7 @@ from ..graph_runner import GraphRunner
 from .attention import TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
+
 
 def next_power_of_2(n: int):
     """Return the smallest power of 2 greater than or equal to n."""
