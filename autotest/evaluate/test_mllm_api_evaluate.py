@@ -100,6 +100,7 @@ def run_test(config, run_id, prepare_environment, worker_id, test_type='infer', 
     return result, msg
 
 
+@pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
@@ -109,6 +110,7 @@ def test_turbomind_vl_eval_tp1(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
@@ -118,6 +120,7 @@ def test_turbomind_vl_eval_tp2(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
@@ -127,6 +130,7 @@ def test_turbomind_vl_eval_tp4(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
@@ -136,6 +140,7 @@ def test_turbomind_vl_eval_tp8(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
@@ -145,6 +150,7 @@ def test_pytorch_vl_eval_tp1(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
@@ -154,6 +160,7 @@ def test_pytorch_vl_eval_tp2(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
@@ -163,6 +170,7 @@ def test_pytorch_vl_eval_tp4(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)

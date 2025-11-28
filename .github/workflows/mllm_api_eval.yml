@@ -155,6 +155,7 @@ jobs:
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind')
         run: |
           unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
+          cd VLMEvalKit && cp -r ../autotest .
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
             pytest autotest/evaluate/test_mllm_api_evaluate.py -m "gpu_num_1 and ${{matrix.backend}} and infer" -n 8 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
