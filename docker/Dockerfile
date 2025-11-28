@@ -2,6 +2,9 @@
 ARG IMAGE_TYPE=final
 ARG CUDA_VERSION=cu12
 
+FROM nvidia/cuda:13.0.2-devel-ubuntu22.04 AS cu13
+ENV CUDA_VERSION_SHORT=cu130
+
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cu12.8
 ENV CUDA_VERSION_SHORT=cu128
 
@@ -40,10 +43,15 @@ COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
 RUN --mount=type=cache,target=/root/.cache \
-    docker/build.sh && \
+    docker/build.sh
+
+RUN --mount=type=cache,target=/root/.cache \
     docker/prepare_wheel.sh
 
 # Runtime image
+FROM nvidia/cuda:13.0.2-base-ubuntu22.04 AS cu13-base
+ENV CUDA_VERSION_SHORT=cu130
+
 FROM nvidia/cuda:12.8.1-base-ubuntu22.04 AS cu12.8-base
 ENV CUDA_VERSION_SHORT=cu128
 
@@ -61,6 +69,7 @@ COPY docker/install.sh /tmp/install.sh
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/wheels,from=builder,source=/wheels \
     --mount=type=cache,target=/nccl,from=builder,source=/nccl \
+    --mount=type=cache,target=/debs,from=builder,source=/debs \
     /tmp/install.sh
 
 # explicitly set ptxas path for triton

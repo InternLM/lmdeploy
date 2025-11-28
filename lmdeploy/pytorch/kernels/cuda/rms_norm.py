@@ -14,59 +14,66 @@ def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
 
     var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
     out = xf * tl.math.rsqrt(var + eps)
-    out = (w * out).to(x.dtype)
+    out = w * out.to(x.dtype)
     return out
 
 
 @triton.jit
-def rms_norm_kernel(input, weight, output, seq_len, input_row_stride: tl.constexpr, eps: tl.constexpr,
-                    N_COLS: tl.constexpr, BLOCK_N: tl.constexpr, NUM_STAGES: tl.constexpr):
+def add_rms_norm_kernel(input, weight, residual, output, out_residual, num_feats, num_groups, stride_ib, stride_ih,
+                        stride_id: tl.constexpr, stride_rb, stride_rh, stride_rd: tl.constexpr, stride_ob, stride_oh,
+                        stride_od: tl.constexpr, stride_rob, stride_roh, stride_rod: tl.constexpr,
+                        has_residual: tl.constexpr, eps: tl.constexpr, N_COLS: tl.constexpr, BLOCK_N: tl.constexpr,
+                        NUM_STAGES: tl.constexpr):
     """Rms norm kernel."""
     prog_id = tl.program_id(0)
     prog_stride = tl.num_programs(0)
     offsets = tl.arange(0, BLOCK_N)
     mask = offsets < N_COLS
 
-    w = tl.load(weight + offsets, mask=mask).to(tl.float32)
+    w = tl.load(weight + offsets, mask=mask)
 
-    x_ptr = input + prog_id * input_row_stride + offsets
-    out_ptr = output + prog_id * input_row_stride + offsets
-    for _ in tl.range(prog_id, seq_len, prog_stride, num_stages=NUM_STAGES):
-        x = tl.load(x_ptr, mask=mask)
+    x_ptrs = input + offsets * stride_id
+    res_ptrs = residual + offsets * stride_rd
+    out_res_ptrs = out_residual + offsets * stride_rod
+    out_ptrs = output + offsets * stride_od
+    for idx in tl.range(prog_id, num_feats, prog_stride, num_stages=NUM_STAGES):
+        batch_id = idx // num_groups
+        head_id = idx % num_groups
+        cur_x_ptrs = x_ptrs + batch_id * stride_ib + head_id * stride_ih
+        cur_res_ptrs = res_ptrs + batch_id * stride_rb + head_id * stride_rh
+        cur_out_ptrs = out_ptrs + batch_id * stride_ob + head_id * stride_oh
+        cur_out_res_ptrs = out_res_ptrs + batch_id * stride_rob + head_id * stride_roh
+        x = tl.load(cur_x_ptrs, mask=mask)
+        if has_residual:
+            res = tl.load(cur_res_ptrs, mask=mask)
+            x += res
+            tl.store(cur_out_res_ptrs, x, mask=mask)
         out = _compute_rms_norm(x, w, eps, N_COLS)
-
-        tl.store(out_ptr, out, mask=mask)
-        x_ptr += prog_stride * input_row_stride
-        out_ptr += prog_stride * input_row_stride
+        tl.store(cur_out_ptrs, out, mask=mask)
 
 
-@triton.jit
-def add_rms_norm_kernel(input, weight, residual, output, out_residual, seq_len, input_row_stride: tl.constexpr,
-                        residual_row_stride: tl.constexpr, eps: tl.constexpr, N_COLS: tl.constexpr,
-                        BLOCK_N: tl.constexpr, NUM_STAGES: tl.constexpr):
-    """Rms norm kernel."""
-    prog_id = tl.program_id(0)
-    prog_stride = tl.num_programs(0)
-    offsets = tl.arange(0, BLOCK_N)
-    mask = offsets < N_COLS
+def _unsqueeze_to_3d(tensor: Tensor) -> Tensor:
+    """Unsqueeze tensor to 3d."""
+    if tensor.dim() == 3:
+        return tensor
+    elif tensor.dim() == 2:
+        return tensor.unsqueeze(0)
+    elif tensor.dim() == 1:
+        return tensor.unsqueeze(0).unsqueeze(0)
+    else:
+        raise ValueError(f'Unsupported tensor dim {tensor.dim()}')
 
-    w = tl.load(weight + offsets, mask=mask).to(tl.float32)
 
-    x_ptr = input + prog_id * input_row_stride + offsets
-    res_ptr = residual + prog_id * residual_row_stride + offsets
-    out_res_ptr = out_residual + prog_id * residual_row_stride + offsets
-    out_ptr = output + prog_id * input_row_stride + offsets
-    for _ in tl.range(prog_id, seq_len, prog_stride, num_stages=NUM_STAGES):
-        x = tl.load(x_ptr, mask=mask)
-        res = tl.load(res_ptr, mask=mask)
-        new_x = x + res
-        tl.store(out_res_ptr, new_x, mask=mask)
-        out = _compute_rms_norm(new_x, w, eps, N_COLS)
-        tl.store(out_ptr, out, mask=mask)
-        x_ptr += prog_stride * input_row_stride
-        res_ptr += prog_stride * input_row_stride
-        out_ptr += prog_stride * input_row_stride
-        out_res_ptr += prog_stride * input_row_stride
+def _squeeze_to_origin_dim(tensor: Tensor, origin_dim: int) -> Tensor:
+    """Squeeze tensor to origin dim."""
+    if origin_dim == 3:
+        return tensor
+    elif origin_dim == 2:
+        return tensor.squeeze(0)
+    elif origin_dim == 1:
+        return tensor.squeeze(0).squeeze(0)
+    else:
+        raise ValueError(f'Unsupported origin dim {origin_dim}')
 
 
 def rms_norm(hidden_states: Tensor,
@@ -76,13 +83,33 @@ def rms_norm(hidden_states: Tensor,
              out: Tensor = None,
              out_residual: Tensor = None):
     """Rms norm."""
-    if not hidden_states.is_contiguous():
-        hidden_states = hidden_states.contiguous()
-
+    assert hidden_states.dim() <= 3
+    assert weight.stride(-1) == 1
     feat_size = weight.shape[0]
     assert hidden_states.size(-1) == feat_size
-    seq_len = hidden_states.numel() // hidden_states.size(-1)
-    input_stride = hidden_states.stride(-2)
+
+    origin_dim = hidden_states.dim()
+    if out is None:
+        out = torch.empty_like(hidden_states)
+    has_residual = residual is not None
+    if has_residual:
+        if out_residual is None:
+            out_residual = torch.empty_like(residual)
+    else:
+        residual = hidden_states
+        out_residual = out
+
+    shape = hidden_states.shape
+    assert residual.shape == shape
+    assert out.shape == shape
+    assert out_residual.shape == shape
+
+    hidden_states = _unsqueeze_to_3d(hidden_states)
+    residual = _unsqueeze_to_3d(residual)
+    out = _unsqueeze_to_3d(out)
+    out_residual = _unsqueeze_to_3d(out_residual)
+
+    num_feats = hidden_states.numel() // hidden_states.size(-1)
 
     BLOCK_N = triton.next_power_of_2(feat_size)
 
@@ -90,52 +117,46 @@ def rms_norm(hidden_states: Tensor,
     num_sm = props['multi_processor_count']
     warps_per_sm = props['warps_per_sm']
     blocks_per_sm = props['blocks_per_sm']
-    num_warps = min(triton.cdiv(BLOCK_N, 128), 4)
+    num_warps = min(triton.cdiv(BLOCK_N, 2048), 4)
     cta_per_sm = min(blocks_per_sm, warps_per_sm // num_warps)
     cta_per_device = num_sm * cta_per_sm
-    num_stages = min(5, triton.cdiv(seq_len, cta_per_device))
+    num_stages = 1
 
-    if out is None:
-        out = torch.empty_like(hidden_states)
+    grid = (min(num_feats, cta_per_device), )
+    add_rms_norm_kernel[grid](
+        hidden_states,
+        weight,
+        residual,
+        out,
+        out_residual,
+        num_feats=num_feats,
+        num_groups=hidden_states.size(1),
+        stride_ib=hidden_states.stride(0),
+        stride_ih=hidden_states.stride(1),
+        stride_id=hidden_states.stride(2),
+        stride_rb=residual.stride(0),
+        stride_rh=residual.stride(1),
+        stride_rd=residual.stride(2),
+        stride_ob=out.stride(0),
+        stride_oh=out.stride(1),
+        stride_od=out.stride(2),
+        stride_rob=out_residual.stride(0),
+        stride_roh=out_residual.stride(1),
+        stride_rod=out_residual.stride(2),
+        has_residual=has_residual,
+        eps=eps,
+        N_COLS=feat_size,
+        BLOCK_N=BLOCK_N,
+        NUM_STAGES=num_stages,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )
 
-    grid = (min(seq_len, cta_per_device), )
-    if residual is None:
-        rms_norm_kernel[grid](
-            hidden_states,
-            weight,
-            out,
-            seq_len=seq_len,
-            input_row_stride=input_stride,
-            eps=eps,
-            N_COLS=feat_size,
-            BLOCK_N=BLOCK_N,
-            NUM_STAGES=num_stages,
-            num_warps=num_warps,
-            num_stages=num_stages,
-        )
-        return out
-    else:
-        if out_residual is None:
-            out_residual = torch.empty_like(hidden_states)
-
-        res_stride = residual.stride(-2)
-        add_rms_norm_kernel[grid](
-            hidden_states,
-            weight,
-            residual,
-            out,
-            out_residual,
-            seq_len=seq_len,
-            input_row_stride=input_stride,
-            residual_row_stride=res_stride,
-            eps=eps,
-            N_COLS=feat_size,
-            BLOCK_N=BLOCK_N,
-            NUM_STAGES=num_stages,
-            num_warps=num_warps,
-            num_stages=num_stages,
-        )
+    out = _squeeze_to_origin_dim(out, origin_dim)
+    out_residual = _squeeze_to_origin_dim(out_residual, origin_dim)
+    if has_residual:
         return out, out_residual
+    return out
 
 
 if __name__ == '__main__':

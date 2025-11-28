@@ -126,6 +126,12 @@ with set_envs():
     # we don't need to read this, it would be passed to ray workers
     # If Ray is launched from outside, it may fail to access the environment variables.
     os.getenv('DEEPEP_MAX_BATCH_SIZE', None)
+    os.getenv('DEEPEP_MAX_TOKENS_PER_RANK', None)
+    os.getenv('DEEPEP_ENABLE_MNNVL', None)
+    os.getenv('DEEPEP_MODE', 'auto')
+
+    # deepep
+    deep_ep_buffer_num_sms = env_to_int('DEEPEP_BUFFER_NUM_SMS', 20)
 
     # deepgemm
     os.getenv('DG_JIT_DEBUG', '0')

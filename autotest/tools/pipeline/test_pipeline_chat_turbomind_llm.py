@@ -7,6 +7,22 @@ from utils.pipeline_chat import run_pipeline_chat_test
 
 @pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
+@pytest.mark.prefix_cache_test
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model', get_turbomind_model_list(tp_num=1))
+def test_pipeline_chat_turbomind_prefix_cache_tp1(config, common_case_config, model, worker_id):
+    if 'gw' in worker_id:
+        set_device_env_variable(worker_id)
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind',
+                           worker_id,
+                           extra={'enable_prefix_caching': True})
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
@@ -280,3 +296,24 @@ def test_modelscope_pipeline_chat_tp1(config, common_case_config, model, worker_
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, use_local_model=True)
     del os.environ['LMDEPLOY_USE_MODELSCOPE']
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.pr_test
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b-chat-inner-4bits'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_pipeline_chat_kvint_pr(config, common_case_config, model, communicator, worker_id):
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind',
+                           worker_id,
+                           extra={
+                               'quant_policy': 4,
+                               'communicator': communicator
+                           },
+                           is_smoke=True)

@@ -5,6 +5,25 @@ import triton.language as tl
 from torch import Tensor
 
 
+@triton.jit
+def _apply_rotary_impl(x_l, x_h, cos_l, cos_h, sin_l, sin_h):
+    """Apply rotary positional embedding implementation."""
+    # x_l, x_h: [BLOCK, BLOCK_N]
+    # cos_l, cos_h, sin_l, sin_h: [BLOCK, BLOCK_N]
+
+    # qe_l = q_l * cos_l - q_h * sin_l
+    # qe_h = q_h * cos_h + q_l * sin_h
+
+    # triton 3.4 would do fma 3 times to perform the above computation,
+    # which causes higher numerical error. So we manually expand the
+    # computation to avoid fma.
+    x_l_new0 = x_l * cos_l + 0
+    x_l_new1 = x_h * sin_l + 0
+    x_h_new0 = x_h * cos_h + 0
+    x_h_new1 = x_l * sin_h + 0
+    return x_l_new0 - x_l_new1, x_h_new0 + x_h_new1
+
+
 @triton.jit(do_not_specialize=('seq_len', ))
 def apply_rotary_pos_emb_qk_kernel(
     Q,
@@ -67,8 +86,8 @@ def apply_rotary_pos_emb_qk_kernel(
 
         q_l = tl.load(ql_ptrs)
         q_h = tl.load(qh_ptrs)
-        qe_l = q_l * cos_l - q_h * sin_l
-        qe_h = q_h * cos_h + q_l * sin_h
+
+        qe_l, qe_h = _apply_rotary_impl(q_l, q_h, cos_l, cos_h, sin_l, sin_h)
 
         tl.store(qel_ptrs, qe_l, mask=seq_mask)
         tl.store(qeh_ptrs, qe_h, mask=seq_mask)
@@ -86,8 +105,8 @@ def apply_rotary_pos_emb_qk_kernel(
         keh_ptrs += head_id * stride_keh
         k_l = tl.load(kl_ptrs)
         k_h = tl.load(kh_ptrs)
-        ke_l = k_l * cos_l - k_h * sin_l
-        ke_h = k_h * cos_h + k_l * sin_h
+
+        ke_l, ke_h = _apply_rotary_impl(k_l, k_h, cos_l, cos_h, sin_l, sin_h)
 
         tl.store(kel_ptrs, ke_l, mask=seq_mask)
         tl.store(keh_ptrs, ke_h, mask=seq_mask)
@@ -123,7 +142,6 @@ def apply_rotary_pos_emb(q: Tensor,
         k_embed = torch.empty_like(k)
 
     seq_len = cos.numel() // cos.size(-1)
-    BLOCK = 16
 
     if q.size(-1) == cos.size(-1):
         half_size = q.size(-1) // 2
@@ -137,8 +155,15 @@ def apply_rotary_pos_emb(q: Tensor,
     BLOCK_N = triton.next_power_of_2(half_size)
     num_heads_q = q.size(-2)
     num_heads_k = k.size(-2)
-    num_warps = 4
+    num_warps = 2
     num_stages = 1
+
+    # compute best BLOCK size
+    num_threads = num_warps * 32
+    elem_size = q.dtype.itemsize
+    elem_per_ldgv4 = 16 // elem_size
+    BLOCK = num_threads * elem_per_ldgv4 // BLOCK_N
+    BLOCK = max(1, BLOCK)
 
     grid = (
         num_heads_q + num_heads_k,

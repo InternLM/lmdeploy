@@ -212,7 +212,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         elif is_unpaged_prefill:
             # prepare some params of unpaged_prefill attention stage.
             q_start_loc_cpu, kv_seqlens_cpu = None, None
-            q_seqlens_cpu = step_context.q_seqlens.cpu()
+            q_seqlens_cpu = step_context.q_seqlens.cpu().to(torch.int32)
             if SocVersion.is_Ascend910():
                 single_attention_mask = torch.logical_not(
                     torch.tril(
@@ -251,7 +251,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                     step_context.block_offsets = step_context.block_offsets\
                         .repeat_interleave(step_context.q_seqlens, 0)
             dynamo.mark_dynamic(step_context.block_offsets, [0, 1])
-            kv_seqlens = step_context.kv_seqlens.to(torch.int32)
+            kv_seqlens = step_context.kv_seqlens.cpu().to(torch.int32)
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
                     if SocVersion.is_Ascend910():
@@ -269,11 +269,9 @@ class AscendOpsBackend(DlinferOpsBackend):
                     else:
                         raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
                     kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
-            if not is_unpaged_prefill and AscendOpsBackend.enable_aclgraph():
-                kv_seqlens = kv_seqlens.cpu().tolist()
         else:
             if step_context.is_decoding:
-                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
+                kv_seqlens_cpu = step_context.kv_seqlens.cpu().to(torch.int32)
             elif is_unpaged_prefill:
                 pass
             else:

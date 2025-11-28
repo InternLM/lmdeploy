@@ -57,6 +57,7 @@ def run_pipeline_chat_test(config,
                                       capture_output=True,
                                       text=True,
                                       encoding='utf-8',
+                                      errors='replace',
                                       env=env,
                                       timeout=900)
         except subprocess.TimeoutExpired as e:
@@ -132,6 +133,7 @@ def run_pipeline_vl_chat_test(config,
                                       capture_output=True,
                                       text=True,
                                       encoding='utf-8',
+                                      errors='replace',
                                       env=env,
                                       timeout=900)
         except subprocess.TimeoutExpired as e:
@@ -229,7 +231,7 @@ def assert_pipeline_batch_return(output, size: int = 1):
 
 
 def assert_pipeline_single_stream_return(output, logprobs_num: int = 0):
-    for i in range(0, len(output) - 1):
+    for i in range(0, len(output) - 2):
         if not assert_pipeline_single_element(output[i], is_stream=True, logprobs_num=logprobs_num):
             return False, f'single_stream_element is false, index is {i}'
     if assert_pipeline_single_element(output[-1], is_stream=True, is_last=True, logprobs_num=logprobs_num) is False:

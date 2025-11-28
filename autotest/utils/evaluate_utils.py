@@ -174,7 +174,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
             print(f"Running command: {' '.join(cmd)}")
             print(f'Work directory: {work_dir}')
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=259200)
+            result = subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=259200)
 
             stdout_output = result.stdout
             stderr_output = result.stderr
