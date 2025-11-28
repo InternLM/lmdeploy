@@ -36,8 +36,8 @@ apt-get clean -y
 rm -rf /var/lib/apt/lists/*
 
 # install GDRCopy debs
-if [ -d "/debs" ] && [ "$(ls -A /debs/*.deb 2>/dev/null)" ]; then
-    dpkg -i /debs/*.deb
+if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
+    dpkg -i /wheels/*.deb
 fi
 
 # install python packages
