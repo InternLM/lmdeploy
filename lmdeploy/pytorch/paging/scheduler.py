@@ -441,4 +441,5 @@ class Scheduler:
             waiting_seqs=self.num_waiting() + self.num_running(),
             total_blocks=self.block_manager.num_gpu_blocks,
             free_blocks=self.block_manager.get_num_free_gpu_blocks(),
+            prefix_cache_hit_rate=self.block_trie.hit_rate(),
         )
