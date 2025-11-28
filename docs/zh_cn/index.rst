@@ -89,6 +89,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    benchmark/benchmark.md
    benchmark/evaluate_with_opencompass.md
+   benchmark/evaluate_with_vlmevalkit.md
 
 .. toctree::
    :maxdepth: 1
