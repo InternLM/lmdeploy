@@ -219,7 +219,11 @@ class Scheduler:
     def _schedule_decoding(self, prealloc_size: int = 0):
         """Schedule decoding."""
 
-        running = self.ready
+        def _reorder_running():
+            """Reorder running."""
+            return sorted(self.ready, key=lambda seq: seq.arrive_time)
+
+        running = _reorder_running()
         assert len(running) != 0
 
         eviction_helper = self.eviction_helper
@@ -243,12 +247,20 @@ class Scheduler:
             return eviction_helper.evict_for_seq(seq, evictable, prealloc_size)
 
         # 1. running
-        for seq in running:
+        while len(running) > 0:
+            # token + n
+            seq = running.pop(0)
             num_required_blocks = self.block_manager.num_required_blocks(seq, prealloc_size)
             assert seq.num_blocks + num_required_blocks <= self.block_manager.num_gpu_blocks, (
                 'Sequence requires more blocks than total gpu blocks.')
 
-            if not __evict_for_seq(seq, num_required_blocks):
+            while not __evict_for_seq(seq, num_required_blocks):
+                if len(running) == 0:
+                    break
+                seq_preempted = running.pop(-1)
+                seq_preempted.state.evict()
+
+            if self.block_manager.get_num_free_gpu_blocks() < num_required_blocks:
                 seq.state.evict()
                 continue
 
