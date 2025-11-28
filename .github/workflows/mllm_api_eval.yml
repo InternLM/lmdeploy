@@ -144,7 +144,7 @@ jobs:
           python3 -m pip install pandas datasets scikit-learn
           apt update && apt install -y libgl1 libglib2.0-0
           cp -r /nvme/qa_test_models/offline_pkg/VLMEvalKit .
-          cd VLMEvalKit && pip install .
+          cd VLMEvalKit && cp ../autotest/evaluate/eval_mllm_api_config.py vlmeval/config.py && pip install .
       - name: Check env
         run: |
           python3 -m pip list

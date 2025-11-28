@@ -312,7 +312,6 @@ def mllm_eval_test(config,
                    **kwargs):
     work_dir = None
     model_name = prepare_environment['model']
-    model_path = '/'.join([config.get('model_path', '/nvme/qa_test_models'), model_name])
     backend_type = prepare_environment['backend']
     tp_num = prepare_environment.get('tp_num', 1)
     communicator = prepare_environment.get('communicator', 'cuda-ipc')
@@ -337,14 +336,13 @@ def mllm_eval_test(config,
     if test_type == 'infer':
         cmd = [
             'python', 'run.py', '--data', 'MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI', '--model',
-            model_path, '--reuse', '--work-dir', work_dir, '--api-nproc', '32', '--mode infer', '--group', 'all',
-            '--base-url', f'http://0.0.0.0:{port}/v1/chat/completions', '--key', 'empty'
+            f'lmdeploy_port{port}', '--reuse', '--work-dir', work_dir, '--api-nproc', '32', '--mode infer'
         ]
     elif test_type == 'eval':
         cmd = [
             'python', 'run.py', '--data', 'MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI', '--model',
-            model_path, '--reuse', '--work-dir', work_dir, '--api-nproc', '32', '--judge', 'Qwen/Qwen3-30B-A3B',
-            '--judge-base-url', 'http://127.0.0.1:8000/v1', '--judge-key', 'empty'
+            f'lmdeploy_port{port}', '--reuse', '--work-dir', work_dir, '--api-nproc', '32', '--judge',
+            'Qwen/Qwen3-30B-A3B', '--judge-base-url', 'http://127.0.0.1:8000/v1', '--judge-key', 'empty'
         ]
 
     print(f'Work directory: {work_dir}')
