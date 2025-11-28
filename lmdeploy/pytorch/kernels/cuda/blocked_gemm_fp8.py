@@ -18,6 +18,8 @@ def _quant_fp8_kernel(
     scale_ptr,
     M,
     M_out,
+    K: tl.constexpr,
+    num_groups_per_cta: tl.constexpr,
     fp8_min: tl.constexpr,
     fp8_max: tl.constexpr,
     stride_am,
@@ -30,30 +32,43 @@ def _quant_fp8_kernel(
     NUM_STAGES: tl.constexpr,
 ):
     """Quant fp8 kernel."""
-    group_id = tl.program_id(0)
+    group_id = tl.program_id(0) * num_groups_per_cta
     m_id_start = tl.program_id(1)
     m_id_stride = tl.num_programs(1)
 
-    g_offs = group_id * GROUP_SIZE + tl.arange(0, GROUP_SIZE)
+    GROUP_SIZE_CTA: tl.constexpr = GROUP_SIZE * num_groups_per_cta
+    g_offs = group_id * GROUP_SIZE + tl.arange(0, GROUP_SIZE_CTA)
     g_offs = tl.max_contiguous(tl.multiple_of(g_offs, GROUP_SIZE), GROUP_SIZE)
+    gs_offs = group_id + tl.arange(0, num_groups_per_cta)
     rfp8_max = 1 / fp8_max
 
     m_id = m_id_start
     a_ptrs = a_ptr + m_id * stride_am + g_offs * stride_ak
     o_ptrs = out_ptr + m_id * stride_om + g_offs * stride_ok
-    s_ptr = scale_ptr + m_id * stride_sm + group_id * stride_sg
+    s_ptr = scale_ptr + m_id * stride_sm + gs_offs * stride_sg
+    if K % GROUP_SIZE_CTA == 0:
+        mask_n = True
+        mask_s = True
+        mask_o = True
+    else:
+        mask_n = g_offs < K
+        mask_o = g_offs < K
+        mask_s = gs_offs < tl.cdiv(K, GROUP_SIZE)
 
     for m_id in tl.range(m_id_start, M_out, m_id_stride, num_stages=NUM_STAGES):
-
-        a = tl.load(a_ptrs, mask=m_id < M, other=0).to(tl.float32)
-        scale = tl.maximum(tl.max(tl.abs(a)), 1e-6) * rfp8_max
-        out = a / scale
+        a = tl.load(a_ptrs, mask=mask_n & (m_id < M), other=0)
+        a = a.reshape(num_groups_per_cta, GROUP_SIZE)
+        a_max = tl.max(tl.abs(a), axis=1)
+        a_max = tl.maximum(a_max, 1e-6).to(tl.float32)
+        scale = a_max * rfp8_max
+        rscale = fp8_max / a_max  # triton does not support rcp
+        out = a.to(tl.float32) * rscale[:, None]
 
         out = tl.clamp(out, fp8_min, fp8_max)
         out = out.to(out_ptr.dtype.element_ty)
-
-        tl.store(o_ptrs, out)
-        tl.store(s_ptr, scale)
+        out = out.reshape(GROUP_SIZE * num_groups_per_cta)
+        tl.store(o_ptrs, out, mask=mask_o)
+        tl.store(s_ptr, scale, mask=mask_s)
 
         a_ptrs += m_id_stride * stride_am
         o_ptrs += m_id_stride * stride_om
@@ -63,7 +78,6 @@ def _quant_fp8_kernel(
 def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor):
     """Quant online."""
     M, K = A.shape
-    num_groups = K // group_size
     M_out = out.size(0)
 
     dtype = out.dtype
@@ -71,22 +85,30 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
     fmin = finfo.min
     fmax = finfo.max
 
-    num_warps = 1
-
+    num_warps = 2
+    # every cp/ldg instruct can load 128bit=16byte data
+    # each warp can read 512 byte data
+    elem_size = A.element_size()
+    num_groups_per_warp = 512 // (group_size * elem_size)
+    num_groups_per_cta = num_groups_per_warp * num_warps
+    grid_size0 = triton.cdiv(K, group_size * num_groups_per_cta)
     props = get_device_props(A.device.index)
     num_sm = props['multi_processor_count']
     warps_per_sm = props['warps_per_sm']
-    max_ctas = num_sm * warps_per_sm // num_warps
-    grid_size1 = min(M_out, max_ctas // num_groups)
+    blocks_per_sm = props['blocks_per_sm']
+    max_ctas = num_sm * min(blocks_per_sm, warps_per_sm // num_warps)
+    grid_size1 = min(M_out, max_ctas // grid_size0)
     assert grid_size1 < 65536
-    num_stages = min(5, max(1, triton.cdiv(M_out, grid_size1)))
-    grid = (num_groups, grid_size1)
+    num_stages = min(4, max(1, triton.cdiv(M_out, grid_size1)))
+    grid = (grid_size0, grid_size1)
     _quant_fp8_kernel[grid](
         A,
         out,
         scales,
         M,
         M_out,
+        K,
+        num_groups_per_cta=num_groups_per_cta,
         fp8_min=fmin,
         fp8_max=fmax,
         stride_am=A.stride(0),

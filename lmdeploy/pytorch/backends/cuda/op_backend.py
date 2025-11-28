@@ -12,13 +12,6 @@ from ..default import DefaultOpsBackend
 logger = get_logger('lmdeploy')
 
 
-def _get_meta_flashmla(kv_seqlens, num_attention_heads):
-    """Get meta for flashmla."""
-    import flash_mla
-    tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(kv_seqlens.to(torch.int32), num_attention_heads, 1)
-    return tile_scheduler_metadata, num_splits
-
-
 def _get_meta_flashattn(
         batch_size: int,
         max_seqlen_q: int,
@@ -112,6 +105,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.LinearBlockedF8:
             from .blockedf8_modules import TritonLinearBlockedF8Builder
             return TritonLinearBlockedF8Builder
+        elif layer_type == OpType.NSAIndexFP8:
+            from .nsa import TritonNSAIndexFP8Builder
+            return TritonNSAIndexFP8Builder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
@@ -151,10 +147,19 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
 
     @classmethod
-    def update_meta_flashmla(cls, attn_metadata, num_attention_heads):
+    def update_meta_flashmla(cls, attn_metadata, model_config: ModelConfig, decoding_query_len: int):
         """Update meta for flashmla."""
-        tile_scheduler_metadata, num_splits = _get_meta_flashmla(attn_metadata.kv_seqlens.to(torch.int32),
-                                                                 num_attention_heads)
+        import flash_mla
+        num_attention_heads = model_config.num_attention_heads * decoding_query_len
+        is_fp8_kvcache = model_config.use_mla_fp8_cache
+        index_topk = model_config.mla_index_topk
+        num_heads_q = None if index_topk is None else num_attention_heads
+        tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
+                                                                         num_attention_heads,
+                                                                         num_heads_k=1,
+                                                                         num_heads_q=num_heads_q,
+                                                                         is_fp8_kvcache=is_fp8_kvcache,
+                                                                         topk=index_topk)
         attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
         attn_metadata.num_splits = num_splits
 
@@ -215,9 +220,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
         if use_flash_mla:
             if step_context.is_decoding is True:
+                model_config = step_context.model_config
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
-                cls.update_meta_flashmla(attn_metadata,
-                                         step_context.model_config.num_attention_heads * decode_query_len)
+                cls.update_meta_flashmla(attn_metadata, model_config, decode_query_len)
         elif use_flash_attn3_decoding:
             if step_context.is_decoding is True:
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
