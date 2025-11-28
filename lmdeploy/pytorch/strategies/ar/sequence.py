@@ -81,7 +81,6 @@ class SchedulerSequenceDefault(SchedulerSequence):
         if self.return_routed_experts:
             if routed_experts is not None:
                 self.all_routed_experts.append(routed_experts)
-                assert routed_experts.shape[0] == len(self.all_routed_experts)
             else:
                 self.all_routed_experts.resize(step)
 
