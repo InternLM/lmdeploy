@@ -52,7 +52,6 @@ class MacaOpsBackend(DlinferOpsBackend):
 
         kv_start_indices, attention_mask = [], []
         block_num, block_size, _, _ = step_context.kv_caches[0][1].shape
-        device = step_context.block_offsets.device
 
         is_unpaged_prefill = False
         if not step_context.is_decoding:
@@ -61,7 +60,7 @@ class MacaOpsBackend(DlinferOpsBackend):
                     step_context.kv_seqlens).tolist())
         q_start_loc = step_context.q_start_loc
         cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
-        
+
         q_seqlens = step_context.q_seqlens.int()
         kv_seqlens = step_context.kv_seqlens.int()
 
@@ -69,7 +68,7 @@ class MacaOpsBackend(DlinferOpsBackend):
             # max_q_seq_len, max_kv_seq_len is not used in decoding stage
             max_q_seq_len = -1
             max_kv_seq_len = -1
-            
+
             # collect kv_start_indices without using a for-loop,
             # (fill kv-cache for just ONE token during the decoding phase)
             idx = (step_context.kv_seqlens - 1) % block_size
@@ -79,7 +78,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         else:
             max_q_seq_len = torch.max(q_seqlens).cpu().item()
             max_kv_seq_len = torch.max(kv_seqlens).cpu().item()
-            
+
             for i in range(step_context.q_start_loc.size(0)):
                 q_seq_len = int(step_context.q_seqlens[i])
                 kv_seq_len = int(step_context.kv_seqlens[i])
