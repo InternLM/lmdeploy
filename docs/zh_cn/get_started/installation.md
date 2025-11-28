@@ -28,10 +28,6 @@ export PYTHON_VERSION=310
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
-## 使用 pip 安装夜间构建包
-
-LMDeploy 的发布频率大约是每月一次或两次。如果你所需的功能已经被合并到 LMDeploy 的主分支但还没有发布，你可以环境中的 CUDA 和 Python 版本，尝试使用[这里](https://github.com/zhyncs/lmdeploy-build)提供的夜间构建包。
-
 ## 从源码安装
 
 默认情况下，LMDeploy 将面向 NVIDIA CUDA 环境进行编译安装，并同时启用 Turbomind 和 PyTorch 两种后端引擎。在安装 LMDeploy 之前，请确保已成功安装 CUDA 工具包。
