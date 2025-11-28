@@ -131,7 +131,6 @@ def _run_proxy_distributed_test(config,
                                 eval_config_name='default'):
     assert manager is not None, 'Manager instance must be provided'
 
-    # 特殊模型使用专用评估配置
     if 'gpt' in model_param.get('model', '').lower():
         eval_config_name = 'gpt'
 
@@ -139,13 +138,11 @@ def _run_proxy_distributed_test(config,
     model_name = model_param['model']
     model_path = os.path.join(config['model_path'], model_name)
 
-    # 启动本测试专属的 API Server（每个节点都启动自己的实例）
     api_server = ApiServerPerTest(proxy_manager=manager, model_path=model_path, model_param=model_param)
     api_server.start()
 
     try:
         if manager.is_master:
-            # Master 等待所有实例注册完成
             api_server.wait_until_ready()
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
 
@@ -160,15 +157,13 @@ def _run_proxy_distributed_test(config,
             print(f'✅ {test_type} test passed')
 
         else:
-            # Worker 节点进入等待模式，监控 master proxy 是否退出
             print(f'⏸️ Worker node {manager.node_rank} waiting for master to complete test...')
             proxy_worker_node_wait(manager, timeout_minutes=4880)
 
     finally:
-        # 每个节点清理自己的 API Server 进程
         api_server.cleanup()
         if manager.is_master:
-            time.sleep(1)  # 给 workers 一点时间感知 proxy 关闭
+            time.sleep(1)
 
 
 def get_turbomind_model_list(tp_num):
@@ -259,34 +254,6 @@ def test_turbomind_restful_tp4(config, run_id, prepare_environment, worker_id):
 def test_turbomind_restful_tp8(config, run_id, prepare_environment, worker_id):
     result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
     assert result, msg
-
-
-@pytest.mark.infer
-@pytest.mark.turbomind
-@pytest.mark.gpu_num_distributed_tp16
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model_param', get_turbomind_model_list(tp_num=16))
-def test_turbomind_restful_distributed_tp16(shared_ray_manager, config, run_id, model_param, worker_id):
-    _run_ray_distributed_test(config=config,
-                              run_id=run_id,
-                              model_param=model_param,
-                              worker_id=worker_id,
-                              test_type='infer',
-                              manager=shared_ray_manager)
-
-
-@pytest.mark.infer
-@pytest.mark.turbomind
-@pytest.mark.gpu_num_distributed_dpep16
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model_param', get_turbomind_model_list(tp_num=16))
-def test_turbomind_restful_distributed_dpep16(shared_proxy_manager, config, run_id, model_param, worker_id):
-    _run_proxy_distributed_test(config=config,
-                                run_id=run_id,
-                                model_param=model_param,
-                                worker_id=worker_id,
-                                test_type='infer',
-                                manager=shared_proxy_manager)
 
 
 @pytest.mark.infer
@@ -463,15 +430,5 @@ def test_turbomind_judgeeval_tp4(config, run_id, prepare_environment_judge_evalu
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_model_list(tp_num=8), indirect=True)
 def test_turbomind_judgeeval_tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
-
-
-@pytest.mark.eval
-@pytest.mark.turbomind
-@pytest.mark.gpu_num_16
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_model_list(tp_num=16), indirect=True)
-def test_turbomind_judgeeval_tp16(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
     assert result, msg

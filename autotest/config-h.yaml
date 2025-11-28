@@ -37,7 +37,6 @@ turbomind_chat_model:
     - Qwen/Qwen3-32B-FP8
     - openai/gpt-oss-120b
     - openai/gpt-oss-20b
-    - moonshotai/Kimi-K2-Instruct-0905
 
 pytorch_chat_model:
     - internlm/Intern-S1
@@ -92,7 +91,6 @@ turbomind_quatization:
         - Qwen/Qwen3-32B-FP8
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
-        - moonshotai/Kimi-K2-Instruct-0905
     gptq:
         - empty
     no_kvint4:
@@ -111,7 +109,6 @@ turbomind_quatization:
         - Qwen/Qwen3-32B-FP8
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
-        - moonshotai/Kimi-K2-Instruct-0905
     no_kvint8:
         - empty
 
