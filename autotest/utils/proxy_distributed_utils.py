@@ -3,31 +3,108 @@ import random
 import socket
 import subprocess
 import time
-from time import time as time_time
 from typing import Any, Dict, Tuple
 
 import requests
 
-# Default constants
-LM_DEPLOY_PROXY_PORT = 8000
-HEALTH_CHECK_TIMEOUT = 30
-CONNECTION_CHECK_TIMEOUT = 5
-WORKER_WAIT_INTERVAL = 30
+time_time = time.time
+
+DEFAULT_PROXY_PORT = 8000
+WORKER_WAIT_INTERVAL = 15  # seconds
+
+
+def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Check if a port is open."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        try:
+            s.connect((host, port))
+            return True
+        except (socket.timeout, ConnectionRefusedError, OSError):
+            return False
+
+
+def verify_service_functionality(host: str, proxy_port: int, model_name: str, check_count: int) -> bool:
+    try:
+        url = f'http://{host}:{proxy_port}/v1/chat/completions'
+        payload = {
+            'model': model_name,
+            'messages': [{
+                'role': 'user',
+                'content': 'hi'
+            }],
+            'max_tokens': 5,
+            'stream': False
+        }
+        resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code in (200, 400):
+            return True
+        else:
+            print(f'🔧 Check {check_count}: Service returned status {resp.status_code}')
+            return False
+    except Exception as e:
+        print(f'🔧 Check {check_count}: Failed to verify service functionality - {e}')
+        return False
+
+
+def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_instances: int, check_count: int,
+                       current_time: float, last_progress_print: float,
+                       progress_print_interval: int) -> Tuple[bool, int]:
+    try:
+        nodes_url = f'http://{host}:{proxy_port}/nodes/status'
+        resp = requests.get(nodes_url, timeout=10)
+
+        if resp.status_code != 200:
+            if current_time - last_progress_print >= progress_print_interval:
+                print(f'🔧 Check {check_count}: Failed to get node status, status code: {resp.status_code}')
+            return False, 0
+
+        nodes_data = resp.json()
+        ready_instances = 0
+        total_instances = len(nodes_data)
+
+        for node_info in nodes_data.values():
+            models = node_info.get('models', [])
+            if model_name in models:
+                ready_instances += 1
+
+        should_print = current_time - last_progress_print >= progress_print_interval
+
+        if should_print:
+            basename = os.path.basename(model_name)
+            print(f'📊 Check {check_count}: Model registration progress: '
+                  f'{ready_instances}/{expected_instances} instances ready '
+                  f'(Total reported: {total_instances})')
+            for node_url, node_info in nodes_data.items():
+                models = node_info.get('models', [])
+                if model_name in models:
+                    print(f'   ✅ Instance {node_url} registered model {basename}')
+                else:
+                    print(f'   ⏳ Instance {node_url} has not registered target model')
+
+        if ready_instances >= expected_instances:
+            if should_print:
+                print(f'🎯 All {expected_instances} API server instances have registered the target model')
+            return True, ready_instances
+        else:
+            if should_print:
+                print(f'⏳ Waiting for more instances to register... ({ready_instances}/{expected_instances})')
+            return False, ready_instances
+
+    except Exception as e:
+        if current_time - last_progress_print >= progress_print_interval:
+            print(f'🔧 Check {check_count}: Exception getting node status - {e}')
+        return False, 0
 
 
 def wait_for_model_service_ready(host: str,
                                  proxy_port: int,
                                  model_name: str,
-                                 timeout_seconds: int = 1500,
-                                 expected_nodes: int = None) -> bool:
-    """Wait for LM Deploy Proxy + backend workers to be fully ready, ensuring
-    all nodes are registered.
-
-    Check all nodes' readiness status through /nodes/status API.
-    """
-    if expected_nodes:
+                                 timeout_seconds: int = 2000,
+                                 expected_instances: int = None) -> bool:
+    if expected_instances:
         print(f'⏳ Waiting for model service to be fully ready (Model: {model_name}), '
-              f'expected nodes: {expected_nodes}, timeout: {timeout_seconds}s')
+              f'expected instances: {expected_instances}, timeout: {timeout_seconds}s')
     else:
         print(f'⏳ Waiting for model service to be fully ready (Model: {model_name}), '
               f'timeout: {timeout_seconds}s')
@@ -54,19 +131,20 @@ def wait_for_model_service_ready(host: str,
                     time.sleep(10)
                     continue
 
-            if expected_nodes:
-                nodes_ready, ready_nodes = check_nodes_status(host, proxy_port, model_name, expected_nodes, check_count,
-                                                              current_time, last_progress_print,
-                                                              progress_print_interval)
-                if not nodes_ready:
-                    if ready_nodes is not None and current_time - last_progress_print >= progress_print_interval:
+            if expected_instances:
+                instances_ready, ready_count = check_nodes_status(host, proxy_port, model_name, expected_instances,
+                                                                  check_count, current_time, last_progress_print,
+                                                                  progress_print_interval)
+                if not instances_ready:
+                    if ready_count is not None and current_time - last_progress_print >= progress_print_interval:
                         last_progress_print = current_time
+                    time.sleep(10)
                     continue
 
             service_ready = verify_service_functionality(host, proxy_port, model_name, check_count)
             if service_ready:
-                if expected_nodes:
-                    print(f'✅ All {expected_nodes} nodes are ready and service is functional!')
+                if expected_instances:
+                    print(f'✅ All {expected_instances} API server instances are ready and service is functional!')
                 else:
                     print('✅ Model service is fully ready!')
                 return True
@@ -87,322 +165,15 @@ def wait_for_model_service_ready(host: str,
     return False
 
 
-def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_nodes: int, check_count: int,
-                       current_time: float, last_progress_print: float,
-                       progress_print_interval: int) -> Tuple[bool, int]:
-    try:
-        nodes_url = f'http://{host}:{proxy_port}/nodes/status'
-        resp = requests.get(nodes_url, timeout=10)
+def proxy_worker_node_wait(manager, timeout_minutes: int = 120):
+    """Worker node waits by periodically checking if the master's proxy service
+    is still alive. If the proxy becomes unreachable for several consecutive
+    checks, assume master has finished.
 
-        if resp.status_code != 200:
-            if current_time - last_progress_print >= progress_print_interval:
-                print(f'🔧 Check {check_count}: Failed to get node status, status code: {resp.status_code}')
-            return False, 0
-
-        nodes_data = resp.json()
-        ready_nodes = 0
-        total_nodes = len(nodes_data)
-
-        for node_url, node_info in nodes_data.items():
-            models = node_info.get('models', [])
-            if model_name in models:
-                ready_nodes += 1
-
-        should_print = current_time - last_progress_print >= progress_print_interval
-
-        if should_print:
-            print(f'📊 Check {check_count}: Node readiness progress: {ready_nodes}/{expected_nodes} '
-                  f'(Total nodes: {total_nodes})')
-            for node_url, node_info in nodes_data.items():
-                models = node_info.get('models', [])
-                basename = os.path.basename(model_name)
-                if model_name in models:
-                    print(f'   ✅ Node {node_url} registered model {basename}')
-                else:
-                    print(f'   ⏳ Node {node_url} has not registered target model')
-
-        if ready_nodes >= expected_nodes:
-            if should_print:
-                print(f'🎯 All {expected_nodes} nodes have registered the target model')
-            return True, ready_nodes
-        else:
-            if should_print:
-                print(f'⏳ Waiting for more nodes to register... ({ready_nodes}/{expected_nodes})')
-            return False, ready_nodes
-
-    except Exception as e:
-        if current_time - last_progress_print >= progress_print_interval:
-            print(f'🔧 Check {check_count}: Exception getting node status - {e}')
-        return False, 0
-
-
-def verify_service_functionality(host: str, proxy_port: int, model_name: str, check_count: int) -> bool:
-    try:
-        test_data = {
-            'model': model_name,
-            'messages': [{
-                'role': 'user',
-                'content': 'hi'
-            }],
-            'max_tokens': 5,
-            'stream': False
-        }
-
-        resp = requests.post(f'http://{host}:{proxy_port}/v1/chat/completions', json=test_data, timeout=15)
-
-        if resp.status_code == 200:
-            print(f'✅ Check {check_count}: Service functionality OK (received valid response)')
-            return True
-        elif resp.status_code == 400:
-            print(f'✅ Check {check_count}: Service framework activated (received 400)')
-            return True
-        else:
-            print(f'🔧 Check {check_count}: Service functionality test failed, status code: {resp.status_code}')
-            return False
-
-    except requests.exceptions.RequestException as e:
-        print(f'🔧 Check {check_count}: Service functionality test exception - {e}')
-        return False
-
-
-class ProxyDistributedManager:
-
-    def __init__(self, health_check: bool = True, proxy_port: int = None, log_dir: str = '.'):
-        self.health_check = health_check
-        self.proxy_port = proxy_port or LM_DEPLOY_PROXY_PORT
-        self.log_dir = log_dir
-        self._cleaned = False
-
-        self._lmdeploy_proxy_process = None
-        self._local_lmdeploy_process = None
-
-        self.node_rank = int(os.getenv('NODE_RANK', '0'))
-        self.is_master = (self.node_rank == 0)
-
-        os.makedirs(self.log_dir, exist_ok=True)
-
-        role = 'master' if self.is_master else 'worker'
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        log_filename = f'lmdeploy_{role}_rank{self.node_rank}_{timestamp}.log'
-        self._lmdeploy_log_path = os.path.join(self.log_dir, log_filename)
-
-        self._setup_from_env()
-        self._setup_distributed_cluster()
-
-        print(f'📝 Node {self.node_rank} LMDeploy log path: {self._lmdeploy_log_path}')
-
-    def _setup_from_env(self):
-        self.node_count = int(os.getenv('NODE_COUNT', '1'))
-        self.master_addr = os.getenv('MASTER_ADDR', 'localhost')
-        self.proc_per_node = int(os.getenv('PROC_PER_NODE', '1'))
-        self.job_id = os.getenv('JOB_ID', 'unknown')
-        self.total_gpus = self.node_count * self.proc_per_node
-
-        print(f'🎯 Node {self.node_rank} distributed environment info:')
-        print(f'  - Nodes: {self.node_count} nodes × {self.proc_per_node} GPUs = {self.total_gpus} GPUs')
-        print(f"  - Current: Rank {self.node_rank} ({'Master node' if self.is_master else 'Worker node'})")
-        print(f'  - Master address: {self.master_addr}')
-        print(f'  - Proxy port: {self.proxy_port}')
-        print(f'  - Job ID: {self.job_id}')
-
-    def _setup_distributed_cluster(self):
-        if self.is_master:
-            self._start_lmdeploy_proxy()
-        if self.health_check:
-            self._basic_health_check()
-
-    def _start_lmdeploy_proxy(self):
-        print(f'🚀 Master node starting lmdeploy proxy (port: {self.proxy_port})...')
-        env = os.environ.copy()
-        self._lmdeploy_proxy_process = subprocess.Popen([
-            'lmdeploy',
-            'serve',
-            'proxy',
-            '--server-name',
-            self.master_addr,
-            '--server-port',
-            str(self.proxy_port),
-            '--routing-strategy',
-            'min_expected_latency',
-            '--serving-strategy',
-            'Hybrid',
-        ],
-                                                        env=env)
-        time.sleep(10)
-
-        if self._check_service_health(self.proxy_port):
-            print('✅ lmdeploy proxy started successfully')
-        else:
-            print('⚠️ lmdeploy proxy may have issues starting')
-
-    def start_lmdeploy_api_server_async(self,
-                                        model_path: str,
-                                        model_param: dict,
-                                        start_timeout: int = 1500) -> Tuple[int, subprocess.Popen]:
-        total_gpus_per_node = self.proc_per_node
-        total_nodes = self.node_count
-
-        ep = total_gpus_per_node * total_nodes
-        dp = total_gpus_per_node * total_nodes
-
-        backend = model_param.get('backend', 'turbomind')
-        communicator = model_param.get('communicator', 'nccl')
-        quant_policy = model_param.get('quant_policy', 0)
-
-        full_command = [
-            'lmdeploy', 'serve', 'api_server', model_path, '--backend', backend, '--tp',
-            str(1), '--ep',
-            str(ep), '--dp',
-            str(dp), '--proxy-url', f'http://{self.master_addr}:{self.proxy_port}', '--nnodes',
-            str(total_nodes), '--node-rank',
-            str(self.node_rank), '--communicator', communicator
-        ]
-
-        if backend == 'turbomind':
-            full_command.extend(['--quant-policy', str(quant_policy)])
-
-        cmd = ' '.join(full_command)
-        print(f'🎯 Node {self.node_rank} start command: {cmd}')
-
-        env = os.environ.copy()
-        env.update({
-            'DEEPEP_MAX_BATCH_SIZE': '256',
-        })
-
-        if dp > 1:
-            env.update({
-                'LMDEPLOY_DP_MASTER_ADDR': self.master_addr,
-                'LMDEPLOY_DP_MASTER_PORT': '29555',
-            })
-
-        log_file = open(self._lmdeploy_log_path, 'w')
-
-        try:
-            self._local_lmdeploy_process = subprocess.Popen(full_command,
-                                                            stdout=log_file,
-                                                            stderr=log_file,
-                                                            env=env,
-                                                            text=True,
-                                                            encoding='utf-8')
-            pid = self._local_lmdeploy_process.pid
-            print(f'🚀 Node {self.node_rank} started lmdeploy api_server (PID: {pid}), log: {self._lmdeploy_log_path}')
-
-            if self.health_check:
-                expected_nodes = self.node_count
-                ready = wait_for_model_service_ready(host=self.master_addr,
-                                                     proxy_port=self.proxy_port,
-                                                     model_name=model_path,
-                                                     timeout_seconds=start_timeout,
-                                                     expected_nodes=expected_nodes)
-                if not ready:
-                    print(f'❌ Node {self.node_rank}: Model service could not be ready within timeout, '
-                          f'terminating local process')
-                    self._local_lmdeploy_process.terminate()
-                    try:
-                        self._local_lmdeploy_process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        self._local_lmdeploy_process.kill()
-                    log_file.close()
-                    return 0, self._local_lmdeploy_process
-
-            log_file.close()
-            return pid, self._local_lmdeploy_process
-
-        except Exception as e:
-            print(f'💥 Node {self.node_rank} failed to start lmdeploy api_server: {e}')
-            log_file.close()
-            raise
-
-    def is_lmdeploy_running(self):
-        return self._local_lmdeploy_process is not None and self._local_lmdeploy_process.poll() is None
-
-    def _basic_health_check(self):
-        print(f'🔍 Node {self.node_rank} performing basic health check...')
-        if self.is_master:
-            ok = self._check_service_health(self.proxy_port)
-            status = '✅ lmdeploy proxy service healthy' if ok else '⚠️ lmdeploy proxy service may have issues'
-        else:
-            ok = self._check_connection_to_master(self.proxy_port)
-            status = '✅ Connection to master node normal' if ok else '⚠️ Connection to master node may have issues'
-        print(status)
-
-    def _check_service_health(self, port: int) -> bool:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(HEALTH_CHECK_TIMEOUT)
-                return sock.connect_ex((self.master_addr, port)) == 0
-        except Exception:
-            return False
-
-    def _check_connection_to_master(self, port: int = None) -> bool:
-        p = port or self.proxy_port
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(CONNECTION_CHECK_TIMEOUT)
-                return sock.connect_ex((self.master_addr, p)) == 0
-        except Exception:
-            return False
-
-    def get_cluster_info(self) -> Dict[str, Any]:
-        return {
-            'node_rank': self.node_rank,
-            'node_count': self.node_count,
-            'master_addr': self.master_addr,
-            'proc_per_node': self.proc_per_node,
-            'total_gpus': self.total_gpus,
-            'job_id': self.job_id,
-            'is_master': self.is_master,
-            'proxy_port': self.proxy_port
-        }
-
-    def cleanup(self, force: bool = True):
-        """Clean up resources.
-
-        Args:
-            force (bool):
-                - False: Only stop LMDeploy API Server (used after individual test completion)
-                - True: Stop API Server + Proxy (if master) and mark as fully cleaned (session end)
-        """
-        if self._cleaned and force:
-            return
-
-        print(f'🧹 Node {self.node_rank} cleaning resources... (force={force})')
-
-        # --- Stop local LMDeploy API Server (all nodes) ---
-        if hasattr(self, '_local_lmdeploy_process') and self._local_lmdeploy_process is not None:
-            if self._local_lmdeploy_process.poll() is None:
-                try:
-                    self._local_lmdeploy_process.terminate()
-                    self._local_lmdeploy_process.wait(timeout=10)
-                    print(f'✅ Node {self.node_rank}: LMDeploy API Server stopped')
-                except subprocess.TimeoutExpired:
-                    print(f'⚠️ Node {self.node_rank}: API Server stop timeout, forcing kill')
-                    self._local_lmdeploy_process.kill()
-
-        # --- Stop LMDeploy Proxy (master node only, only when force=True) ---
-        if force and self.is_master:
-            if hasattr(self, '_lmdeploy_proxy_process') and self._lmdeploy_proxy_process is not None:
-                if self._lmdeploy_proxy_process.poll() is None:
-                    try:
-                        self._lmdeploy_proxy_process.terminate()
-                        self._lmdeploy_proxy_process.wait(timeout=10)
-                        print('✅ LMDeploy Proxy stopped')
-                    except subprocess.TimeoutExpired:
-                        print('⚠️ LMDeploy Proxy stop timeout, forcing kill')
-                        self._lmdeploy_proxy_process.kill()
-
-        # Mark as fully cleaned only on final cleanup
-        if force:
-            self._cleaned = True
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.cleanup(force=True)
-
-
-def proxy_worker_node_wait(manager: ProxyDistributedManager, timeout_minutes: int = 60):
+    Args:
+        manager: ProxyDistributedManager instance
+        timeout_minutes: Maximum time to wait before giving up (default: 120 minutes)
+    """
     print(f'⏸️ Worker node {manager.node_rank} entering monitoring mode...')
 
     max_checks = (timeout_minutes * 60) // WORKER_WAIT_INTERVAL
@@ -410,11 +181,11 @@ def proxy_worker_node_wait(manager: ProxyDistributedManager, timeout_minutes: in
     max_consecutive_failures = 3
 
     for i in range(max_checks):
-        if not manager._check_connection_to_master():
+        if not is_port_open(manager.master_addr, manager.proxy_port, timeout=2.0):
             consecutive_failures += 1
-            print(f'⚠️ Master node connection failed ({consecutive_failures}/{max_consecutive_failures})')
+            print(f'⚠️ Proxy connection to master failed ({consecutive_failures}/{max_consecutive_failures})')
             if consecutive_failures >= max_consecutive_failures:
-                print('📡 Master node service stopped, worker node exiting')
+                print('📡 Master proxy service stopped, worker node exiting')
                 break
         else:
             consecutive_failures = 0
@@ -427,5 +198,102 @@ def proxy_worker_node_wait(manager: ProxyDistributedManager, timeout_minutes: in
     else:
         print(f'⏰ Worker node {manager.node_rank} monitoring timed out ({timeout_minutes} minutes)')
 
-    manager.cleanup(force=False)  # Worker node only cleans up its own API Server when exiting
     print(f'✅ Worker node {manager.node_rank} completed waiting')
+
+
+class ProxyDistributedManager:
+
+    def __init__(self):
+        self.master_addr = os.getenv('MASTER_ADDR', 'localhost')
+        self.node_rank = int(os.getenv('NODE_RANK', '0'))
+        self.proxy_port = int(os.getenv('PROXY_PORT', str(DEFAULT_PROXY_PORT)))
+
+        self.is_master = (self.node_rank == 0)
+        self.proxy_process = None
+
+    def start(self):
+        if not self.is_master:
+            return
+
+        cmd = [
+            'lmdeploy', 'serve', 'proxy', '--server-name', self.master_addr, '--server-port',
+            str(self.proxy_port), '--routing-strategy', 'min_expected_latency', '--serving-strategy', 'Hybrid'
+        ]
+        print(f"[Proxy] Starting: {' '.join(cmd)}")
+        self.proxy_process = subprocess.Popen(cmd)
+
+        time.sleep(5)
+
+    def cleanup(self):
+        if self.proxy_process and self.proxy_process.poll() is None:
+            print('[Proxy] Terminating proxy process...')
+            self.proxy_process.terminate()
+            try:
+                self.proxy_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.proxy_process.kill()
+
+
+class ApiServerPerTest:
+
+    def __init__(self, proxy_manager: ProxyDistributedManager, model_path: str, model_param: Dict[str, Any]):
+        self.proxy_manager = proxy_manager
+        self.model_path = model_path
+        self.model_param = model_param or {}
+
+        self.master_addr = proxy_manager.master_addr
+        self.proxy_port = proxy_manager.proxy_port
+        self.node_rank = int(os.getenv('NODE_RANK', '0'))
+        self.node_count = int(os.getenv('NODE_COUNT', '1'))
+        self.proc_per_node = int(os.getenv('PROC_PER_NODE', '1'))
+
+        self.backend = self.model_param.get('backend', 'turbomind')
+        self.communicator = self.model_param.get('communicator', 'nccl')
+        self.quant_policy = self.model_param.get('quant_policy', 0)
+        self.tp = int(self.model_param.get('tp', 1))
+        self.ep = self.node_count * self.proc_per_node
+        self.dp = self.node_count * self.proc_per_node
+        self.max_batch_size = int(self.model_param.get('max_batch_size', 128))
+
+        self.expected_instances = self.node_count * self.proc_per_node
+        self.is_master = (self.node_rank == 0)
+        self.api_process = None
+
+    def start(self):
+        proxy_url = f'http://{self.master_addr}:{self.proxy_port}'
+        cmd = [
+            'lmdeploy', 'serve', 'api_server', self.model_path, '--backend',
+            str(self.backend), '--tp',
+            str(self.tp), '--ep',
+            str(self.ep), '--dp',
+            str(self.dp), '--proxy-url', proxy_url, '--nnodes',
+            str(self.node_count), '--node-rank',
+            str(self.node_rank), '--communicator',
+            str(self.communicator), '--max-batch-size',
+            str(self.max_batch_size)
+        ]
+        if self.quant_policy != 0:
+            cmd += ['--quant-policy', str(self.quant_policy)]
+
+        print(f"[API Server] Starting: {' '.join(cmd)}")
+        self.api_process = subprocess.Popen(cmd)
+
+    def wait_until_ready(self):
+        if not self.is_master:
+            return
+        success = wait_for_model_service_ready(host=self.master_addr,
+                                               proxy_port=self.proxy_port,
+                                               model_name=self.model_path,
+                                               timeout_seconds=2000,
+                                               expected_instances=self.expected_instances)
+        if not success:
+            raise RuntimeError(f'API Server failed to register model: {self.model_path}')
+
+    def cleanup(self):
+        if self.api_process and self.api_process.poll() is None:
+            print(f'[API Server] Terminating for model: {self.model_path}')
+            self.api_process.terminate()
+            try:
+                self.api_process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.api_process.kill()

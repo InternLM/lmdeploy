@@ -3,7 +3,7 @@ import time
 
 import pytest
 from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
-from utils.proxy_distributed_utils import proxy_worker_node_wait
+from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_restful_api,
                                     stop_restful_api, test_logprobs)
@@ -90,20 +90,23 @@ def _run_proxy_distributed_test(
     model_name = model_param['model']
     model_path = os.path.join(config['model_path'], model_name)
 
-    # Start API Server for current model (master node starts/stops, worker nodes verify)
-    manager.start_lmdeploy_api_server_async(model_path=model_path, model_param=model_param)
+    api_server = ApiServerPerTest(proxy_manager=manager, model_path=model_path, model_param=model_param)
+    api_server.start()
 
-    if manager.is_master:
+    try:
 
-        try:
+        if manager.is_master:
+            api_server.wait_until_ready()
+
             run_all_step(config, common_case_config, worker_id=worker_id, port=PROXY_PORT)
 
-        finally:
-            # Clean up API Server for current model (worker nodes skip)
-            manager.cleanup(force=False)
-    else:
-        time.sleep(10)
-        proxy_worker_node_wait(manager, timeout_minutes=4880)
+        else:
+            print(f'⏸️ Worker node {manager.node_rank} waiting for master to complete test...')
+            proxy_worker_node_wait(manager, timeout_minutes=4880)
+    finally:
+        api_server.cleanup()
+        if manager.is_master:
+            time.sleep(1)
 
 
 @pytest.mark.order(7)
@@ -170,6 +173,7 @@ def test_restful_chat_tp8(config, common_case_config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_distributed_16
 @pytest.mark.parametrize('model_param', getModelList(tp_num=16))
 def test_restful_chat_distributed_tp16(shared_ray_manager, config, model_param, common_case_config, worker_id):
@@ -183,7 +187,8 @@ def test_restful_chat_distributed_tp16(shared_ray_manager, config, model_param, 
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
-@pytest.mark.gpu_num_distributed_16
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_distributed_dpep16
 @pytest.mark.parametrize('model_param', getModelList(tp_num=16))
 def test_restful_chat_distributed_dpep16(shared_proxy_manager, config, model_param, common_case_config, worker_id):
     _run_proxy_distributed_test(config=config,

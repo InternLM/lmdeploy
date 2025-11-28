@@ -4,7 +4,7 @@ import time
 import pytest
 from utils.config_utils import get_evaluate_pytorch_model_list, get_evaluate_turbomind_model_list, get_workerid
 from utils.evaluate_utils import restful_test
-from utils.proxy_distributed_utils import proxy_worker_node_wait
+from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api
 
@@ -129,10 +129,9 @@ def _run_proxy_distributed_test(config,
                                 test_type='infer',
                                 manager=None,
                                 eval_config_name='default'):
-
     assert manager is not None, 'Manager instance must be provided'
 
-    # Adjust eval config for GPT-style models
+    # 特殊模型使用专用评估配置
     if 'gpt' in model_param.get('model', '').lower():
         eval_config_name = 'gpt'
 
@@ -140,29 +139,36 @@ def _run_proxy_distributed_test(config,
     model_name = model_param['model']
     model_path = os.path.join(config['model_path'], model_name)
 
-    manager.start_lmdeploy_api_server_async(model_path=model_path, model_param=model_param)
+    # 启动本测试专属的 API Server（每个节点都启动自己的实例）
+    api_server = ApiServerPerTest(proxy_manager=manager, model_path=model_path, model_param=model_param)
+    api_server.start()
 
-    if manager.is_master:
-        try:
-
+    try:
+        if manager.is_master:
+            # Master 等待所有实例注册完成
+            api_server.wait_until_ready()
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
+
             result, msg = restful_test(config,
                                        run_id,
                                        model_param,
                                        worker_id=worker_id,
-                                       port=manager.proxy_port,
+                                       port=PROXY_PORT,
                                        test_type=test_type,
                                        **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
             print(f'✅ {test_type} test passed')
 
-        finally:
-            print('🧹 Master node cleaning up API servers after test...')
-            manager.cleanup(force=False)
+        else:
+            # Worker 节点进入等待模式，监控 master proxy 是否退出
+            print(f'⏸️ Worker node {manager.node_rank} waiting for master to complete test...')
+            proxy_worker_node_wait(manager, timeout_minutes=4880)
 
-    else:
-        print(f'⏸️ Worker node {manager.node_rank} waiting for master to complete test...')
-        proxy_worker_node_wait(manager, timeout_minutes=4880)
+    finally:
+        # 每个节点清理自己的 API Server 进程
+        api_server.cleanup()
+        if manager.is_master:
+            time.sleep(1)  # 给 workers 一点时间感知 proxy 关闭
 
 
 def get_turbomind_model_list(tp_num):
@@ -257,7 +263,7 @@ def test_turbomind_restful_tp8(config, run_id, prepare_environment, worker_id):
 
 @pytest.mark.infer
 @pytest.mark.turbomind
-@pytest.mark.gpu_num_16
+@pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model_param', get_turbomind_model_list(tp_num=16))
 def test_turbomind_restful_distributed_tp16(shared_ray_manager, config, run_id, model_param, worker_id):
@@ -271,7 +277,7 @@ def test_turbomind_restful_distributed_tp16(shared_ray_manager, config, run_id, 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
-@pytest.mark.gpu_num_16
+@pytest.mark.gpu_num_distributed_dpep16
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model_param', get_turbomind_model_list(tp_num=16))
 def test_turbomind_restful_distributed_dpep16(shared_proxy_manager, config, run_id, model_param, worker_id):
@@ -340,7 +346,7 @@ def test_pytorch_restful_tp16(config, run_id, prepare_environment, worker_id):
 
 @pytest.mark.infer
 @pytest.mark.pytorch
-@pytest.mark.gpu_num_16
+@pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model_param', get_pytorch_model_list(tp_num=16))
 def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_id, model_param, worker_id):
@@ -354,7 +360,7 @@ def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_id, mo
 
 @pytest.mark.infer
 @pytest.mark.pytorch
-@pytest.mark.gpu_num_16
+@pytest.mark.gpu_num_distributed_dpep16
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model_param', get_pytorch_model_list(tp_num=16))
 def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_id, model_param, worker_id):
@@ -457,5 +463,15 @@ def test_turbomind_judgeeval_tp4(config, run_id, prepare_environment_judge_evalu
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_model_list(tp_num=8), indirect=True)
 def test_turbomind_judgeeval_tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
+    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
+    assert result, msg
+
+
+@pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_16
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_model_list(tp_num=16), indirect=True)
+def test_turbomind_judgeeval_tp16(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
     assert result, msg
