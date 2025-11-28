@@ -106,6 +106,9 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                                 f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{quant_policy}")
         os.makedirs(work_dir, exist_ok=True)
 
+        master_addr = os.getenv('MASTER_ADDR', '127.0.0.1')
+        test_url = f'http://{master_addr}:{port}/v1'
+
         try:
 
             temp_config_file = f"temp_{backend_type}_{summary_model_name.replace('/', '_')}_{communicator}.py"
@@ -119,12 +122,12 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
 
                 cfg.MODEL_NAME = summary_model_name
                 cfg.MODEL_PATH = model_path
-                cfg.API_BASE = f'http://127.0.0.1:{port}/v1'  # noqa: E231
+                cfg.API_BASE = test_url  # noqa: E231
 
                 if cfg.models and len(cfg.models) > 0:
                     model_cfg = cfg.models[0]
                     model_cfg['abbr'] = f'{summary_model_name}-lmdeploy-api'
-                    model_cfg['openai_api_base'] = f'http://127.0.0.1:{port}/v1'  # noqa: E231
+                    model_cfg['openai_api_base'] = test_url  # noqa: E231
                     model_cfg['path'] = model_path
 
                     for key, value in kwargs.items():
@@ -142,7 +145,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                 cfg = Config.fromfile(temp_config_path)
                 print(f'Using existing temp config file: {temp_config_path}')
 
-                cfg.JUDGE_API_BASE = f'http://127.0.0.1:{port}/v1'
+                cfg.JUDGE_API_BASE = test_url
                 cfg.JUDGE_MODEL_PATH = os.path.join(model_base_path, 'Qwen/Qwen2.5-32B-Instruct')
 
                 if hasattr(cfg, 'judge_cfg'):

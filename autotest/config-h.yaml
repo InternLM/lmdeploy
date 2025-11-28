@@ -19,6 +19,7 @@ tp_config:
     DeepSeek-V3.1: 8
     Qwen3-30B-A3B-Base: 2
     Qwen2.5-32B-Instruct: 2
+    Kimi-K2-Instruct-0905: 16
 
 turbomind_chat_model:
     - internlm/Intern-S1
@@ -54,6 +55,7 @@ pytorch_chat_model:
     - unsloth/gpt-oss-120b-BF16
     - unsloth/gpt-oss-20b-BF16
     - deepseek/DeepSeek-V3.1
+    - moonshotai/Kimi-K2-Instruct-0905
 
 turbomind_vl_model:
     - internlm/Intern-S1
@@ -129,6 +131,7 @@ pytorch_quatization:
         - Qwen/Qwen3-30B-A3B-FP8
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
+        - moonshotai/Kimi-K2-Instruct-0905
     no_kvint8:
         - empty
 
@@ -167,3 +170,4 @@ evaluate_model:
     - unsloth/gpt-oss-120b-BF16
     - unsloth/gpt-oss-20b-BF16
     - deepseek/DeepSeek-V3.1
+    - moonshotai/Kimi-K2-Instruct-0905

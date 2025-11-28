@@ -16,7 +16,8 @@ from utils.rule_condition_assert import assert_result
 
 from lmdeploy.serve.openai.api_client import APIClient
 
-BASE_HTTP_URL = 'http://localhost'
+MASTER_ADDR = os.getenv('MASTER_ADDR', 'localhost')
+BASE_HTTP_URL = f'http://{MASTER_ADDR}'
 DEFAULT_PORT = 23333
 PROXY_PORT = 8000
 

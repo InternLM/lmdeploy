@@ -1,6 +1,11 @@
+import os
+import time
+
 import pytest
 from utils.config_utils import get_evaluate_pytorch_model_list, get_evaluate_turbomind_model_list, get_workerid
 from utils.evaluate_utils import restful_test
+from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
+from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api
 
 DEFAULT_PORT = 23333
@@ -73,6 +78,92 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
     finally:
         stop_restful_api(judge_pid, judge_start_res, request.param)
         stop_restful_api(proxy_pid, proxy_process, request.param)
+
+
+def _run_ray_distributed_test(
+        config,
+        run_id,
+        model_param,
+        worker_id,
+        test_type='infer',
+        manager=None,  # ← New parameter: pass in shared manager
+        eval_config_name='default'):
+    """Universal distributed test executor (using shared Ray cluster)"""
+    assert manager is not None, 'Manager instance must be provided'
+    if 'gpt' in model_param.get('model', '').lower():
+        eval_config_name = 'gpt'
+        preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+
+    if manager.is_master:
+        model_name = model_param['model']
+        model_path = os.path.join(config['model_path'], model_name)
+        preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+
+        # Start API Server for current model (master node starts/stops, worker nodes verify)
+        manager.start_lmdeploy_api_server(model_path=model_path, model_param=model_param)
+
+        try:
+            print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
+            result, msg = restful_test(config,
+                                       run_id,
+                                       model_param,
+                                       worker_id=worker_id,
+                                       port=PROXY_PORT,
+                                       test_type=test_type,
+                                       **preset_config)
+            assert result, f'❌ {test_type} test failed: {msg}'
+            print(f'✅ {test_type} test passed')
+
+        finally:
+            # Clean up API Server for current model (worker nodes skip)
+            manager.cleanup(force=False)
+    else:
+        time.sleep(10)
+        ray_worker_node_wait(manager, timeout_minutes=4880)
+
+
+def _run_proxy_distributed_test(config,
+                                run_id,
+                                model_param,
+                                worker_id,
+                                test_type='infer',
+                                manager=None,
+                                eval_config_name='default'):
+    assert manager is not None, 'Manager instance must be provided'
+
+    if 'gpt' in model_param.get('model', '').lower():
+        eval_config_name = 'gpt'
+
+    preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+    model_name = model_param['model']
+    model_path = os.path.join(config['model_path'], model_name)
+
+    api_server = ApiServerPerTest(proxy_manager=manager, model_path=model_path, model_param=model_param)
+    api_server.start()
+
+    try:
+        if manager.is_master:
+            api_server.wait_until_ready()
+            print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
+
+            result, msg = restful_test(config,
+                                       run_id,
+                                       model_param,
+                                       worker_id=worker_id,
+                                       port=PROXY_PORT,
+                                       test_type=test_type,
+                                       **preset_config)
+            assert result, f'❌ {test_type} test failed: {msg}'
+            print(f'✅ {test_type} test passed')
+
+        else:
+            print(f'⏸️ Worker node {manager.node_rank} waiting for master to complete test...')
+            proxy_worker_node_wait(manager, timeout_minutes=4880)
+
+    finally:
+        api_server.cleanup()
+        if manager.is_master:
+            time.sleep(1)
 
 
 def get_turbomind_model_list(tp_num):
@@ -218,6 +309,34 @@ def test_pytorch_restful_tp8(config, run_id, prepare_environment, worker_id):
 def test_pytorch_restful_tp16(config, run_id, prepare_environment, worker_id):
     result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
     assert result, msg
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_tp16
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('model_param', get_pytorch_model_list(tp_num=16))
+def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_id, model_param, worker_id):
+    _run_ray_distributed_test(config=config,
+                              run_id=run_id,
+                              model_param=model_param,
+                              worker_id=worker_id,
+                              test_type='infer',
+                              manager=shared_ray_manager)
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep16
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('model_param', get_pytorch_model_list(tp_num=16))
+def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_id, model_param, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_id=run_id,
+                                model_param=model_param,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager)
 
 
 @pytest.mark.eval
