@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, Dict, List, Literal
 
@@ -11,6 +10,7 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
@@ -494,10 +494,10 @@ class BuildModelContext:
     enable_return_routed_experts: bool = False
 
 
-class StepContextManager:
+class StepContextManager(CtxMgrBase[StepContext]):
 
     def __init__(self, build_ctx: BuildModelContext = None):
-        self._current_ctx = None
+        super().__init__(None)
         build_ctx = build_ctx or BuildModelContext()
         self.build_ctx = build_ctx
 
@@ -519,40 +519,15 @@ class StepContextManager:
             kv_quant_policy,
         )
 
-    def set_context(self, ctx: StepContext):
-        """Set context."""
-        self._current_ctx = ctx
 
-    @contextmanager
-    def context(self, ctx: StepContext):
-        """Context context."""
-        old_ctx = self.current_context()
-        self.set_context(ctx)
-        yield ctx
-        self.set_context(old_ctx)
+@singleton
+class StepCtxMgrApi(CtxMgrBase[StepContextManager]):
+    """Context manager for StepContextManager."""
 
-    def current_context(self):
-        """Get current_context."""
-        return self._current_ctx
+    def __init__(self):
+        super().__init__(None)
 
 
-_CTX_MANAGER: StepContextManager = None
-
-
-def set_step_ctx_manager(mgr: StepContextManager):
-    global _CTX_MANAGER
-    _CTX_MANAGER = mgr
-    return mgr
-
-
-def get_step_ctx_manager():
-    """Get device manager."""
-    return _CTX_MANAGER
-
-
-@contextmanager
-def step_ctx_manager(mgr: StepContextManager):
-    old_mgr = _CTX_MANAGER
-    set_step_ctx_manager(mgr)
-    yield mgr
-    set_step_ctx_manager(old_mgr)
+set_step_ctx_manager = StepCtxMgrApi().set_context
+get_step_ctx_manager = StepCtxMgrApi().current_context
+step_ctx_manager = StepCtxMgrApi().context

@@ -35,6 +35,8 @@ class CudaGraphMeta:
     output_buffers: BuffType = None
     vocab_size: int = 1
     decode_query_len: int = 1
+    use_flash_mla: bool = False
+    use_fa3_decoding: bool = False
 
 
 class CudaGraphMixin:
@@ -75,19 +77,15 @@ class CudaGraphMixin:
                                                    dtype=torch.int64,
                                                    device=device)
         input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
-        use_flash_mla = getattr(self.config, 'use_flash_mla', False)
-        # use fa3 decode kernel for spec decode
-        use_flash_attn3_decoding = decode_query_len > 1 and not use_flash_mla
-
-        if use_flash_mla is True:
+        if graph_meta.use_flash_mla is True:
             import flash_mla
 
             # create buffers for flash mla
             input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
                 torch.ones(max_batches, dtype=torch.int32, device=device),
                 self.config.num_attention_heads * decode_query_len, 1)
-
-        if use_flash_attn3_decoding is True:
+        # use fa3 decode kernel for spec decode
+        elif graph_meta.use_fa3_decoding is True:
             input_buffers['scheduler_metadata'] = torch.zeros(max_batches + 1, dtype=torch.int32, device=device)
 
         # flash_mla requires block_offsets and kv_lens int32
@@ -149,8 +147,7 @@ class CudaGraphMixin:
         attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
         attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
 
-        use_flash_mla = getattr(self.config, 'use_flash_mla', False)
-        if use_flash_mla is True:
+        if graph_meta.use_flash_mla is True:
             import flash_mla
             tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
                 attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads * decode_query_len, 1)
@@ -161,8 +158,7 @@ class CudaGraphMixin:
             attn_metadata.num_splits = input_buffers['num_splits']
 
         # use fa3 decode kernel for spec decode
-        use_flash_attn3_decoding = decode_query_len > 1 and not use_flash_mla
-        if use_flash_attn3_decoding:
+        elif graph_meta.use_fa3_decoding is True:
             from flash_attn_interface import get_scheduler_metadata
             block_size = past_key_values[0][0].size(1)
             scheduler_metadata = get_scheduler_metadata(

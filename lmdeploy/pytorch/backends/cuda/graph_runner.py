@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
@@ -74,15 +75,19 @@ class CUDASingleGraphRunner:
         self.ctx_mgr = model.ctx_mgr
         self.model_config = model_config
 
-        self.meta = CudaGraphMeta(max_batchs=max_batches,
-                                  max_tokens=max_tokens,
-                                  num_blocks=num_blocks,
-                                  is_decoding=is_decoding,
-                                  device=device,
-                                  input_buffers=dict(),
-                                  output_buffers=dict(),
-                                  vocab_size=self.model_config.vocab_size,
-                                  decode_query_len=decode_query_len)
+        self.meta = CudaGraphMeta(
+            max_batchs=max_batches,
+            max_tokens=max_tokens,
+            num_blocks=num_blocks,
+            is_decoding=is_decoding,
+            device=device,
+            input_buffers=dict(),
+            output_buffers=dict(),
+            vocab_size=self.model_config.vocab_size,
+            decode_query_len=decode_query_len,
+            use_flash_mla=model_config.use_flash_mla,
+            use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
+        )
         self.device = device
         self.max_batches = max_batches
         self.max_tokens = max_tokens
@@ -250,6 +255,12 @@ class CUDAGraphRunner(GraphRunner):
         context: StepContext = None,
     ):
         """Prepare inputs."""
+
+        if get_moe_backend().use_deepep_moe_backend():
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
+            deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
+            DeepEPBuffer.set_deepep_mode(deepep_mode)
+
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,

@@ -2,7 +2,8 @@ allure-pytest
 coverage
 jsonschema
 matplotlib
-opencv-python<4.9
+nvidia-ml-py
+opencv-python-headless
 pytest
 pytest-assume
 pytest-cov

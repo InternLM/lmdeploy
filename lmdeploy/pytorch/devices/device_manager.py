@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import threading
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable
+
+from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 
 @dataclass
@@ -13,11 +13,11 @@ class DeviceContext:
 DefaultContext = DeviceContext()
 
 
-class DeviceManager:
+@singleton
+class DeviceManager(CtxMgrBase[DeviceContext]):
 
     def __init__(self):
-        self.t_local = threading.local()
-        self.t_local.device_context = DefaultContext
+        super().__init__(DefaultContext)
         self._context_callback: dict[int, Callable] = dict()
         self._next_cb_handle = 0
 
@@ -32,31 +32,7 @@ class DeviceManager:
         """Unregister callback."""
         self._context_callback.pop(handle, None)
 
-    def current_context(self) -> DeviceContext:
-        """Get current context."""
-        return getattr(self.t_local, 'device_context', DefaultContext)
-
-    def set_context(self, context: DeviceContext):
-        """Set current context."""
-        self.t_local.device_context = context
-        for callback in self._context_callback.values():
-            callback(context)
-
-    @contextmanager
-    def context(self, context: DeviceContext):
-        """Context manager."""
-        origin_context = self.current_context()
-        self.set_context(context)
-        yield self
-        self.set_context(origin_context)
-
-
-_DEVICE_MANAGER: DeviceManager = None
-
 
 def get_device_manager():
     """Get device manager."""
-    global _DEVICE_MANAGER
-    if _DEVICE_MANAGER is None:
-        _DEVICE_MANAGER = DeviceManager()
-    return _DEVICE_MANAGER
+    return DeviceManager()

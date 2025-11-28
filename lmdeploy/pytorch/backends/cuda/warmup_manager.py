@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 import torch
 
+from lmdeploy.pytorch.utils import singleton
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -16,6 +17,7 @@ class WarmupMeta:
     dtype: torch.dtype
 
 
+@singleton
 class WarmupManager:
 
     def __init__(self):
@@ -45,13 +47,6 @@ class WarmupManager:
             func(warmup_meta)
 
 
-_WARMUP_MANAGER = None
-
-
 def get_warmup_manager():
     """Get warmup manager."""
-    global _WARMUP_MANAGER
-    if _WARMUP_MANAGER is None:
-        _WARMUP_MANAGER = WarmupManager()
-
-    return _WARMUP_MANAGER
+    return WarmupManager()

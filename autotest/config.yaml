@@ -69,6 +69,7 @@ turbomind_chat_model:
     - OpenGVLab/InternVL2-Llama3-76B-AWQ
     - Qwen/Qwen3-0.6B
     - Qwen/Qwen3-4B
+    - Qwen/Qwen3-8B
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B
@@ -131,6 +132,7 @@ pytorch_chat_model:
     - OpenGVLab/Mono-InternVL-2B
     - Qwen/Qwen3-0.6B
     - Qwen/Qwen3-4B
+    - Qwen/Qwen3-8B
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B
@@ -270,6 +272,7 @@ turbomind_quatization:
         - openbmb/MiniCPM-V-2_6
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
+        - Qwen/Qwen3-8B
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
@@ -302,6 +305,7 @@ pytorch_quatization:
         - 01-ai/Yi-6B-Chat
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
+        - Qwen/Qwen3-8B
         - Qwen/Qwen3-32B
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
@@ -328,6 +332,7 @@ pytorch_quatization:
         - OpenGVLab/InternVL2_5-1B
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
+        - Qwen/Qwen3-8B
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
@@ -352,10 +357,7 @@ pytorch_quatization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 
 longtext_model:
-    - meta-llama/Meta-Llama-3-1-8B-Instruct
-    - meta-llama/Meta-Llama-3-1-70B-Instruct
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
+    - Qwen/Qwen3-8B
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-30B-A3B
     - Qwen/Qwen3-235B-A22B

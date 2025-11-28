@@ -102,9 +102,10 @@ def longtext_throughput_test(config,
             command += ' --model-format awq'
         command = command + f' --quant-policy {quant_policy}'
 
-    for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', None),
-                                                                    (1, 65536, 10, '64k', None),
-                                                                    (198000, 1024, 3, '198k', 1)]:
+    for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 60, '32k', 20),
+                                                                    (1, 65536, 30, '64k', 10),
+                                                                    (65536, 1024, 45, '64k-1k', 15),
+                                                                    (198000, 1024, 3, '198k-1k', 1)]:
         session_len = input_len + out_len
         csv_path = f'{benchmark_path}/longtext_{case_name}_1th.csv'
         benchmark_log = os.path.join(
@@ -124,6 +125,7 @@ def longtext_throughput_test(config,
             return False, 'result is empty'
         if returncode != 0:
             return returncode == 0, stderr
+    return True, ''
 
 
 def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
@@ -267,9 +269,11 @@ def prefixcache_throughput_test(config,
         if not _is_bf16_supported_by_device():
             base_command += ' --dtype float16'
     else:
+        if '4bit' in model:
+            base_command += ' --model-format awq'
         base_command = base_command + f' --quant-policy {quant_policy}'
 
-    test_configs = [(16384, 16384, 100, '16k', None)]
+    test_configs = [(16384, 1024, 10, '16k', None)]
 
     for enable_prefix_caching in [False, True]:
         suffix = '_cache' if enable_prefix_caching else '_no_cache'
