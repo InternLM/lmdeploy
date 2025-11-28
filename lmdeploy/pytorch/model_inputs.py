@@ -406,8 +406,6 @@ class StepContext:
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
-        if inputs.is_dummy:
-            kv_seqlens = torch.zeros_like(kv_seqlens)
 
         ret = StepContext(
             input_ids=inputs.input_ids,

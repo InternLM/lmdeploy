@@ -29,8 +29,8 @@ class WindowBlockManager(DefaultBlockManager):
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int, window_size: int):
-        super().__init__(num_gpu_blocks, num_cpu_blocks)
+    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int, window_size: int, num_gpu_reserved: int = 0):
+        super().__init__(num_gpu_blocks, num_cpu_blocks, num_gpu_reserved)
         assert window_size > 0, ('expect window size > 0, '
                                  f'but get window_size = {window_size}')
         self.window_size = window_size
