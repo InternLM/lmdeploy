@@ -256,11 +256,8 @@ class DeepseekV32Attention(DeepseekV2Attention):
     ):
         """Rewrite of LlamaAttention.forward."""
         dist_ctx = get_dist_manager().current_context()
-        if dist_ctx.dp > 1:
-            num_heads = self.num_heads
-        else:
-            world_size = dist_ctx.world_size
-            num_heads = self.num_heads // world_size
+        tp_world_size = dist_ctx.dist_config.attn_tp
+        num_heads = self.num_heads // tp_world_size
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 
