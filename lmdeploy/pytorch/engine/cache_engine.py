@@ -422,13 +422,7 @@ class CacheEngine:
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
 
-        def get_assignment_len():
-            head_dim = self.model_config.get_head_size()
-            num_heads = self.model_config.num_key_value_heads // self.world_size
-            block_size = self.cache_config.block_size
-            return head_dim * num_heads * block_size * self.model_config.dtype.itemsize
-
-        assignment_len = get_assignment_len()
+        assignment_len = self.full_gpu_cache.element_size() * self.full_gpu_cache.size(-1)
         layer_stride = self.cache_config.num_gpu_blocks * assignment_len
 
         def get_assignment_batch(mr_key, block_ids, assignment_len, layer_stride, remote_layer_stride):
