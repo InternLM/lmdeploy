@@ -238,11 +238,11 @@ class DLLMSequenceStrategy(SequenceStrategy):
             stop = stopped[idx]
             model_meta = model_metas[idx]
             mask = dllm_mask[idx]
-            if msg.status != MessageStatus.LOCKED:
+            if msg.status != MessageStatus.RUNNING:
                 continue
 
             # fill token
             msg.update_token_ids(token, dllm_mask=mask, model_meta=model_meta, mode=update_mode)
             if stop:
                 msg.set_stop_pos(stop_pos[idx])
-                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
+                msg.state.finish()

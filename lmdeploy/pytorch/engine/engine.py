@@ -18,7 +18,7 @@ from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
+from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig, SpecDecodeConfig
@@ -281,7 +281,7 @@ class InputsMakerAsync(InputsMakerBase):
         if self.next_is_prefill:
             ret = scheduler.has_waiting()
         else:
-            ret = not scheduler.has_running()
+            ret = not scheduler.has_ready()
         return ret
 
     def do_prefill_default(self):
@@ -289,7 +289,7 @@ class InputsMakerAsync(InputsMakerBase):
         scheduler = self.scheduler
         if not scheduler.has_waiting():
             return False
-        num_running = scheduler.num_running()
+        num_ready = scheduler.num_ready()
         num_waiting = scheduler.num_waiting()
         max_batches = self.scheduler_config.max_batches
         # prefill if too much waiting
@@ -297,7 +297,7 @@ class InputsMakerAsync(InputsMakerBase):
         if num_waiting >= permitted_waiting:
             return True
         # prefill if no enough running
-        if num_running < max_batches * 0.5:
+        if num_ready < max_batches * 0.5:
             return True
         # decoding
         return False
@@ -328,11 +328,11 @@ class InputsMakerAsync(InputsMakerBase):
         if prefill:
             enable = True
         else:
-            num_running = scheduler.num_running()
+            num_ready = scheduler.num_ready()
             is_decoding = self.forward_inputs['inputs'].is_decoding
             running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding or self.spec_decoding else 0
 
-            if num_running > running_threshold:
+            if num_ready > running_threshold:
                 enable = True
 
         if enable:
@@ -592,7 +592,7 @@ class Engine(EngineBase):
             if session_id in self.scheduler.sessions:
                 msgs = list(self.scheduler.sessions[session_id].sequences.values())
                 if len(msgs) > 0 and msgs[0].preserve_cache:
-                    self.scheduler._set_message_status(msgs[0], MessageStatus.TO_BE_MIGRATED)
+                    msgs[0].state.finish()
                 else:
                     self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -676,9 +676,7 @@ class Engine(EngineBase):
                                   preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
-                scheduler.add_sequence(msg)
                 if migration_request:
-                    self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
                     self.migration_event.set()
             else:
                 msg = next(iter(sess.sequences.values()))
@@ -689,7 +687,7 @@ class Engine(EngineBase):
                     mode=UpdateTokenMode.INPUTS,
                 )
                 msg.sampling_param = sampling_param
-                msg.status = MessageStatus.WAITING
+                msg.state.activate()
                 __update_max_new_tokens(msg)
 
             msg.resp = req.resp
@@ -775,7 +773,6 @@ class Engine(EngineBase):
         return vision_embedding_inputs
 
     @torch.inference_mode()
-    @logging_timer('CreateModelInputs', logger)
     @record_function('CreateModelInputs')
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """Create model inputs from messages.
@@ -861,7 +858,7 @@ class Engine(EngineBase):
         if model_metas is None:
             model_metas = [None] * len(running)
         for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
-            if msg.status != MessageStatus.MIGRATION_LOCKED:
+            if msg.status != MessageStatus.MIGRATION_RUNNING:
                 continue
             update_token = token
 
@@ -870,7 +867,7 @@ class Engine(EngineBase):
             if stop:
                 update_token = _EMPTY_TOKEN
                 msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
-                msg.status = MessageStatus.STOPPED
+                msg.state.finish()
 
     @record_function('make_infer_outputs')
     def _make_infer_outputs(
@@ -889,7 +886,7 @@ class Engine(EngineBase):
             logprobs.indices = logprobs.indices.tolist()
 
         seq_length = [seq.num_token_ids for seq in running]
-        is_run = [seq.status == MessageStatus.LOCKED for seq in running]
+        is_run = [seq.status == MessageStatus.RUNNING for seq in running]
         self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
 
         # generate output
@@ -966,7 +963,7 @@ class Engine(EngineBase):
             if (self.engine_config.role == EngineRole.Prefill):
                 return False
             # disable decoding if no running reqs.
-            if not self.scheduler.has_running():
+            if not self.scheduler.has_ready():
                 logger.warning('No running sequences for decoding scheduling after prefill scheduling.')
                 return False
             return True
@@ -1107,12 +1104,12 @@ class Engine(EngineBase):
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """Async loop migration."""
         while True:
-            migration_running = self.scheduler._schedule_migration()
-            if not migration_running and not self.scheduler.has_migration_waiting():
+            migration_ready = self.scheduler._schedule_migration()
+            if not migration_ready and not self.scheduler.has_migration_waiting():
                 await self.migration_event.wait()
-            elif migration_running:
+            elif migration_ready:
                 self.migration_event.clear()
-                for msg in migration_running:
+                for msg in migration_ready:
                     migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
                     migration_request = msg.migration_request
                     prefill_block_ids = migration_request.remote_block_ids
@@ -1137,8 +1134,8 @@ class Engine(EngineBase):
 
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
-                self.scheduler.lock_running_migration(migration_running)
-                for _, msg in enumerate(migration_running):
+                self.scheduler.activate_migration_seqs(migration_ready)
+                for _, msg in enumerate(migration_ready):
                     session_id = msg.session_id
                     msg.resp.type = ResponseType.SUCCESS
                     token_ids = [msg.migration_request.remote_token_id]
@@ -1155,7 +1152,7 @@ class Engine(EngineBase):
                     outputs[session_id] = out
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
                 resp_que.put_nowait(outputs)
-                self.scheduler.unlock_running_migration(migration_running)
+                self.scheduler.deactivate_migration_seqs(migration_ready)
                 has_runable_event.set()
             else:
                 # release coroutine for decoding
@@ -1202,7 +1199,7 @@ class Engine(EngineBase):
             is_decoding = forward_inputs['inputs'].is_decoding
             running = next_running
             next_running = None
-            scheduler.lock_running(running)
+            scheduler.active_seqs(running)
             for idx in range(num_loops):
 
                 # pre-forward before get last token
@@ -1221,7 +1218,7 @@ class Engine(EngineBase):
                 if idx == num_loops // 2:
                     forward_event.clear()
 
-            scheduler.unlock_running(running)
+            scheduler.deactive_seqs(running)
             has_runable_event.set()
 
     @staticmethod
