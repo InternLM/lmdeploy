@@ -31,11 +31,14 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
                                        int                   vocab_size,
                                        int                   vocab_size_padded,
                                        cudaStream_t          stream,
-                                       const cudaDeviceProp* device_prop)
+                                       const cudaDeviceProp* device_prop,
+                                       int                   tp_rank):
+    tp_rank_{tp_rank}
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     TM_CHECK(dtype == kFloat32);
-    BaseDynamicDecodeLayer::BaseParam param{max_batch_size, vocab_size, vocab_size_padded, stream, device_prop};
+    BaseDynamicDecodeLayer::BaseParam param{
+        max_batch_size, vocab_size, vocab_size_padded, stream, device_prop, tp_rank};
     layers_.emplace_back(new LogitsProcessorLayer<float>{param});
     layers_.emplace_back(new GuidedDecodeMaskLayer<float>{param});
     layers_.emplace_back(new SamplingLayer<float>{param});

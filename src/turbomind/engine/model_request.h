@@ -15,7 +15,7 @@ class ModelRequest {
 public:
     virtual ~ModelRequest() = default;
 
-    ModelRequest(Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim);
+    ModelRequest(Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim, int tp_size);
 
     // Cancel running request
     void Cancel();
@@ -50,6 +50,7 @@ protected:
     const int session_len_;
     const int hidden_dim_;
     const int vocab_size_;
+    const int tp_size_;
 
     uint64_t session_id_;
 
