@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import inspect
+from contextlib import contextmanager
 from inspect import Parameter, Signature
-from typing import Dict, Sequence
+from typing import Dict, Generic, Optional, Sequence, TypeVar
 
 import psutil
 
@@ -31,6 +32,52 @@ def bind_sigature(input_names: str, args: Sequence, kwargs: Dict):
     sig = Signature([Parameter(name, kind) for name in input_names])
     bind = sig.bind(*args, **kwargs)
     return bind.arguments
+
+
+def singleton(cls):
+    """Singleton decorator."""
+    import multiprocessing as mp
+
+    from lmdeploy.utils import get_logger
+    logger = get_logger('lmdeploy')
+    instances = {}
+
+    def get_instance(*args, **kwargs):
+        if cls not in instances:
+            pid = mp.current_process().pid
+            logger.debug(f'pid:{pid} - Creating instance of singleton class {cls.__name__}')
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+
+    return get_instance
+
+
+T = TypeVar('T')
+
+
+class CtxMgrBase(Generic[T]):
+    """Context manager base class."""
+
+    def __init__(self, default: Optional[T] = None):
+        self._context = default
+
+    def current_context(self) -> Optional[T]:
+        """Get current context."""
+        return self._context
+
+    def set_context(self, context: Optional[T]):
+        """Set current context."""
+        self._context = context
+
+    @contextmanager
+    def context(self, context: T):
+        """Context manager."""
+        origin_context = self.current_context()
+        self.set_context(context)
+        try:
+            yield self
+        finally:
+            self.set_context(origin_context)
 
 
 # from vllm

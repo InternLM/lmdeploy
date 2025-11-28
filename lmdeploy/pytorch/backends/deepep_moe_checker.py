@@ -1,4 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from lmdeploy.pytorch.utils import singleton
+
+
+@singleton
 class MoEBackend:
 
     def __init__(self):
@@ -18,11 +22,4 @@ MOE_BACKEND = None
 
 
 def get_moe_backend():
-    global MOE_BACKEND
-    if MOE_BACKEND is None:
-        MOE_BACKEND = MoEBackend()
-
-    return MOE_BACKEND
-
-
-moe_backend = get_moe_backend()
+    return MoEBackend()

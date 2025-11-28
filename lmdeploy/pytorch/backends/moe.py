@@ -39,10 +39,6 @@ class FusedMoEImpl(ABC):
         """Update weights."""
         return gate_up_weights, down_weights
 
-    def support_ep(self):
-        """Support expert parallelism."""
-        return False
-
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         raise NotImplementedError('Not Implemented.')
@@ -67,7 +63,14 @@ class FusedMoEBuilder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(top_k: int, num_experts: int, renormalize: bool = False):
+    def build(top_k: int,
+              num_experts: int,
+              renormalize: bool = False,
+              hidden_dim: int = 1,
+              ep_size: int = 1,
+              ep_group: dist.ProcessGroup = None,
+              layer_idx: int = 0,
+              out_dtype: torch.dtype = torch.bfloat16):
         """Build from mlp."""
         raise NotImplementedError
 
@@ -79,10 +82,6 @@ class FusedMoEW8A8Impl(ABC):
                        down_scale: torch.Tensor):
         """Update weights."""
         return gate_up_weights, down_weights, gate_up_scale, down_scale
-
-    def support_ep(self):
-        """Support expert parallelism."""
-        return False
 
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
@@ -124,10 +123,6 @@ class FusedMoEBlockedF8Impl(ABC):
                        down_scale: torch.Tensor):
         """Update weights."""
         return gate_up_weights, down_weights, gate_up_scale, down_scale
-
-    def support_ep(self):
-        """Support expert parallelism."""
-        return False
 
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
