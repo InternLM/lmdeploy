@@ -13,12 +13,14 @@
 
 namespace turbomind {
 
-ModelRequest::ModelRequest(Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim):
+ModelRequest::ModelRequest(
+    Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim, int tp_size):
     gateway_{gateway},
     data_type_{data_type},
     session_len_{session_len},
     vocab_size_{vocab_size},
-    hidden_dim_{hidden_dim}
+    hidden_dim_{hidden_dim},
+    tp_size_{tp_size}
 {
 }
 
@@ -127,8 +129,14 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->output_ids      = outputs_->at("output_ids");
     r->sequence_length = outputs_->at("sequence_length");
 
+    r->matchers.clear();
     if (grammar_) {
-        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*grammar_);
+        for (int i = 0; i < tp_size_; ++i) {
+            r->matchers.push_back(std::make_shared<xgrammar::GrammarMatcher>(*grammar_));
+        }
+    }
+    else {
+        r->matchers.resize(tp_size_);
     }
 
     // Keep a weak reference for canceling the request

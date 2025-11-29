@@ -31,6 +31,7 @@ public:
         int                   vocab_size_padded;
         cudaStream_t          stream;
         const cudaDeviceProp* device_prop;
+        int                   tp_rank;
     };
 
     virtual ~BaseDynamicDecodeLayer() = default;
@@ -42,6 +43,7 @@ public:
         vocab_size_padded_ = param.vocab_size_padded;
         stream_            = param.stream;
         device_prop_       = param.device_prop;
+        tp_rank_           = param.tp_rank;
     };
 
     virtual void Setup(const std::vector<const Request*>& rs, const TensorMap& args) = 0;
@@ -54,6 +56,7 @@ protected:
     int                   vocab_size_padded_;
     cudaStream_t          stream_;
     const cudaDeviceProp* device_prop_;
+    int                   tp_rank_;
 };
 
 }  // namespace turbomind

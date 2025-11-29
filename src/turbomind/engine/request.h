@@ -154,7 +154,7 @@ struct Request {
         kInconsistency = 9,  // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
     };
 
-    std::shared_ptr<xgrammar::GrammarMatcher> matcher;
+    std::vector<std::shared_ptr<xgrammar::GrammarMatcher>> matchers;  // GrammarMatchers for different threads (tp_size)
 };
 
 inline void UpdateState(Request& r, int status, int seq_len)
