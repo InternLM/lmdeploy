@@ -1019,6 +1019,7 @@ class BaseModelAgent:
             dllm_config=self.misc_config.dllm_config,
             strategy_factory=self.strategy_factory,
             enable_return_routed_experts=enable_return_routed_experts,
+            enforce_fp32_head=self.misc_config.enforce_fp32_head,
         )
         patched_model = build_patched_model(self.model_config,
                                             device=device,

@@ -435,6 +435,7 @@ class MiscConfig:
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
+    enforce_fp32_head: bool = False
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -454,6 +455,7 @@ class MiscConfig:
             logprobs_mode=engine_config.logprobs_mode,
             dllm_config=dllm_config,
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
+            enforce_fp32_head=engine_config.enforce_fp32_head,
         )
         return misc_config
 
