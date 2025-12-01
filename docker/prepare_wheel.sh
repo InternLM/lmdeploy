@@ -22,8 +22,7 @@ if [[ ${PYTHON_VERSION} = "3.13" ]]; then
     pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/google/sentencepiece.git@v0.2.0#subdirectory=python"
 fi
 
-if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
-
+if [ "${GPU_ARCH}" == "hopper" ] && [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     GDRCOPY_VERSION=2.5.1
     DEEP_EP_VERSION=9af0e0d  # v1.2.1
     DEEP_GEMM_VERSION=c9f8b34  # v2.1.1.post3

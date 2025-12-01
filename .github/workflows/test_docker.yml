@@ -23,9 +23,11 @@ jobs:
       matrix:
         cuda_version: [cu13, cu12]
         python_version: ['3.10', '3.11', '3.12', '3.13']
+        gpu_arch: ['hopper', '']
     env:
       CUDA_VERSION: ${{ matrix.cuda_version }}
       PYTHON_VERSION: ${{ matrix.python_version }}
+      GPU_ARCH: ${{ matrix.gpu_arch }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -50,7 +52,7 @@ jobs:
           git config --local --unset "http.https://github.com/.extraheader"
       - name: Build Docker image
         run: |
-          docker build . -t lmdeploy:latest -f docker/Dockerfile --build-arg CUDA_VERSION=${CUDA_VERSION} --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+          docker build . -t lmdeploy:latest -f docker/Dockerfile --build-arg CUDA_VERSION=${CUDA_VERSION} --build-arg PYTHON_VERSION=${PYTHON_VERSION} --build-arg GPU_ARCH=${GPU_ARCH}
       - name: Test image with lmdeploy check_env
         run: |
           docker images

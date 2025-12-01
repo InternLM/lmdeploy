@@ -1,6 +1,7 @@
 # Base images
 ARG IMAGE_TYPE=final
 ARG CUDA_VERSION=cu12
+ARG GPU_ARCH=''
 
 FROM nvidia/cuda:13.0.2-devel-ubuntu22.04 AS cu13
 ENV CUDA_VERSION_SHORT=cu130
@@ -18,7 +19,9 @@ ENV CUDA_VERSION_SHORT=cu118
 FROM ${CUDA_VERSION} AS dev
 ARG PYTHON_VERSION=3.10
 ARG NCCL_BRANCH=v2.26.6-1
+ARG GPU_ARCH
 
+ENV GPU_ARCH=${GPU_ARCH}
 ENV PATH=/opt/py3/bin:/root/.local/bin:${PATH}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
@@ -63,7 +66,9 @@ ENV CUDA_VERSION_SHORT=cu118
 
 FROM ${CUDA_VERSION}-base AS final
 ARG PYTHON_VERSION=3.10
+ARG GPU_ARCH
 
+ENV GPU_ARCH=${GPU_ARCH}
 COPY docker/install.sh /tmp/install.sh
 
 RUN --mount=type=cache,target=/root/.cache \

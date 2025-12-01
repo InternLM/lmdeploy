@@ -35,11 +35,6 @@ fi
 apt-get clean -y
 rm -rf /var/lib/apt/lists/*
 
-# install GDRCopy debs
-if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
-    dpkg -i /wheels/*.deb
-fi
-
 # install python packages
 export PATH=/opt/py3/bin:$PATH
 
@@ -57,10 +52,17 @@ fi
 
 pip install -U pip wheel setuptools
 
-if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
-    pip install nvidia-nvshmem-cu13
-elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
-    pip install nvidia-nvshmem-cu12
+if [ "${GPU_ARCH}" == "hopper" ]; then
+    # install GDRCopy debs
+    if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
+        dpkg -i /wheels/*.deb
+    fi
+
+    if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+        pip install nvidia-nvshmem-cu13 dlblas==0.0.6
+    elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+        pip install nvidia-nvshmem-cu12 dlblas==0.0.6
+    fi
 fi
 
 pip install torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
@@ -68,7 +70,7 @@ pip install /wheels/*.whl
 
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]] && [[ "${PYTHON_VERSION}" != "3.9" ]]; then
-    pip install cuda-python dlblas==0.0.6
+    pip install cuda-python
 fi
 
 # install pre-compiled flash attention wheel
