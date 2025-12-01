@@ -11,7 +11,7 @@ from .utils import get_device_props
 logger = get_logger('lmdeploy')
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['M', 'M_out'])
 def _quant_fp8_kernel(
     a_ptr,
     out_ptr,
