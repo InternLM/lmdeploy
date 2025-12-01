@@ -4,6 +4,8 @@ dataset_name: &dataset_name "sharegpt"
 model_path: &model_path "Qwen/Qwen3-30B-A3B-FP8"
 server:
   server_port: 23333
+  # The type of the server. It is either "api_server" or "proxy".
+  type: "api_server"
 # Inference engine configuration
 engine:
   - model_path: *model_path
@@ -15,13 +17,6 @@ engine:
     cache_max_entry_count: 0.9
     max_prefill_token_num: 4096
     tp: 1
-  - model_path: "Qwen/Qwen3-235B-A22B-FP8"
-    max_batch_size: 64
-    cache_max_entry_count: 0.7
-    max_prefill_token_num: 4096
-    dp: 8
-    ep: 8
-    proxy_url: "http://localhost:8000"
 # Benchmark test configuration for profile_restful_api.py
 # Defines multiple test cases with different output lengths to evaluate API performance
 data:
