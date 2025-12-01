@@ -14,7 +14,7 @@ def prepare_environment(request, config, worker_id):
         model = param['model']
         model_path = config.get('model_path') + '/' + model
 
-        pid, startRes = start_restful_api(config, param, model, model_path, 'pytorch', worker_id)
+        pid, startRes = start_restful_api(config, param, model, model_path, 'turbomind', worker_id)
         yield
         stop_restful_api(pid, startRes, param)
     else:
