@@ -296,3 +296,24 @@ def test_modelscope_pipeline_chat_tp1(config, common_case_config, model, worker_
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, use_local_model=True)
     del os.environ['LMDEPLOY_USE_MODELSCOPE']
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.pr_test
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b-chat-inner-4bits'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_pipeline_chat_kvint_pr(config, common_case_config, model, communicator, worker_id):
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind',
+                           worker_id,
+                           extra={
+                               'quant_policy': 4,
+                               'communicator': communicator
+                           },
+                           is_smoke=True)

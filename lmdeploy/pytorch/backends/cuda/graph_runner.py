@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
@@ -68,6 +69,7 @@ class CUDASingleGraphRunner:
         pool: Tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
+        decode_query_len: int = 1,
     ):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
@@ -82,6 +84,9 @@ class CUDASingleGraphRunner:
             input_buffers=dict(),
             output_buffers=dict(),
             vocab_size=self.model_config.vocab_size,
+            decode_query_len=decode_query_len,
+            use_flash_mla=model_config.use_flash_mla,
+            use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
         )
         self.device = device
         self.max_batches = max_batches
@@ -188,17 +193,21 @@ class CUDAGraphRunner(GraphRunner):
         batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
+        # for draft model to distinguish inputs from target model and itself
+        query_len = input_ids.size(1) // batch_size
         if meta.padding_batch_size is None:
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch)
+        return (batch_size, is_decoding, enable_microbatch, query_len)
 
-    def _get_max_tokens(self, graph_key: tuple):
+    def _get_max_tokens(self, graph_key: tuple, input_ids: torch.Tensor, q_seqlens: torch.Tensor):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
         assert is_decoding
-        return self.cudagraph_strategy.get_max_tokens(max_batches)
+        origin_batch_size = q_seqlens.size(0)
+        num_tokens = input_ids.size(1)
+        return self.cudagraph_strategy.get_max_tokens(max_batches, origin_batch_size, num_tokens)
 
     def __call__(self, **kwargs):
         """call."""
@@ -215,16 +224,20 @@ class CUDAGraphRunner(GraphRunner):
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
+        decode_query_len = graph_key[3]
         if graph_key not in self._runner_map:
-            max_tokens = self._get_max_tokens(graph_key)
-            runner = CUDASingleGraphRunner(self.model,
-                                           max_batches=max_batches,
-                                           max_tokens=max_tokens,
-                                           num_blocks=self.num_blocks,
-                                           is_decoding=is_decoding,
-                                           pool=self.graph_pool_handle,
-                                           model_config=self.model_config,
-                                           device=self.device)
+            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
+            runner = CUDASingleGraphRunner(
+                self.model,
+                max_batches=max_batches,
+                max_tokens=max_tokens,
+                num_blocks=self.num_blocks,
+                is_decoding=is_decoding,
+                pool=self.graph_pool_handle,
+                model_config=self.model_config,
+                device=self.device,
+                decode_query_len=decode_query_len,
+            )
             output = runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
             # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
@@ -242,6 +255,12 @@ class CUDAGraphRunner(GraphRunner):
         context: StepContext = None,
     ):
         """Prepare inputs."""
+
+        if get_moe_backend().use_deepep_moe_backend():
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
+            deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
+            DeepEPBuffer.set_deepep_mode(deepep_mode)
+
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,

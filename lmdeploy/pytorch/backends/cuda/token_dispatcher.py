@@ -1,6 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 try:
     from deep_ep import Buffer
+
+    from lmdeploy.pytorch.envs import deep_ep_buffer_num_sms
+
+    Buffer.set_num_sms(deep_ep_buffer_num_sms)
     use_deepep = True
 except ImportError:
     use_deepep = False

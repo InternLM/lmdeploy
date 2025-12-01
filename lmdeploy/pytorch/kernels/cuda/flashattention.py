@@ -243,8 +243,12 @@ def _flash_prefill_fwd_kernel(
         order=(1, 0),
     )
 
-    k_bound0: tl.constexpr = None
-    k_bound1: tl.constexpr = (1, )
+    if BLOCK_DK + BLOCK_DK1 == head_dim_k:
+        k_bound0: tl.constexpr = None
+        k_bound1: tl.constexpr = (1, )
+    else:
+        k_bound0: tl.constexpr = (1, )
+        k_bound1: tl.constexpr = (0, 1)
     if head_dim_v == BLOCK_DV:
         v_bound0: tl.constexpr = None
         v_bound1: tl.constexpr = (0, )

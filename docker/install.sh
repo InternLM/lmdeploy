@@ -1,10 +1,11 @@
 #!/bin/bash -ex
 
+# install system packages
 export DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
 sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list
 apt-get update -y
 apt-get install -y --no-install-recommends \
-    tzdata wget curl ssh sudo git-core libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1
+    tzdata wget curl ssh sudo git-core vim libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core libmlx5-1
 
 if [[ ${PYTHON_VERSION} != "3.10" ]]; then
     apt-get install -y --no-install-recommends software-properties-common
@@ -12,6 +13,7 @@ if [[ ${PYTHON_VERSION} != "3.10" ]]; then
     apt-get update -y
 fi
 
+# install python, create virtual env
 apt-get install -y --no-install-recommends \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv
 
@@ -19,40 +21,57 @@ pushd /opt >/dev/null
     python${PYTHON_VERSION} -m venv py3
 popd >/dev/null
 
+# install CUDA build tools
 if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     apt-get install -y --no-install-recommends cuda-minimal-build-11-8
 elif [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-12-4
+    apt-get install -y --no-install-recommends cuda-minimal-build-12-4 dkms
 elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-12-8
+    apt-get install -y --no-install-recommends cuda-minimal-build-12-8 dkms
+elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    apt-get install -y --no-install-recommends cuda-minimal-build-13-0 dkms
 fi
 
 apt-get clean -y
 rm -rf /var/lib/apt/lists/*
 
+# install GDRCopy debs
+if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
+    dpkg -i /wheels/*.deb
+fi
+
+# install python packages
 export PATH=/opt/py3/bin:$PATH
 
 if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     FA_VERSION=2.7.3
     TORCH_VERSION="<2.7"
+elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    FA_VERSION=2.8.3
+    TORCH_VERSION="==2.9.0"
 else
     FA_VERSION=2.8.3
-    TORCH_VERSION=""
+    # pin torch version to avoid build and runtime mismatch, o.w. deep_gemm undefined symbol error
+    TORCH_VERSION="==2.8.0"
 fi
 
 pip install -U pip wheel setuptools
 
-if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    pip install nvidia-nvshmem-cu13
+elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     pip install nvidia-nvshmem-cu12
 fi
 
-pip install /wheels/*.whl torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
+pip install torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
+pip install /wheels/*.whl
 
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]] && [[ "${PYTHON_VERSION}" != "3.9" ]]; then
-    pip install cuda-python dlblas
+    pip install cuda-python dlblas==0.0.6
 fi
 
+# install pre-compiled flash attention wheel
 PLATFORM="linux_x86_64"
 PY_VERSION=$(python3 - <<'PY'
 import torch, sys

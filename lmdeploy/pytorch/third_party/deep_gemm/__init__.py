@@ -82,3 +82,10 @@ except Exception:
 
     def get_mn_major_tma_aligned_tensor(x):
         return get_col_major_tma_aligned_tensor(x)
+
+
+try:
+    from deep_gemm import m_grouped_bf16_gemm_nt_contiguous, m_grouped_bf16_gemm_nt_masked  # noqa: F401
+except Exception:
+    logger.warning('DeepGemm bf16 grouped gemm kernels are not found. '
+                   'Please upgrade DeepGemm to the latest version.')
