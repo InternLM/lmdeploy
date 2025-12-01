@@ -767,7 +767,7 @@ class Engine(EngineBase):
         return vision_embedding_inputs
 
     @torch.inference_mode()
-    @record_function('CreateModelInputs')
+    @record_function('create_model_inputs')
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """Create model inputs from messages.
 
@@ -932,6 +932,7 @@ class Engine(EngineBase):
                 outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
+    @record_function('make_forward_inputs')
     def _make_forward_inputs(self, prefill: bool, enable_empty: bool = False):
         """Make forward inputs."""
 

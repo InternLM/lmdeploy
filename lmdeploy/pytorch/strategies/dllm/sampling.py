@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List
 
+from torch.profiler import record_function
+
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 
@@ -16,6 +18,7 @@ class DLLMSamplingStrategy(ARSamplingStrategy):
         super().__init__(pad_token_id)
         self.dllm_block_length = dllm_block_length
 
+    @record_function('make_sampling_inputs')
     def make_sampling_inputs(self, seqs: SeqList) -> SamplingInputs:
         """Create sampling inputs from the sequences."""
         out = super().make_sampling_inputs(seqs)

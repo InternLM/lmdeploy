@@ -5,6 +5,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
 
+from torch.profiler import record_function
+
 from lmdeploy.messages import EventType, ScheduleMetrics
 from lmdeploy.utils import get_logger
 
@@ -161,6 +163,7 @@ class Scheduler:
 
         return migration_ready
 
+    @record_function('schedule_prefill')
     def _schedule_prefill(self, prealloc_size: int = 0):
         """Schedule for prefilling."""
 
@@ -217,6 +220,7 @@ class Scheduler:
 
         return running, swap_in_map, swap_out_map, copy_map
 
+    @record_function('schedule_decoding')
     def _schedule_decoding(self, prealloc_size: int = 0):
         """Schedule decoding."""
 
