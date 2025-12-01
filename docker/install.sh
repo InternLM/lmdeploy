@@ -51,29 +51,34 @@ else
 fi
 
 pip install -U pip wheel setuptools
-
-if [ "${GPU_ARCH}" == "hopper" ]; then
-    # install GDRCopy debs
-    if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
-        dpkg -i /wheels/*.deb
-    fi
-
-    if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
-        pip install nvidia-nvshmem-cu13 dlblas==0.0.6
-    elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
-        pip install nvidia-nvshmem-cu12 dlblas==0.0.6
-    fi
-fi
-
 pip install torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
 pip install /wheels/*.whl
-
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]] && [[ "${PYTHON_VERSION}" != "3.9" ]]; then
     pip install cuda-python
 fi
 
-# install pre-compiled flash attention wheel
+# install hopper specific packages
+if [ "${GPU_ARCH}" == "hopper" ] && [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+    # GDRCopy debs
+    if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
+        dpkg -i /wheels/*.deb
+    fi
+
+    # FA3
+    FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/${CUDA_VERSION_SHORT}_torch280"
+    pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
+
+    # nvshmem and dlblas
+    if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+        pip install nvidia-nvshmem-cu13
+    else
+        pip install nvidia-nvshmem-cu12
+    fi
+    pip install dlblas==0.0.6
+fi
+
+# install pre-built flash attention wheel
 PLATFORM="linux_x86_64"
 PY_VERSION=$(python3 - <<'PY'
 import torch, sys

@@ -27,7 +27,6 @@ if [ "${GPU_ARCH}" == "hopper" ] && [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; th
     DEEP_EP_VERSION=9af0e0d  # v1.2.1
     DEEP_GEMM_VERSION=c9f8b34  # v2.1.1.post3
     FLASH_MLA_VERSION=1408756  # no release, pick the latest commit
-    FLASH_ATTENTION_VERSION=060c918  # v2.8.3
 
     # DeepEP
     if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
@@ -44,13 +43,6 @@ if [ "${GPU_ARCH}" == "hopper" ] && [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; th
     # FlashMLA
     # sm100 compilation for Flash MLA requires NVCC 12.9 or higher
     FLASH_MLA_DISABLE_SM100=1 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
-
-    # FA3
-    git clone https://github.com/Dao-AILab/flash-attention.git \
-    && pushd flash-attention \
-    && git checkout ${FLASH_ATTENTION_VERSION} && cd hopper \
-    && FLASH_ATTENTION_FORCE_BUILD=TRUE pip wheel -v --no-build-isolation --no-deps -w /wheels . \
-    && popd
 
     # GDRCopy debs
     apt-get update -y \
