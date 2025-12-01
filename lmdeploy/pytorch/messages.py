@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -179,9 +180,7 @@ class SequenceManager:
 
     def __init__(self, seq_meta: SequenceMeta) -> None:
         self._seq_map: SeqMap = dict()
-        self._status_seq_map: Dict[MessageStatus, SeqMap] = dict()
-        for status in MessageStatus:
-            self._status_seq_map[status] = dict()
+        self._status_seq_map: Dict[MessageStatus, SeqMap] = defaultdict(dict)
 
         self.seq_meta = seq_meta
         self._seq_count = 0
@@ -203,9 +202,10 @@ class SequenceManager:
         """Num sequences."""
         return len(self.get_sequences(status))
 
-    def add_sequence(self, seq: 'SchedulerSequence', status: MessageStatus):
+    def add_sequence(self, seq: 'SchedulerSequence'):
         """Add sequence."""
         seq_id = seq.seq_id
+        status = seq.status
         status_map = self._status_seq_map[status]
         self._seq_map[seq_id] = seq
         status_map[seq_id] = seq
@@ -288,7 +288,7 @@ class SchedulerSession:
         # update seq manager
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
         seq.set_state(build_seq_state(self.scheduler, seq, status))
-        self.seq_manager.add_sequence(seq, status)
+        self.seq_manager.add_sequence(seq)
 
         # metrics
         seq.record_event(EventType.QUEUED)

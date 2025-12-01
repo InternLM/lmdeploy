@@ -656,11 +656,10 @@ class Engine(EngineBase):
         scheduler = self.scheduler
         for req in reqs:
             session_id = req.data['session_id']
-            if scheduler is None:
+            sess = scheduler.sessions.get(session_id, None)
+            if sess is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
-            session_id = req.data['session_id']
-            sess = scheduler.sessions[session_id]
             # TODO: support 1 session n sequence
             sampling_param = req.data['sampling_param']
             if len(sess.sequences) == 0:
@@ -675,7 +674,6 @@ class Engine(EngineBase):
                                   resp_cache=req.data.get('with_cache'),
                                   preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
-                __update_max_new_tokens(msg)
                 if migration_request:
                     self.migration_event.set()
             else:
@@ -688,18 +686,14 @@ class Engine(EngineBase):
                 )
                 msg.sampling_param = sampling_param
                 msg.state.activate()
-                __update_max_new_tokens(msg)
 
+            __update_max_new_tokens(msg)
             msg.resp = req.resp
 
     @property
     def model_config(self) -> ModelConfig:
         """Model config."""
         return self.executor.model_config
-
-    @property
-    def gpu_count(self):
-        return self.dist_config.world_size
 
     @property
     def torch_int_dtype(self):
@@ -1309,8 +1303,8 @@ class Engine(EngineBase):
                                         forward_event=forward_event,
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
-        except Exception as e:
-            logger.exception(f'exception happened: {type(e)} {e}')
+        except Exception:
+            logger.exception('Engine main loop failed.')
         finally:
             self._loop_finally()
 

@@ -17,6 +17,7 @@ from .state_manager import StateManager
 
 logger = get_logger('lmdeploy')
 
+MapType = Dict[int, int]
 SeqList = List[SchedulerSequence]
 
 
@@ -25,9 +26,9 @@ class SchedulerOutput:
     """Output of schedule."""
 
     running: SeqList
-    swap_in_map: Dict[int, int]
-    swap_out_map: Dict[int, int]
-    copy_map: Dict[int, int]
+    swap_in_map: MapType
+    swap_out_map: MapType
+    copy_map: MapType
 
 
 class Scheduler:
@@ -165,9 +166,9 @@ class Scheduler:
 
         max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
         eviction_helper = self.eviction_helper
-        swap_out_map: Dict[int, int] = dict()
-        swap_in_map: Dict[int, int] = dict()
-        copy_map: Dict[int, int] = dict()
+        swap_out_map: MapType = dict()
+        swap_in_map: MapType = dict()
+        copy_map: MapType = dict()
         running: SeqList = []
         token_count = 0
 
@@ -227,9 +228,9 @@ class Scheduler:
         assert len(running) != 0
 
         eviction_helper = self.eviction_helper
-        swap_out_map: Dict[int, int] = dict()
-        swap_in_map: Dict[int, int] = dict()
-        copy_map: Dict[int, int] = dict()
+        swap_out_map: MapType = dict()
+        swap_in_map: MapType = dict()
+        copy_map: MapType = dict()
 
         def __evict_for_seq(seq: SchedulerSequence, num_required_blocks: int):
             """Evict until can append."""
@@ -312,28 +313,24 @@ class Scheduler:
         """Get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
 
-    def active_seqs(self, running: SeqList):
+    def active_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.READY):
         """Lock running sequence."""
         for seq in running:
-            if seq.status == MessageStatus.READY:
+            if seq.status == filter_status:
                 seq.state.activate()
 
-    def deactive_seqs(self, running: SeqList):
+    def deactive_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.RUNNING):
         for seq in running:
-            if seq.status == MessageStatus.RUNNING:
+            if seq.status == filter_status:
                 seq.state.deactivate()
 
     def activate_migration_seqs(self, running: SeqList):
         """Lock running sequence."""
-        for seq in running:
-            if seq.status == MessageStatus.MIGRATION_READY:
-                seq.state.activate()
+        return self.active_seqs(running, filter_status=MessageStatus.MIGRATION_READY)
 
     def deactivate_migration_seqs(self, running: SeqList):
         """Unlock running migration."""
-        for seq in running:
-            if seq.status == MessageStatus.MIGRATION_RUNNING:
-                seq.state.deactivate()
+        return self.deactive_seqs(running, filter_status=MessageStatus.MIGRATION_RUNNING)
 
     def collect_migration_done(self):
         for seq in self.migration_done:

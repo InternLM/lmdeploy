@@ -108,7 +108,7 @@ class RequestSender:
         resps = []
         for rtype, rdata in zip(req_types, data):
             event = asyncio.Event()
-            resp = Response(type=ResponseType.HANDLER_NOT_EXIST,
+            resp = Response(type=ResponseType.INTERNAL_ENGINE_ERROR,
                             sender_id=self.sender_id,
                             event=event,
                             data=None,
