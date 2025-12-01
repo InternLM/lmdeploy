@@ -14,13 +14,6 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
-
-        # for multi-modal models, get the language model config to build model config
-        if hasattr(hf_config, 'text_config'):
-            hf_config = hf_config.text_config
-        elif hasattr(hf_config, 'llm_config'):
-            hf_config = hf_config.llm_config
-
         head_dim = getattr(hf_config, 'head_dim', None)
         head_dim = head_dim or hf_config.hidden_size // hf_config.num_attention_heads
 
