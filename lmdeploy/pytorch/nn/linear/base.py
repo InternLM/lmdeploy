@@ -181,7 +181,7 @@ class LinearBase(nn.Module):
         """Default forward implement."""
         raise NotImplementedError('This method should be implemented in subclasses.')
 
-    def _forward_lora(self, x, tp_sizes: List[int]):
+    def _forward_lora(self, x, tp_sizes: List[int] = None):
         """Forward with LoRA."""
         out = self._forward_default(x, False, tp_sizes)
 
