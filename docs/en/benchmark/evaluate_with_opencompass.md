@@ -10,33 +10,44 @@ If sufficient computational resources are available, please refer to the [End-to
 
 ## Environment Setup
 
-```shell
-pip install lmdeploy
-pip install "opencompass[full]"
+Install LMDeploy and OpenCompass in separate Python virtual environments to avoid potential dependency conflicts.
 
+- install lmdeploy
+
+```shell
+conda create -n lmdeploy python=3.10 -y
+pip install lmdeploy
 # Download the lmdeploy source code, which will be used in subsequent steps to access eval script and configuration
 git clone --depth=1 https://github.com/InternLM/lmdeploy.git
 ```
 
-It is recommended to install LMDeploy and OpenCompass in separate Python virtual environments to avoid potential dependency conflicts.
+- install opencompass
+
+```shell
+conda create -n opencompass python=3.10 -y
+pip install "opencompass[full]"
+```
 
 ## End-to-End Evaluation
 
 1. **Deploy Target Model**
 
 ```shell
+conda activate lmdeploy
 lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 ```
 
 2. **Deploy Evaluation Model (Judger)**
 
 ```shell
+conda activate lmdeploy
 lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2
 ```
 
 3. **Generate Evaluation Configuration and Execute**
 
 ```shell
+conda activate opencompass
 
 cd {the/root/path/of/lmdeploy/repo}
 
@@ -64,12 +75,14 @@ This stage generates model responses for the dataset.
 1. **Deploy Target Model**
 
 ```shell
+conda activate lmdeploy
 lmdeploy serve api_server <model_path> --server-port 10000 <--other-options>
 ```
 
 2. **Generate Inference Configuration and Execute**
 
 ```shell
+conda activate opencompass
 cd {the/root/path/of/lmdeploy/repo}
 
 ## Specify the dataset path. OC will download the datasets automatically if they are
@@ -92,12 +105,15 @@ This stage uses the evaluation model (Judger) to assess the quality of inference
 1. **Deploy Evaluation Model (Judger)**
 
 ```shell
+conda activate lmdeploy
 lmdeploy serve api_server opencompass/CompassVerifier-32B --server-port 20000 --tp 2 --session-len 65536
 ```
 
 2. **Generate Evaluation Configuration and Execute**
 
 ```shell
+conda activate opencompass
+
 cd {the/root/path/of/lmdeploy/repo}
 
 ## Specify the dataset path. OC will download the datasets automatically if they are
@@ -105,7 +121,7 @@ cd {the/root/path/of/lmdeploy/repo}
 export COMPASS_DATA_CACHE=/nvme1/shared/opencompass/.cache
 export HF_DATASETS_CACHE=/nvme4/huggingface_hub/datasets
 # Run evaluation task
-opencompass /path/to/judger_config.py -m eval -w {oc_output_dir} -r {yyyymmdd_hhmmss}
+python eval/eval.py {task_name} --mode eval --judger-server http://{judger-server-ip}:20000 -w {oc_output_dir} -r {yyyymmdd_hhmmss}
 ```
 
 Important Notes:
