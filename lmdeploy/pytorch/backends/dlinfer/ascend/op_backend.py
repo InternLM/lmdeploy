@@ -2,7 +2,6 @@
 import itertools
 import os
 import re
-from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -13,7 +12,6 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from ..op_backend import DlinferOpsBackend
-from .utils import nd_to_nz_spec
 
 logger = get_logger('lmdeploy')
 
@@ -123,6 +121,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             is_unpaged_prefill = all((step_context.q_seqlens == step_context.kv_seqlens).tolist())
         if step_context.block_offsets.dtype != torch.int32:
             step_context.block_offsets = step_context.block_offsets.to(torch.int32)
+        if not (step_context.is_decoding or is_unpaged_prefill):
+            step_context.block_offsets = step_context.block_offsets.repeat_interleave(step_context.q_seqlens, 0)
         if step_context.kv_seqlens.dtype != torch.int32:
             step_context.kv_seqlens = step_context.kv_seqlens.to(torch.int32)
         if step_context.q_seqlens.dtype != torch.int32:
@@ -148,7 +148,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 q_seqlens_cpu = step_context.q_seqlens.cpu()
                 kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             return q_seqlens_cpu, kv_seqlens_cpu
-        
+
         def get_list_seqlens(is_decoding, is_unpaged_prefill, q_seqlens_cpu=None, kv_seqlens_cpu=None):
             if is_decoding:
                 q_seqlens_list, kv_seqlens_list = None, None
@@ -168,7 +168,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                 max_kv_seq_len = max(kv_seqlens_list)
             return max_q_seq_len, max_kv_seq_len
 
-        def get_kv_start_indices_and_attention_mask(is_decoding, is_unpaged_prefill, q_seqlens_list, kv_seqlens_list, max_q_seq_len, max_kv_seq_len):
+        def get_kv_start_indices_and_attention_mask(is_decoding, is_unpaged_prefill, q_seqlens_list, kv_seqlens_list,
+                                                    max_q_seq_len, max_kv_seq_len):
             kv_start_indices, attention_mask = [], []
             if is_decoding:
                 idx = (step_context.kv_seqlens - 1) % block_size
@@ -187,31 +188,38 @@ class AscendOpsBackend(DlinferOpsBackend):
                     kv_start_indices.append(slots)
 
                     if not is_unpaged_prefill:
-                        single_attention_mask = torch.logical_not(
-                            torch.tril(
+                        single_attention_mask = torch.triu(
                                 torch.ones(q_seq_len,
                                            step_context.block_offsets.shape[1] * block_size,
-                                           dtype=step_context.kv_caches[0][0].dtype,
+                                           dtype=torch.bool,
                                            device=step_context.block_offsets.device),
-                                diagonal=kv_seq_len - q_seq_len,
-                            ))
+                                diagonal=kv_seq_len - q_seq_len + 1,
+                            )
                         attention_mask.append(single_attention_mask)
 
                 if is_unpaged_prefill:
-                    attention_mask.append(torch.logical_not(
-                    torch.tril(
-                        torch.ones(max_q_seq_len, max_kv_seq_len, dtype=step_context.kv_caches[0][0].dtype, device=step_context.block_offsets.device),
-                        diagonal=max_kv_seq_len - max_q_seq_len,
-                    )))
+                    attention_mask.append(torch.triu(
+                        torch.ones(max_q_seq_len,
+                                   max_kv_seq_len,
+                                   dtype=step_context.kv_caches[0][0].dtype,
+                                   device=step_context.block_offsets.device),
+                        diagonal=max_kv_seq_len - max_q_seq_len + 1))
+                else:
+                    attention_mask = [torch.cat(attention_mask)]
 
                 kv_start_indices = torch.cat(kv_start_indices)
 
             return kv_start_indices, attention_mask
 
         q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding, is_unpaged_prefill)
-        q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_cpu, kv_seqlens_cpu)
-        max_q_seq_len, max_kv_seq_len = get_max_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_list, kv_seqlens_list)
-        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(step_context.is_decoding, is_unpaged_prefill, q_seqlens_list, kv_seqlens_list, max_q_seq_len, max_kv_seq_len)
+        q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_cpu,
+                                                           kv_seqlens_cpu)
+        max_q_seq_len, max_kv_seq_len = get_max_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_list,
+                                                        kv_seqlens_list)
+        kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(step_context.is_decoding,
+                                                                                   is_unpaged_prefill, q_seqlens_list,
+                                                                                   kv_seqlens_list, max_q_seq_len,
+                                                                                   max_kv_seq_len)
 
         if not cls.enable_graph and step_context.kv_quant_policy == 8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
