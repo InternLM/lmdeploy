@@ -15,6 +15,12 @@
 
 namespace turbomind::comm {
 
+enum class CommType
+{
+    kIntra,
+    kInter,
+};
+
 enum class RedOp
 {
     kSum,
@@ -29,6 +35,17 @@ typedef void (*reduce_fn)(void* src, int n, void* dst, int offset);
 class HostCommImpl {
 public:
     virtual ~HostCommImpl();
+
+    virtual void* query(CommType type) const
+    {
+        return nullptr;
+    }
+
+    template<typename T>
+    T* as() const
+    {
+        return static_cast<T*>(query(T::kCommType));
+    }
 
     virtual int rank() const = 0;
 
@@ -45,6 +62,23 @@ public:
     virtual void AllGather(void* data, int count, DataType dtype, copy_fn copy) = 0;
 
     virtual void AllReduce(void* data, int count, DataType dtype, RedOp red_op) = 0;
+};
+
+class IpcHostCommImpl: public HostCommImpl {
+public:
+    static constexpr CommType kCommType = CommType::kInter;
+
+    virtual bool is_hybrid() const = 0;
+
+    virtual char* create_buffer(size_t size) = 0;
+
+    virtual void* query(CommType type) const override
+    {
+        if (type == kCommType) {
+            return const_cast<IpcHostCommImpl*>(this);
+        }
+        return HostCommImpl::query(type);
+    }
 };
 
 class HostComm {
@@ -92,19 +126,25 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
         }
         else {
             try {
-                std::vector<char> buf;
-                if (comm->rank() == root) {
-                    size_t sz{};
-                    serialize(nullptr, sz, data, 1);
-                    buf.resize(sz);
-                    serialize(buf.data(), sz, data, n);
+                auto ipc_comm = TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>());
+                // serialize on root rank and deserialize on other ranks
+                size_t& buf_size = *reinterpret_cast<size_t*>(ipc_comm->create_buffer(sizeof(size_t)));
+                if (ipc_comm->rank() == root) {
+                    buf_size = 0;
+                    serialize(nullptr, buf_size, data, n);
                 }
-                size_t size = buf.size();
-                Broadcast(comm, &size, 1, root);
-                buf.resize(size);
-                Broadcast(comm, buf.data(), buf.size(), root);  // trivially_copyable
-                if (comm->rank() != root) {
-                    deserialize(data, n, buf.data());
+                ipc_comm->Broadcast(&buf_size, 1, data_type_v<size_t>, root, detail::copy_fn<size_t>);
+
+                int   count = buf_size;
+                char* buf   = ipc_comm->create_buffer(count);
+                if (ipc_comm->rank() == root) {
+                    size_t sz{};
+                    serialize(buf, sz, data, n);
+                }
+                ipc_comm->Broadcast(buf, count, data_type_v<uint8_t>, root, detail::copy_fn<uint8_t>);
+
+                if (ipc_comm->rank() != root) {
+                    deserialize(data, n, buf);
                 }
             }
             catch (const std::invalid_argument& e) {
@@ -129,19 +169,19 @@ void AllGather(HostCommImpl* comm, T* data, int n)
         else {
             try {
                 // buf may have different size on different ranks
-                size_t sz_i{};
+                auto    ipc_comm = TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>());
+                size_t& sz_i     = *reinterpret_cast<size_t*>(ipc_comm->create_buffer(sizeof(size_t)));
+                sz_i             = 0;
                 serialize(nullptr, sz_i, data, n);
-                int sz_max = sz_i;
-                comm->AllReduce(&sz_max, 1, data_type_v<int>, RedOp::kMax);
-
-                std::vector<char> buf(sz_max * comm->n_ranks());
-                serialize(buf.data() + comm->rank() * sz_max, sz_i, data, n);
-                comm->AllGather(buf.data(), sz_max, data_type_v<uint8_t>, detail::copy_fn<char>);
-
+                comm->AllReduce(&sz_i, 1, data_type_v<size_t>, RedOp::kMax);
+                size_t sz_max = sz_i;
+                char*  buf    = ipc_comm->create_buffer(sz_max * comm->n_ranks());
+                serialize(buf + comm->rank() * sz_max, sz_i, data, n);
+                comm->AllGather(buf, sz_max, data_type_v<uint8_t>, detail::copy_fn<uint8_t>);
                 for (int i = 0; i < comm->n_ranks(); ++i) {
                     if (i != comm->rank()) {
                         // some field in data may be not shared by all rank
-                        deserialize(data + n * i, n, buf.data() + i * sz_max);
+                        deserialize(data + n * i, n, buf + i * sz_max);
                     }
                 }
             }

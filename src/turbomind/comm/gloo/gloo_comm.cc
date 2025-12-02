@@ -109,7 +109,7 @@ private:
 
 typedef void (*ReduceFunc)(void*, const void*, const void*, size_t);
 
-struct GlooCommImpl: public HostCommImpl {
+struct GlooCommImpl: public IpcHostCommImpl {
 
     struct SplitInfo {
         int color;
@@ -135,6 +135,19 @@ struct GlooCommImpl: public HostCommImpl {
     }
 
     ~GlooCommImpl() {}
+
+    bool is_hybrid() const override
+    {
+        return false;
+    }
+
+    char* create_buffer(size_t size) override
+    {
+        if (buffer_ == nullptr || size > buffer_->byte_size()) {
+            buffer_ = std::make_shared<::turbomind::core::Buffer_<uint8_t>>(size, kCPU);
+        }
+        return static_cast<char*>(buffer_->raw_data());
+    }
 
     int rank() const override
     {
@@ -267,6 +280,9 @@ struct GlooCommImpl: public HostCommImpl {
     std::shared_ptr<Store>                       store_;
     int                                          rank_;
     int                                          n_ranks_;
+
+    // reduce the overhead caused by repeatedly creating buffers.
+    std::shared_ptr<::turbomind::core::Buffer_<uint8_t>> buffer_;
 };
 
 class GlooGroupId: public HostGroupId {
