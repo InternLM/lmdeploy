@@ -8,188 +8,198 @@
 
 namespace turbomind::comm {
 
-std::vector<char> streambuf_to_vector(std::streambuf* sb)
+char* serialize(char* data, size_t& size, const std::string& s)
 {
-    auto start = sb->pubseekoff(0, std::ios::beg, std::ios::in);
-    auto end   = sb->pubseekoff(0, std::ios::end, std::ios::in);
-    auto size  = end - start;
-
-    std::vector<char> buffer(size);
-    sb->pubseekpos(start);
-    sb->sgetn(buffer.data(), size);
-    return buffer;
+    int n = s.length();
+    data  = serialize(data, size, n);
+    if (data) {
+        std::memcpy(data, s.data(), n);
+    }
+    size += n;
+    return data ? data + n : data;
 }
 
-void serialize(std::ostream& os, const std::string& s)
+char* deserialize(std::string& s, char* data)
 {
-    int size = s.length();
-    serialize(os, size);
-    os << s;
+    int n;
+    data = deserialize(n, data);
+    s.resize(n);
+    std::memcpy(s.data(), data, n);
+    return data + n;
 }
 
-void deserialize(std::istream& is, std::string& s)
+char* serialize(char* data, size_t& size, const GenerationConfig& gen)
 {
-    int size;
-    deserialize(is, size);
-    s.resize(size);
-    is.read(s.data(), size);
+    data = serialize(data, size, gen.max_new_tokens);
+    data = serialize(data, size, gen.min_new_tokens);
+    data = serialize(data, size, gen.eos_ids);
+    data = serialize(data, size, gen.stop_ids[0]);
+    data = serialize(data, size, gen.stop_ids[1]);
+    data = serialize(data, size, gen.bad_ids[0]);
+    data = serialize(data, size, gen.bad_ids[1]);
+    data = serialize(data, size, gen.top_k);
+    data = serialize(data, size, gen.top_p);
+    data = serialize(data, size, gen.min_p);
+    data = serialize(data, size, gen.temperature);
+    data = serialize(data, size, gen.repetition_penalty);
+    data = serialize(data, size, gen.random_seed);
+    data = serialize(data, size, gen.output_logprobs);
+    data = serialize(data, size, gen.output_last_hidden_state);
+    data = serialize(data, size, gen.output_logits);
+    return data;
 }
 
-void serialize(std::ostream& os, const GenerationConfig& gen)
+char* deserialize(GenerationConfig& gen, char* data)
 {
-    serialize(os, gen.max_new_tokens);
-    serialize(os, gen.min_new_tokens);
-    serialize(os, gen.eos_ids);
-    serialize(os, gen.stop_ids[0]);
-    serialize(os, gen.stop_ids[1]);
-    serialize(os, gen.bad_ids[0]);
-    serialize(os, gen.bad_ids[1]);
-    serialize(os, gen.top_k);
-    serialize(os, gen.top_p);
-    serialize(os, gen.min_p);
-    serialize(os, gen.temperature);
-    serialize(os, gen.repetition_penalty);
-    serialize(os, gen.random_seed);
-    serialize(os, gen.output_logprobs);
-    serialize(os, gen.output_last_hidden_state);
-    serialize(os, gen.output_logits);
+    data = deserialize(gen.max_new_tokens, data);
+    data = deserialize(gen.min_new_tokens, data);
+    data = deserialize(gen.eos_ids, data);
+    data = deserialize(gen.stop_ids[0], data);
+    data = deserialize(gen.stop_ids[1], data);
+    data = deserialize(gen.bad_ids[0], data);
+    data = deserialize(gen.bad_ids[1], data);
+    data = deserialize(gen.top_k, data);
+    data = deserialize(gen.top_p, data);
+    data = deserialize(gen.min_p, data);
+    data = deserialize(gen.temperature, data);
+    data = deserialize(gen.repetition_penalty, data);
+    data = deserialize(gen.random_seed, data);
+    data = deserialize(gen.output_logprobs, data);
+    data = deserialize(gen.output_last_hidden_state, data);
+    data = deserialize(gen.output_logits, data);
+    return data;
 }
 
-void deserialize(std::istream& is, GenerationConfig& gen)
+char* serialize(char* data, size_t& size, const SessionParam& sess)
 {
-    deserialize(is, gen.max_new_tokens);
-    deserialize(is, gen.min_new_tokens);
-    deserialize(is, gen.eos_ids);
-    deserialize(is, gen.stop_ids[0]);
-    deserialize(is, gen.stop_ids[1]);
-    deserialize(is, gen.bad_ids[0]);
-    deserialize(is, gen.bad_ids[1]);
-    deserialize(is, gen.top_k);
-    deserialize(is, gen.top_p);
-    deserialize(is, gen.min_p);
-    deserialize(is, gen.temperature);
-    deserialize(is, gen.repetition_penalty);
-    deserialize(is, gen.random_seed);
-    deserialize(is, gen.output_logprobs);
-    deserialize(is, gen.output_last_hidden_state);
-    deserialize(is, gen.output_logits);
+    data = serialize(data, size, sess.id);
+    data = serialize(data, size, sess.step);
+    data = serialize(data, size, sess.start_flag);
+    data = serialize(data, size, sess.end_flag);
+    data = serialize(data, size, sess.kill_flag);
+    return data;
 }
 
-void serialize(std::ostream& os, const SessionParam& sess)
+char* deserialize(SessionParam& sess, char* data)
 {
-    serialize(os, sess.id);
-    serialize(os, sess.step);
-    serialize(os, sess.start_flag);
-    serialize(os, sess.end_flag);
-    serialize(os, sess.kill_flag);
+    data = deserialize(sess.id, data);
+    data = deserialize(sess.step, data);
+    data = deserialize(sess.start_flag, data);
+    data = deserialize(sess.end_flag, data);
+    data = deserialize(sess.kill_flag, data);
+    return data;
 }
 
-void deserialize(std::istream& is, SessionParam& sess)
+char* serialize(char* data, size_t& size, const Layout& layout)
 {
-    deserialize(is, sess.id);
-    deserialize(is, sess.step);
-    deserialize(is, sess.start_flag);
-    deserialize(is, sess.end_flag);
-    deserialize(is, sess.kill_flag);
+    data = serialize(data, size, layout.shape());
+    data = serialize(data, size, layout.stride());
+    return data;
 }
 
-void serialize(std::ostream& os, const Layout& layout)
-{
-    serialize(os, layout.shape());
-    serialize(os, layout.stride());
-}
-
-void deserialize(std::istream& is, Layout& layout)
+char* deserialize(Layout& layout, char* data)
 {
     std::vector<ssize_t> shape;
     std::vector<ssize_t> stride;
-    deserialize(is, shape);
-    deserialize(is, stride);
+    data   = deserialize(shape, data);
+    data   = deserialize(stride, data);
     layout = Layout(std::move(shape), std::move(stride));
+    return data;
 }
 
-void serialize(std::ostream& os, const Buffer& buffer)
+char* serialize(char* data, size_t& size, const Buffer& buffer)
 {
     FT_CHECK(buffer.device() == turbomind::core::Device(kCPU));
-    serialize(os, buffer.size());
-    serialize(os, buffer.dtype());
-    os.write((char*)buffer.raw_data(), buffer.byte_size());
+    data = serialize(data, size, buffer.size());
+    data = serialize(data, size, buffer.dtype());
+    if (data) {
+        std::memcpy(data, buffer.raw_data(), buffer.byte_size());
+    }
+    size += buffer.byte_size();
+    return data ? data + buffer.byte_size() : data;
 }
 
-void deserialize(std::istream& is, Buffer& buffer)
+char* deserialize(Buffer& buffer, char* data)
 {
     ssize_t  size;
     DataType dtype;
-    deserialize(is, size);
-    deserialize(is, dtype);
+    data   = deserialize(size, data);
+    data   = deserialize(dtype, data);
     buffer = Buffer(size, dtype, turbomind::core::Device(kCPU));
-    is.read((char*)buffer.raw_data(), buffer.byte_size());
+    std::memcpy(buffer.raw_data(), data, buffer.byte_size());
+    return data + buffer.byte_size();
 }
 
-void serialize(std::ostream& os, const Tensor& tensor)
+char* serialize(char* data, size_t& size, const Tensor& tensor)
 {
     FT_CHECK(tensor.is_contiguous());
-    serialize(os, tensor.layout());
-    serialize(os, tensor.buffer());
+    data = serialize(data, size, tensor.layout());
+    data = serialize(data, size, tensor.buffer());
+    return data;
 }
 
-void deserialize(std::istream& is, Tensor& tensor)
+char* deserialize(Tensor& tensor, char* data)
 {
     Layout layout;
     Buffer buffer;
-    deserialize(is, layout);
-    deserialize(is, buffer);
+    data   = deserialize(layout, data);
+    data   = deserialize(buffer, data);
     tensor = Tensor(std::move(buffer), std::move(layout));
+    return data;
 }
 
-void serialize(std::ostream& os, const TensorMap& map)
+char* serialize(char* data, size_t& size, const TensorMap& map)
 {
-    int size = map.size();
-    serialize(os, size);
+    data = serialize(data, size, (int)map.size());
     for (const auto& [key, tensor] : map) {
-        serialize(os, key);
-        serialize(os, tensor);
+        data = serialize(data, size, key);
+        data = serialize(data, size, tensor);
     }
+    return data;
 }
 
-void deserialize(std::istream& is, TensorMap& map)
+char* deserialize(TensorMap& map, char* data)
 {
     int size;
-    deserialize(is, size);
+    data = deserialize(size, data);
     for (int i = 0; i < size; ++i) {
         std::string key;
-        deserialize(is, key);
+        data = deserialize(key, data);
         Tensor tensor;
-        deserialize(is, tensor);
-        map.emplace(key, tensor);
+        data = deserialize(tensor, data);
+        map.emplace(std::move(key), std::move(tensor));
     }
+    return data;
 }
 
-void serialize(std::ostream& os, const Request& req)
+char* serialize(char* data, size_t& size, const Request& req)
 {
-    serialize(os, req.id);
-    serialize(os, req.unique_id);
-    serialize(os, req.session);
-    serialize(os, req.gen_cfg);
-    serialize(os, req.stream_output);
-    serialize(os, req.inputs);
-    serialize(os, req.outputs);
-    serialize(os, req.ec);
+    // TODO: support grammar
+    data = serialize(data, size, req.id);
+    data = serialize(data, size, req.unique_id);  // consider dp ?
+    data = serialize(data, size, req.session);
+    data = serialize(data, size, req.gen_cfg);
+    data = serialize(data, size, req.stream_output);
+    data = serialize(data, size, req.inputs);
+    data = serialize(data, size, req.outputs);
+    data = serialize(data, size, req.ec);
+    return data;
 }
 
-void deserialize(std::istream& is, Request& req)
+char* deserialize(Request& req, char* data)
 {
-    deserialize(is, req.id);
-    deserialize(is, req.unique_id);
-    deserialize(is, req.session);
-    deserialize(is, req.gen_cfg);
-    deserialize(is, req.stream_output);
-    deserialize(is, req.inputs);
-    deserialize(is, req.outputs);
-    deserialize(is, req.ec);
+    data = deserialize(req.id, data);
+    data = deserialize(req.unique_id, data);
+    data = deserialize(req.session, data);
+    data = deserialize(req.gen_cfg, data);
+    data = deserialize(req.stream_output, data);
+    data = deserialize(req.inputs, data);
+    data = deserialize(req.outputs, data);
+    data = deserialize(req.ec, data);
 
     req.output_ids      = req.outputs.at("output_ids");
     req.sequence_length = req.outputs.at("sequence_length");
+    return data;
 }
 
 }  // namespace turbomind::comm

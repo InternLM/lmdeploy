@@ -182,7 +182,7 @@ struct GlooCommImpl: public HostCommImpl {
         ::gloo::BroadcastOptions opts(context_);
         opts.setRoot(root);
         opts.setTimeout(kTimeOut);
-        opts.setOutput((char*)data, count);
+        opts.setOutput((char*)data, count * byte_size(dtype));
         ::gloo::broadcast(opts);
     }
 
@@ -190,7 +190,7 @@ struct GlooCommImpl: public HostCommImpl {
     {
         ::gloo::AllgatherOptions opts(context_);
         opts.setTimeout(kTimeOut);
-        opts.setOutput((char*)data, count * n_ranks_);
+        opts.setOutput((char*)data, count * byte_size(dtype) * n_ranks_);
         ::gloo::allgather(opts);
     }
 

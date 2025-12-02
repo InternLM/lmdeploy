@@ -1353,65 +1353,45 @@ struct RequestData {
 #ifdef BUILD_MULTI_GPU
 namespace comm {
 
-void serialize(std::ostream& os, const RequestData& req)
+template<>
+char* serialize(char* data, size_t& size, const std::shared_ptr<RequestData>& req)
 {
-    // std::vector<std::shared_ptr<Request>> infer;
-    serialize(os, (int)req.infer.size());
-    for (const auto& r : req.infer) {
-        serialize(os, *r);
+    TM_CHECK(req != nullptr);
+    data = serialize(data, size, (int)req->infer.size());
+    for (const auto& r : req->infer) {
+        data = serialize(data, size, *r);
     }
-    // std::vector<std::shared_ptr<Request>> kill;
-    serialize(os, (int)req.kill.size());
-    for (const auto& r : req.kill) {
-        serialize(os, *r);
+    data = serialize(data, size, (int)req->kill.size());
+    for (const auto& r : req->kill) {
+        data = serialize(data, size, *r);
     }
-
-    serialize(os, req.cancel);  // std::vector<int> cancel;
-    serialize(os, req.abort);   // bool             abort;
+    data = serialize(data, size, req->cancel);
+    data = serialize(data, size, req->abort);
+    return data;
 }
 
 template<>
-void serialize(const std::shared_ptr<RequestData>* req, int n, std::vector<char>& vec)
+char* deserialize(std::shared_ptr<RequestData>& req, char* data)
 {
-    std::stringstream ss;
-    for (int i = 0; i < n; ++i) {
-        const auto& r = req[i];
-        if (r != nullptr) {
-            serialize(ss, *r);
-        }
+    if (req == nullptr) {
+        req = std::make_shared<RequestData>();
     }
-    vec = streambuf_to_vector(ss.rdbuf());
-}
 
-void deserialize(std::istream& is, RequestData& req)
-{
-    auto process = [](std::istream& is, std::vector<std::shared_ptr<Request>>& vec) {
+    auto process = [](std::vector<std::shared_ptr<Request>>& vec, char* data) {
         int size;
-        deserialize(is, size);
+        data = deserialize(size, data);
         vec.resize(size);
         for (auto& r : vec) {
-            r = std::make_shared<Request>();
-            deserialize(is, *r);
+            r    = std::make_shared<Request>();
+            data = deserialize(*r, data);
         }
+        return data;
     };
-    process(is, req.infer);
-    process(is, req.kill);
-    deserialize(is, req.cancel);
-    deserialize(is, req.abort);
-}
-
-template<>
-void deserialize(std::shared_ptr<RequestData>* req, int n, const std::vector<char>& vec)
-{
-    std::stringstream ss;
-    ss.write(vec.data(), vec.size());
-    for (int i = 0; i < n; ++i) {
-        auto& r = req[i];
-        if (r == nullptr) {
-            r = std::make_shared<RequestData>();
-        }
-        deserialize(ss, *r);
-    }
+    data = process(req->infer, data);
+    data = process(req->kill, data);
+    data = deserialize(req->cancel, data);
+    data = deserialize(req->abort, data);
+    return data;
 }
 
 }  // namespace comm
@@ -1448,7 +1428,7 @@ void LlamaBatch::InternalThreadEntry()
                     if (!comm_.h_comm->is_same_process()) {
                         bool empty_pop = req->infer.size() == 0 && req->kill.size() == 0 && req->abort == false;
                         wait           = is_empty && empty_pop;
-                        wait           = AllReduce(comm_.h_comm, wait, comm::RedOp::kSum) == comm_.h_comm->n_ranks();
+                        wait = AllReduce(comm_.h_dp_group, wait, comm::RedOp::kSum) == comm_.h_comm->n_ranks();
                     }
                 } while (wait);
             }

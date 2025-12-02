@@ -14,79 +14,116 @@
 
 namespace turbomind::comm {
 
-std::vector<char> streambuf_to_vector(std::streambuf* sb);
+template<typename T>
+using TrivialType = std::enable_if_t<std::is_trivially_copyable_v<T>, char*>;
 
 template<typename T>
-inline void serialize(const T*, int n, std::vector<char>&)
+using NonTrivialType = std::enable_if_t<!std::is_trivially_copyable_v<T>, char*>;
+
+template<typename T>
+inline NonTrivialType<T> serialize(char* data, size_t& size, const T& v)
 {
     throw std::invalid_argument("not implemented");
+    return {};
 }
 
 template<typename T>
-inline void deserialize(T*, int n, const std::vector<char>&)
+inline NonTrivialType<T> deserialize(T& v, char* data)
 {
     throw std::invalid_argument("not implemented");
+    return {};
 }
 
-template<typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
-inline void serialize(std::ostream& os, const T& v)
+template<typename T>
+inline char* serialize(char* data, size_t& size, const T* v, int n)
 {
-    os.write((char*)&v, sizeof(v));
+    for (int i = 0; i < n; ++i) {
+        data = serialize(data, size, v[i]);
+    }
+    return data;
 }
 
-template<typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
-inline void deserialize(std::istream& is, T& v)
+template<typename T>
+inline char* deserialize(T* v, int n, char* data)
 {
-    is.read((char*)&v, sizeof(v));
+    for (int i = 0; i < n; ++i) {
+        data = deserialize(v[i], data);
+    }
+    return data;
 }
 
-void serialize(std::ostream& os, const std::string& s);
-
-void deserialize(std::istream& is, std::string& s);
-
-template<typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
-inline void serialize(std::ostream& os, const std::vector<T>& vec)
+template<typename T>
+inline TrivialType<T> serialize(char* data, size_t& size, const T& v)
 {
-    int size = vec.size();
-    os.write((char*)&size, sizeof(int));
-    os.write((char*)vec.data(), sizeof(T) * size);
+    int n = sizeof(v);
+    if (data) {
+        std::memcpy(data, (char*)&v, n);
+    }
+    size += n;
+    return data ? data + n : data;
 }
 
-template<typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
-inline void deserialize(std::istream& is, std::vector<T>& vec)
+template<typename T>
+inline TrivialType<T> deserialize(T& v, char* data)
 {
-    int size;
-    is.read((char*)&size, sizeof(int));
-    vec.resize(size);
-    is.read((char*)vec.data(), sizeof(T) * size);
+    int n = sizeof(v);
+    std::memcpy((char*)&v, data, n);
+    return data + n;
 }
 
-void serialize(std::ostream& os, const GenerationConfig& gen);
+template<typename T>
+inline TrivialType<T> serialize(char* data, size_t& size, const std::vector<T>& vec)
+{
+    data  = serialize(data, size, (int)vec.size());
+    int n = sizeof(T) * vec.size();
+    if (data) {
+        std::memcpy(data, (char*)vec.data(), n);
+    }
+    size += n;
+    return data ? data + n : data;
+}
 
-void deserialize(std::istream& is, GenerationConfig& gen);
+template<typename T>
+inline TrivialType<T> deserialize(std::vector<T>& vec, char* data)
+{
+    int vsz;
+    data = deserialize(vsz, data);
+    vec.resize(vsz);
+    int n = sizeof(T) * vec.size();
+    std::memcpy((char*)vec.data(), data, n);
+    return data + n;
+}
 
-void serialize(std::ostream& os, const SessionParam& sess);
+char* serialize(char* data, size_t& size, const std::string& s);
 
-void deserialize(std::istream& is, SessionParam& sess);
+char* deserialize(std::string& s, char* data);
 
-void serialize(std::ostream& os, const Layout& layout);
+char* serialize(char* data, size_t& size, const GenerationConfig& gen);
 
-void deserialize(std::istream& is, Layout& layout);
+char* deserialize(GenerationConfig& gen, char* data);
 
-void serialize(std::ostream& os, const Buffer& buffer);
+char* serialize(char* data, size_t& size, const SessionParam& sess);
 
-void deserialize(std::istream& is, Buffer& buffer);
+char* deserialize(SessionParam& sess, char* data);
 
-void serialize(std::ostream& os, const Tensor& tensor);
+char* serialize(char* data, size_t& size, const Layout& layout);
 
-void deserialize(std::istream& is, Tensor& tensor);
+char* deserialize(Layout& layout, char* data);
 
-void serialize(std::ostream& os, const TensorMap& map);
+char* serialize(char* data, size_t& size, const Buffer& buffer);
 
-void deserialize(std::istream& is, TensorMap& map);
+char* deserialize(Buffer& buffer, char* data);
 
-void serialize(std::ostream& os, const Request& req);
+char* serialize(char* data, size_t& size, const Tensor& tensor);
 
-void deserialize(std::istream& is, Request& req);
+char* deserialize(Tensor& tensor, char* data);
+
+char* serialize(char* data, size_t& size, const TensorMap& map);
+
+char* deserialize(TensorMap& map, char* data);
+
+char* serialize(char* data, size_t& size, const Request& req);
+
+char* deserialize(Request& req, char* data);
 
 }  // namespace turbomind::comm
