@@ -191,7 +191,7 @@ class RequestManager:
         else:
             return self._loop_task.get_loop()
 
-    def start_loop(self, loop: asyncio.Task):
+    def set_main_loop(self, loop: asyncio.Task):
         """Start main loop."""
         self._loop_coro = loop
 

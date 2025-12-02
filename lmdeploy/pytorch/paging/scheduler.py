@@ -2,6 +2,7 @@
 # modify from: https://github.com/vllm-project/vllm
 
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Dict, List
 
@@ -317,24 +318,42 @@ class Scheduler:
         """Get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
 
-    def active_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.READY):
+    def activate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.READY):
         """Lock running sequence."""
         for seq in running:
             if seq.status == filter_status:
                 seq.state.activate()
 
-    def deactive_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.RUNNING):
+    def deactivate_seqs(self, running: SeqList, filter_status: MessageStatus = MessageStatus.RUNNING):
         for seq in running:
             if seq.status == filter_status:
                 seq.state.deactivate()
 
+    @contextmanager
+    def seqs_activation(self, running: SeqList):
+        """Context manager to activate and deactivate sequences."""
+        self.activate_seqs(running, MessageStatus.READY)
+        try:
+            yield running
+        finally:
+            self.deactivate_seqs(running, MessageStatus.RUNNING)
+
     def activate_migration_seqs(self, running: SeqList):
         """Lock running sequence."""
-        return self.active_seqs(running, filter_status=MessageStatus.MIGRATION_READY)
+        return self.activate_seqs(running, filter_status=MessageStatus.MIGRATION_READY)
 
     def deactivate_migration_seqs(self, running: SeqList):
         """Unlock running migration."""
-        return self.deactive_seqs(running, filter_status=MessageStatus.MIGRATION_RUNNING)
+        return self.deactivate_seqs(running, filter_status=MessageStatus.MIGRATION_RUNNING)
+
+    @contextmanager
+    def seqs_migration_activation(self, running: SeqList):
+        """Context manager to activate and deactivate sequences."""
+        self.activate_migration_seqs(running)
+        try:
+            yield running
+        finally:
+            self.deactivate_migration_seqs(running)
 
     def collect_migration_done(self):
         for seq in self.migration_done:
@@ -343,7 +362,7 @@ class Scheduler:
     @property
     def schedule_metrics(self):
         return ScheduleMetrics(
-            active_seqs=self.num_running(),
+            activate_seqs=self.num_running(),
             waiting_seqs=self.num_waiting() + self.num_ready(),
             total_blocks=self.block_manager.num_gpu_blocks,
             free_blocks=self.block_manager.get_num_free_gpu_blocks(),
