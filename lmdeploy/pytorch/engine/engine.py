@@ -1257,8 +1257,14 @@ class Engine(EngineBase):
         self.executor.update_params(request)
 
     def sleep(self, level: int = 1):
-        """Sleep."""
+        """Sleep.
+
+        Args:
+            level (int): 1 to cpu, 2 to meta.
+        """
         self.executor.sleep(level)
+        if level == 2:
+            self.scheduler.block_trie.reset()
 
     def wakeup(self, tags: Optional[List[str]] = None):
         """Wakeup."""

@@ -251,3 +251,23 @@ class BlockTrie:
         self.allocator.free(np.array(evicted_blocks))
 
         return len(evicted_blocks)
+
+    def reset(self):
+        """Reset block trie."""
+        if not self.enable:
+            return
+
+        self.stats.reset()
+        nodes = list(self._roots.values())
+        self._roots = dict()
+        self.leaves = set()
+
+        blocks = []
+        while len(nodes):
+            node = nodes.pop(0)
+            if node.block >= 0:
+                blocks.append(node.block)
+            nodes += list(node.children.values())
+
+        if len(blocks):
+            self.allocator.free(np.asanyarray(blocks))

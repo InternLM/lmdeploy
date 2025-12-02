@@ -185,3 +185,37 @@ class TestBlockTire:
         new_leaf = next(iter(block_trie.leaves))
         assert leaf != new_leaf
         assert block_mgr.get_num_free_gpu_blocks() == 5
+
+    def test_reset(self, block_trie, block_mgr, seq_manager, num_gpu_blocks):
+        allocator = block_trie.allocator
+        sess = SchedulerSession(0, seq_manager)
+        block_size = sess.seq_meta.block_size
+
+        # initialize cache
+        token_ids = ([1] * block_size + [2] * block_size)
+        token_ids += [3] * (block_size // 2)
+        seq = sess.add_sequence(token_ids)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        token_ids = ([1] * block_size + [3] * block_size)
+        seq1 = sess.add_sequence(token_ids)
+        block_trie.match(seq1)
+        block_mgr.allocate(seq1)
+        block_trie.allocate(seq1)
+
+        ref_cnt = allocator.get_ref_count(seq.logical_blocks.get_real_blocks())
+        assert np.array_equal(ref_cnt, [3, 2, 1])
+        ref_cnt = allocator.get_ref_count(seq1.logical_blocks.get_real_blocks())
+        assert np.array_equal(ref_cnt, [3, 2])
+        block_trie.reset()
+        assert len(block_trie.leaves) == 0
+        ref_cnt = allocator.get_ref_count(seq.logical_blocks.get_real_blocks())
+        assert np.array_equal(ref_cnt, [2, 1, 1])
+        ref_cnt = allocator.get_ref_count(seq1.logical_blocks.get_real_blocks())
+        assert np.array_equal(ref_cnt, [2, 1])
+        block_mgr.free(seq)
+        ref_cnt = allocator.get_ref_count(seq1.logical_blocks.get_real_blocks())
+        assert np.array_equal(ref_cnt, [1, 1])
+        block_mgr.free(seq1)
+        assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
