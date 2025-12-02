@@ -67,8 +67,8 @@ if [ "${GPU_ARCH}" == "hopper" ] && [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; th
 
     # FA3
     if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
-        FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/${CUDA_VERSION_SHORT}_torch280"
-        pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
+        FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/cu128_torch280"
+        pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} --extra-index-url https://download.pytorch.org/whl/cu128
     fi
 
     # nvshmem and dlblas
