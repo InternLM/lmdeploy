@@ -49,12 +49,6 @@ class AscendGraphRunner(GraphRunner):
                                                                backend='atbgraph')
             else:
                 self.model = torch.compile(self.model, fullgraph=True, dynamic=True, backend='atbgraph')
-            if SocVersion.is_Ascend310P() and hasattr(self.model, 'get_logits'):
-                # Compile get_logits for Ascend310P to use ATB linear since we would convert weight to nz format
-                self.model.get_logits = torch.compile(self.model.get_logits,
-                                                      fullgraph=True,
-                                                      dynamic=True,
-                                                      backend='atbgraph')
 
     def check_enable_graph(self):
         """Check enable graph."""

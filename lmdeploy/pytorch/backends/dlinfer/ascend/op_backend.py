@@ -266,9 +266,6 @@ class AscendOpsBackend(DlinferOpsBackend):
         """Initialize Ascend backend."""
         try:
             from torch_npu.contrib import transfer_to_npu  # noqa: F401
-            if SocVersion.is_Ascend310P():
-                # NOTE: Ascend310P has a bug with InternVL vision embedding using interpolate.
-                torch.npu.set_compile_mode(jit_compile=False)
         except ImportError:
             logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. '
                            'Ascend initialization skipped.')
