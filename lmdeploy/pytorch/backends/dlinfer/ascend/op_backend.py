@@ -189,21 +189,21 @@ class AscendOpsBackend(DlinferOpsBackend):
 
                     if not is_unpaged_prefill:
                         single_attention_mask = torch.triu(
-                                torch.ones(q_seq_len,
-                                           step_context.block_offsets.shape[1] * block_size,
-                                           dtype=torch.bool,
-                                           device=step_context.block_offsets.device),
-                                diagonal=kv_seq_len - q_seq_len + 1,
-                            )
+                            torch.ones(q_seq_len,
+                                       step_context.block_offsets.shape[1] * block_size,
+                                       dtype=torch.bool,
+                                       device=step_context.block_offsets.device),
+                            diagonal=kv_seq_len - q_seq_len + 1,
+                        )
                         attention_mask.append(single_attention_mask)
 
                 if is_unpaged_prefill:
-                    attention_mask.append(torch.triu(
-                        torch.ones(max_q_seq_len,
-                                   max_kv_seq_len,
-                                   dtype=step_context.kv_caches[0][0].dtype,
-                                   device=step_context.block_offsets.device),
-                        diagonal=max_kv_seq_len - max_q_seq_len + 1))
+                    attention_mask.append(
+                        torch.triu(torch.ones(max_q_seq_len,
+                                              max_kv_seq_len,
+                                              dtype=step_context.kv_caches[0][0].dtype,
+                                              device=step_context.block_offsets.device),
+                                   diagonal=max_kv_seq_len - max_q_seq_len + 1))
                 else:
                     attention_mask = [torch.cat(attention_mask)]
 
