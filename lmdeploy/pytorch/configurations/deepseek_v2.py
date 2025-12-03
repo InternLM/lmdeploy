@@ -24,7 +24,7 @@ def _check_env_v32(device: str = 'cuda'):
         raise ImportError('Deepseek V3.2 requires <flash_mla>.')
 
     if not hasattr(flash_mla, 'flash_mla_sparse_fwd'):
-        raise RuntimeError('Deepseek V3.2 latest <flash_mla> with <flash_mla_sparse_fwd> support.')
+        raise RuntimeError('Latest flash_mla is required: https://github.com/deepseek-ai/FlashMLA.')
 
 
 class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):

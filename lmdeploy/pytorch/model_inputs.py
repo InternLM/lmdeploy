@@ -266,7 +266,6 @@ class ModelInputs:
                 end = min(max_seq_len, start + split_size)
 
             max_q_seqlen = end - start
-            max_kv_seqlen += max_q_seqlen
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
             max_kv_seqlen += max_q_seqlen
