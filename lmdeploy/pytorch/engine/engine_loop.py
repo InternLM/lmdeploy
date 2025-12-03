@@ -452,11 +452,11 @@ class EngineLoop:
             try:
                 task.result()
             except asyncio.CancelledError:
-                logger.debug(f'Task <{task_name}> cancelled.')
-            except Exception:
+                logger.info(f'Task <{task_name}> cancelled.')
+            except BaseException:
                 logger.exception(f'Task <{task_name}> failed')
             finally:
-                self.stop_event.set()
+                self.stop()
                 self.cancel()
 
         for task in self.tasks:
@@ -476,15 +476,31 @@ class EngineLoop:
 
         self._add_loop_tasks_done_callback()
 
-    async def wait_tasks(self, timeout: Optional[float] = None):
+    async def wait_tasks(self):
         """Wait for all tasks to finish."""
-        if len(self.tasks) == 0:
+        if not self.tasks:
             return
-        if timeout is not None:
-            await asyncio.wait(asyncio.gather(*self.tasks), timeout=timeout)
-        else:
-            await asyncio.gather(*self.tasks)
-        self.stop()
+
+        try:
+            done, pending = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_EXCEPTION)
+
+            # cancel all pending tasks
+            for task in pending:
+                task.cancel()
+
+            for task in done:
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    logger.debug('Task cancelled.')
+        except asyncio.CancelledError:
+            logger.info('Engine loop wait tasks cancelled.')
+            raise
+        except BaseException:
+            logger.exception('Engine loop wait tasks failed.')
+        finally:
+            self.stop()
+            self.cancel()
 
     def stop(self):
         """Stop all loops."""
@@ -493,7 +509,7 @@ class EngineLoop:
     def cancel(self):
         """Cancel all loops."""
         for task in self.tasks:
-            if not (task.done() or task.cancelled()):
+            if not task.done():
                 task.cancel()
 
 

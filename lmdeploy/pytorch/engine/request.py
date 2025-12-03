@@ -179,7 +179,7 @@ class RequestManager:
         event_loop = asyncio.get_event_loop()
         assert self._loop_coro is not None, ('Please set loop task with manager.start_loop')
         loop_unshielded = event_loop.create_task(self._loop_coro(), name='EngineMainLoop')
-        self._loop_task = asyncio.shield(loop_unshielded)
+        self._loop_task = loop_unshielded
         self.requests = asyncio.Queue()
         return self._loop_task
 

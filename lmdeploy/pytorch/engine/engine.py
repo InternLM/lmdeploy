@@ -460,8 +460,9 @@ class Engine(EngineBase):
             engine_loop.create_tasks(event_loop)
             await engine_loop.wait_tasks()
         except asyncio.CancelledError:
-            logger.debug('Engine main loop cancelled.')
-        except Exception:
+            logger.info('Engine main loop cancelled.')
+            raise
+        except BaseException:
             logger.exception('Engine main loop failed.')
         finally:
             self._loop_finally()
