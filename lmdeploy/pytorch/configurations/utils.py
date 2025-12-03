@@ -11,9 +11,13 @@ def flash_mla_available():
     # use flash_mla by default if it is installed
     use_flash_mla = False
     try:
-        # torch_npu device_properties doesn't have 'major' attribute
+        """
+        In some torch_npu versions, device_properties doesn't have 'major' attribute;
+        In other torch_npu versions, the value of major is None.
+        """
         device_properties = torch.cuda.get_device_properties(0)
-        if hasattr(device_properties, 'major') and device_properties.major >= 9:
+        major = getattr(device_properties, 'major', None)
+        if isinstance(major, int) and major >= 9:
             import flash_mla  # noqa
             use_flash_mla = True
     except ImportError:
