@@ -51,7 +51,7 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
             'tp_num':
             2,
             'extra':
-            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 46000 '
+            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 76000 '
             '--cache-max-entry-count 0.7 '.format(port),
             'cuda_prefix':
             None

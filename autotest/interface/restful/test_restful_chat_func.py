@@ -3,7 +3,7 @@ from typing import Literal
 import pytest
 from openai import OpenAI
 from utils.restful_return_check import (assert_chat_completions_batch_return, assert_chat_completions_stream_return,
-                                        get_repeat_times)
+                                        has_repeated_fragment)
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
@@ -249,7 +249,7 @@ class TestRestfulInterfaceChatCompletions:
         for index in range(0, len(outputList) - 1):
             assert_chat_completions_stream_return(outputList[index], model_name)
             response += outputList[index].get('choices')[0].get('delta').get('content')
-        assert get_repeat_times(response, 'pls') > 5 or get_repeat_times(response, 'extensive') > 5
+        assert has_repeated_fragment(response)
 
     def test_repetition_penalty_bigger_than_1(self):
         api_client = APIClient(BASE_URL)

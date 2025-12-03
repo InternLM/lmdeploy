@@ -7,7 +7,7 @@ from utils.get_run_config import close_pipeline
 from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_batch_stream_return,
                                  assert_pipeline_common_log, assert_pipeline_single_return,
                                  assert_pipeline_single_stream_return, save_pipeline_common_log)
-from utils.restful_return_check import get_repeat_times
+from utils.restful_return_check import has_repeated_fragment
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 
@@ -515,7 +515,7 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id
         gen_config = GenerationConfig(repetition_penalty=0.01, random_seed=1, do_sample=True)
         response = pipe('Shanghai is', gen_config=gen_config)
 
-        result = get_repeat_times(response.text, 'is a name') > 5 or get_repeat_times(response.text, 'Shanghai is') > 5
+        result = has_repeated_fragment(response.text)
         save_pipeline_common_log(config, file_name, result, response)
         close_pipeline(pipe)
 

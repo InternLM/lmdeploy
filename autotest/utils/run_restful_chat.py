@@ -5,7 +5,6 @@ import subprocess
 from time import sleep, time
 
 import allure
-import psutil
 import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
@@ -97,7 +96,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
                                 shell=True,
                                 text=True,
                                 encoding='utf-8',
-                                errors='replace')
+                                errors='replace',
+                                start_new_session=True)
     pid = startRes.pid
 
     http_url = BASE_HTTP_URL + ':' + str(port)
@@ -131,10 +131,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
 def stop_restful_api(pid, startRes, param):
     if pid > 0:
-        parent = psutil.Process(pid)
-        for child in parent.children(recursive=True):
-            child.terminate()
-        parent.terminate()
+        startRes.terminate()
+        startRes.join(10)
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
         if modelscope:

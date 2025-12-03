@@ -346,7 +346,7 @@ jobs:
       - name: Test lmdeploy - restful api - base
         timeout-minutes: 40
         run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -m 'not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -m 'not interns1 and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.backend}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if: always()

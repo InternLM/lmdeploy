@@ -315,7 +315,14 @@ def run_testcase(cmd, benchmark_log):
     with open(benchmark_log, write_type) as f:
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
-        with Popen([cmd], stdin=PIPE, stdout=f, stderr=PIPE, shell=True, text=True, encoding='utf-8') as process:
+        with Popen([cmd],
+                   stdin=PIPE,
+                   stdout=f,
+                   stderr=PIPE,
+                   shell=True,
+                   text=True,
+                   encoding='utf-8',
+                   start_new_session=True) as process:
             try:
                 stdout, stderr = process.communicate(None)
             except Exception:
