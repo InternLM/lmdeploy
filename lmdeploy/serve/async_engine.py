@@ -889,7 +889,7 @@ class AsyncEngine(LogitsMixin):
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
                 hit_stop_token = 0
-                req_state = RequestStats(prompt_tokens=input_len)  # per-requst stats
+                req_state = RequestStats(prompt_tokens=input_len)  # per-request stats
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
