@@ -15,11 +15,11 @@ class SchedulerStats:
     """Stats associated with the scheduler.
 
     Attributes:
-        num_total_reqs: the number of all requests received since server start.
-        num_finished_reqs: the number of successfully completed requests since server start.
-        num_running_reqs: currently executing requests.
-        num_waiting_reqs: requests queued waiting for execution.
-        gpu_cache_usage: fraction of GPU KV blocks utilized (0.0 to 1.0).
+        num_total_reqs: The number of all requests received since server start.
+        num_finished_reqs: The number of successfully completed requests since server start.
+        num_running_reqs: Currently executing requests.
+        num_waiting_reqs: Requests queued waiting for execution.
+        gpu_cache_usage: Fraction of GPU KV blocks utilized (0.0 to 1.0).
     """
 
     num_total_reqs: int = 0
@@ -53,21 +53,30 @@ class RequestStats:
             arrival_time (float, optional): The timestamp when the request arrives.
                 If not provided, the current time will be used. Defaults to None.
             prompt_tokens (int, optional): The number of tokens in the prompt. Defaults to 0.
+
+        Attributes:
+            generation_tokens (int): The number of tokens generated during the request inference.
+                It will be updated by IterationStats.update_from_output.
+            queued_time (float): Time when the request is put to the inference engine's queue.
+                It will be updated according the EngineEvent.
+            scheduled_time (float): Time when the request is scheduled to run.
+                It will be updated according the EngineEvent.
+            first_token_time (float): Time when the first token is generated.
+                It will be updated by IterationStats.update_from_output.
+            lastest_token_time (float): Time when the latest token is generated.
+                It will be updated by IterationStats.update_from_output.
+            finish_time (float): Time when a request finishes generation.
+                It will be updated by IterationStats.update_from_output.
+            finish_reason (ResponseType): The reason why the request finished.
         """
         self.arrival_time = time.time() if arrival_time is None else arrival_time
         self.prompt_tokens = prompt_tokens
 
-        # Number of tokens generated during the request inference, updated by IterationStats.update_from_output
         self.generation_tokens: int = 0
-        # Time when the request is put to the inference engine's queue. It will be updated according the EngineEvent
         self.queued_time: float = 0.0
-        # Time when the request is scheduled to run. It will be updated according the EngineEvent
         self.scheduled_time: float = 0.0
-        # Time when the first token is generated. It will be updated by IterationStats.update_from_output
         self.first_token_time: float = 0.0
-        # Time when the latest token is generated. It will be updated by IterationStats.update_from_output
         self.lastest_token_time: float = 0.0
-        # Time when a request finishes generation. It will be updated by IterationStats.update_from_output
         self.finish_time: float = 0.0
         self.finish_reason: ResponseType = None
 
@@ -135,17 +144,21 @@ class IterationStats:
     """Stats associated with one token generation iteration of a request."""
 
     def __init__(self):
-        # Record the timestamp when this iteration finished
+        """Initialize the stats of one iteration.
+
+        Attributes:
+            iteration_timestamp (float): The timestamp when this iteration finishes.
+            new_generation_tokens (int): The number of newly generated tokens in this iteration.
+            prompt_tokens (int): The number of prompt tokens processed in this iteration.
+            ttft (float | None): Time to First Token (TTFT).
+            tpot (float | None): Time per Output Token (TPOT).
+            itl (float | None): Iter-Token Latency (ITL).
+        """
         self.iteration_timestamp = time.time()
-        # The number of newly generated tokens in this iteration
         self.new_generation_tokens = 0
-        # The number of prompt tokens processed in this iteration
         self.prompt_tokens = 0
-        # Time to First Token (TTFT)
         self.ttft: Optional[float] = None
-        # Time per Output Token (TPOT)
         self.tpot: Optional[float] = None
-        # Iter-Token Latency (ITL)
         self.itl: Optional[float] = None
 
     def __repr__(self):
