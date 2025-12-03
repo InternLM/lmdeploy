@@ -245,7 +245,7 @@ class SpeculativeDecodingStats:
         draft_acceptance_rate = (self.num_accepted_tokens / self.num_draft_tokens *
                                  100 if self.num_draft_tokens > 0 else float('nan'))
 
-        # Conventionally, mean acceptance length includes the bonus token
+        # conventionally, mean acceptance length includes the bonus token
         mean_acceptance_length = 1 + (self.num_accepted_tokens /
                                       self.num_drafts) if self.num_drafts > 0 else float('nan')
 
