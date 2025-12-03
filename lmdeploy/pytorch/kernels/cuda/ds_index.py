@@ -28,7 +28,7 @@ def _fp8_index_kernel(
     stride_ksn: tl.constexpr,
     stride_boff0,
     stride_boff1: tl.constexpr,
-    stride_om: tl.constexpr,
+    stride_om,
     stride_on: tl.constexpr,
     max_q_seqlen,
     BLOCK_H: tl.constexpr,
