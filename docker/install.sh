@@ -25,15 +25,20 @@ popd >/dev/null
 if [[ "${CUDA_VERSION_SHORT}" = "cu118" ]]; then
     apt-get install -y --no-install-recommends cuda-minimal-build-11-8
 elif [[ "${CUDA_VERSION_SHORT}" = "cu124" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-12-4 dkms
+    apt-get install -y --no-install-recommends cuda-minimal-build-12-4 numactl dkms
 elif [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-12-8 dkms
+    apt-get install -y --no-install-recommends cuda-minimal-build-12-8 numactl dkms
 elif [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
-    apt-get install -y --no-install-recommends cuda-minimal-build-13-0 dkms
+    apt-get install -y --no-install-recommends cuda-minimal-build-13-0 numactl dkms
 fi
 
 apt-get clean -y
 rm -rf /var/lib/apt/lists/*
+
+# install GDRCopy debs
+if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
+    dpkg -i /wheels/*.deb
+fi
 
 # install python packages
 export PATH=/opt/py3/bin:$PATH
@@ -51,33 +56,18 @@ else
 fi
 
 pip install -U pip wheel setuptools
+
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    pip install nvidia-nvshmem-cu13
+elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
+    pip install nvidia-nvshmem-cu12
+fi
+
 pip install torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
 pip install /wheels/*.whl
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]] && [[ "${PYTHON_VERSION}" != "3.9" ]]; then
-    pip install cuda-python
-fi
-
-# install hopper specific packages
-if [ "${GPU_ARCH}" == "hopper" ] && [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
-    # GDRCopy debs
-    if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
-        dpkg -i /wheels/*.deb
-    fi
-
-    # FA3
-    if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
-        FA3_WHEELS_URL="https://windreamer.github.io/flash-attention3-wheels/cu128_torch280"
-        pip install flash_attn_3 --find-links ${FA3_WHEELS_URL} --extra-index-url https://download.pytorch.org/whl/cu128
-    fi
-
-    # nvshmem and dlblas
-    if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
-        pip install nvidia-nvshmem-cu13
-    else
-        pip install nvidia-nvshmem-cu12
-    fi
-    pip install dlblas==0.0.6
+    pip install cuda-python dlblas==0.0.6 dlslime==0.0.1.post10
 fi
 
 # install pre-built flash attention wheel
