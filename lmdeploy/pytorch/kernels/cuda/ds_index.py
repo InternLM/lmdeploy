@@ -141,7 +141,6 @@ def fp8_index(q: torch.Tensor,
     # we better have a tensor to indicate batch id of each q
     M = max_q_seqlen * batch_size
     NUM_SPLIT = max(1, triton.cdiv(cta_per_device, M))
-    NUM_SPLIT = 1
     grid = (M, NUM_SPLIT)
 
     _fp8_index_kernel[grid](q,
