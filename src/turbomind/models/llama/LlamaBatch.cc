@@ -1428,7 +1428,7 @@ void LlamaBatch::InternalThreadEntry()
                     if (!comm_.h_comm->is_same_process()) {
                         bool empty_pop = req->infer.size() == 0 && req->kill.size() == 0 && req->abort == false;
                         wait           = is_empty && empty_pop;
-                        wait = AllReduce(comm_.h_dp_group, wait, comm::RedOp::kSum) == comm_.h_comm->n_ranks();
+                        wait = AllReduce(comm_.h_dp_group, wait, comm::RedOp::kSum) == comm_.h_dp_group->n_ranks();
                     }
                 } while (wait);
             }
