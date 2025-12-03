@@ -42,6 +42,12 @@ public:
 
     ~LlamaTritonModel();
 
+    LlamaTritonModel(const LlamaTritonModel&) = delete;
+    LlamaTritonModel& operator=(const LlamaTritonModel&) = delete;
+
+    LlamaTritonModel(LlamaTritonModel&&) = default;
+    LlamaTritonModel& operator=(LlamaTritonModel&&) = default;
+
     std::unique_ptr<ModelRequest> createModelInstance(int deviceId);
 
     void createSharedWeights(int deviceId, int rank);

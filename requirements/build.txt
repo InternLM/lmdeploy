@@ -1,3 +1,3 @@
 cmake_build_extension
-pybind11<=2.13.1
+nanobind
 setuptools

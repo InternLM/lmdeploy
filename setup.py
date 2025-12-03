@@ -133,32 +133,41 @@ def parse_requirements(fname='requirements.txt', with_version=True):
 if get_target_device() == 'cuda' and not os.getenv('DISABLE_TURBOMIND', '').lower() in ('yes', 'true', 'on', 't', '1'):
     import cmake_build_extension
 
+    cmake_configure_options = [
+        f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
+        f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
+        '-DCALL_FROM_SETUP_PY:BOOL=ON',
+        '-DBUILD_SHARED_LIBS:BOOL=OFF',
+        # Select the bindings implementation
+        '-DBUILD_PY_FFI=ON',
+        '-DBUILD_MULTI_GPU=' + ('OFF' if os.name == 'nt' else 'ON'),
+        '-DUSE_NVTX=' + ('OFF' if os.name == 'nt' else 'ON'),
+    ]
+
+    options = {}
+    if sys.version_info >= (3, 12):
+        options['bdist_wheel'] = {'py_limited_api': 'cp312'}
+        cmake_configure_options.append('-DUSE_STABLE_ABI=ON')
+
     ext_modules = [
         cmake_build_extension.CMakeExtension(
             name='_turbomind',
             install_prefix='lmdeploy/lib',
-            cmake_depends_on=['pybind11'],
+            cmake_depends_on=['nanobind'],
             source_dir=str(Path(__file__).parent.absolute()),
             cmake_generator=None if os.name == 'nt' else 'Ninja',
             cmake_build_type=os.getenv('CMAKE_BUILD_TYPE', 'RelWithDebInfo'),
-            cmake_configure_options=[
-                f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
-                f'-DPYTHON_EXECUTABLE={Path(sys.executable)}',
-                '-DCALL_FROM_SETUP_PY:BOOL=ON',
-                '-DBUILD_SHARED_LIBS:BOOL=OFF',
-                # Select the bindings implementation
-                '-DBUILD_PY_FFI=ON',
-                '-DBUILD_MULTI_GPU=' + ('OFF' if os.name == 'nt' else 'ON'),
-                '-DUSE_NVTX=' + ('OFF' if os.name == 'nt' else 'ON'),
-            ],
+            cmake_configure_options=cmake_configure_options,
         ),
     ]
+
     extra_deps = get_turbomind_deps()
     cmdclass = dict(build_ext=cmake_build_extension.BuildExtension, )
 else:
     ext_modules = []
     cmdclass = {}
     extra_deps = []
+    options = {}
 
 if __name__ == '__main__':
     setup(
@@ -192,4 +201,5 @@ if __name__ == '__main__':
         entry_points={'console_scripts': ['lmdeploy = lmdeploy.cli:run']},
         ext_modules=ext_modules,
         cmdclass=cmdclass,
+        options=options,
     )
