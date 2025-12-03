@@ -3,7 +3,7 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Coroutine, Dict, List
 
 from lmdeploy.messages import RequestMetrics, ResponseType
 from lmdeploy.utils import get_logger
@@ -191,7 +191,7 @@ class RequestManager:
         else:
             return self._loop_task.get_loop()
 
-    def set_main_loop(self, loop: asyncio.Task):
+    def set_main_loop_func(self, loop: Callable[[Coroutine], asyncio.Task]):
         """Start main loop."""
         self._loop_coro = loop
 

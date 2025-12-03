@@ -63,6 +63,7 @@ class Scheduler:
         self.eviction_helper = build_eviction_helper(self, self.scheduler_config.eviction_type)
 
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
+        self.seq_meta = seq_meta
         self.seq_manager = SequenceManager(seq_meta)
 
     @staticmethod
@@ -302,6 +303,8 @@ class Scheduler:
         Args:
             session_id (int): The session id.
         """
+        if self.seq_meta.sampling_strategy is not None:
+            self.seq_meta.sampling_strategy.on_session_end(session_id)
         session = self.sessions[session_id]
         seqs = list(session.sequences.values())
         for seq in seqs:

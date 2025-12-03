@@ -17,6 +17,7 @@ from .block import LogicalTokenBlocks
 if TYPE_CHECKING:
     from lmdeploy.pytorch.paging.scheduler import Scheduler
     from lmdeploy.pytorch.paging.seq_states.states import StateBase
+    from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
 logger = get_logger('lmdeploy')
@@ -173,6 +174,7 @@ class SequenceMeta:
     """Meta data shared by all sequence."""
     block_size: int
     strategy: 'SequenceStrategy' = None
+    sampling_strategy: 'SamplingStrategy' = None
 
 
 class SequenceManager:

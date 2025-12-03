@@ -54,10 +54,10 @@ class InferOutput:
     routed_experts: torch.Tensor = None
 
 
-def _build_seq_meta(cache_config: CacheConfig, strategy: Any):
+def _build_seq_meta(cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
     from lmdeploy.pytorch.messages import SequenceMeta
 
-    seq_meta = SequenceMeta(cache_config.block_size, strategy=strategy)
+    seq_meta = SequenceMeta(cache_config.block_size, strategy=seq_strategy, sampling_strategy=sampling_strategy)
     return seq_meta
 
 
@@ -156,7 +156,9 @@ class Engine(EngineBase):
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.seq_meta = _build_seq_meta(cache_config, strategy=self.seq_strategy)
+        self.seq_meta = _build_seq_meta(cache_config,
+                                        seq_strategy=self.seq_strategy,
+                                        sampling_strategy=self.sampling_strategy)
         self.scheduler = Scheduler(scheduler_config, cache_config, seq_meta=self.seq_meta)
 
         # engine args
@@ -174,7 +176,7 @@ class Engine(EngineBase):
         self.req_manager = self._bind_request_manager()
 
         # create main thread
-        self.req_manager.set_main_loop(self.async_loop)
+        self.req_manager.set_main_loop_func(self.async_loop)
         self._loop_main = None
 
         # for PD Disaggregation
@@ -448,11 +450,12 @@ class Engine(EngineBase):
             self._loop_main = asyncio.current_task()
             event_loop = asyncio.get_event_loop()
 
-            # migration task
+            # create engine loop
             engine_loop = build_engine_loop(self)
             self.migration_event = engine_loop.migration_event
             forward_event = engine_loop.forward_event
 
+            # start executor
             logger.info('Starting executor.')
             self.executor.start(forward_event)
 
@@ -499,7 +502,6 @@ class Engine(EngineBase):
     def end_session(self, session_id: int):
         """End session."""
         if session_id in self.scheduler.sessions:
-            self.sampling_strategy.on_session_end(session_id)
             self.scheduler.end_session(session_id)
             return True
         return False

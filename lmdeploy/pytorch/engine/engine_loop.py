@@ -25,34 +25,28 @@ if TYPE_CHECKING:
 
     from .engine import Engine, SeqList
     from .executor import ExecutorBase
-    from .input_maker import InputsMakerAsync
+    from .inputs_maker import InputsMakerAsync
     from .request import RequestManager
 
 logger = get_logger('lmdeploy')
 _EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
 
 
-class CounterEvent:
+class CounterEvent(asyncio.Event):
 
     def __init__(self):
+        super().__init__()
         self._counter = 0
-        self._event = asyncio.Event()
-
-    async def wait(self):
-        await self._event.wait()
-
-    def is_set(self):
-        return self._event.is_set()
 
     def set(self):
         if self._counter > 0:
             self._counter -= 1
         if self._counter == 0:
-            self._event.set()
+            super().set()
 
     def clear(self):
-        if self._counter == 0 and self._event.is_set():
-            self._event.clear()
+        if self._counter == 0 and super().is_set():
+            super().clear()
         self._counter += 1
 
 
@@ -511,11 +505,12 @@ class EngineLoop:
         for task in self.tasks:
             if not task.done():
                 task.cancel()
+        self.tasks.clear()
 
 
 def build_engine_loop(engine: 'Engine'):
     """Build engine loop."""
-    from .input_maker import build_inputs_maker
+    from .inputs_maker import build_inputs_maker
 
     config = EngineLoopConfig.from_engine(engine)
     inputs_maker = build_inputs_maker(engine)

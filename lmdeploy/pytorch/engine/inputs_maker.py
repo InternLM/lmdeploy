@@ -38,7 +38,7 @@ def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
 
 
 @dataclass
-class InputMakerConfig:
+class InputsMakerConfig:
     """Input maker config.
 
     This config is added for Dependency Injection
@@ -53,7 +53,7 @@ class InputMakerConfig:
     @staticmethod
     def from_engine(engine: 'Engine'):
         cache_config = engine.cache_config
-        return InputMakerConfig(
+        return InputsMakerConfig(
             spec_decoding=engine.specdecode_config is not None,
             max_batches=cache_config.max_batches,
             max_prefill_token_num=cache_config.max_prefill_token_num,
@@ -73,7 +73,7 @@ class InputsMakerAsync:
         engine_strategy: 'EngineStrategy',
         sampling_strategy: 'SamplingStrategy',
         model_agent_strategy: 'ModelAgentStrategy',
-        config: InputMakerConfig,
+        config: InputsMakerConfig,
     ):
         self.executor = executor
         self.scheduler = scheduler
@@ -92,7 +92,7 @@ class InputsMakerAsync:
         self.next_is_prefill = True
         self.forward_inputs = None
 
-    def _init_do_prefill(self, config: InputMakerConfig):
+    def _init_do_prefill(self, config: InputsMakerConfig):
         if config.role == EngineRole.Prefill:
             self.do_prefill = self.do_prefill_pnode
         elif config.dp == 1:
@@ -403,7 +403,7 @@ class InputsMakerAsync:
 
 def build_inputs_maker(engine: 'Engine'):
     """Build inputs makers."""
-    config = InputMakerConfig.from_engine(engine)
+    config = InputsMakerConfig.from_engine(engine)
     return InputsMakerAsync(
         executor=engine.executor,
         scheduler=engine.scheduler,
