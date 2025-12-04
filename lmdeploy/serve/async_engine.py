@@ -842,7 +842,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.max_new_tokens = max(0, self.session_len - self.id2step[session_id] - len(input_ids))
             if gen_config.max_new_tokens == 0:
                 logger.error(f'run out of tokens. session={session_id}.')
-                yield GenOut(response='run out of tokens',
+                yield GenOut(response='',
                              history_token_len=self.id2step[session_id],
                              input_token_len=len(input_ids),
                              generate_token_len=0,
