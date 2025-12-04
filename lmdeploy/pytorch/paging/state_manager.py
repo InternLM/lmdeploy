@@ -62,12 +62,7 @@ class StateManager:
 
 
 def build_state_manager(cache_config: CacheConfig) -> StateManager:
-    """Build state manager.
-
-    Args:
-        num_states (int): number of states.
-        num_reserved (int): number of reserved states.
-    """
+    """Build state manager."""
     num_states = cache_config.num_state_caches
     # state is different from block, we always reserve one state for system use
     num_reserved = 1
