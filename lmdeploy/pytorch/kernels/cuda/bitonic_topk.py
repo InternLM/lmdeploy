@@ -193,7 +193,7 @@ def bitonic_topk(scores: torch.Tensor,
                  k: int,
                  fill: int = -1,
                  descending: bool = True,
-                 sorted: bool = False):
+                 sorted: bool = True):
     """Bitnoic topk."""
     num_tokens = scores.size(0)
     max_kv_len = scores.size(-1)
