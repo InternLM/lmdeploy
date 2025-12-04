@@ -877,7 +877,7 @@ class Engine(EngineBase):
         self,
         batched_outputs: BatchedOutputs,
         running: SeqList,
-        is_decoding: bool,
+        model_inputs: ModelInputs,
     ):
         """Make infer output."""
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -890,7 +890,7 @@ class Engine(EngineBase):
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
-        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
+        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, model_inputs=model_inputs)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
@@ -918,7 +918,7 @@ class Engine(EngineBase):
                 cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
             # get spec stats info
             spec_info = None
-            if self.specdecode_config is not None and is_decoding and self.engine_config.enable_metrics:
+            if self.specdecode_config is not None and model_inputs.is_decoding and self.engine_config.enable_metrics:
                 num_draft_tokens = self.specdecode_config.num_speculative_tokens
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
@@ -1199,7 +1199,7 @@ class Engine(EngineBase):
 
             forward_event.set()
             num_loops = forward_inputs['loop_count']
-            is_decoding = forward_inputs['inputs'].is_decoding
+            model_inputs = forward_inputs['inputs']
             running = next_running
             next_running = None
             scheduler.lock_running(running)
@@ -1212,7 +1212,7 @@ class Engine(EngineBase):
                 # send output
                 out = await self.executor.get_output_async()
                 if out is not None:
-                    step_outputs = self._make_infer_outputs(out, running=running, is_decoding=is_decoding)
+                    step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs)
                     resp_que.put_nowait(step_outputs)
 
                 # lock forward event
