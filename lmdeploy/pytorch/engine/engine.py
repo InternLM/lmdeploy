@@ -113,17 +113,20 @@ def _build_scheduler_config(engine_config: PytorchEngineConfig):
 
 def _build_cache_config(engine_config: PytorchEngineConfig):
     """Build cache config."""
-    cache_config = CacheConfig(max_batches=engine_config.max_batch_size,
-                               block_size=engine_config.block_size,
-                               num_cpu_blocks=engine_config.num_cpu_blocks,
-                               num_gpu_blocks=engine_config.num_gpu_blocks,
-                               cache_max_entry_count=engine_config.cache_max_entry_count,
-                               max_prefill_token_num=engine_config.max_prefill_token_num,
-                               enable_prefix_caching=engine_config.enable_prefix_caching,
-                               quant_policy=engine_config.quant_policy,
-                               device_type=engine_config.device_type,
-                               migration_backend=engine_config.migration_backend,
-                               role=engine_config.role)
+    cache_config = CacheConfig(
+        max_batches=engine_config.max_batch_size,
+        block_size=engine_config.block_size,
+        num_cpu_blocks=engine_config.num_cpu_blocks,
+        num_gpu_blocks=engine_config.num_gpu_blocks,
+        cache_max_entry_count=engine_config.cache_max_entry_count,
+        max_prefill_token_num=engine_config.max_prefill_token_num,
+        enable_prefix_caching=engine_config.enable_prefix_caching,
+        quant_policy=engine_config.quant_policy,
+        device_type=engine_config.device_type,
+        migration_backend=engine_config.migration_backend,
+        role=engine_config.role,
+        # reserve 1 blocks for dummy input and padding
+        num_reserved_gpu_blocks=1)
     return cache_config
 
 
@@ -542,7 +545,8 @@ class Engine(EngineBase):
     def _get_max_session_len(self):
         """Get max session len."""
         session_len = self.scheduler_config.max_session_len
-        max_tokens = (self.cache_config.num_gpu_blocks * self.cache_config.block_size)
+        num_gpu_blocks = self.cache_config.num_gpu_blocks - self.cache_config.num_reserved_gpu_blocks
+        max_tokens = (num_gpu_blocks * self.cache_config.block_size)
         window_size = self.cache_config.window_size
         if window_size > 0 and window_size <= max_tokens:
             max_tokens = (1 << 63) - 1
