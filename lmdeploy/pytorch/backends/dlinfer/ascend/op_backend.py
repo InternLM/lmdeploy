@@ -2,6 +2,7 @@
 import itertools
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -19,15 +20,25 @@ logger = get_logger('lmdeploy')
 class SocVersion:
     Ascend310P: str = 'Ascend310P'
     Ascend910: str = 'Ascend910'
-    device_name: str = torch.npu.get_device_name()
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def device_name(cls) -> str:
+        try:
+            return torch.npu.get_device_name()
+        except ImportError:
+            logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly.')
+        except Exception as e:
+            logger.warning(f'Error during Ascend get device name: {str(e)}. '
+                           'Please check your Ascend environment configuration.')
 
     @classmethod
     def is_Ascend310P(cls) -> bool:
-        return cls.device_name.startswith(cls.Ascend310P)
+        return cls.device_name().startswith(cls.Ascend310P)
 
     @classmethod
     def is_Ascend910(cls) -> bool:
-        return cls.device_name.startswith(cls.Ascend910)
+        return cls.device_name().startswith(cls.Ascend910)
 
 
 class AscendKVQuantMeta:
@@ -114,7 +125,6 @@ class AscendOpsBackend(DlinferOpsBackend):
     def update_step_context(cls, step_context):
         """Update step context."""
 
-        kv_start_indices, attention_mask = [], []
         block_num, block_size, *_ = step_context.kv_caches[0][0].shape
         is_unpaged_prefill = False
         if not step_context.is_decoding:
