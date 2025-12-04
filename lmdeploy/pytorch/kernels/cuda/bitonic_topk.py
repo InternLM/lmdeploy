@@ -7,59 +7,67 @@ from triton.language.standard import _log2
 
 
 @triton.jit
-def _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):
-    n_outer: tl.constexpr = x.numel >> n_dims
-    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
-    y = tl.reshape(x, shape)
-    # slice left/right with 'stride' 2**(n_dims - i - 1)
-    mask = tl.arange(0, 2)[None, :, None]
-    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape)
-    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape)
-    left = tl.reshape(left, x.shape)
-    right = tl.reshape(right, x.shape)
-
-    # idx
-    y_idx = tl.reshape(ids, shape)
-    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)
-    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)
-    left_idx = tl.reshape(left_idx, x.shape)
-    right_idx = tl.reshape(right_idx, x.shape)
-
-    # actual compare-and-swap
-    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    ileft = left.to(idtype, bitcast=True)
-    iright = right.to(idtype, bitcast=True)
-    ix = x.to(idtype, bitcast=True)
-
-    cond = (left > right) ^ flip
-    cond = cond.to(tl.int1)
-
-    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))
-
-    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))
-
-    return ret.to(x.dtype, bitcast=True), new_ids
+def _indicator(n_dims: core.constexpr, j: core.constexpr):
+    ar = core.arange(0, 2)
+    ar = core.reshape(ar, [1] * (n_dims - j - 1) + [2] + [1] * j)
+    return ar
 
 
 @triton.jit
-def _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):
+def _compare_and_swap(x, ids, flip, i: core.constexpr):
+    # compare-and-swap on the ith *innermost* dimension
+    n_dims: core.constexpr = _log2(x.numel)
+
+    # determines whether we are in the right (rather than left) position along the axis:
+    is_right = _indicator(n_dims, i)
+
+    # flip along middle dimension (the bitwise XORs will be optimised away):
+    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    ix = x.to(idtype, bitcast=True)
+    iy = ix ^ tl.xor_sum(ix, n_dims - 1 - i, True)
+    y = iy.to(x.dtype, bitcast=True)
+
+    # same to ids
+    ids_idtype = core.get_int_dtype(bitwidth=ids.dtype.primitive_bitwidth, signed=True)
+    ids_ix = ids.to(ids_idtype, bitcast=True)
+    ids_iy = ids_ix ^ tl.xor_sum(ids_ix, n_dims - 1 - i, True)
+    ids_y = ids_iy.to(ids.dtype, bitcast=True)
+
+    # conditional swap:
+    mask = (x > y) != (flip ^ is_right)
+    ret_x = core.where(mask, y, x)
+    ret_ids = core.where(mask, ids_y, ids)
+    return ret_x, ret_ids
+
+
+@triton.jit
+def _bitonic_merge_hypercube(x, ids, stage: core.constexpr, order: core.constexpr):
     """order_type 0 == ascending order_type 1 == descending order_type 2 ==
     alternating."""
-    n_outer: tl.constexpr = x.numel >> n_dims
-    tl.static_assert(stage <= n_dims)
     # flip denotes whether to re-arrange sub-sequences of elements in ascending or
     # descending order.
     # if flip = 00000000... then all elements will be re-arranged ascendingly at this stage
     # if flip = 00110011... then all the elements will be re-arranged alternatingly (with
     # a stride of 2) at this stage
     if order == 2:
-        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
-        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)
+        flip = _indicator(_log2(x.numel), stage)
     else:
         flip = order
     # perform `stage` rounds of `compare-and-swap`
-    for i in tl.static_range(stage):
-        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)
+    for i in core.static_range(stage):
+        x, ids = _compare_and_swap(x, ids, flip, stage - 1 - i)
+    return x, ids
+
+
+@triton.jit
+def _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):
+    """order_type 0 == ascending order_type 1 == descending order_type 2 ==
+    alternating."""
+    h = core.reshape(x, [2] * _log2(x.numel))
+    h_ids = core.reshape(ids, [2] * _log2(x.numel))
+    h, h_ids = _bitonic_merge_hypercube(h, h_ids, stage, order)
+    x = core.reshape(h, x.shape)
+    ids = core.reshape(h_ids, ids.shape)
     return x, ids
 
 
