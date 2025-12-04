@@ -29,9 +29,9 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         config.dtype = torch.float16
         return config
 
-    torch_dtype = getattr(config.llm_config, 'dtype', None)
+    torch_dtype = getattr(config.hf_config, 'dtype', None)
     if torch_dtype is None:
-        torch_dtype = getattr(config.llm_config, 'torch_dtype', None)
+        torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
 
     # deal with case when torch_dtype is not string but torch.dtype
     if isinstance(torch_dtype, torch.dtype):

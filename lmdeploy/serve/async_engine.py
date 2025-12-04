@@ -21,7 +21,7 @@ from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, ResponseType, SpeculativeConfig,
                                TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
-from lmdeploy.metrics.stats import IterationStats, RequestState, SpeculativeDecodingStats
+from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
@@ -842,7 +842,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.max_new_tokens = max(0, self.session_len - self.id2step[session_id] - len(input_ids))
             if gen_config.max_new_tokens == 0:
                 logger.error(f'run out of tokens. session={session_id}.')
-                yield GenOut(response='run out of tokens',
+                yield GenOut(response='',
                              history_token_len=self.id2step[session_id],
                              input_token_len=len(input_ids),
                              generate_token_len=0,
@@ -889,7 +889,7 @@ class AsyncEngine(LogitsMixin):
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
                 hit_stop_token = 0
-                req_state = RequestState(prompt_tokens=input_len)  # per-requst state
+                req_state = RequestStats(prompt_tokens=input_len)  # per-request stats
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(

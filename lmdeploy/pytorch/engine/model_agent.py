@@ -873,16 +873,17 @@ class BaseModelAgent:
         keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
-
+            forward_inputs_cuda = {}
+            forward_inputs_cuda.update(forward_inputs)
             logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
                 for k in keys:
-                    if k not in forward_inputs:
+                    if k not in forward_inputs_cuda:
                         continue
-                    forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
+                    forward_inputs_cuda[k] = _try_to_cuda(forward_inputs_cuda[k], non_blocking=non_blocking)
                 self.out_stream.synchronize()
             logger.debug('preprocessing forward inputs done.')
-            self._in_que.put_nowait(forward_inputs)
+            self._in_que.put_nowait(forward_inputs_cuda)
             if forward_event is not None:
                 forward_event.clear()
 

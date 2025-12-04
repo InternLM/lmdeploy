@@ -20,6 +20,7 @@ from .engine import InferOutput, ResponseType, response_reqs
 if TYPE_CHECKING:
     from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
     from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
+    from lmdeploy.pytorch.model_inputs import ModelInputs
     from lmdeploy.pytorch.paging import Scheduler
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
@@ -211,7 +212,7 @@ class EngineLoop:
         self,
         batched_outputs: 'BatchedOutputs',
         running: 'SeqList',
-        is_decoding: bool,
+        model_inputs: 'ModelInputs',
     ):
         """Make infer output."""
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -224,7 +225,7 @@ class EngineLoop:
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
-        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
+        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, model_inputs=model_inputs)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
@@ -253,7 +254,7 @@ class EngineLoop:
             # get spec stats info
             spec_info = None
             num_draft_tokens = self.config.num_speculative_tokens
-            if num_draft_tokens is not None and is_decoding and self.config.enable_metrics:
+            if num_draft_tokens is not None and model_inputs.is_decoding and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
@@ -293,7 +294,7 @@ class EngineLoop:
     ):
         """Get outputs and prefetch."""
         num_loops = forward_inputs['loop_count']
-        is_decoding = forward_inputs['inputs'].is_decoding
+        model_inputs = forward_inputs['inputs']
         for idx in range(num_loops):
             # pre-forward before get last token
             if idx == num_loops - 1:
@@ -303,7 +304,7 @@ class EngineLoop:
             # send output
             out = await self.executor.get_output_async()
             if out is not None:
-                step_outputs = self._make_infer_outputs(out, running=running, is_decoding=is_decoding)
+                step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs)
                 self.resp_queue.put_nowait(step_outputs)
 
             # lock forward event

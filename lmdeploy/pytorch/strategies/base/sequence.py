@@ -7,6 +7,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
     from lmdeploy.pytorch.messages import SamplingParam, SchedulerSequence, SchedulerSession
+    from lmdeploy.pytorch.model_inputs import ModelInputs
     SeqList = List[SchedulerSequence]
 
 
@@ -25,6 +26,7 @@ class SequenceStrategy(ABC):
         pass
 
     @abstractmethod
-    def update_running(self, running: 'SeqList', batched_outputs: 'BatchedOutputs', is_decoding: bool) -> None:
+    def update_running(self, running: 'SeqList', batched_outputs: 'BatchedOutputs',
+                       model_inputs: 'ModelInputs') -> None:
         """Update running sequences."""
         pass
