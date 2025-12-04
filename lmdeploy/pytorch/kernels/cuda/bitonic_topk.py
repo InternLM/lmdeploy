@@ -14,6 +14,15 @@ def _indicator(n_dims: core.constexpr, j: core.constexpr):
 
 
 @triton.jit
+def _flip_along_middle(x, n_dims, i):
+    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    ix = x.to(idtype, bitcast=True)
+    iy = ix ^ tl.xor_sum(ix, n_dims - 1 - i, True)
+    y = iy.to(x.dtype, bitcast=True)
+    return y
+
+
+@triton.jit
 def _compare_and_swap(x, ids, flip, i: core.constexpr):
     # compare-and-swap on the ith *innermost* dimension
     n_dims: core.constexpr = _log2(x.numel)
@@ -22,16 +31,8 @@ def _compare_and_swap(x, ids, flip, i: core.constexpr):
     is_right = _indicator(n_dims, i)
 
     # flip along middle dimension (the bitwise XORs will be optimised away):
-    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    ix = x.to(idtype, bitcast=True)
-    iy = ix ^ tl.xor_sum(ix, n_dims - 1 - i, True)
-    y = iy.to(x.dtype, bitcast=True)
-
-    # same to ids
-    ids_idtype = core.get_int_dtype(bitwidth=ids.dtype.primitive_bitwidth, signed=True)
-    ids_ix = ids.to(ids_idtype, bitcast=True)
-    ids_iy = ids_ix ^ tl.xor_sum(ids_ix, n_dims - 1 - i, True)
-    ids_y = ids_iy.to(ids.dtype, bitcast=True)
+    y = _flip_along_middle(x, n_dims, i)
+    ids_y = _flip_along_middle(ids, n_dims, i)
 
     # conditional swap:
     mask = (x > y) != (flip ^ is_right)
@@ -104,6 +105,8 @@ def _bitonic_topk_kernel0(score_ptr,
 
     offs_k = tl.arange(0, K)
     origin_ids = block_id * K + offs_k
+    # num scores should less than max(int32), I guess
+    origin_ids = origin_ids.to(tl.int32)
     mask = (origin_ids < seqlen)
     score_ptrs = score_ptr + batch_id * stride_m + origin_ids
     scores = tl.load(score_ptrs, mask=mask, other=-1e6)
@@ -171,7 +174,6 @@ def _bitonic_topk_kernel1(score_ptr,
         merged_ids = _concate(ids, new_ids)
 
         merged_scores, merged_ids = _bitonic_merge(merged_scores, merged_ids, stage, descending, stage)
-        # merged_scores, merged_ids = argsort(merged_scores, merged_ids, 0, descending)
 
         scores, _ = _split(merged_scores, K)
         ids, _ = _split(merged_ids, K)
@@ -192,6 +194,7 @@ def bitonic_topk(scores: torch.Tensor,
     """Bitnoic topk."""
     num_tokens = scores.size(0)
     max_kv_len = scores.size(-1)
+    assert max_kv_len < (1 << 31)
 
     if num_tokens != kv_seqlens.size(0):
         repeat_kv_seqlens = torch.repeat_interleave(kv_seqlens, q_seqlens, output_size=num_tokens)
@@ -199,6 +202,7 @@ def bitonic_topk(scores: torch.Tensor,
         repeat_kv_seqlens = kv_seqlens
     tmp_scores = torch.empty_like(scores)
     tmp_ids = torch.empty_like(scores, dtype=torch.int32)
+    num_warps = triton.cdiv(k, 4096)
     grid = (num_tokens, triton.cdiv(max_kv_len, k))
     _bitonic_topk_kernel0[grid](scores,
                                 repeat_kv_seqlens,
@@ -208,7 +212,7 @@ def bitonic_topk(scores: torch.Tensor,
                                 K=k,
                                 fill=fill,
                                 descending=1 if descending else 0,
-                                num_warps=4)
+                                num_warps=num_warps)
 
     out = kv_seqlens.new_empty((num_tokens, k), dtype=torch.int32)
     _bitonic_topk_kernel1[(num_tokens, )](tmp_scores,
@@ -219,5 +223,5 @@ def bitonic_topk(scores: torch.Tensor,
                                           K=k,
                                           fill=fill,
                                           descending=1 if descending else 0,
-                                          num_warps=4)
+                                          num_warps=num_warps * 2)
     return out
