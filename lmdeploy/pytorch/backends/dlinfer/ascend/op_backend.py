@@ -127,9 +127,6 @@ class AscendOpsBackend(DlinferOpsBackend):
             step_context.kv_seqlens = step_context.kv_seqlens.to(torch.int32)
         if step_context.q_seqlens.dtype != torch.int32:
             step_context.q_seqlens = step_context.q_seqlens.to(torch.int32)
-        if cls.enable_graph:
-            import torch._dynamo as dynamo
-            dynamo.mark_dynamic(step_context.block_offsets, [0, 1])
 
         def get_total_slots():
             if cls.total_slots is None:
