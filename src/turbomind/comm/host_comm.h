@@ -19,6 +19,7 @@ enum class CommType
 {
     kIntra,
     kInter,
+    kHybrid,
 };
 
 enum class RedOp
@@ -68,14 +69,33 @@ class IpcHostCommImpl: public HostCommImpl {
 public:
     static constexpr CommType kCommType = CommType::kInter;
 
-    virtual bool is_hybrid() const = 0;
-
     virtual char* create_buffer(size_t size) = 0;
 
     virtual void* query(CommType type) const override
     {
         if (type == kCommType) {
             return const_cast<IpcHostCommImpl*>(this);
+        }
+        return HostCommImpl::query(type);
+    }
+};
+
+class HybridHostCommImpl: public HostCommImpl {
+public:
+    static constexpr CommType kCommType = CommType::kHybrid;
+
+    virtual IpcHostCommImpl* inter_comm() const = 0;
+
+    virtual HostCommImpl* intra_comm() const = 0;
+
+    virtual const std::unordered_map<int, int>& get_rank_to_intra() const = 0;
+
+    virtual const std::vector<int>& get_rank_to_inter() const = 0;
+
+    virtual void* query(CommType type) const override
+    {
+        if (type == kCommType) {
+            return const_cast<HybridHostCommImpl*>(this);
         }
         return HostCommImpl::query(type);
     }
@@ -125,8 +145,7 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
             comm->Broadcast(data, n, kNull, root, detail::copy_fn<T>);
         }
         else {
-            try {
-                auto ipc_comm = TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>());
+            auto process = [&](IpcHostCommImpl* ipc_comm, int root) {
                 // serialize on root rank and deserialize on other ranks
                 size_t& buf_size = *reinterpret_cast<size_t*>(ipc_comm->create_buffer(sizeof(size_t)));
                 if (ipc_comm->rank() == root) {
@@ -145,6 +164,28 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
 
                 if (ipc_comm->rank() != root) {
                     deserialize(data, n, buf);
+                }
+            };
+
+            try {
+                if (auto hybrid_comm = comm->as<HybridHostCommImpl>(); hybrid_comm) {
+                    auto  inter_comm    = TM_CHECK_NOTNULL(hybrid_comm->inter_comm());
+                    auto  intra_comm    = TM_CHECK_NOTNULL(hybrid_comm->intra_comm());
+                    auto& rank_to_intra = hybrid_comm->get_rank_to_intra();
+                    auto& rank_to_inter = hybrid_comm->get_rank_to_inter();
+                    bool  root_node     = rank_to_intra.count(root) > 0;  // root on this node
+                    if (root_node) {
+                        intra_comm->Broadcast(data, n, kNull, rank_to_intra.at(root), detail::copy_fn<T>);
+                    }
+                    if (intra_comm->rank() == 0) {
+                        process(inter_comm, rank_to_inter[root]);
+                    }
+                    if (!root_node) {
+                        intra_comm->Broadcast(data, n, kNull, 0, detail::copy_fn<T>);
+                    }
+                }
+                else {
+                    process(TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>()), root);
                 }
             }
             catch (const std::invalid_argument& e) {
@@ -232,7 +273,7 @@ public:
     virtual void Export(std::ostream& os) = 0;
     virtual void Import(std::istream& is) = 0;
 
-    virtual HostComm CreateCommunicator(int n_ranks, int rank) = 0;
+    virtual HostComm CreateCommunicator(int n_ranks, int rank, int node_rank = 0) = 0;
 };
 
 std::unique_ptr<HostGroupId> CreateHostGroupId(const std::string& backend);

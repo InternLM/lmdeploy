@@ -136,11 +136,6 @@ struct GlooCommImpl: public IpcHostCommImpl {
 
     ~GlooCommImpl() {}
 
-    bool is_hybrid() const override
-    {
-        return false;
-    }
-
     char* create_buffer(size_t size) override
     {
         if (buffer_ == nullptr || size > buffer_->byte_size()) {
@@ -305,7 +300,7 @@ class GlooGroupId: public HostGroupId {
         info_ = ss.str();
     }
 
-    HostComm CreateCommunicator(int n_ranks, int rank) override
+    HostComm CreateCommunicator(int n_ranks, int rank, int node_rank = 0) override
     {
         FT_CHECK(info_ != "");
         auto impl = std::make_shared<GlooCommImpl>(GlobalStoreFactory::Instance().Load(info_), n_ranks, rank);

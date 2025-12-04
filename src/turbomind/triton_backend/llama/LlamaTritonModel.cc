@@ -520,7 +520,7 @@ Communicators LlamaTritonModel::createCommSplits(int rank)
     const int color_cp   = inner_rank / engine_param_.attn_cp_size;
     const int color_dp   = inner_rank % tp_cp_size;
 
-    comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
+    comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank, engine_param_.node_rank);
 
     comm.h_tp_group = comm.h_comm->Split(color_tp, 0);
     comm.h_dp_group = comm.h_comm->Split(color_dp, 0);

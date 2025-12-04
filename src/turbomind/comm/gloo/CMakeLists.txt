@@ -23,7 +23,8 @@ target_include_directories(gloo PUBLIC
 
 add_library(gloo_comm STATIC
     gloo_comm.cc
+    hybrid_comm.cc
     tcp_store.cc
 )
 set_property(TARGET gloo_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(gloo_comm PUBLIC gloo logger xgrammar)
+target_link_libraries(gloo_comm PUBLIC gloo host_comm logger xgrammar)
