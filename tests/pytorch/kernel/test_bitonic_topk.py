@@ -59,7 +59,7 @@ class TestBitonicTopk:
 
     def test_bitonic_topk(self, scores, q_seqlens, kv_seqlens, k, gt):
         from lmdeploy.pytorch.kernels.cuda.bitonic_topk import bitonic_topk
-        out = bitonic_topk(scores, q_seqlens=q_seqlens, kv_seqlens=kv_seqlens, k=k, fill=-1)
+        out = bitonic_topk(scores, q_seqlens=q_seqlens, kv_seqlens=kv_seqlens, k=k, fill=-1, sorted=True)
         gt[gt < 0] = 0
         out[out < 0] = 0
         gt_score = torch.gather(scores, 1, gt.to(torch.int64))

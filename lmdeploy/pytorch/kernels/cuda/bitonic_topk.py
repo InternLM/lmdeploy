@@ -93,7 +93,8 @@ def _bitonic_topk_kernel0(score_ptr,
                           stride_m,
                           K: tl.constexpr,
                           fill: tl.constexpr,
-                          descending: tl.constexpr = core.CONSTEXPR_0):
+                          descending: tl.constexpr = core.CONSTEXPR_0,
+                          sorted: tl.constexpr = False):
     """kernel0."""
     batch_id = tl.program_id(0).to(tl.int64)
     block_id = tl.program_id(1).to(tl.int64)
@@ -113,7 +114,8 @@ def _bitonic_topk_kernel0(score_ptr,
     ids = tl.where(mask, origin_ids, fill)
     ids = origin_ids
 
-    scores, ids = argsort(scores, ids, 0, descending)
+    if sorted or (seqlen > K):
+        scores, ids = argsort(scores, ids, 0, descending)
 
     tl.store(out_ptr + batch_id * stride_m + origin_ids, scores, mask=mask)
     tl.store(ids_ptr + batch_id * stride_m + origin_ids, ids, mask=mask)
@@ -190,7 +192,8 @@ def bitonic_topk(scores: torch.Tensor,
                  kv_seqlens: torch.Tensor,
                  k: int,
                  fill: int = -1,
-                 descending: bool = True):
+                 descending: bool = True,
+                 sorted: bool = False):
     """Bitnoic topk."""
     num_tokens = scores.size(0)
     max_kv_len = scores.size(-1)
@@ -212,6 +215,7 @@ def bitonic_topk(scores: torch.Tensor,
                                 K=k,
                                 fill=fill,
                                 descending=1 if descending else 0,
+                                sorted=sorted,
                                 num_warps=num_warps)
 
     out = kv_seqlens.new_empty((num_tokens, k), dtype=torch.int32)
