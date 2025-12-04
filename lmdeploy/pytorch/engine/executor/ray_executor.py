@@ -561,7 +561,7 @@ class RayExecutor(ExecutorBase):
     def _init_distributed_environment_by_device(self, device_str: str):
         """Init distributed environment."""
         driver_ip = _get_master_addr()
-        if device_str in ['cuda']:
+        if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
 
         elif device_str == 'ascend':
