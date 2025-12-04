@@ -33,7 +33,7 @@ void GuidedDecodeMaskLayer<T>::Setup(const std::vector<const Request*>& rs, cons
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     matchers_.clear();
     for (const auto& r : rs) {
-        matchers_.push_back(r->matcher);
+        matchers_.push_back(r->matchers[tp_rank_]);
     }
 }
 
