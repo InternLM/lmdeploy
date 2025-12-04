@@ -6,9 +6,10 @@ information."""
 import json
 import logging
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import _xgrammar as _xgr  # noqa: E402
+from pydantic import BaseModel
 
 try:
     import sentencepiece
@@ -286,58 +287,150 @@ class TokenizerInfo(_xgr.TokenizerInfo):
             # TODO(yixin): unsupported tokenizer
             raise ValueError(f'Unsupported tokenizer type: {type(tokenizer)}')
 
-    @property
-    def vocab_type(self) -> VocabType:
-        """The type of the vocabulary."""
-        return VocabType(self._handle.vocab_type)
 
-    @property
-    def vocab_size(self) -> int:
-        """The size of the vocabulary."""
-        return self._handle.vocab_size
+def _convert_schema_to_str(schema: Union[str, Type[BaseModel], Dict[str, Any]]) -> str:
+    """Convert a schema to a string representation. It returns the schema in
+    string format because it's faster to send to C++.
 
-    @property
-    def add_prefix_space(self) -> bool:
-        """Whether the tokenizer will prepend a space before the text in the
-        tokenization process."""
-        return self._handle.add_prefix_space
+    This function handles different schema input types and converts them to a JSON string:
+    - Pydantic models are converted using their schema methods
+    - String inputs are returned as-is (assumed to be valid JSON)
+    - Dictionary inputs are converted to JSON strings
 
-    @property
-    def prepend_space_in_tokenization(self) -> bool:
-        """Whether the tokenizer will prepend a space before the text in the
-        tokenization process.
+    Parameters
+    ----------
+    schema : Union[str, Type[BaseModel], Dict[str, Any]]
+        The schema to convert, which can be a Pydantic model class,
+        a JSON schema string, or a dictionary representing a JSON schema.
 
-        This property is deprecated. Use add_prefix_space instead.
+    Returns
+    -------
+    str
+        The JSON schema as a string.
+
+    Raises
+    ------
+    ValueError
+        When the schema type is not supported.
+    TypeError
+        When the dictionary is not serializable.
+    """
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        if hasattr(schema, 'model_json_schema'):
+            return json.dumps(schema.model_json_schema())
+        if hasattr(schema, 'schema_json'):
+            return json.dumps(schema.schema_json())
+        else:
+            raise ValueError('The schema should have a model_json_schema or json_schema method.')
+    elif isinstance(schema, str):
+        return schema
+    elif isinstance(schema, dict):
+        return json.dumps(schema)
+    else:
+        raise ValueError('The schema should be a string or a Pydantic model.')
+
+
+class GrammarCompiler(_xgr.CompiledGrammar):
+    """The compiler for grammars.
+
+    It is associated with a certain tokenizer info, and compiles grammars into CompiledGrammar with the tokenizer info.
+    It allows parallel compilation with multiple threads, and has a cache to store the compilation result, avoiding
+    compiling the same grammar multiple times.
+    """
+
+    def __init__(
+        self,
+        tokenizer_info: TokenizerInfo,
+        *,
+        max_threads: int = 8,
+        cache_enabled: bool = True,
+        cache_limit_bytes: int = -1,
+    ):
+        """Construct the compiler.
+
+        Parameters
+        ----------
+        tokenizer_info : TokenizerInfo
+            The tokenizer info.
+
+        max_threads : int, default: 8
+            The maximum number of threads used to compile the grammar.
+
+        cache_enabled : bool, default: True
+            Whether to enable the cache.
+
+        cache_limit_bytes : int, default: -1
+            The maximum memory usage for the cache in the specified unit.
+            Note that the actual memory usage may slightly exceed this value.
         """
-        logger.warning('prepend_space_in_tokenization is deprecated. Use add_prefix_space instead.')
-        return self.add_prefix_space
+        if not isinstance(tokenizer_info, TokenizerInfo):
+            raise ValueError('Please convert the tokenizer to TokenizerInfo before passing it '
+                             'to GrammarCompiler.')
 
-    @property
-    def decoded_vocab(self) -> List[bytes]:
-        """The decoded vocabulary of the tokenizer.
+        super().__init__(tokenizer_info, max_threads, cache_enabled, cache_limit_bytes)
 
-        This converts the tokens in the LLM's vocabulary back to the original format of the input text. E.g. for type
-        ByteFallback, the token <0x1B> is converted back to "\u001b".
+    def compile_json_schema(
+        self,
+        schema: Union[str, Type[BaseModel], Dict[str, Any]],
+        *,
+        any_whitespace: bool = True,
+        indent: Optional[int] = None,
+        separators: Optional[Tuple[str, str]] = None,
+        strict_mode: bool = True,
+        max_whitespace_cnt: Optional[int] = None,
+    ) -> _xgr.CompiledGrammar:
+        """Get CompiledGrammar from the specified JSON schema and format. The
+        indent and separators parameters follow the same convention as in
+        json.dumps().
+
+        Parameters
+        ----------
+        schema : Union[str, Type[BaseModel], Dict[str, Any]]
+            The schema string or Pydantic model or JSON schema dict.
+
+        indent : Optional[int], default: None
+            The number of spaces for indentation. If None, the output will be in one line.
+
+        separators : Optional[Tuple[str, str]], default: None
+            Two separators used in the schema: comma and colon. Examples: (",", ":"), (", ", ": ").
+            If None, the default separators will be used: (",", ": ") when the indent is not None,
+            and (", ", ": ") otherwise.
+
+        strict_mode : bool, default: True
+            Whether to use strict mode. In strict mode, the generated grammar will not allow
+            properties and items that is not specified in the schema. This is equivalent to
+            setting unevaluatedProperties and unevaluatedItems to false.
+
+            This helps LLM to generate accurate output in the grammar-guided generation with JSON
+            schema.
+
+        max_whitespace_cnt : Optional[int], default: None
+            The maximum number of whitespace characters allowed between elements,
+            such like keys, values, separators and so on.
+            If None, there is no limit on the number of whitespace characters.
+            If specified, it will limit the number of whitespace characters to at most max_whitespace_cnt.
+            It should be a positive integer.
+
+        Returns
+        -------
+        compiled_grammar : CompiledGrammar
+            The compiled grammar.
         """
-        return self._handle.decoded_vocab
+        schema_str = _convert_schema_to_str(schema)
+        return super().compile_json_schema(schema_str, any_whitespace, indent, separators, strict_mode,
+                                           max_whitespace_cnt)
 
-    @property
-    def stop_token_ids(self) -> List[int]:
-        """The stop token ids."""
-        return self._handle.stop_token_ids
+    def compile_regex(self, regex: str) -> _xgr.CompiledGrammar:
+        """Get CompiledGrammar from the specified regex.
 
-    @property
-    def special_token_ids(self) -> List[int]:
-        """The special token ids.
+        Parameters
+        ----------
+        regex : str
+            The regex string.
 
-        Special tokens include control tokens, reserved tokens, padded tokens, etc. Now it is automatically detected
-        from the vocabulary.
+        Returns
+        -------
+        compiled_grammar : CompiledGrammar
+            The compiled grammar.
         """
-        return self._handle.special_token_ids
-
-    def dump_metadata(self) -> str:
-        """Dump the metadata of the tokenizer to a json string.
-
-        It can be used to construct the tokenizer info from the vocabulary and the metadata string.
-        """
-        return self._handle.dump_metadata()
+        return super().compile_regex(regex)

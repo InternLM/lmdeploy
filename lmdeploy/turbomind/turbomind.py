@@ -33,9 +33,8 @@ from .supported_models import is_supported
 lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
 sys.path.append(osp.join(lmdeploy_dir, 'lib'))
 import _turbomind as _tm  # noqa: E402
-import _xgrammar as _xgr  # noqa: E402
 
-from .tokenizer_info import TokenizerInfo  # noqa: E402
+from .xgrammar import GrammarCompiler, TokenizerInfo  # noqa: E402
 
 logger = get_logger('lmdeploy')
 
@@ -729,7 +728,7 @@ class TurboMindInstance:
                 elif decode_grammar_type == 'json_object':
                     decode_grammar = '{"type" : "object", "additionalProperties": true}'
 
-                compiler = _xgr.GrammarCompiler(tokenizer_info)
+                compiler = GrammarCompiler(tokenizer_info)
 
                 if decode_grammar_type == 'json_schema':
                     decode_grammar = json.dumps(decode_grammar)
