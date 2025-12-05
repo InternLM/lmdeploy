@@ -65,10 +65,34 @@ docker run -it \
     --ipc=host \
     --network=host \
     --shm-size 32G \
-    -v /root:/workspace \
+    -v ./workspace:/workspace \
     rocm/pytorch:latest
 
 
 #Once inside the container, install LMDeploy with ROCm support:
 LMDEPLOY_TARGET_DEVICE=rocm pip install  git+https://github.com/InternLM/lmdeploy.git
+```
+
+If you are using podman with podman-compose:
+```
+services:
+  pytorch-rocm:
+    image: docker.io/rocm/pytorch:latest
+    container_name: pytorch-rocm
+    stdin_open: true
+    tty: true
+    shm_size: 32G
+    ipc: host
+    network_mode: host
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    volumes:
+      - ./workspace:/workspace:Z
 ```
