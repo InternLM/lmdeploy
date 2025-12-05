@@ -209,6 +209,7 @@ void TCPStore::wait(const std::vector<std::string>& keys, const std::chrono::mil
                 ss << key << " ";
             }
             ss << "]";
+            TM_LOG_ERROR("[TM][COMM] %s, elapsed %lld s", ss.str().c_str(), elapsed.count());
             throw std::runtime_error("Wait timeout for key(s): " + ss.str());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
