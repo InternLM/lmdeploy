@@ -350,6 +350,7 @@ class PytorchEngineConfig:
         dllm_denoising_steps (int): Dllm denoising steps.
         dllm_confidence_threshold (float): dllm unmasking threshold for
             dynamic unmasking.
+        enforce_fp32_head (bool): Enforce lm_head to use fp32 in forward.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -387,6 +388,7 @@ class PytorchEngineConfig:
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
+    enforce_fp32_head: bool = False
     # router replay
     enable_return_routed_experts: bool = False
     enable_transfer_obj_ref: bool = False

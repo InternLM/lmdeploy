@@ -19,7 +19,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
-from .utils.model import DeployModelMixin, vlm_model
+from .utils.model import DeployModelMixinV1, vlm_model
 
 
 class Gating(nn.Module):
@@ -444,7 +444,7 @@ class InternVisionModel(nn.Module):
         return last_hidden_state
 
 
-class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
+class InternVLChatModel(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -801,9 +801,9 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                                                position_ids=position_ids,
                                                attn_metadata=attn_metadata)
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.language_model.get_logits(hidden_states)
+    def get_lm_head(self):
+        """Get lm_head."""
+        return self.language_model.get_lm_head()
 
     def get_input_embeddings(self):
         """Get input embeddings."""
