@@ -56,7 +56,7 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
             'tp_num':
             2,
             'extra':
-            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 46000 '
+            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 65536 '
             '--cache-max-entry-count 0.7 '.format(port),
             'cuda_prefix':
             None
@@ -170,7 +170,10 @@ def get_turbomind_model_list(tp_num):
     model_list = get_evaluate_turbomind_model_list(tp_num, kvint_list=[4, 8])
     new_model_list = []
     for model in model_list:
-        model['extra'] = '--session-len 65536 '
+        if 'Qwen3-235B-A22B-Thinking-2507' in model['model']:
+            model['extra'] = '--session-len 65536 --cache-max-entry-count 0.9 --max-batch-size 1024 '
+        else:
+            model['extra'] = '--session-len 65536 --cache-max-entry-count 0.9 '
         model['cuda_prefix'] = None
         new_model_list.append(model)
     return new_model_list
@@ -180,7 +183,10 @@ def get_pytorch_model_list(tp_num):
     model_list = get_evaluate_pytorch_model_list(tp_num, kvint_list=[4, 8])
     new_model_list = []
     for model in model_list:
-        model['extra'] = '--session-len 65536 '
+        if 'Qwen3-235B-A22B-Thinking-2507' in model['model']:
+            model['extra'] = '--session-len 65536 --cache-max-entry-count 0.9 --max-batch-size 1024 '
+        else:
+            model['extra'] = '--session-len 65536 --cache-max-entry-count 0.9 '
         model['cuda_prefix'] = None
         new_model_list.append(model)
     return new_model_list
@@ -242,6 +248,16 @@ def test_turbomind_restful_tp2(config, run_id, prepare_environment, worker_id):
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment', get_turbomind_model_list(tp_num=4), indirect=True)
 def test_turbomind_restful_tp4(config, run_id, prepare_environment, worker_id):
+    result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
+    assert result, msg
+
+
+@pytest.mark.infer
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('prepare_environment', get_turbomind_model_list({'cp': 2, 'tp': 8}), indirect=True)
+def test_turbomind_restful_cp2tp8(config, run_id, prepare_environment, worker_id):
     result, msg = run_test(config, run_id, prepare_environment, worker_id, 'infer')
     assert result, msg
 
@@ -327,9 +343,23 @@ def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_id, mo
 
 @pytest.mark.infer
 @pytest.mark.pytorch
+@pytest.mark.gpu_num_distributed_dpep8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('model_param', get_pytorch_model_list({'dp': 8, 'ep': 8}))
+def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_id, model_param, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                run_id=run_id,
+                                model_param=model_param,
+                                worker_id=worker_id,
+                                test_type='infer',
+                                manager=shared_proxy_manager)
+
+
+@pytest.mark.infer
+@pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model_param', get_pytorch_model_list(tp_num=16))
+@pytest.mark.parametrize('model_param', get_pytorch_model_list({'dp': 16, 'ep': 16}))
 def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_id, model_param, worker_id):
     _run_proxy_distributed_test(config=config,
                                 run_id=run_id,

@@ -6,6 +6,7 @@ import time
 from typing import Any, Dict, Tuple
 
 import requests
+from utils.ray_distributed_utils import verify_service_functionality
 
 time_time = time.time
 
@@ -22,29 +23,6 @@ def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
             return True
         except (socket.timeout, ConnectionRefusedError, OSError):
             return False
-
-
-def verify_service_functionality(host: str, proxy_port: int, model_name: str, check_count: int) -> bool:
-    try:
-        url = f'http://{host}:{proxy_port}/v1/chat/completions'
-        payload = {
-            'model': model_name,
-            'messages': [{
-                'role': 'user',
-                'content': 'hi'
-            }],
-            'max_tokens': 5,
-            'stream': False
-        }
-        resp = requests.post(url, json=payload, timeout=15)
-        if resp.status_code in (200, 400):
-            return True
-        else:
-            print(f'🔧 Check {check_count}: Service returned status {resp.status_code}')
-            return False
-    except Exception as e:
-        print(f'🔧 Check {check_count}: Failed to verify service functionality - {e}')
-        return False
 
 
 def check_nodes_status(host: str, proxy_port: int, model_name: str, expected_instances: int, check_count: int,
@@ -251,9 +229,10 @@ class ApiServerPerTest:
         self.communicator = self.model_param.get('communicator', 'nccl')
         self.quant_policy = self.model_param.get('quant_policy', 0)
         self.tp = int(self.model_param.get('tp', 1))
-        self.ep = self.node_count * self.proc_per_node
-        self.dp = self.node_count * self.proc_per_node
-        self.max_batch_size = int(self.model_param.get('max_batch_size', 128))
+        parallel_config = self.model_param.get('parallel_config', {})
+        self.ep = int(parallel_config.get('ep', self.node_count * self.proc_per_node))
+        self.dp = int(parallel_config.get('dp', self.node_count * self.proc_per_node))
+        self.extra = int(self.model_param.get('extra', ''))
 
         self.expected_instances = self.node_count * self.proc_per_node
         self.is_master = (self.node_rank == 0)
@@ -262,18 +241,32 @@ class ApiServerPerTest:
     def start(self):
         proxy_url = f'http://{self.master_addr}:{self.proxy_port}'
         cmd = [
-            'lmdeploy', 'serve', 'api_server', self.model_path, '--backend',
-            str(self.backend), '--tp',
-            str(self.tp), '--ep',
-            str(self.ep), '--dp',
-            str(self.dp), '--proxy-url', proxy_url, '--nnodes',
-            str(self.node_count), '--node-rank',
-            str(self.node_rank), '--communicator',
-            str(self.communicator), '--max-batch-size',
-            str(self.max_batch_size)
+            'lmdeploy',
+            'serve',
+            'api_server',
+            self.model_path,
+            '--backend',
+            str(self.backend),
+            '--tp',
+            str(self.tp),
+            '--ep',
+            str(self.ep),
+            '--dp',
+            str(self.dp),
+            '--proxy-url',
+            proxy_url,
+            '--nnodes',
+            str(self.node_count),
+            '--node-rank',
+            str(self.node_rank),
         ]
         if self.quant_policy != 0:
             cmd += ['--quant-policy', str(self.quant_policy)]
+
+        if self.backend == 'turbomind':
+            cmd.extend(['--communicator', str(self.communicator)])
+        if self.extra != '':
+            cmd += [str(self.extra)]
 
         print(f"[API Server] Starting: {' '.join(cmd)}")
         self.api_process = subprocess.Popen(cmd)

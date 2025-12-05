@@ -167,11 +167,15 @@ class RayLMDeployManager:
                 cmd = [
                     'lmdeploy', 'serve', 'api_server', model_path, '--server-port',
                     str(self.api_port), '--tp',
-                    str(tp), '--backend', backend, '--communicator', communicator
+                    str(tp), '--backend', backend
                 ]
 
+                if quant_policy != 0:
+                    cmd += ['--quant-policy', str(self.quant_policy)]
+
                 if backend == 'turbomind':
-                    cmd.extend(['--quant-policy', str(quant_policy)])
+                    cmd.extend(['--communicator', str(communicator)])
+
                 print(f"🚀 Master node starting LMDeploy API Server: {' '.join(cmd)}")
                 self._api_process = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
             print(f'📝 API Server log: {log_path}')

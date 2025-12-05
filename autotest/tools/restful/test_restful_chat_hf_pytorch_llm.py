@@ -198,7 +198,7 @@ def test_restful_chat_distributed_tp16(shared_ray_manager, config, model_param, 
 @pytest.mark.restful_api_pytorch
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_distributed_dpep16
-@pytest.mark.parametrize('model_param', getModelList(tp_num=16))
+@pytest.mark.parametrize('model_param', getModelList({'dp': 16, 'ep': 16}))
 def test_restful_chat_distributed_dpep16(shared_proxy_manager, config, model_param, common_case_config, worker_id):
     _run_proxy_distributed_test(config=config,
                                 model_param=model_param,
