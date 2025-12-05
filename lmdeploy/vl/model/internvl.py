@@ -5,7 +5,7 @@ import torch
 from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
@@ -64,7 +64,7 @@ def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnai
 
 
 @VISION_MODELS.register_module()
-class InternVLVisionModel(VisonModel):
+class InternVLVisionModel(VisionModel):
     """InternVL vision model."""
 
     _arch = 'InternVLChatModel'
@@ -236,7 +236,7 @@ class InternVLVisionModel(VisonModel):
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisonModel.IMAGE_TOKEN_included(messages):
+        if VisionModel.IMAGE_TOKEN_included(messages):
             # backward compatibility
             for message in messages:
                 role, content = message['role'], message['content']

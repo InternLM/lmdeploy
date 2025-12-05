@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 
 import torch
 
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 
 def check_transformers():
@@ -15,7 +15,7 @@ def check_transformers():
 
 
 @VISION_MODELS.register_module()
-class Qwen3VLModel(VisonModel):
+class Qwen3VLModel(VisionModel):
     """Qwen3VL model."""
 
     _arch = ['Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration']
@@ -51,7 +51,7 @@ class Qwen3VLModel(VisonModel):
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisonModel.IMAGE_TOKEN_included(messages):
+        if VisionModel.IMAGE_TOKEN_included(messages):
             # backward compatibility
             for message in messages:
                 role, content = message['role'], message['content']
