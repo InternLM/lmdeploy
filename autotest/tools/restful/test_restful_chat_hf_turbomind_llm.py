@@ -4,17 +4,21 @@ from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_
                                     stop_restful_api, test_logprobs)
 
 DEFAULT_PORT = 23333
+PROXY_PORT = 8000
 
 
 @pytest.fixture(scope='function', autouse=True)
 def prepare_environment(request, config, worker_id):
-    param = request.param
-    model = param['model']
-    model_path = config.get('model_path') + '/' + model
+    if hasattr(request, 'param'):
+        param = request.param
+        model = param['model']
+        model_path = config.get('model_path') + '/' + model
 
-    pid, startRes = start_restful_api(config, param, model, model_path, 'turbomind', worker_id)
-    yield
-    stop_restful_api(pid, startRes, param)
+        pid, startRes = start_restful_api(config, param, model, model_path, 'turbomind', worker_id)
+        yield
+        stop_restful_api(pid, startRes, param)
+    else:
+        yield
 
 
 def getModelList(tp_num):

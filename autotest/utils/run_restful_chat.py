@@ -16,7 +16,8 @@ from utils.rule_condition_assert import assert_result
 
 from lmdeploy.serve.openai.api_client import APIClient
 
-BASE_HTTP_URL = 'http://localhost'
+MASTER_ADDR = os.getenv('MASTER_ADDR', 'localhost')
+BASE_HTTP_URL = f'http://{MASTER_ADDR}'
 DEFAULT_PORT = 23333
 PROXY_PORT = 8000
 
@@ -26,6 +27,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     cuda_prefix = param['cuda_prefix']
     tp_num = param['tp_num']
+
+    parallel_config = param.get('parallel_config', {})
 
     if 'extra' in param.keys():
         extra = param['extra']
@@ -44,7 +47,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
             model_path = model
 
     if cuda_prefix is None:
-        cuda_prefix = get_cuda_prefix_by_workerid(worker_id, tp_num=tp_num)
+        cuda_prefix = get_cuda_prefix_by_workerid(worker_id, parallel_config=tp_num)
 
     if tp_num > 1 and 'gw' in worker_id:
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
@@ -65,6 +68,17 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     device = os.environ.get('DEVICE', '')
     if device:
         cmd += f' --device {device} '
+
+    if parallel_config:
+        if 'dp' in parallel_config:
+            dp = parallel_config['dp']
+            cmd += f' --dp {dp}'
+        if 'ep' in parallel_config:
+            ep = parallel_config['ep']
+            cmd += f' --ep {ep}'
+        if 'cp' in parallel_config:
+            cp = parallel_config['cp']
+            cmd += f' --cp {cp}'
 
     if backend_type == 'turbomind':
         if ('w4' in model or '4bits' in model or 'awq' in model.lower()):

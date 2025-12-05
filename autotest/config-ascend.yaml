@@ -19,21 +19,24 @@ tp_config:
     Qwen2.5-32B-Instruct: 4
 
 pytorch_chat_model:
-    - Qwen/Qwen3-30B-A3B
-    - Qwen/Qwen3-235B-A22B
-    - Qwen/Qwen3-32B
-    - Qwen/Qwen3-8B
-    - Qwen/Qwen3-0.6B
+    tp:
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-8B
+        - Qwen/Qwen3-0.6B
 
 pytorch_vl_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
-    - OpenGVLab/InternVL3_5-2B
-    - OpenGVLab/InternVL3_5-8B
-    - OpenGVLab/InternVL3_5-38B
+    tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - OpenGVLab/InternVL3_5-2B
+        - OpenGVLab/InternVL3_5-8B
+        - OpenGVLab/InternVL3_5-38B
 
 pytorch_base_model:
-    - Qwen/Qwen3-0.6B
+    tp:
+        - Qwen/Qwen3-0.6B
 
 pytorch_quatization:
     awq:
