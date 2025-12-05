@@ -18,8 +18,5 @@ class MoEBackend:
         return self._use_deepep_moe_backend
 
 
-MOE_BACKEND = None
-
-
 def get_moe_backend():
     return MoEBackend()
