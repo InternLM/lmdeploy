@@ -15,8 +15,12 @@ def build_block_manager(cache_config: CacheConfig) -> BaseBlockManager:
     num_cpu_blocks = cache_config.num_cpu_blocks
     num_gpu_blocks = cache_config.num_gpu_blocks
     window_size = cache_config.window_size
+    num_gpu_reserved = cache_config.num_reserved_gpu_blocks
 
     if window_size < 0:
-        return DefaultBlockManager(num_gpu_blocks, num_cpu_blocks)
+        return DefaultBlockManager(num_gpu_blocks, num_cpu_blocks, num_gpu_reserved=num_gpu_reserved)
     else:
-        return WindowBlockManager(num_gpu_blocks, num_cpu_blocks, window_size=window_size)
+        return WindowBlockManager(num_gpu_blocks,
+                                  num_cpu_blocks,
+                                  window_size=window_size,
+                                  num_gpu_reserved=num_gpu_reserved)

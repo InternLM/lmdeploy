@@ -51,17 +51,20 @@ class ConfigBuilder:
     @staticmethod
     def build_cache_config(engine_config: PytorchEngineConfig):
         """Build cache config."""
-        cache_config = CacheConfig(max_batches=engine_config.max_batch_size,
-                                   block_size=engine_config.block_size,
-                                   num_cpu_blocks=engine_config.num_cpu_blocks,
-                                   num_gpu_blocks=engine_config.num_gpu_blocks,
-                                   cache_max_entry_count=engine_config.cache_max_entry_count,
-                                   max_prefill_token_num=engine_config.max_prefill_token_num,
-                                   enable_prefix_caching=engine_config.enable_prefix_caching,
-                                   quant_policy=engine_config.quant_policy,
-                                   device_type=engine_config.device_type,
-                                   migration_backend=engine_config.migration_backend,
-                                   role=engine_config.role)
+        cache_config = CacheConfig(
+            max_batches=engine_config.max_batch_size,
+            block_size=engine_config.block_size,
+            num_cpu_blocks=engine_config.num_cpu_blocks,
+            num_gpu_blocks=engine_config.num_gpu_blocks,
+            cache_max_entry_count=engine_config.cache_max_entry_count,
+            max_prefill_token_num=engine_config.max_prefill_token_num,
+            enable_prefix_caching=engine_config.enable_prefix_caching,
+            quant_policy=engine_config.quant_policy,
+            device_type=engine_config.device_type,
+            migration_backend=engine_config.migration_backend,
+            role=engine_config.role,
+            # reserve 1 blocks for dummy input and padding
+            num_reserved_gpu_blocks=1)
         return cache_config
 
     @staticmethod
