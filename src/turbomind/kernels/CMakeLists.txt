@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.11)
 
 add_library(ban_bad_words STATIC ban_bad_words.cu)
 set_property(TARGET ban_bad_words PROPERTY POSITION_INDEPENDENT_CODE  ON)

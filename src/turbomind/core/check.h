@@ -103,7 +103,7 @@ DEFINE_CHECK_OP_IMPL(Check_GT, >);
     if (TM_UNLIKELY(!(e))) turbomind::core::CheckErrorStream(__FILE__, __LINE__, #e)
 
 #define TM_CHECK_OP(name, op, a, b)                                                  \
-    if (auto&& [__p, __s] = turbomind::core::Check##name##Impl(a, b); __p) \
+    if (auto [__p, __s] = turbomind::core::Check##name##Impl(a, b); __p) \
         turbomind::core::CheckErrorStream(__FILE__, __LINE__, #a " " #op " " #b, __s)
 // clang-format on
 
