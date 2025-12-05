@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import heapq
+from dataclasses import dataclass
 from typing import Dict, Set
 
 import numpy as np
@@ -8,6 +9,20 @@ from lmdeploy.pytorch.messages import SchedulerSequence
 
 from ..config import CacheConfig
 from .block_manager import BaseBlockManager
+
+
+@dataclass
+class PrefixCacheStats:
+    """Prefix caching stats."""
+    num_query_tokens: int = 0
+    num_hit_tokens: int = 0
+
+    def reset(self):
+        self.num_query_tokens = 0
+        self.num_hit_tokens = 0
+
+    def hit_rate(self):
+        return 0.0 if self.num_query_tokens <= 0 else float(self.num_hit_tokens) / self.num_query_tokens
 
 
 class Node:
@@ -54,6 +69,11 @@ class BlockTrie:
         # caches with different adapter should not be shared.
         self._roots: Dict[str, Node] = dict()
         self.leaves: Set[Node] = set()
+        self.stats = PrefixCacheStats()
+
+    def hit_rate(self):
+        """Get hit rate."""
+        return self.stats.hit_rate()
 
     def get_root(self, adapter_name: str):
         """Get root by adapter name."""
@@ -73,6 +93,7 @@ class BlockTrie:
         curr: Node = getattr(logical_blocks, 'last_shared_node', None)
         if curr is None:
             curr = self.get_root(seq.adapter_name)
+        init_num_matched = curr.num_matched
         num_matched = curr.num_matched
 
         def __match_success(node: Node):
@@ -100,6 +121,10 @@ class BlockTrie:
             self.allocator.add_ref_count(matched_blocks, 1)
             seq.logical_blocks.append(matched_blocks)
             seq.set_step(num_matched)
+
+        # record prefix hit
+        self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
+        self.stats.num_hit_tokens += num_matched - init_num_matched
 
         seq.logical_blocks.last_shared_node = curr
 
