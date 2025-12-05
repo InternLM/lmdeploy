@@ -84,7 +84,8 @@ class VLAsyncEngine(AsyncEngine):
                                                        adapter_name,
                                                        tools,
                                                        enable_thinking=enable_thinking,
-                                                       add_vision_id=add_vision_id**kwargs)
+                                                       add_vision_id=add_vision_id,
+                                                       **kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
 
