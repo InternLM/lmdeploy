@@ -63,24 +63,7 @@ class Qwen3VLModel(VisionModel):
                 prompt = prompt.replace(IMAGE_TOKEN, f'<|vision_start|>{self.image_token}<|vision_end|>')
                 prompt_messages.append(dict(role='user', content=prompt))
         else:
-            if add_vision_id:
-                prompt_messages = messages
-            else:
-                for message in messages:
-                    role, content = message['role'], message['content']
-                    if role != 'user' or isinstance(content, str):
-                        prompt_messages.append(message)
-                        continue
-                    _content = []
-                    for item in content:
-                        if item['type'] == 'text':
-                            _content.append(item['text'])
-                        elif item['type'] in ['image', 'image_url']:
-                            _content.append(f'<|vision_start|>{self.image_token}<|vision_end|>')
-                        else:
-                            raise ValueError(f'Unsupported message type: {item["type"]}')
-                    message = dict(role=role, content=''.join(_content))
-                    prompt_messages.append(message)
+            prompt_messages = messages
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start, add_vision_id=add_vision_id)
         return prompt, self.image_token
 
@@ -104,6 +87,12 @@ class Qwen3VLModel(VisionModel):
         # TODO: implement for turbomind
         pass
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
+    def to_turbomind(self,
+                     messages,
+                     chat_template,
+                     tokenizer,
+                     sequence_start,
+                     add_vision_id: Optional[bool] = False,
+                     **kwargs):
         # TODO: implement for turbomind
         pass

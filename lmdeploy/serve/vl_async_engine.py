@@ -104,7 +104,8 @@ class VLAsyncEngine(AsyncEngine):
                                                                self.tokenizer,
                                                                sequence_start,
                                                                tools=tools,
-                                                               enable_thinking=enable_thinking)
+                                                               enable_thinking=enable_thinking,
+                                                               add_vision_id=add_vision_id)
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
