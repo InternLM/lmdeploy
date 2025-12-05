@@ -12,7 +12,7 @@ from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import add_device_hook, disable_logging, rewrite_ctx
 
 logger = get_logger('lmdeploy')
@@ -84,7 +84,7 @@ def init_empty_vit(model_path):
 
 
 @VISION_MODELS.register_module()
-class Xcomposer2VisionModel(VisonModel):
+class Xcomposer2VisionModel(VisionModel):
     """InternLM-Xcomposer2 vision model."""
 
     def __init__(self,

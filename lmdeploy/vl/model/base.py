@@ -12,7 +12,7 @@ from lmdeploy.archs import get_model_arch
 VISION_MODELS = Registry('vision_model')
 
 
-class VisonModel(ABC):
+class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: Union[str, List[str]] = None
 

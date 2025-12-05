@@ -768,6 +768,7 @@ class AsyncEngine(LogitsMixin):
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
+            add_vision_id: Optional[bool] = False,
             **kwargs):
         """Generate responses.
 
@@ -819,6 +820,7 @@ class AsyncEngine(LogitsMixin):
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
                                                         enable_thinking=enable_thinking,
+                                                        add_vision_id=add_vision_id,
                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
@@ -889,12 +891,12 @@ class AsyncEngine(LogitsMixin):
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
                 hit_stop_token = 0
-                req_state = RequestStats(prompt_tokens=input_len)  # per-request stats
+                req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
-                    metrics_processor.queue_update((outputs, req_state, iteration_stats, specdecode_stats))
+                    metrics_processor.queue_update((outputs, req_stats, iteration_stats, specdecode_stats))
                     # decode res
                     if is_error(outputs.status):
                         break

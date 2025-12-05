@@ -150,6 +150,7 @@ class ChatCompletionRequest(BaseModel):
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
     min_p: float = 0.0
     enable_thinking: Optional[bool] = None
+    add_vision_id: Optional[bool] = False
     return_token_ids: Optional[bool] = False
     include_stop_str_in_output: Optional[bool] = False
 

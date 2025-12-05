@@ -2,7 +2,7 @@
 
 from typing import Dict, List
 
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 
 def check_transformers():
@@ -14,7 +14,7 @@ def check_transformers():
 
 
 @VISION_MODELS.register_module()
-class MllamaVLModel(VisonModel):
+class MllamaVLModel(VisionModel):
     """llama3.2 model."""
 
     _arch = 'MllamaForConditionalGeneration'

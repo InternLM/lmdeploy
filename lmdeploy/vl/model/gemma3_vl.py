@@ -6,7 +6,7 @@ from transformers import AutoConfig, AutoProcessor
 from transformers.processing_utils import ImagesKwargs, ProcessingKwargs
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
 
@@ -35,7 +35,7 @@ class Gemma3ProcessorKwargs(ProcessingKwargs, total=False):
 
 
 @VISION_MODELS.register_module()
-class Gemma3VisionModel(VisonModel):
+class Gemma3VisionModel(VisionModel):
     """Gemma3 vision model."""
 
     _arch = 'Gemma3ForConditionalGeneration'

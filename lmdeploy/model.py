@@ -773,11 +773,13 @@ class HFChatTemplate(BaseChatTemplate):
             kwargs.pop('enable_thinking')
         if 'reasoning_effort' in kwargs and kwargs.get('reasoning_effort', None) is None:
             kwargs.pop('reasoning_effort')
+        add_vision_id = kwargs.pop('add_vision_id', False)
         add_generation_prompt = messages[-1]['role'] != 'assistant'
         if sequence_start:
             prompt = self.tokenizer.apply_chat_template(messages,
                                                         tokenize=False,
                                                         add_generation_prompt=add_generation_prompt,
+                                                        add_vision_id=add_vision_id,
                                                         **kwargs)
         else:
             # Use a sentinel position to avoid the influence of default system role in the tokenizer's chat template
@@ -788,6 +790,7 @@ class HFChatTemplate(BaseChatTemplate):
             prompt = self.tokenizer.apply_chat_template(sentinel_messages + messages,
                                                         tokenize=False,
                                                         add_generation_prompt=add_generation_prompt,
+                                                        add_vision_id=add_vision_id,
                                                         **kwargs)
             # remove the sentinel part
             prompt = prompt[len(sentinel_prompt):]

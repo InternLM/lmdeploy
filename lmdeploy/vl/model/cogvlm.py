@@ -2,13 +2,13 @@
 from typing import Dict, List
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class CogVLMVisionModel(VisonModel):
+class CogVLMVisionModel(VisionModel):
     """CogVLM vision model."""
 
     _arch = 'CogVLMForCausalLM'
