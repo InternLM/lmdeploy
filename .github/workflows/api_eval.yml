@@ -191,7 +191,9 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Install opencompass
         run: |
-          python3 -m pip install opencompass
+          git clone https://github.com/open-compass/opencompass.git --depth 1
+          cd opencompass
+          python3 -m pip install .
           python3 -m pip install langdetect
       - name: Check env
         run: |

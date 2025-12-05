@@ -169,7 +169,8 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
                 print(f'Modified config for eval stage saved to: {temp_config_path}')
 
             cmd = [
-                'opencompass', temp_config_path, '--reuse', '--max-num-workers', '16', '-w', work_dir, '-m', test_type
+                'opencompass', temp_config_path, '--reuse', '--max-num-workers', '16', '-w', work_dir, '-m', test_type,
+                '--dump-res-length'
             ]
             print(f"Running command: {' '.join(cmd)}")
             print(f'Work directory: {work_dir}')
