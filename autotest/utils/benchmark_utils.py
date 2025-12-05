@@ -287,7 +287,7 @@ def prefixcache_throughput_test(config,
             command = ' '.join([
                 base_command, '--dataset-name random', f'--random-input-len {input_len}',
                 f'--random-output-len {out_len}', '--random-range-ratio 1.0', f'--num-prompts {num_prompts}',
-                '--stream-output', f'--csv {csv_path}'
+                '--stream-output', '--session-len 32768', f'--csv {csv_path}'
             ])
 
             if enable_prefix_caching:
