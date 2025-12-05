@@ -13,12 +13,18 @@ set(GLOO_INSTALL OFF CACHE BOOL "" FORCE)
 set(GLOO_STATIC_OR_SHARED STATIC CACHE STRING "" FORCE)
 set(USE_NCCL OFF)
 set(BUILD_TEST OFF)
+set(USE_IBVERBS OFF)
 FetchContent_MakeAvailable(gloo)
 
 # gloo build doesn't add include directories as a target property...
 target_include_directories(gloo PUBLIC
     $<BUILD_INTERFACE:${gloo_SOURCE_DIR}>
     $<BUILD_INTERFACE:${gloo_BINARY_DIR}> # config.h generated at cmake config time
+)
+
+target_compile_options(gloo PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W0>
+    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-w>
 )
 
 add_library(gloo_comm STATIC

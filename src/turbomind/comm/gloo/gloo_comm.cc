@@ -8,6 +8,7 @@
 #include <gloo/barrier.h>
 #include <gloo/broadcast.h>
 #include <gloo/common/utils.h>
+#include <gloo/config.h>
 #include <gloo/context.h>
 #include <gloo/math.h>
 #include <gloo/rendezvous/context.h>
@@ -15,6 +16,10 @@
 #include <gloo/rendezvous/store.h>
 #include <gloo/transport/tcp/attr.h>
 #include <gloo/transport/tcp/device.h>
+
+#if GLOO_HAVE_TRANSPORT_IBVERBS
+#include "gloo/transport/ibverbs/device.h"
+#endif
 
 #include "src/turbomind/comm/gloo/tcp_store.h"
 #include "src/turbomind/comm/host_comm.h"
@@ -27,6 +32,16 @@ const char  STORE_INFO_DELIM       = ',';
 
 std::shared_ptr<::gloo::transport::Device> createGlooDevice()
 {
+#if GLOO_HAVE_TRANSPORT_IBVERBS
+    if (auto transport = std::getenv("GLOO_DEVICE_TRANSPORT");
+        transport != nullptr && strcmp(transport, "ibverbs") == 0) {
+        ::gloo::transport::ibverbs::attr ib_attr{};
+        ib_attr.name  = "";
+        ib_attr.port  = 1;
+        ib_attr.index = 3;  // use IBV_GID_TYPE_ROCE_V2 and ipv4
+        return ::gloo::transport::ibverbs::CreateDevice(ib_attr);
+    }
+#endif
     ::gloo::transport::tcp::attr attr;
     if (auto ifname = std::getenv(GLOO_SOCKET_IFNAME_ENV); ifname) {
         attr.iface = ifname;
