@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -14,6 +15,9 @@ from lmdeploy.utils import get_logger
 from .block import LogicalTokenBlocks
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.paging.scheduler import Scheduler
+    from lmdeploy.pytorch.paging.seq_states.states import StateBase
+    from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
 logger = get_logger('lmdeploy')
@@ -146,21 +150,19 @@ class MessageStatus(enum.Enum):
     """Status of a sequence."""
 
     WAITING = enum.auto()
-    RUNNING = enum.auto()
+    READY = enum.auto()
     STOPPED = enum.auto()
-    ENDED = enum.auto()
-    ABORTED = enum.auto()
-    LOCKED = enum.auto()
+    RUNNING = enum.auto()
 
     # PD Disaggregation
-    # WAITING_MIGRATION: state of Unmigrated Requests
+    # MIGRATION_WAITING: state of Unmigrated Requests
     # in both prefill and decode engines are tagged by
-    # RUNNING_MIGRATION: state of Migrating Requests
+    # MIGRATION_READY: state of Migrating Requests
     # in decode engine
     TO_BE_MIGRATED = enum.auto()
-    WAITING_MIGRATION = enum.auto()
-    RUNNING_MIGRATION = enum.auto()
-    MIGRATION_LOCKED = enum.auto()
+    MIGRATION_WAITING = enum.auto()
+    MIGRATION_READY = enum.auto()
+    MIGRATION_RUNNING = enum.auto()
     MIGRATION_DONE = enum.auto()
 
 
@@ -172,6 +174,7 @@ class SequenceMeta:
     """Meta data shared by all sequence."""
     block_size: int
     strategy: 'SequenceStrategy' = None
+    sampling_strategy: 'SamplingStrategy' = None
 
 
 class SequenceManager:
@@ -179,9 +182,7 @@ class SequenceManager:
 
     def __init__(self, seq_meta: SequenceMeta) -> None:
         self._seq_map: SeqMap = dict()
-        self._status_seq_map: Dict[MessageStatus, SeqMap] = dict()
-        for status in MessageStatus:
-            self._status_seq_map[status] = dict()
+        self._status_seq_map: Dict[MessageStatus, SeqMap] = defaultdict(dict)
 
         self.seq_meta = seq_meta
         self._seq_count = 0
@@ -247,12 +248,12 @@ def _to_ndarray(token_ids) -> np.ndarray:
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, seq_manager: SequenceManager) -> None:
+    def __init__(self, session_id: int, seq_manager: SequenceManager, scheduler: 'Scheduler') -> None:
         self.session_id = session_id
         self.seq_meta = seq_manager.seq_meta
-        self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: SeqMap = dict()
         self.seq_manager = seq_manager
+        self.scheduler = scheduler
 
     def add_sequence(self,
                      token_ids: Tensor,
@@ -264,6 +265,8 @@ class SchedulerSession:
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
+        from lmdeploy.pytorch.paging.seq_states.states import build_seq_state
+
         if sampling_param is None:
             sampling_param = SamplingParam()
 
@@ -282,12 +285,22 @@ class SchedulerSession:
             mode=UpdateTokenMode.INPUTS,
         )
         self.sequences[seq.seq_id] = seq
+
+        # set status
+        # update seq manager
+        status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
+        seq.set_state(build_seq_state(self.scheduler, seq, status))
         self.seq_manager.add_sequence(seq)
+
+        # metrics
+        seq.record_event(EventType.QUEUED)
+
         return seq
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
         assert seq.seq_id in self.sequences
+        seq.state.free()
         self.sequences.pop(seq.seq_id)
         self.seq_manager.remove_sequence(seq)
 
@@ -557,7 +570,6 @@ class SchedulerSequence:
     arrive_time: float = 0.0
     output_start_pos: int = 0
     meta: Any = None
-    _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
 
@@ -583,6 +595,7 @@ class SchedulerSequence:
         self._num_images: int = len(self.history_embeddings)
         self._num_history_cross: int = 0
         self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
+        self._state = None
 
     @property
     def block_size(self) -> int:
@@ -692,22 +705,20 @@ class SchedulerSequence:
         return len(self.logical_blocks)
 
     @property
-    def seq_manager(self) -> SequenceManager:
-        """Sequence manager."""
-        return self.session.seq_manager
+    def state(self) -> 'StateBase':
+        return self._state
+
+    def set_state(self, state: 'StateBase'):
+        """Set state."""
+        self._state = state
 
     @property
     def status(self):
-        return self._status
+        return self.state.status
 
     @property
     def return_logits(self):
         return self.sampling_param.out_logits
-
-    @status.setter
-    def status(self, value: MessageStatus):
-        self.seq_manager.update_sequence_status(self, value)
-        self._status = value
 
     def num_all_cross_tokens(self):
         """Num of all cross tokens."""
