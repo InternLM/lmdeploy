@@ -114,6 +114,7 @@ turbomind_quatization:
         - Qwen/Qwen3-32B-FP8
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
     gptq:
         - empty
     no_kvint4:
@@ -132,8 +133,9 @@ turbomind_quatization:
         - Qwen/Qwen3-32B-FP8
         - openai/gpt-oss-120b
         - openai/gpt-oss-20b
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
     no_kvint8:
-        - empty
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
 
 pytorch_quatization:
     awq:
@@ -155,47 +157,44 @@ pytorch_quatization:
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-32B-FP8
         - moonshotai/Kimi-K2-Instruct-0905
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
     no_kvint8:
-        - empty
+        - Qwen/Qwen3-235B-A22B-Thinking-2507
 
 longtext_model:
-    tp:
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
 
 benchmark_model:
-    tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
-        - meta-llama/Meta-Llama-3-1-8B-Instruct
-        - meta-llama/Meta-Llama-3-1-70B-Instruct
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen2.5-72B-Instruct
-        - openai/gpt-oss-120b
-        - openai/gpt-oss-20b
-        - unsloth/gpt-oss-20b-BF16
-        - unsloth/gpt-oss-120b-BF16
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
+    - meta-llama/Meta-Llama-3-1-8B-Instruct
+    - meta-llama/Meta-Llama-3-1-70B-Instruct
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen2.5-72B-Instruct
+    - openai/gpt-oss-120b
+    - openai/gpt-oss-20b
+    - unsloth/gpt-oss-20b-BF16
+    - unsloth/gpt-oss-120b-BF16
 
 evaluate_model:
-    tp:
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-32B-FP8
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-30B-A3B-FP8
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-235B-A22B-FP8
-        - openai/gpt-oss-120b
-        - openai/gpt-oss-20b
-        - unsloth/gpt-oss-120b-BF16
-        - unsloth/gpt-oss-20b-BF16
-        - deepseek/DeepSeek-V3.1
-        - moonshotai/Kimi-K2-Instruct-0905
-    dp_ep:
-        - moonshotai/Kimi-K2-Instruct-0905
+    - Qwen/Qwen3-0.6B-FP8
+    - Qwen/Qwen3-1.7B-FP8
+    - Qwen/Qwen3-4B-FP8
+    - Qwen/Qwen3-8B-FP8
+    - Qwen/Qwen3-14B-FP8
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-32B-FP8
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-30B-A3B-FP8
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-235B-A22B-FP8
+    - openai/gpt-oss-120b
+    - openai/gpt-oss-20b
+    - unsloth/gpt-oss-120b-BF16
+    - unsloth/gpt-oss-20b-BF16
+    - deepseek/DeepSeek-V3.1
+    - moonshotai/Kimi-K2-Instruct-0905
+    - Qwen/Qwen3-235B-A22B-Thinking-2507

@@ -138,20 +138,19 @@ pytorch_quatization:
 
 
 evaluate_model:
-    tp:
-        - internlm/Intern-S1-mini
-        - Qwen/Qwen3-0.6B-FP8
-        - Qwen/Qwen3-1.7B-FP8
-        - Qwen/Qwen3-4B-FP8
-        - Qwen/Qwen3-8B-FP8
-        - Qwen/Qwen3-14B-FP8
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-32B-FP8
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-30B-A3B-FP8
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-235B-A22B-FP8
-        - openai/gpt-oss-120b
-        - openai/gpt-oss-20b
-        - unsloth/gpt-oss-120b-BF16
-        - unsloth/gpt-oss-20b-BF16
+    - internlm/Intern-S1-mini
+    - Qwen/Qwen3-0.6B-FP8
+    - Qwen/Qwen3-1.7B-FP8
+    - Qwen/Qwen3-4B-FP8
+    - Qwen/Qwen3-8B-FP8
+    - Qwen/Qwen3-14B-FP8
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-32B-FP8
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-30B-A3B-FP8
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-235B-A22B-FP8
+    - openai/gpt-oss-120b
+    - openai/gpt-oss-20b
+    - unsloth/gpt-oss-120b-BF16
+    - unsloth/gpt-oss-20b-BF16

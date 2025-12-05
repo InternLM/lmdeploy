@@ -361,7 +361,7 @@ def get_evaluate_turbomind_model_list(parallel_config: Optional[Union[int, Dict[
     if is_longtext:
         case_list_base = [item for item in config.get('longtext_model', [])]
     else:
-        case_list_base = config.get('evaluate_model', config.get('benchmark_model', []))
+        case_list_base = config.get('evaluate_model', [])
 
     if parallel_config is not None:
         filtered_models = []
@@ -481,7 +481,7 @@ def get_evaluate_pytorch_model_list(parallel_config: Optional[Union[int, Dict[st
     if is_longtext:
         case_list_base = [item for item in config.get('longtext_model', [])]
     else:
-        case_list_base = config.get('evaluate_model', config.get('benchmark_model', []))
+        case_list_base = config.get('evaluate_model', [])
 
     if parallel_config is not None:
         filtered_models = []

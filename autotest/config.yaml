@@ -363,34 +363,31 @@ pytorch_quatization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 
 longtext_model:
-    tp:
-        - Qwen/Qwen3-8B
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen3-8B
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
 
 benchmark_model:
-    tp:
-        - internlm/Intern-S1
-        - internlm/Intern-S1-mini
-        - meta-llama/Llama-2-7b-chat-hf
-        - meta-llama/Meta-Llama-3-1-8B-Instruct
-        - meta-llama/Meta-Llama-3-1-70B-Instruct
-        - internlm/internlm3-8b-instruct
-        - internlm/internlm2_5-7b-chat
-        - internlm/internlm2_5-20b-chat
-        - THUDM/glm-4-9b-chat
-        - Qwen/Qwen3-32B
-        - Qwen/Qwen3-30B-A3B
-        - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen2.5-7B-Instruct
-        - Qwen/Qwen2.5-72B-Instruct
-        - unsloth/gpt-oss-20b-BF16
-        - unsloth/gpt-oss-120b-BF16
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
+    - meta-llama/Llama-2-7b-chat-hf
+    - meta-llama/Meta-Llama-3-1-8B-Instruct
+    - meta-llama/Meta-Llama-3-1-70B-Instruct
+    - internlm/internlm3-8b-instruct
+    - internlm/internlm2_5-7b-chat
+    - internlm/internlm2_5-20b-chat
+    - THUDM/glm-4-9b-chat
+    - Qwen/Qwen3-32B
+    - Qwen/Qwen3-30B-A3B
+    - Qwen/Qwen3-235B-A22B
+    - Qwen/Qwen2.5-7B-Instruct
+    - Qwen/Qwen2.5-72B-Instruct
+    - unsloth/gpt-oss-20b-BF16
+    - unsloth/gpt-oss-120b-BF16
 
 
 evaluate_model:
-  tp:
     - google/gemma-2-9b-it
     - google/gemma-2-27b-it
     - meta-llama/Meta-Llama-3-1-8B-Instruct
