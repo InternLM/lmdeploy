@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import torch
 from torch import Tensor
+from torch.profiler import record_function
 
 from lmdeploy.pytorch.model_inputs import StepContext
 
@@ -34,8 +35,10 @@ class CudaGraphMeta:
     input_buffers: BuffType = None
     output_buffers: BuffType = None
     vocab_size: int = 1
-    decode_query_len: int = 1
+    use_mla_fp8_cache: bool = False
     use_flash_mla: bool = False
+    mla_index_topk: Optional[int] = None
+    decode_query_len: int = 1
     use_fa3_decoding: bool = False
 
 
@@ -81,9 +84,17 @@ class CudaGraphMixin:
             import flash_mla
 
             # create buffers for flash mla
+            num_attention_heads = self.config.num_attention_heads
+            index_topk = graph_meta.mla_index_topk
+            num_heads_q = None if index_topk is None else num_attention_heads
             input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
                 torch.ones(max_batches, dtype=torch.int32, device=device),
-                self.config.num_attention_heads * decode_query_len, 1)
+                num_attention_heads * decode_query_len,
+                num_heads_k=1,
+                num_heads_q=num_heads_q,
+                is_fp8_kvcache=graph_meta.use_mla_fp8_cache,
+                topk=index_topk)
+
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
             input_buffers['scheduler_metadata'] = torch.zeros(max_batches + 1, dtype=torch.int32, device=device)
@@ -95,6 +106,7 @@ class CudaGraphMixin:
         input_buffers['q_start_loc'] = input_buffers['qkv_lens'][0]
         input_buffers['q_seqlens'] = input_buffers['qkv_lens'][1]
         input_buffers['kv_seqlens'] = input_buffers['qkv_lens'][2]
+        input_buffers['qkv_seqlens'] = input_buffers['qkv_lens'][1:]
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
         # create buffer for cross_attn_metadata here
         input_buffers['fill_seqlens'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
@@ -105,6 +117,7 @@ class CudaGraphMixin:
 
         return input_buffers
 
+    @record_function('fill_buffers_cudagraph')
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
                                past_key_values: List, attn_metadata: Any, inputs_embeds: Tensor,
                                **kwargs) -> Dict[str, Tensor]:
@@ -129,8 +142,7 @@ class CudaGraphMixin:
         input_buffers['qkv_lens'].zero_()
         input_buffers['q_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
         input_buffers['qkv_lens'][:, :batch_size] = qkv
-        input_buffers['cu_seqlens_q'][1:batch_size + 1] = input_buffers['q_seqlens'][:batch_size].cumsum(0)
-        input_buffers['cu_seqlens_k'][1:batch_size + 1] = input_buffers['kv_seqlens'][:batch_size].cumsum(0)
+        input_buffers['cu_seqlens'][:, 1:] = input_buffers['qkv_seqlens'].cumsum(1)
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
             if 'inputs_embeds' not in input_buffers:
@@ -149,8 +161,16 @@ class CudaGraphMixin:
 
         if graph_meta.use_flash_mla is True:
             import flash_mla
+            num_attention_heads = self.config.num_attention_heads
+            index_topk = graph_meta.mla_index_topk
+            num_heads_q = None if index_topk is None else num_attention_heads
             tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
-                attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads * decode_query_len, 1)
+                attn_metadata.kv_seqlens.to(torch.int32),
+                num_attention_heads * decode_query_len,
+                num_heads_k=1,
+                num_heads_q=num_heads_q,
+                is_fp8_kvcache=graph_meta.use_mla_fp8_cache,
+                topk=index_topk)
             # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
             input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
             input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])

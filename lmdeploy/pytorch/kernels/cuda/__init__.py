@@ -3,7 +3,6 @@ from ..default.w8a8_kernels import per_channel_quant
 from .alibi_pagedattention import alibi_paged_attention_fwd
 from .apply_rotary_pos_emb import apply_rotary_pos_emb
 from .fill_kv_cache import fill_kv_cache
-from .flash_mla import flash_mla_fwd
 from .flashattention import flash_attention_fwd
 from .flatten_kv_cache import flatten_kv_cache
 from .fused_moe import fused_moe
