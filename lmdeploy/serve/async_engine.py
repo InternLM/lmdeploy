@@ -768,6 +768,7 @@ class AsyncEngine(LogitsMixin):
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
+            add_vision_id: Optional[bool] = False,
             **kwargs):
         """Generate responses.
 
@@ -819,6 +820,7 @@ class AsyncEngine(LogitsMixin):
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
                                                         enable_thinking=enable_thinking,
+                                                        add_vision_id=add_vision_id,
                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']

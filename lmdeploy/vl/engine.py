@@ -69,6 +69,7 @@ class ImageEncoder:
         sequence_start,
         tools: Optional[List[object]] = None,
         enable_thinking: Optional[bool] = None,
+        add_vision_id: Optional[bool] = False,
     ) -> List[Dict]:
         """
         Args:
@@ -93,7 +94,8 @@ class ImageEncoder:
                                            tokenizer,
                                            sequence_start,
                                            tools=tools,
-                                           enable_thinking=enable_thinking)
+                                           enable_thinking=enable_thinking,
+                                           add_vision_id=add_vision_id)
         else:
             result = self.model.to_pytorch_with_input_ids(messages)
         # clear data

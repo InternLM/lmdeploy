@@ -56,6 +56,7 @@ class VLAsyncEngine(AsyncEngine):
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
                                 enable_thinking: Optional[bool] = None,
+                                add_vision_id: Optional[bool] = False,
                                 **kwargs):
         """Process messages and return the required data for the inference
         engines.
@@ -70,6 +71,7 @@ class VLAsyncEngine(AsyncEngine):
                                                    adapter_name,
                                                    tools=tools,
                                                    enable_thinking=enable_thinking,
+                                                   add_vision_id=add_vision_id,
                                                    **kwargs)
         elif isinstance(messages, List):
             has_multimodal_input = any(
@@ -82,7 +84,7 @@ class VLAsyncEngine(AsyncEngine):
                                                        adapter_name,
                                                        tools,
                                                        enable_thinking=enable_thinking,
-                                                       **kwargs)
+                                                       add_vision_id=add_vision_id**kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
 
@@ -110,7 +112,8 @@ class VLAsyncEngine(AsyncEngine):
                                                              self.tokenizer,
                                                              sequence_start,
                                                              tools=tools,
-                                                             enable_thinking=enable_thinking)
+                                                             enable_thinking=enable_thinking,
+                                                             add_vision_id=add_vision_id)
         return results
 
     @classmethod
