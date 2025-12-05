@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from torch import Tensor
+from torch.profiler import record_function
 
 from lmdeploy.pytorch.model_inputs import StepContext
 
@@ -105,6 +106,7 @@ class CudaGraphMixin:
         input_buffers['q_start_loc'] = input_buffers['qkv_lens'][0]
         input_buffers['q_seqlens'] = input_buffers['qkv_lens'][1]
         input_buffers['kv_seqlens'] = input_buffers['qkv_lens'][2]
+        input_buffers['qkv_seqlens'] = input_buffers['qkv_lens'][1:]
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
         # create buffer for cross_attn_metadata here
         input_buffers['fill_seqlens'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
@@ -115,6 +117,7 @@ class CudaGraphMixin:
 
         return input_buffers
 
+    @record_function('fill_buffers_cudagraph')
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
                                past_key_values: List, attn_metadata: Any, inputs_embeds: Tensor,
                                **kwargs) -> Dict[str, Tensor]:
@@ -139,8 +142,7 @@ class CudaGraphMixin:
         input_buffers['qkv_lens'].zero_()
         input_buffers['q_seqlens'].fill_(graph_meta.max_tokens // graph_meta.max_batchs)
         input_buffers['qkv_lens'][:, :batch_size] = qkv
-        input_buffers['cu_seqlens_q'][1:batch_size + 1] = input_buffers['q_seqlens'][:batch_size].cumsum(0)
-        input_buffers['cu_seqlens_k'][1:batch_size + 1] = input_buffers['kv_seqlens'][:batch_size].cumsum(0)
+        input_buffers['cu_seqlens'][:, 1:] = input_buffers['qkv_seqlens'].cumsum(1)
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
             if 'inputs_embeds' not in input_buffers:

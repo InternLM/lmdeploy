@@ -193,17 +193,20 @@ class CudaOpsBackend(DefaultOpsBackend):
         """Update step context."""
         attn_meta_cls = cls.get_attention_metadata_cls()
         q_seqlens = step_context.q_seqlens
-        q_start_loc = q_seqlens.cumsum(0) - q_seqlens
         kv_seqlens = step_context.kv_seqlens
         kv_start_loc = None
         kv_flatten_size = None
         use_flash_mla = step_context.model_config.use_flash_mla
         use_flash_attn3_decoding = step_context.model_config.model_paradigm == 'ar_spec'
 
-        cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
-        cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
+        # pad and cumsum requires 4 kernels, so we fuse seqlens cumsum into one kernel
+        seqlens = torch.stack([q_seqlens, kv_seqlens], dim=0)
+        cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens, dim=1, dtype=torch.int32), (1, 0))
+        cu_seqlens_q = cu_seqlens[0]
+        cu_seqlens_k = cu_seqlens[1]
+        q_start_loc = step_context.q_start_loc
         if not step_context.is_decoding:
-            kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
+            kv_start_loc = cu_seqlens_k[:-1].to(kv_seqlens.dtype)
             kv_flatten_size = step_context.sum_kv_seqlen
 
         attn_metadata = attn_meta_cls(
@@ -218,13 +221,12 @@ class CudaOpsBackend(DefaultOpsBackend):
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
         )
-        if use_flash_mla:
-            if step_context.is_decoding is True:
+        if step_context.is_decoding:
+            if use_flash_mla:
                 model_config = step_context.model_config
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
                 cls.update_meta_flashmla(attn_metadata, model_config, decode_query_len)
-        elif use_flash_attn3_decoding:
-            if step_context.is_decoding is True:
+            elif use_flash_attn3_decoding:
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 
         cross_seqlens = step_context.cross_seqlens
