@@ -233,6 +233,12 @@ class ArgumentHelper:
         return parser.add_argument('--nnodes', type=int, default=1, help='The total node nums')
 
     @staticmethod
+    def dist_init_addr(parser):
+        """Add argument dist_init_addr to parser."""
+
+        return parser.add_argument('--dist-init-addr', type=str, default=None)
+
+    @staticmethod
     def session_id(parser):
         """Add argument session_id to parser."""
 

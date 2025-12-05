@@ -85,6 +85,7 @@ private:
 
     std::shared_ptr<Gateway>               gateway_;
     std::function<std::shared_ptr<void>()> ffi_ctx_factory_;
+    std::vector<int>                       node_dp_ranks_;
 
     // Weights & engine instances for the ranks
     std::vector<std::shared_ptr<LlamaWeight>> weights_;

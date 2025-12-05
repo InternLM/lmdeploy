@@ -246,6 +246,10 @@ class TurbomindEngineConfig:
     mlp_tp_size: int = None
     mlp_dp_size: int = None
     outer_dp_size: int = None
+    nnodes: int = 1
+    node_rank: int = 0
+    dist_init_addr: Optional[str] = None
+    devices: List[int] = None
     session_len: Optional[int] = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8

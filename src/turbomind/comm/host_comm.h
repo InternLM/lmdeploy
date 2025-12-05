@@ -3,14 +3,24 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
 
+#include "src/turbomind/comm/serialize.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/utils/logger.h"
 
 namespace turbomind::comm {
+
+enum class CommType
+{
+    kIntra,
+    kInter,
+    kHybrid,
+};
 
 enum class RedOp
 {
@@ -27,6 +37,17 @@ class HostCommImpl {
 public:
     virtual ~HostCommImpl();
 
+    virtual void* query(CommType type) const
+    {
+        return nullptr;
+    }
+
+    template<typename T>
+    T* as() const
+    {
+        return static_cast<T*>(query(T::kCommType));
+    }
+
     virtual int rank() const = 0;
 
     virtual int n_ranks() const = 0;
@@ -42,6 +63,42 @@ public:
     virtual void AllGather(void* data, int count, DataType dtype, copy_fn copy) = 0;
 
     virtual void AllReduce(void* data, int count, DataType dtype, RedOp red_op) = 0;
+};
+
+class IpcHostCommImpl: public HostCommImpl {
+public:
+    static constexpr CommType kCommType = CommType::kInter;
+
+    virtual char* create_buffer(size_t size) = 0;
+
+    virtual void* query(CommType type) const override
+    {
+        if (type == kCommType) {
+            return const_cast<IpcHostCommImpl*>(this);
+        }
+        return HostCommImpl::query(type);
+    }
+};
+
+class HybridHostCommImpl: public HostCommImpl {
+public:
+    static constexpr CommType kCommType = CommType::kHybrid;
+
+    virtual IpcHostCommImpl* inter_comm() const = 0;
+
+    virtual HostCommImpl* intra_comm() const = 0;
+
+    virtual const std::unordered_map<int, int>& get_rank_to_intra() const = 0;
+
+    virtual const std::vector<int>& get_rank_to_inter() const = 0;
+
+    virtual void* query(CommType type) const override
+    {
+        if (type == kCommType) {
+            return const_cast<HybridHostCommImpl*>(this);
+        }
+        return HostCommImpl::query(type);
+    }
 };
 
 class HostComm {
@@ -88,7 +145,53 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
             comm->Broadcast(data, n, kNull, root, detail::copy_fn<T>);
         }
         else {
-            throw std::runtime_error("not implemented");
+            auto process = [&](IpcHostCommImpl* ipc_comm, int root) {
+                // serialize on root rank and deserialize on other ranks
+                size_t& buf_size = *reinterpret_cast<size_t*>(ipc_comm->create_buffer(sizeof(size_t)));
+                if (ipc_comm->rank() == root) {
+                    buf_size = 0;
+                    serialize(nullptr, buf_size, data, n);
+                }
+                ipc_comm->Broadcast(&buf_size, 1, data_type_v<size_t>, root, detail::copy_fn<size_t>);
+
+                int   count = buf_size;
+                char* buf   = ipc_comm->create_buffer(count);
+                if (ipc_comm->rank() == root) {
+                    size_t sz{};
+                    serialize(buf, sz, data, n);
+                }
+                ipc_comm->Broadcast(buf, count, data_type_v<uint8_t>, root, detail::copy_fn<uint8_t>);
+
+                if (ipc_comm->rank() != root) {
+                    deserialize(data, n, buf);
+                }
+            };
+
+            try {
+                if (auto hybrid_comm = comm->as<HybridHostCommImpl>(); hybrid_comm) {
+                    auto  inter_comm    = TM_CHECK_NOTNULL(hybrid_comm->inter_comm());
+                    auto  intra_comm    = TM_CHECK_NOTNULL(hybrid_comm->intra_comm());
+                    auto& rank_to_intra = hybrid_comm->get_rank_to_intra();
+                    auto& rank_to_inter = hybrid_comm->get_rank_to_inter();
+                    bool  root_node     = rank_to_intra.count(root) > 0;  // root on this node
+                    if (root_node) {
+                        intra_comm->Broadcast(data, n, kNull, rank_to_intra.at(root), detail::copy_fn<T>);
+                    }
+                    if (intra_comm->rank() == 0) {
+                        process(inter_comm, rank_to_inter[root]);
+                    }
+                    if (!root_node) {
+                        intra_comm->Broadcast(data, n, kNull, 0, detail::copy_fn<T>);
+                    }
+                }
+                else {
+                    process(TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>()), root);
+                }
+            }
+            catch (const std::invalid_argument& e) {
+                TM_LOG_ERROR("Broadcast failed: %s", e.what());
+                throw;
+            }
         }
     }
 }
@@ -105,8 +208,28 @@ void AllGather(HostCommImpl* comm, T* data, int n)
             comm->AllGather(data, n, kNull, detail::copy_fn<T>);
         }
         else {
-            /// serialize data
-            throw std::runtime_error("not implemented");
+            try {
+                // buf may have different size on different ranks
+                auto    ipc_comm = TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>());
+                size_t& sz_i     = *reinterpret_cast<size_t*>(ipc_comm->create_buffer(sizeof(size_t)));
+                sz_i             = 0;
+                serialize(nullptr, sz_i, data, n);
+                comm->AllReduce(&sz_i, 1, data_type_v<size_t>, RedOp::kMax);
+                size_t sz_max = sz_i;
+                char*  buf    = ipc_comm->create_buffer(sz_max * comm->n_ranks());
+                serialize(buf + comm->rank() * sz_max, sz_i, data, n);
+                comm->AllGather(buf, sz_max, data_type_v<uint8_t>, detail::copy_fn<uint8_t>);
+                for (int i = 0; i < comm->n_ranks(); ++i) {
+                    if (i != comm->rank()) {
+                        // some field in data may be not shared by all rank
+                        deserialize(data + n * i, n, buf + i * sz_max);
+                    }
+                }
+            }
+            catch (const std::invalid_argument& e) {
+                TM_LOG_ERROR("AllGather failed: %s", e.what());
+                throw;
+            }
         }
     }
 }
@@ -150,7 +273,7 @@ public:
     virtual void Export(std::ostream& os) = 0;
     virtual void Import(std::istream& is) = 0;
 
-    virtual HostComm CreateCommunicator(int n_ranks, int rank) = 0;
+    virtual HostComm CreateCommunicator(int n_ranks, int rank, int node_rank = 0) = 0;
 };
 
 std::unique_ptr<HostGroupId> CreateHostGroupId(const std::string& backend);

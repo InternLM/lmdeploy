@@ -5,6 +5,7 @@ import base64
 import copy
 import json
 import math
+import os
 import os.path as osp
 import sys
 from collections.abc import Sequence
@@ -86,10 +87,11 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
+    cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
     if not complete_parallel_config(cfg):
         total = cfg.dp * cfg.tp
         if not cfg.device_num:
-            count = torch.cuda.device_count()
+            count = torch.cuda.device_count() * cfg.nnodes
             if total < count:
                 count = total
             cfg.device_num = count
@@ -106,7 +108,11 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
-    cfg.devices = cfg.devices or list(range(cfg.device_num))
+    # update devices
+    cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
+    cfg.devices = cfg.devices[:cfg.device_num // cfg.nnodes]
+    assert len(cfg.devices) == cfg.device_num // cfg.nnodes
+    # for simplicity, each node has dp
 
 
 class TurboMind:
@@ -142,8 +148,21 @@ class TurboMind:
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
         update_parallel_config(_engine_config)
+        self.is_dummy = self._check_is_dummy(_engine_config)
+        if _engine_config.nnodes > 1:
+            logger.info(f'dist_init_addr={_engine_config.dist_init_addr}')
+            assert _engine_config.dist_init_addr is not None
+            hostname, port = _engine_config.dist_init_addr.split(':')
+            os.environ['LMDEPLOY_DIST_INIT_ADDR'] = hostname
+            os.environ['LMDEPLOY_DIST_INIT_PORT'] = port
+            # this will block the process and ignore signals until all ranks done
+            from torch.distributed import TCPStore
+            self.store = TCPStore(host_name=hostname,
+                                  port=int(port),
+                                  world_size=_engine_config.nnodes,
+                                  is_master=_engine_config.node_rank == 0)
 
-        self.gpu_count = _engine_config.device_num
+        self.gpu_count = len(_engine_config.devices)
         self.devices = _engine_config.devices
         self._engine_created = False
 
@@ -157,6 +176,19 @@ class TurboMind:
             self._create_engine()
 
         self.session_len = self.config.session_len
+
+    def _check_is_dummy(self, cfg: TurbomindEngineConfig):
+        dp_ranks = []
+        comm_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
+        tp_cp_size = cfg.attn_tp_size * cfg.attn_cp_size
+        for i in range(len(cfg.devices)):
+            rank = i + len(cfg.devices) * cfg.node_rank
+            outer_dp_rank = rank // comm_size
+            attn_tp_rank = rank % tp_cp_size // cfg.attn_cp_size
+            attn_dp_rank = rank % comm_size // tp_cp_size
+            if attn_tp_rank == 0:
+                dp_ranks.append((rank, outer_dp_rank * cfg.attn_dp_size + attn_dp_rank))
+        return len(dp_ranks) == 0
 
     def _check_unloaded_tm_params(self):
         tm_params = self._tm_model.tm_params
@@ -192,10 +224,8 @@ class TurboMind:
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
 
-        # TODO: support mpi
-        self.node_id = 0
-        self.node_num = 1
-        torch.cuda.synchronize()
+        engine_cfg = self.config_dict['engine_config']
+        self.node_id = engine_cfg['node_rank']
 
         # create weight
         def _create_weight_func(device_id):
@@ -382,6 +412,8 @@ class TurboMind:
         if self.model_comm is not None:
             self.model_comm = None
         self._engine_created = False
+        if hasattr(self, 'store'):
+            del self.store
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -527,11 +559,6 @@ class TurboMindInstance:
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
-        self.node_id = tm_model.node_id
-        self.gpu_count = tm_model.gpu_count
-
-        self.session_len = tm_model.session_len
-
         # create model instances
         lazy_init = self.tm_model.config_dict['engine_config'].get('empty_init', False)
         self._model_inst = None if lazy_init else self._create_model_instance(0)
@@ -559,6 +586,14 @@ class TurboMindInstance:
         if self._model_inst is None:
             self._model_inst = self._create_model_instance(0)
         return self._model_inst
+
+    def ensure_not_dummy(func):
+
+        def wrapper(self, *args, **kwargs):
+            assert self.tm_model.is_dummy is False, 'dummy node cannot do inference'
+            return func(self, *args, **kwargs)
+
+        return wrapper
 
     def _create_model_instance(self, device_id):
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)
@@ -661,14 +696,17 @@ class TurboMindInstance:
 
         return inputs, input_len
 
+    @ensure_not_dummy
     async def async_cancel(self, session_id: int = None):
         self.model_inst.cancel()
 
+    @ensure_not_dummy
     def async_end_cb(self, fut: asyncio.Future, status: int):
         """Executing on engine's signaling thread."""
         logger.info(f'[async_end_cb] session ended, status = {status}')
         fut.get_loop().call_soon_threadsafe(fut.set_result, status)
 
+    @ensure_not_dummy
     async def async_end(self, session_id):
         fut = asyncio.get_running_loop().create_future()
         self.model_inst.end(partial(self.async_end_cb, fut), session_id)
@@ -678,6 +716,7 @@ class TurboMindInstance:
         """Executing on engine's signaling thread."""
         s.loop.call_soon_threadsafe(s.release)
 
+    @ensure_not_dummy
     async def async_stream_infer(self,
                                  session_id,
                                  input_ids,

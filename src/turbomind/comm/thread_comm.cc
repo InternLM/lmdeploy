@@ -315,7 +315,7 @@ public:
         TM_CHECK((bool)internal_);
     }
 
-    HostComm CreateCommunicator(int n_ranks, int rank) override
+    HostComm CreateCommunicator(int n_ranks, int rank, int node_rank = 0) override
     {
         auto init_shared_state = [&] {  //
             internal_->state = std::make_shared<ThreadCommImpl::State>(n_ranks);
