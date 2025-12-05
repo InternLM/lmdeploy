@@ -52,20 +52,23 @@ class MacaOpsBackend(DlinferOpsBackend):
 
         kv_start_indices, attention_mask = [], []
         block_num, block_size, _, _ = step_context.kv_caches[0][1].shape
-        device = step_context.block_offsets.device
 
         is_unpaged_prefill = False
         if not step_context.is_decoding:
             is_unpaged_prefill = \
                all((step_context.q_seqlens ==
                     step_context.kv_seqlens).tolist())
-        q_start_loc = torch.cat((torch.tensor([0], device=device), step_context.q_seqlens.cumsum(0))).int()
+        q_start_loc = step_context.q_start_loc
+        cu_seqlens = torch.cat((q_start_loc, step_context.q_seqlens.sum().unsqueeze(0))).int()
+
         q_seqlens = step_context.q_seqlens.int()
         kv_seqlens = step_context.kv_seqlens.int()
-        max_q_seq_len = torch.max(q_seqlens).item()
-        max_kv_seq_len = torch.max(kv_seqlens).item()
 
         if step_context.is_decoding:
+            # max_q_seq_len, max_kv_seq_len is not used in decoding stage
+            max_q_seq_len = -1
+            max_kv_seq_len = -1
+
             # collect kv_start_indices without using a for-loop,
             # (fill kv-cache for just ONE token during the decoding phase)
             idx = (step_context.kv_seqlens - 1) % block_size
@@ -73,6 +76,9 @@ class MacaOpsBackend(DlinferOpsBackend):
             last_block = step_context.block_offsets.gather(1, b_num.view(-1, 1)).view(-1)
             kv_start_indices = (last_block * block_size + idx).reshape((-1, 1))
         else:
+            max_q_seq_len = torch.max(q_seqlens).cpu().item()
+            max_kv_seq_len = torch.max(kv_seqlens).cpu().item()
+
             for i in range(step_context.q_start_loc.size(0)):
                 q_seq_len = int(step_context.q_seqlens[i])
                 kv_seq_len = int(step_context.kv_seqlens[i])
@@ -88,7 +94,7 @@ class MacaOpsBackend(DlinferOpsBackend):
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets.int(),
-            q_start_loc=q_start_loc,
+            q_start_loc=cu_seqlens,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
             kv_start_indices=kv_start_indices,
