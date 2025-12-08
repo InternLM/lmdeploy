@@ -546,6 +546,7 @@ class ScheduleMetrics:
     active_blocks: int = 0
     cached_blocks: int = 0
     free_blocks: int = 0
+    prefix_cache_hit_rate: float = 0
 
 
 @dataclass
