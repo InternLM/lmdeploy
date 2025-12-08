@@ -19,58 +19,64 @@ tp_config:
     Qwen2.5-32B-Instruct: 2
 
 turbomind_chat_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
-    - Qwen/Qwen3-0.6B-FP8
-    - Qwen/Qwen3-1.7B-FP8
-    - Qwen/Qwen3-4B-FP8
-    - Qwen/Qwen3-8B-FP8
-    - Qwen/Qwen3-14B-FP8
-    - Qwen/Qwen3-235B-A22B
-    - Qwen/Qwen3-235B-A22B-FP8
-    - Qwen/Qwen3-30B-A3B
-    - Qwen/Qwen3-30B-A3B-FP8
-    - Qwen/Qwen3-32B
-    - Qwen/Qwen3-32B-FP8
-    - openai/gpt-oss-120b
-    - openai/gpt-oss-20b
+    tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - Qwen/Qwen3-0.6B-FP8
+        - Qwen/Qwen3-1.7B-FP8
+        - Qwen/Qwen3-4B-FP8
+        - Qwen/Qwen3-8B-FP8
+        - Qwen/Qwen3-14B-FP8
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-30B-A3B-FP8
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-32B-FP8
+        - openai/gpt-oss-120b
+        - openai/gpt-oss-20b
 
 pytorch_chat_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
-    - Qwen/Qwen3-0.6B-FP8
-    - Qwen/Qwen3-1.7B-FP8
-    - Qwen/Qwen3-4B-FP8
-    - Qwen/Qwen3-8B-FP8
-    - Qwen/Qwen3-14B-FP8
-    - Qwen/Qwen3-235B-A22B
-    - Qwen/Qwen3-235B-A22B-FP8
-    - Qwen/Qwen3-30B-A3B
-    - Qwen/Qwen3-30B-A3B-FP8
-    - Qwen/Qwen3-32B
-    - Qwen/Qwen3-32B-FP8
-    - unsloth/gpt-oss-120b-BF16
-    - unsloth/gpt-oss-20b-BF16
+    tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
+        - Qwen/Qwen3-0.6B-FP8
+        - Qwen/Qwen3-1.7B-FP8
+        - Qwen/Qwen3-4B-FP8
+        - Qwen/Qwen3-8B-FP8
+        - Qwen/Qwen3-14B-FP8
+        - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-235B-A22B-FP8
+        - Qwen/Qwen3-30B-A3B
+        - Qwen/Qwen3-30B-A3B-FP8
+        - Qwen/Qwen3-32B
+        - Qwen/Qwen3-32B-FP8
+        - unsloth/gpt-oss-120b-BF16
+        - unsloth/gpt-oss-20b-BF16
 
 turbomind_vl_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
+   tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
 
 pytorch_vl_model:
-    - internlm/Intern-S1
-    - internlm/Intern-S1-mini
+   tp:
+        - internlm/Intern-S1
+        - internlm/Intern-S1-mini
 
 turbomind_base_model:
-    - internlm/Intern-S1-mini
-    - Qwen/Qwen3-4B-FP8
-    - openai/gpt-oss-20b
+    tp:
+        - internlm/Intern-S1-mini
+        - Qwen/Qwen3-4B-FP8
+        - openai/gpt-oss-20b
 
 pytorch_base_model:
-    - internlm/Intern-S1-mini
-    - Qwen/Qwen3-4B-FP8
-    - unsloth/gpt-oss-20b-BF16
+    tp:
+        - internlm/Intern-S1-mini
+        - Qwen/Qwen3-4B-FP8
+        - unsloth/gpt-oss-20b-BF16
 
-turbomind_quatization:
+turbomind_quantization:
     no_awq:
         - internlm/Intern-S1
         - internlm/Intern-S1-mini
@@ -108,7 +114,7 @@ turbomind_quatization:
     no_kvint8:
         - empty
 
-pytorch_quatization:
+pytorch_quantization:
     awq:
         - empty
     w8a8:
