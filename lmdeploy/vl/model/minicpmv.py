@@ -8,14 +8,14 @@ from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class MiniCPMVModel(VisonModel):
+class MiniCPMVModel(VisionModel):
     """MiniCPMV vision model."""
 
     _arch = 'MiniCPMV'

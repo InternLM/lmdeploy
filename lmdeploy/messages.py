@@ -586,7 +586,7 @@ class EngineOutput:
 
 @dataclass
 class VisionConfig:
-    """Vison model configs.
+    """Vision model configs.
 
     Args:
         max_batch_size (int): the max image size passed to the model, since

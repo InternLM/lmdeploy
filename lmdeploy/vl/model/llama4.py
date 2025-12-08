@@ -5,7 +5,7 @@ import torch
 from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
 
@@ -24,7 +24,7 @@ def check_trans_version():
 
 
 @VISION_MODELS.register_module()
-class LLama4VisionModel(VisonModel):
+class LLama4VisionModel(VisionModel):
     """Llama4 vision model."""
 
     _arch = 'Llama4ForConditionalGeneration'
