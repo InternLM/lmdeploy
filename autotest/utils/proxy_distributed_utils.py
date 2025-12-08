@@ -182,7 +182,7 @@ def proxy_worker_node_wait(manager, timeout_minutes: int = 120):
 class ProxyDistributedManager:
 
     def __init__(self):
-        self.master_addr = os.getenv('MASTER_ADDR', 'localhost')
+        self.master_addr = os.getenv('MASTER_ADDR', '127.0.0.1')
         self.node_rank = int(os.getenv('NODE_RANK', '0'))
         self.proxy_port = int(os.getenv('PROXY_PORT', str(DEFAULT_PROXY_PORT)))
 
@@ -230,9 +230,9 @@ class ApiServerPerTest:
         self.quant_policy = self.model_param.get('quant_policy', 0)
         self.tp = int(self.model_param.get('tp', 1))
         parallel_config = self.model_param.get('parallel_config', {})
-        self.ep = int(parallel_config.get('ep', self.node_count * self.proc_per_node))
-        self.dp = int(parallel_config.get('dp', self.node_count * self.proc_per_node))
-        self.extra = int(self.model_param.get('extra', ''))
+        self.ep = int(parallel_config.get('ep', 1))
+        self.dp = int(parallel_config.get('dp', 1))
+        self.extra = self.model_param.get('extra', '')
 
         self.expected_instances = self.node_count * self.proc_per_node
         self.is_master = (self.node_rank == 0)
@@ -247,26 +247,26 @@ class ApiServerPerTest:
             self.model_path,
             '--backend',
             str(self.backend),
-            '--tp',
-            str(self.tp),
-            '--ep',
-            str(self.ep),
-            '--dp',
-            str(self.dp),
             '--proxy-url',
             proxy_url,
-            '--nnodes',
-            str(self.node_count),
-            '--node-rank',
-            str(self.node_rank),
         ]
+        if self.node_count > 1:
+            cmd += ['--nnodes', str(self.node_count), '--node-rank', str(self.node_rank)]
         if self.quant_policy != 0:
             cmd += ['--quant-policy', str(self.quant_policy)]
 
         if self.backend == 'turbomind':
-            cmd.extend(['--communicator', str(self.communicator)])
-        if self.extra != '':
-            cmd += [str(self.extra)]
+            cmd += ['--communicator', str(self.communicator)]
+
+        if self.ep != 1:
+            cmd += ['--ep', str(self.ep)]
+        if self.dp != 1:
+            cmd += ['--dp', str(self.dp)]
+        if self.tp != 1:
+            cmd += ['--tp', str(self.tp)]
+        if self.extra.strip() != '':
+            extra_args = self.extra.strip().split()
+            cmd.extend(extra_args)
 
         print(f"[API Server] Starting: {' '.join(cmd)}")
         self.api_process = subprocess.Popen(cmd)

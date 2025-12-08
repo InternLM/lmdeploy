@@ -52,7 +52,7 @@ pytorch_base_model:
     tp:
         - Qwen/Qwen3-4B
 
-turbomind_quatization:
+turbomind_quantization:
     no_awq:
         - OpenGVLab/InternVL3-2B-Instruct
     gptq:
@@ -69,7 +69,7 @@ turbomind_quatization:
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Chat
 
-pytorch_quatization:
+pytorch_quantization:
     awq:
         - meta-llama/Llama-3.2-3B-Instruct
         - OpenGVLab/InternVL2_5-1B

@@ -38,7 +38,7 @@ pytorch_base_model:
     tp:
         - Qwen/Qwen3-0.6B
 
-pytorch_quatization:
+pytorch_quantization:
     awq:
         - Empty
     w8a8:

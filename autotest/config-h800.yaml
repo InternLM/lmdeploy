@@ -76,7 +76,7 @@ pytorch_base_model:
         - Qwen/Qwen3-4B-FP8
         - unsloth/gpt-oss-20b-BF16
 
-turbomind_quatization:
+turbomind_quantization:
     no_awq:
         - internlm/Intern-S1
         - internlm/Intern-S1-mini
@@ -114,7 +114,7 @@ turbomind_quatization:
     no_kvint8:
         - empty
 
-pytorch_quatization:
+pytorch_quantization:
     awq:
         - empty
     w8a8:

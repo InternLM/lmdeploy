@@ -77,9 +77,20 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
     try:
         model_name = prepare_environment['model']
         backend_type = prepare_environment['backend']
-        tp_num = prepare_environment.get('tp_num', 1)
         communicator = prepare_environment.get('communicator', 'cuda-ipc')
         quant_policy = prepare_environment.get('quant_policy', 0)
+
+        parallel_config = prepare_environment.get('parallel_config', 1)
+
+        if isinstance(parallel_config, int):
+            parallel_str = f'tp{parallel_config}'
+        elif isinstance(parallel_config, dict):
+            sorted_items = sorted(parallel_config.items())
+            parallel_str = '_'.join(f'{k}{v}' for k, v in sorted_items)
+        else:
+            parallel_str = str(parallel_config).replace(' ', '_').replace(':', '')
+
+        tp_num = parallel_config if isinstance(parallel_config, int) else parallel_config.get('tp', 1)
 
         summary_model_name = model_name
         if quant_policy in [4, 8]:
@@ -102,8 +113,7 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         os.makedirs(log_path, exist_ok=True)
 
         original_cwd = os.getcwd()
-        work_dir = os.path.join(log_path,
-                                f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{quant_policy}")
+        work_dir = f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{parallel_str}_{quant_policy}"
         os.makedirs(work_dir, exist_ok=True)
 
         master_addr = os.getenv('MASTER_ADDR', '127.0.0.1')
@@ -111,7 +121,9 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
 
         try:
 
-            temp_config_file = f"temp_{backend_type}_{summary_model_name.replace('/', '_')}_{communicator}.py"
+            temp_config_file = (f'temp_{backend_type}_'
+                                f"{summary_model_name.replace('/', '_')}_"
+                                f'{communicator}_{parallel_str}.py')
             temp_config_path = os.path.join(log_path, temp_config_file)
 
             if test_type == 'infer':

@@ -247,7 +247,7 @@ pytorch_base_model:
         - internlm/internlm2_5-20b
         - bigcode/starcoder2-7b
 
-turbomind_quatization:
+turbomind_quantization:
     no_awq:
         - internlm/Intern-S1
         - internlm/Intern-S1-mini
@@ -300,7 +300,7 @@ turbomind_quatization:
         - deepseek-ai/DeepSeek-V2-Chat
         - Qwen/Qwen2.5-7B-Instruct
 
-pytorch_quatization:
+pytorch_quantization:
     awq:
         - meta-llama/Meta-Llama-3-8B-Instruct
         - meta-llama/Meta-Llama-3-1-8B-Instruct

@@ -23,11 +23,17 @@ tp_config:
     Qwen3-235B-A22B-Thinking-2507: 8
 
 dp_ep_config:
-    Kimi-K2-Instruct-0905: {"dp": 16, "ep": 16}
-    Qwen3-235B-A22B-Thinking-2507: {"dp": 8, "ep": 8}
+    Kimi-K2-Instruct-0905:
+        "dp": 16
+        "ep": 16
+    Qwen3-235B-A22B-Thinking-2507:
+        "dp": 8
+        "ep": 8
 
 cp_tp_config:
-    Qwen3-235B-A22B-Thinking-2507: {"cp": 2, "tp": 8}
+    Qwen3-235B-A22B-Thinking-2507:
+        "cp": 2
+        "tp": 8
 
 
 turbomind_chat_model:
@@ -97,7 +103,7 @@ pytorch_base_model:
         - Qwen/Qwen3-8B-Base
         - Qwen/Qwen3-30B-A3B-Base
 
-turbomind_quatization:
+turbomind_quantization:
     no_awq:
         - internlm/Intern-S1
         - internlm/Intern-S1-mini
@@ -137,7 +143,7 @@ turbomind_quatization:
     no_kvint8:
         - Qwen/Qwen3-235B-A22B-Thinking-2507
 
-pytorch_quatization:
+pytorch_quantization:
     awq:
         - empty
     w8a8:
