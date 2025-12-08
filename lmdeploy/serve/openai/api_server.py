@@ -469,6 +469,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
         enable_thinking=request.enable_thinking,
+        add_vision_id=request.add_vision_id,
     )
 
     def create_stream_response_json(index: int,
@@ -1327,10 +1328,9 @@ def create_lifespan_handler(backend_config: Union[PytorchEngineConfig, Turbomind
                     while True:
                         await asyncio.sleep(log_interval)
 
-                        # Since scheduled metrics is not changed as frequently as iteration statistics,
-                        # we conduct its statistics every `log_interval` seconds
+                        # periodically update schedule metrics, as they change less frequently than iteration stats
                         schedule_metrics = async_engine.get_schedule_metrics()
-                        await metrics_processor.udpate_schedule_stats(schedule_metrics)
+                        await metrics_processor.update_schedule_stats(schedule_metrics)
 
                         await async_engine.do_log_stats()
 

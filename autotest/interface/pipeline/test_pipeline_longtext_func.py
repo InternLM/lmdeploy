@@ -40,7 +40,7 @@ def test_history_issue_tp1(config, model, worker_id):
 def test_history_issue_tp2(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     stream_infer_basic(config, model, log_name)
 
@@ -87,7 +87,7 @@ def test_long_test_passkey_tp1(config, model, backend, worker_id):
 def test_long_test_passkey_tp2(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     passkey_retrival(config, model, backend, log_name, 2, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
 
@@ -98,7 +98,7 @@ def test_long_test_passkey_tp2(config, model, backend, worker_id):
 def test_long_test_passkey_tp4(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=4)
+        set_device_env_variable(worker_id, parallel_config=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     passkey_retrival(config, model, backend, log_name, 4, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
 
@@ -110,7 +110,7 @@ def test_long_test_passkey_tp4(config, model, backend, worker_id):
 def test_long_test_passkey_tp8(config, model, backend, worker_id):
     log_name = ''.join(['pipeline_longtext_passkey_', worker_id, '.log'])
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=8)
+        set_device_env_variable(worker_id, parallel_config=8)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     passkey_retrival(config, model, backend, log_name, 8, SESSION_LEN_CONFIG.get(model, SESSION_LEN_128K))
 

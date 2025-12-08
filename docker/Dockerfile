@@ -43,7 +43,9 @@ COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
 RUN --mount=type=cache,target=/root/.cache \
-    docker/build.sh && \
+    docker/build.sh
+
+RUN --mount=type=cache,target=/root/.cache \
     docker/prepare_wheel.sh
 
 # Runtime image

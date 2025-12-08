@@ -1,15 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import numpy as np
 
+from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.messages import SchedulerSequence
 
 
 class StateAllocator:
     """State allocator."""
 
-    def __init__(self, num_states: int):
+    def __init__(self, num_states: int, offset: int = 0):
         self.num_states = num_states
-        self._free_states = np.arange(num_states, dtype=np.int64)
+        self._free_states = np.arange(offset, offset + num_states, dtype=np.int64)
         self._free_count = num_states
 
     def allocate(self):
@@ -33,10 +34,10 @@ class StateAllocator:
 
 class StateManager:
 
-    def __init__(self, num_states: int):
+    def __init__(self, num_states: int, num_reserved: int = 0):
         if num_states is None:
             num_states = 1
-        self.allocator = StateAllocator(num_states)
+        self.allocator = StateAllocator(num_states, offset=num_reserved)
 
     def is_allocated(self, seq: SchedulerSequence):
         """Check if a sequence is allocated."""
@@ -58,3 +59,11 @@ class StateManager:
     def get_num_free(self):
         """Get num free."""
         return self.allocator.get_num_free()
+
+
+def build_state_manager(cache_config: CacheConfig) -> StateManager:
+    """Build state manager."""
+    num_states = cache_config.num_state_caches
+    # state is different from block, we always reserve one state for system use
+    num_reserved = 1
+    return StateManager(num_states, num_reserved)

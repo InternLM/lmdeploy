@@ -4,13 +4,13 @@ from typing import Dict, List
 from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
 logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class GLM4VisionModel(VisonModel):
+class GLM4VisionModel(VisionModel):
     """Glm-4v-9b vision model."""
 
     _arch = ['ChatGLMModel', 'ChatGLMForConditionalGeneration']

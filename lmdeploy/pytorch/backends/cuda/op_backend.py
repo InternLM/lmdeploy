@@ -218,8 +218,7 @@ class CudaOpsBackend(DefaultOpsBackend):
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
                 cls.update_meta_flashmla(attn_metadata,
                                          step_context.model_config.num_attention_heads * decode_query_len)
-
-        if use_flash_attn3_decoding:
+        elif use_flash_attn3_decoding:
             if step_context.is_decoding is True:
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 

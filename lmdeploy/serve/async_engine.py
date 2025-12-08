@@ -21,7 +21,7 @@ from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, ResponseType, SpeculativeConfig,
                                TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
-from lmdeploy.metrics.stats import IterationStats, RequestState, SpeculativeDecodingStats
+from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
@@ -768,6 +768,7 @@ class AsyncEngine(LogitsMixin):
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
+            add_vision_id: Optional[bool] = False,
             **kwargs):
         """Generate responses.
 
@@ -819,6 +820,7 @@ class AsyncEngine(LogitsMixin):
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
                                                         enable_thinking=enable_thinking,
+                                                        add_vision_id=add_vision_id,
                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
@@ -842,7 +844,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.max_new_tokens = max(0, self.session_len - self.id2step[session_id] - len(input_ids))
             if gen_config.max_new_tokens == 0:
                 logger.error(f'run out of tokens. session={session_id}.')
-                yield GenOut(response='run out of tokens',
+                yield GenOut(response='',
                              history_token_len=self.id2step[session_id],
                              input_token_len=len(input_ids),
                              generate_token_len=0,
@@ -889,12 +891,12 @@ class AsyncEngine(LogitsMixin):
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
                 hit_stop_token = 0
-                req_state = RequestState(prompt_tokens=input_len)  # per-requst state
+                req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
-                    metrics_processor.queue_update((outputs, req_state, iteration_stats, specdecode_stats))
+                    metrics_processor.queue_update((outputs, req_stats, iteration_stats, specdecode_stats))
                     # decode res
                     if is_error(outputs.status):
                         break

@@ -561,13 +561,14 @@ class RayExecutor(ExecutorBase):
     def _init_distributed_environment_by_device(self, device_str: str):
         """Init distributed environment."""
         driver_ip = _get_master_addr()
-        if device_str in ['cuda', 'maca']:
+        if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
 
         elif device_str == 'ascend':
             self._init_ascend_distributed_environment(driver_ip)
-        elif device_str == 'camb':
-            self._init_camb_distributed_environment(driver_ip)
+        elif device_str in ['camb', 'maca']:
+            self.workers = self._sort_workers(driver_ip, self.workers)
+            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
         else:
             raise ValueError(f'Unsupported device type: {device_str}')
 
@@ -589,10 +590,6 @@ class RayExecutor(ExecutorBase):
             ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
         else:
             self.workers = self._sort_workers(driver_ip, self.workers)
-
-    def _init_camb_distributed_environment(self, driver_ip):
-        self.workers = self._sort_workers(driver_ip, self.workers)
-        ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
 
     """ PD Disaggregation API Begin """
 

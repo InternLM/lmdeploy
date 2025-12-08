@@ -22,6 +22,7 @@ class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
 class DefaultMultinomialSamplingBuilder(MultinomialSamplingBuilder):
     """Multinomial sampling implementation builder."""
 
+    @staticmethod
     def build():
         """build."""
         return DefaultMultinomialSamplingImpl()

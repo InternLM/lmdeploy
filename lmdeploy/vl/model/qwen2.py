@@ -3,7 +3,7 @@ from typing import Dict, List, Tuple
 
 import torch
 
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
@@ -22,7 +22,7 @@ def check_qwen_vl_deps_install():
 
 
 @VISION_MODELS.register_module()
-class Qwen2VLModel(VisonModel):
+class Qwen2VLModel(VisionModel):
     """Qwen2VL model."""
 
     _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration']
@@ -129,7 +129,7 @@ class Qwen2VLModel(VisonModel):
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisonModel.IMAGE_TOKEN_included(messages):
+        if VisionModel.IMAGE_TOKEN_included(messages):
             # backward compatibility
             for message in messages:
                 role, content = message['role'], message['content']

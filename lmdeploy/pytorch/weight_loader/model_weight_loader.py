@@ -101,13 +101,15 @@ def _get_safetensors_weights_iterator(file: str, prefix: str):
 def _get_pt_weights_iterator(file: str, prefix: str):
     """Get pt weights iterator."""
     state = torch.load(file, weights_only=True, map_location='cpu')
-    if prefix is None:
-        yield from state.items()
-    else:
-        for k, v in state.items():
-            yield f'{prefix}{k}', v
-    del state
-    torch.cuda.empty_cache()
+    try:
+        if prefix is None:
+            yield from state.items()
+        else:
+            for k, v in state.items():
+                yield f'{prefix}{k}', v
+    finally:
+        del state
+        torch.cuda.empty_cache()
 
 
 class ModelWeightLoader:
