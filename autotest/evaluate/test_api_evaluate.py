@@ -424,21 +424,21 @@ def test_pytorch_judgeeval_tp16(config, run_id, prepare_environment_judge_evalua
     assert result, msg
 
 
-@pytest.mark.infer
+@pytest.mark.eval
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model_param', get_pytorch_model_list(tp_num=16))
+@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=16))
 def test_pytorch_judgeeval_distributed_tp16(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
     assert result, msg
 
 
-@pytest.mark.infer
+@pytest.mark.eval
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model_param', get_pytorch_model_list({'dp': 8, 'ep': 8}))
+@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list({'dp': 8, 'ep': 8}))
 def test_pytorch_judgeeval_distributed_dpep8(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
     assert result, msg
@@ -484,11 +484,16 @@ def test_turbomind_judgeeval_tp8(config, run_id, prepare_environment_judge_evalu
     assert result, msg
 
 
-@pytest.mark.infer
+@pytest.mark.eval
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_model_list({'cp': 2, 'tp': 8}), indirect=True)
-def test_turbomind_judgeeval_cp2tp8(config, run_id, prepare_environment, worker_id):
+@pytest.mark.parametrize('prepare_environment_judge_evaluate',
+                         get_turbomind_model_list({
+                             'cp': 2,
+                             'tp': 8
+                         }),
+                         indirect=True)
+def test_turbomind_judgeeval_cp2tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
     assert result, msg
