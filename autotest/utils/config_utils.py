@@ -376,6 +376,9 @@ def get_evaluate_turbomind_model_list(parallel_config: Optional[Union[int, Dict[
             model_config = get_parallel_config(config, model)
 
             if not model_config:
+                if not target_config or (len(target_config) == 1 and 'tp' in target_config
+                                         and target_config['tp'] == 1):
+                    filtered_models.append(model)
                 continue
 
             match = True
@@ -806,4 +809,4 @@ def unset_device_env_variable():
             del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-print(get_evaluate_pytorch_model_list(parallel_config=1, is_longtext=False, is_mllm=True))
+print(get_evaluate_turbomind_model_list(parallel_config=2, is_longtext=False))
