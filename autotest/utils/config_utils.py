@@ -301,12 +301,15 @@ def get_vl_model_list(parallel_config: Optional[Union[int, Dict[str, int]]] = No
 
 def get_evaluate_turbomind_model_list(parallel_config: Optional[Union[int, Dict[str, int]]] = None,
                                       is_longtext: bool = False,
+                                      is_mllm: bool = False,
                                       kvint_list: list = []):
 
     config = get_config()
 
     if is_longtext:
         case_list_base = [item for item in config.get('longtext_model', [])]
+    elif is_mllm:
+        case_list_base = config.get('mllm_evaluate_model', [])
     else:
         case_list_base = config.get('evaluate_model', [])
 
@@ -404,12 +407,15 @@ def get_evaluate_turbomind_model_list(parallel_config: Optional[Union[int, Dict[
 
 def get_evaluate_pytorch_model_list(parallel_config: Optional[Union[int, Dict[str, int]]] = None,
                                     is_longtext: bool = False,
+                                    is_mllm: bool = False,
                                     kvint_list: list = []):
 
     config = get_config()
 
     if is_longtext:
         case_list_base = [item for item in config.get('longtext_model', [])]
+    elif is_mllm:
+        case_list_base = config.get('mllm_evaluate_model', [])
     else:
         case_list_base = config.get('evaluate_model', [])
 
