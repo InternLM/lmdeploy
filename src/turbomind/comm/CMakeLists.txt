@@ -5,11 +5,11 @@ cmake_minimum_required(VERSION 3.8)
 find_package(Threads)
 
 add_library(host_comm STATIC host_comm.cc thread_comm.cc)
-target_link_libraries(host_comm PRIVATE core logger Threads::Threads xgrammar)
+target_link_libraries(host_comm PRIVATE core logger Threads::Threads)
 set_property(TARGET host_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_library(device_comm STATIC device_comm.cc)
-target_link_libraries(device_comm PRIVATE core logger xgrammar)
+target_link_libraries(device_comm PRIVATE core logger)
 set_property(TARGET device_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET device_comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
@@ -26,7 +26,7 @@ if (BUILD_MULTI_GPU)
     target_link_libraries(host_comm INTERFACE gloo_comm)
 
     add_library(serialize STATIC serialize.cc)
-    target_link_libraries(serialize PRIVATE core xgrammar)
+    target_link_libraries(serialize PRIVATE core)
     set_property(TARGET serialize PROPERTY POSITION_INDEPENDENT_CODE ON)
     target_link_libraries(host_comm INTERFACE serialize)
 

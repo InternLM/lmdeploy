@@ -10,10 +10,12 @@
 #include <memory>
 #include <ostream>
 
-#include <xgrammar/xgrammar.h>
-
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/utils/metrics.h"
+
+namespace xgrammar {
+class GrammarMatcher;  // forward declaration
+}  // namespace xgrammar
 
 namespace turbomind {
 

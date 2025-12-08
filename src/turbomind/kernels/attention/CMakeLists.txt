@@ -47,8 +47,6 @@ set_property(TARGET attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_compile_options(attention PRIVATE -O3
     $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr>)
 target_link_libraries(attention PRIVATE nvidia::cutlass::cutlass)
-# TODO: remove xgrammar
-target_link_libraries(attention PRIVATE xgrammar)
 
 if (BUILD_TEST)
     target_compile_options(attention PRIVATE
