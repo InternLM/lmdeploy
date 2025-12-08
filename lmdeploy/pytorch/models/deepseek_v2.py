@@ -13,8 +13,8 @@ from torch import nn
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding,
-                                 build_rotary_params)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, ParallelEmbedding, RMSNorm, RopeType, SiluAndMul,
+                                 build_rotary_embedding, build_rotary_params)
 from lmdeploy.pytorch.nn.eplb import EPLBDispatchInfo, EPLBManager
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
@@ -970,6 +970,7 @@ class DeepseekV2Model(nn.Module):
                                          self.padding_idx,
                                          dtype=dtype,
                                          device=device)
+
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size_, _ = get_ep_world_rank()
             EPLBManager.init_global_eplb_metadata(ep_size_, config.n_routed_experts, config.num_hidden_layers)
