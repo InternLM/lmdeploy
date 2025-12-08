@@ -24,16 +24,16 @@ tp_config:
 
 dp_ep_config:
     Kimi-K2-Instruct-0905:
-        "dp": 16
-        "ep": 16
+        dp: 16
+        ep: 16
     Qwen3-235B-A22B-Thinking-2507:
-        "dp": 8
-        "ep": 8
+        dp: 8
+        ep: 8
 
 cp_tp_config:
     Qwen3-235B-A22B-Thinking-2507:
-        "cp": 2
-        "tp": 8
+        cp: 2
+        tp: 8
 
 
 turbomind_chat_model:

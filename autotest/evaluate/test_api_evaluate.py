@@ -428,7 +428,7 @@ def test_pytorch_judgeeval_tp16(config, run_id, prepare_environment_judge_evalua
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=16))
+@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list(tp_num=16), indirect=True)
 def test_pytorch_judgeeval_distributed_tp16(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
     assert result, msg
@@ -438,7 +438,12 @@ def test_pytorch_judgeeval_distributed_tp16(config, run_id, prepare_environment_
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_distributed_dpep8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_model_list({'dp': 8, 'ep': 8}))
+@pytest.mark.parametrize('prepare_environment_judge_evaluate',
+                         get_pytorch_model_list({
+                             'dp': 8,
+                             'ep': 8
+                         }),
+                         indirect=True)
 def test_pytorch_judgeeval_distributed_dpep8(config, run_id, prepare_environment_judge_evaluate, worker_id):
     result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
     assert result, msg

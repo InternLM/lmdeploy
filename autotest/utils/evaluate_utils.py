@@ -113,7 +113,8 @@ def restful_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFA
         os.makedirs(log_path, exist_ok=True)
 
         original_cwd = os.getcwd()
-        work_dir = f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{parallel_str}_{quant_policy}"
+        work_dir_name = f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{parallel_str}_{quant_policy}"
+        work_dir = os.path.join(log_path, work_dir_name)
         os.makedirs(work_dir, exist_ok=True)
 
         master_addr = os.getenv('MASTER_ADDR', '127.0.0.1')
