@@ -265,8 +265,8 @@ class AscendOpsBackend(DlinferOpsBackend):
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
-        from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
-        return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
+        from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import AscendGraphRunner
+        return AscendGraphRunner(model, model_config, cache_config, backend_config, device)
 
     @staticmethod
     def init():
