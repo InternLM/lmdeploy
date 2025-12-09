@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from typing import Tuple
 
 import allure
 import pandas as pd
@@ -80,6 +81,7 @@ def llm_summary(model_name, tp_num, result, backend_type, communicator, work_dir
 
 
 def mllm_summary(model_name,
+                 summary_model_name,
                  tp_num,
                  result,
                  backend_type,
@@ -87,7 +89,7 @@ def mllm_summary(model_name,
                  work_dir=None,
                  dataset_list=['MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI']):
     metrics = {}
-    pattern = os.path.join(work_dir, 'T*')
+    pattern = os.path.join(work_dir, model_name, 'T*')
     t_dirs = [d for d in glob.glob(pattern) if os.path.isdir(d)]
 
     if not t_dirs:
@@ -99,21 +101,21 @@ def mllm_summary(model_name,
 
     for dataset in dataset_list:
         if dataset == 'OCRBench_MINI':
-            score_file = os.path.join('outputs', f'{latest_dir}/{model_name}_{dataset}_score.json')
+            score_file = f'{latest_dir}/{model_name}_{dataset}_score.json'
             cur_score = 0
             with open(score_file, 'r') as f:
                 total_score = json.load(f)
                 cur_score = total_score['Final Score Norm']
             metrics[dataset] = f'{cur_score:.2f}'  # noqa: E231
         else:
-            score_file = os.path.join('outputs', f'{latest_dir}/{model_name}_{dataset}_acc.csv')
+            score_file = f'{latest_dir}/{model_name}_{dataset}_acc.csv'
             df = pd.read_csv(score_file)
             cur_score = df['Overall'].iloc[0]
             if dataset == 'MMBench_V11_MINI':
                 cur_score = df.loc[df['split'] == 'dev', 'Overall'].values
-            metrics[dataset] = f'{cur_score:.2f}'  # noqa: E231
+            metrics[dataset] = f'{cur_score.item():.2f}'  # noqa: E231
 
-    write_to_summary(model_name, tp_num, result, backend_type, communicator, metrics, work_dir)
+    write_to_summary(summary_model_name, tp_num, result, backend_type, communicator, metrics, work_dir)
 
 
 def eval_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFAULT_PORT, test_type='infer', **kwargs):
@@ -348,18 +350,13 @@ def mllm_eval_test(config,
     os.makedirs(log_path, exist_ok=True)
 
     work_dir = os.path.join(log_path, f"wk_{backend_type}_{model_name.replace('/', '_')}_{communicator}_{quant_policy}")
+    simple_model_name = model_name.split('/')[-1]
     os.makedirs(work_dir, exist_ok=True)
     if test_type == 'infer':
-        cmd = [
-            'python', 'run.py', '--data', 'MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI', '--model',
-            f'lmdeploy_port{port}', '--reuse', '--work-dir', work_dir, '--api-nproc', '32', '--mode infer'
-        ]
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode infer'
+
     elif test_type == 'eval':
-        cmd = [
-            'python', 'run.py', '--data', 'MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI', '--model',
-            f'lmdeploy_port{port}', '--reuse', '--work-dir', work_dir, '--api-nproc', '32', '--judge',
-            'Qwen/Qwen3-30B-A3B', '--judge-base-url', 'http://127.0.0.1:8000/v1', '--judge-key', 'empty'
-        ]
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --judge Qwen2.5-32B-Instruct --judge-base-url http://127.0.0.1:8000/v1'
 
     print(f'Work directory: {work_dir}')
 
@@ -369,9 +366,10 @@ def mllm_eval_test(config,
                     f'{worker_id}_'
                     f'{quant_policy}.log')
     log_file = os.path.join(log_path, log_filename)
-    result, msg = execute_command_real_time_simple(cmd, log_file)
+    result, msg = execute_command_with_logging(cmd, log_file)
 
-    mllm_summary(summary_model_name,
+    mllm_summary(simple_model_name,
+                 summary_model_name,
                  tp_num,
                  result,
                  backend_type,
@@ -381,35 +379,57 @@ def mllm_eval_test(config,
     return result, msg
 
 
-def execute_command_real_time_simple(cmd, log_file_path):
-    with open(log_file_path, 'w', encoding='utf-8') as log_file:
-        cmd_command = ' '.join(cmd)
-        initial_msg = f'reproduce command: {cmd_command}\n'
-        print(initial_msg, end='')
-        log_file.write(initial_msg)
-        log_file.flush()
+def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
+    try:
+        with open(log_file_path, 'w', encoding='utf-8') as log_file:
+            start_msg = f"执行命令: {cmd}\n"
+            print(start_msg, end='')
+            log_file.write(start_msg)
+            log_file.flush()
+
+            process = subprocess.run(cmd,
+                                     shell=True,
+                                     text=True,
+                                     encoding='utf-8',
+                                     errors='replace',
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT,
+                                     bufsize=1)
+
+            if process.stdout:
+                print(process.stdout, end='')
+                log_file.write(process.stdout)
+
+            if process.returncode == 0:
+                result_msg = f"✅ success: {process.returncode}\n"
+            else:
+                result_msg = f"❌ fail: {process.returncode}\n"
+
+            print(result_msg, end='')
+            log_file.write(result_msg)
+
+            return process.returncode == 0, result_msg.strip()
+
+    except Exception as e:
+        error_msg = f"⚠️  执行命令时出错: {str(e)}\n"
+        print(error_msg, file=sys.stderr, end='')
 
         try:
-            process = subprocess.Popen(cmd,
-                                       stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT,
-                                       shell=True,
-                                       text=True,
-                                       encoding='utf-8',
-                                       errors='replace',
-                                       bufsize=1)
+            with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                log_file.write(error_msg)
+        except:
+            pass
 
-            for line in iter(process.stdout.readline, ''):
-                if line:
-                    print(line, end='', flush=True)
-                    log_file.write(line)
-                    log_file.flush()
+        return False, error_msg.strip()
 
-            returncode = process.wait()
-            return returncode == 0, f'Process completed with return code: {returncode}'
 
-        except Exception as e:
-            error_msg = f'Error executing command: {str(e)}\n'
-            print(error_msg, file=sys.stderr)
-            log_file.write(error_msg)
-            return False, error_msg
+print(
+    mllm_summary(
+        'Intern-S1-mini',
+        'Intern-S1-mini-test',
+        1,
+        'test.csv',
+        'turbomind',
+        'cuda-ipc',
+        work_dir=
+        '/nvme/qa_test_models/mllm_evaluation_report/20026426334/wk_turbomind_internlm_Intern-S1-mini_cuda-ipc_0'))
