@@ -13,7 +13,7 @@ def get_masked_input_and_mask(input: torch.Tensor, start_index: int, end_index: 
 
 
 class DefaultEmbeddingImpl(EmbeddingImpl):
-    """Linear implementation api."""
+    """Embedding implementation api."""
 
     def __init__(self, start_index: int, end_index: int):
         self.start_index = start_index
@@ -35,7 +35,7 @@ class DefaultEmbeddingImpl(EmbeddingImpl):
 
 
 class DefaultEmbeddingBuilder(EmbeddingBuilder):
-    """Linear implementation builder."""
+    """Embedding implementation builder."""
 
     @staticmethod
     def build(start_index: int, end_index: int):

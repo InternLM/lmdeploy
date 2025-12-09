@@ -69,8 +69,7 @@ class ParallelEmbedding(nn.Module):
                                     requires_grad=False)
         return weight
 
-    def _weight_loader_tp_rowwise(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, rank: int,
-                                  world_size: int):
+    def _weight_loader_tp_rowwise(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader for rowwise embedding."""
         loaded_weight = loaded_weight.to(param.device)
 
@@ -86,7 +85,7 @@ class ParallelEmbedding(nn.Module):
         if not self.is_tp:
             default_weight_loader(param, loaded_weight)
         else:
-            self._weight_loader_tp_rowwise(param, loaded_weight, self.rank, self.tp)
+            self._weight_loader_tp_rowwise(param, loaded_weight)
         if self.padding_idx is not None and self.padding_idx >= self.start_index and self.padding_idx < self.end_index:
             self.weight[self.padding_idx - self.start_index] = 0
 
