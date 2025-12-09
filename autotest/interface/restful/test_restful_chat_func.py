@@ -229,9 +229,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      max_tokens=200):
             continue
         assert_chat_completions_batch_return(output, model_name)
-        assert ' is is' * 5 in output.get('choices')[0].get('message').get(
-            'content') or ' extensive ' * 5 in output.get('choices')[0].get('message').get(
-                'content') or 'isanghai ' * 5 in output.get('choices')[0].get('message').get('content')
+        assert has_repeated_fragment(output.get('choices')[0].get('message').get('content'))
 
     def test_minimum_repetition_penalty_streaming(self):
         api_client = APIClient(BASE_URL)
