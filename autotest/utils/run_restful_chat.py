@@ -146,7 +146,6 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 def stop_restful_api(pid, startRes, param):
     if pid > 0:
         startRes.terminate()
-        startRes.join()
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
         if modelscope:
