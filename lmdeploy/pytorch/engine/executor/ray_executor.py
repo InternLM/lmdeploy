@@ -47,6 +47,7 @@ def _get_master_port():
 
 
 def get_ascend_device_rank_mapping(master_addr):
+# def get_ascend_device_rank_mapping(master_addr: str, workers: list, dp: int):
     rank_table_file = _envs.ascend_rank_table_file
     if not rank_table_file:
         raise ValueError('ASCEND_RANK_TABLE_FILE_PATH is not set')
@@ -67,6 +68,8 @@ def get_ascend_device_rank_mapping(master_addr):
         logger.error(f'Parse rank table file({rank_table})  failed')
         raise e
 
+    # if dp > 1:
+    #     worker_ips = ray.get([worker.get_node_ip.remote() for worker in workers])
     envs = {
         'ASCEND_RANK_TABLE_FILE_PATH': rank_table_file,
     }
@@ -285,6 +288,9 @@ class RayExecutor(ExecutorBase):
             self.dag = None
             self._prefetch_task: asyncio.Task = None
             self.remote_outs: asyncio.Queue = None
+
+            rank_offset = dist_config.dp_rank * attn_tp
+            self.rank_offset = rank_offset
 
             logger.info('Init distributed environment by device.')
             self.rank_offset = dist_config.dp_rank * attn_tp
