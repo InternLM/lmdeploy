@@ -84,6 +84,7 @@ class TestEmbedding:
                                  dtype=dtype,
                                  device=torch.device(type='cuda', index=0))
         token_emb.weight.data.copy_(weight)
+        token_emb._fill_padding_idx_with_zero()
         input = x.to(torch.device(type='cuda', index=0))
         yield token_emb(input)
 
