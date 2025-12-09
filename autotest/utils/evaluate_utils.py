@@ -3,12 +3,11 @@ import glob
 import json
 import os
 import subprocess
-import sys
-from typing import Tuple
 
 import allure
 import pandas as pd
 from mmengine.config import Config
+from utils.common_utils import execute_command_with_logging
 
 DEFAULT_PORT = 23333
 
@@ -353,10 +352,10 @@ def mllm_eval_test(config,
     simple_model_name = model_name.split('/')[-1]
     os.makedirs(work_dir, exist_ok=True)
     if test_type == 'infer':
-        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode infer'
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode infer'  # noqa
 
     elif test_type == 'eval':
-        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --judge Qwen2.5-32B-Instruct --judge-base-url http://127.0.0.1:8000/v1'
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge Qwen2.5-32B-Instruct --judge-base-url http://127.0.0.1:8000/v1'  # noqa
 
     print(f'Work directory: {work_dir}')
 
@@ -377,59 +376,3 @@ def mllm_eval_test(config,
                  work_dir,
                  dataset_list=['MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI'])
     return result, msg
-
-
-def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
-    try:
-        with open(log_file_path, 'w', encoding='utf-8') as log_file:
-            start_msg = f"执行命令: {cmd}\n"
-            print(start_msg, end='')
-            log_file.write(start_msg)
-            log_file.flush()
-
-            process = subprocess.run(cmd,
-                                     shell=True,
-                                     text=True,
-                                     encoding='utf-8',
-                                     errors='replace',
-                                     stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT,
-                                     bufsize=1)
-
-            if process.stdout:
-                print(process.stdout, end='')
-                log_file.write(process.stdout)
-
-            if process.returncode == 0:
-                result_msg = f"✅ success: {process.returncode}\n"
-            else:
-                result_msg = f"❌ fail: {process.returncode}\n"
-
-            print(result_msg, end='')
-            log_file.write(result_msg)
-
-            return process.returncode == 0, result_msg.strip()
-
-    except Exception as e:
-        error_msg = f"⚠️  执行命令时出错: {str(e)}\n"
-        print(error_msg, file=sys.stderr, end='')
-
-        try:
-            with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                log_file.write(error_msg)
-        except:
-            pass
-
-        return False, error_msg.strip()
-
-
-print(
-    mllm_summary(
-        'Intern-S1-mini',
-        'Intern-S1-mini-test',
-        1,
-        'test.csv',
-        'turbomind',
-        'cuda-ipc',
-        work_dir=
-        '/nvme/qa_test_models/mllm_evaluation_report/20026426334/wk_turbomind_internlm_Intern-S1-mini_cuda-ipc_0'))

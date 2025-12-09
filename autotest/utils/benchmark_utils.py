@@ -3,7 +3,7 @@ import subprocess
 from subprocess import PIPE
 
 import allure
-from utils.common_utils import run_cmd
+from utils.common_utils import execute_command_with_logging
 from utils.config_utils import _is_bf16_supported_by_device, get_workerid
 from utils.run_restful_chat import health_check
 
@@ -55,7 +55,7 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
             get_max_cache_entry(model, backend), '--csv ', csv_path
         ])
 
-        returncode, stderr = run_cmd(cmd, benchmark_log)
+        returncode, stderr = execute_command_with_logging(cmd, benchmark_log)
         allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if returncode == 0 and not os.path.isfile(csv_path):
@@ -118,7 +118,7 @@ def longtext_throughput_test(config,
         if concurrency:
             cmd += f' --concurrency {concurrency}'
 
-        returncode, stderr = run_cmd(cmd, benchmark_log)
+        returncode, stderr = execute_command_with_logging(cmd, benchmark_log)
         allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if returncode == 0 and not os.path.isfile(csv_path):
@@ -296,7 +296,7 @@ def prefixcache_throughput_test(config,
             if concurrency:
                 command += f' --concurrency {concurrency}'
 
-            returncode, stderr = run_cmd(command, benchmark_log)
+            returncode, stderr = execute_command_with_logging(command, benchmark_log)
             allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
             if returncode == 0 and not os.path.isfile(csv_path):
