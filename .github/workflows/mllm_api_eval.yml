@@ -178,21 +178,17 @@ jobs:
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
+          mkdir ${{env.REPORT_DIR}} -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
+          python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         run: |
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
       - name: Install vlmeval
         run: |
