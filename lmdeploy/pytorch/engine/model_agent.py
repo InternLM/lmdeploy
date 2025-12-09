@@ -28,7 +28,7 @@ from ..models.patch import BuildModelContext, add_adapters, build_patched_model,
 from ..spec_decode import build_spec_agent
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
-from ..utils import get_gpu_memory
+from ..utils import get_gpu_memory, monkey_patch_hf_modules_cache
 from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
 from .cache_engine import CacheEngine, StateCacheEngine
 from .guided_process import GuidedDecodingManager
@@ -325,6 +325,7 @@ class BaseModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
         # use raw tokenizer
+        monkey_patch_hf_modules_cache()
         self.tokenizer = Tokenizer(model_path).model.model
 
         self._pre_in_que = None
