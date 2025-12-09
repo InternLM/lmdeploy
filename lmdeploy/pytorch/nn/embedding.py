@@ -31,9 +31,10 @@ class ParallelEmbedding(nn.Module):
         self.is_tp = is_tp
         self.vocab_size = vocab_size
         self.padding_size = padding_size
-        if padding_idx < 0:
-            padding_idx = vocab_size - padding_idx
-        assert padding_idx > 0
+        if padding_idx is not None:
+            if padding_idx < 0:
+                padding_idx = vocab_size - padding_idx
+            assert padding_idx > 0
         self.padding_idx = padding_idx
 
         dist_cfg = get_dist_manager().current_config()
