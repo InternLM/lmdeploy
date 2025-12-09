@@ -70,25 +70,25 @@ def _run_ray_distributed_test(
     assert manager is not None, 'Manager instance must be provided'
     if 'gpt' in model_param.get('model', '').lower():
         eval_config_name = 'gpt'
-        preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+        preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
     if manager.is_master:
         model_name = model_param['model']
         model_path = os.path.join(config['model_path'], model_name)
-        preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+        preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
         # Start API Server for current model (master node starts/stops, worker nodes verify)
         manager.start_lmdeploy_api_server(model_path=model_path, model_param=model_param)
 
         try:
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
-            result, msg = restful_test(config,
-                                       run_id,
-                                       model_param,
-                                       worker_id=worker_id,
-                                       port=PROXY_PORT,
-                                       test_type=test_type,
-                                       **preset_config)
+            result, msg = eval_test(config,
+                                    run_id,
+                                    model_param,
+                                    worker_id=worker_id,
+                                    port=constant.PROXY_PORT,
+                                    test_type=test_type,
+                                    **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
             print(f'✅ {test_type} test passed')
 
@@ -112,7 +112,7 @@ def _run_proxy_distributed_test(config,
     if 'gpt' in model_param.get('model', '').lower():
         eval_config_name = 'gpt'
 
-    preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
     model_name = model_param['model']
     model_path = os.path.join(config['model_path'], model_name)
 
@@ -124,13 +124,13 @@ def _run_proxy_distributed_test(config,
             api_server.wait_until_ready()
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
 
-            result, msg = restful_test(config,
-                                       run_id,
-                                       model_param,
-                                       worker_id=worker_id,
-                                       port=PROXY_PORT,
-                                       test_type=test_type,
-                                       **preset_config)
+            result, msg = eval_test(config,
+                                    run_id,
+                                    model_param,
+                                    worker_id=worker_id,
+                                    port=constant.PROXY_PORT,
+                                    test_type=test_type,
+                                    **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
             print(f'✅ {test_type} test passed')
 

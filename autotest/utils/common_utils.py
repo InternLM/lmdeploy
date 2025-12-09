@@ -32,9 +32,9 @@ def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
                 log_file.write(process.stdout)
 
             if process.returncode == 0:
-                result_msg = f"✅ success: {process.returncode}\n"
+                result_msg = f"success: {process.returncode}\n"
             else:
-                result_msg = f"❌ fail: {process.returncode}\n"
+                result_msg = f"fail: {process.returncode}\n"
 
             print(result_msg, end='')
             log_file.write(result_msg)
