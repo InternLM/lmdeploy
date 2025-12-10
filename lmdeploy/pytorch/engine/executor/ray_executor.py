@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import base64
 import contextlib
 import json
 import os
@@ -353,13 +352,6 @@ class RayExecutor(ExecutorBase):
         if tags is None or 'kv_cache' in tags:
             self.update_configs()
         self.collective_rpc('wakeup', (tags, ))
-
-    def serialize(self, obj) -> str:
-        """Serialize obj."""
-        ref = ray.put(obj)
-        data = ray.cloudpickle.dumps(ref)
-        data = base64.b64encode(data).decode('utf-8')
-        return data
 
     def get_input_processor(self):
         """Build cache engine."""
