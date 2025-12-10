@@ -24,6 +24,8 @@ tp_config:
     Qwen3-235B-A22B: 8
     Qwen3-32B: 2
     Qwen3-30B-A3B: 2
+    Qwen3-VL-32B-Instruct: 2
+    Qwen3-VL-30B-A3B-Instruct: 2
     Qwen3-30B-A3B-Base: 2
     Qwen2.5-32B-Instruct: 2
     Qwen2.5-72B-Instruct: 4
