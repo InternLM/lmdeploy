@@ -41,6 +41,7 @@ public:
 
     OutputParam Forward(InputParam param, std::function<void()> cb);
     void        setGrammar(const xgrammar::CompiledGrammar& grammar);
+    void        clearGrammar();
 
 protected:
     Gateway* const gateway_;

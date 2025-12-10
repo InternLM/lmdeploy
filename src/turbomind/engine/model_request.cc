@@ -152,4 +152,9 @@ void ModelRequest::setGrammar(const xgrammar::CompiledGrammar& grammar)
     grammar_ = std::make_shared<xgrammar::CompiledGrammar>(grammar);
 }
 
+void ModelRequest::clearGrammar()
+{
+    grammar_.reset();
+}
+
 }  // namespace turbomind

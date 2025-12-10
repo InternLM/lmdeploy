@@ -814,6 +814,8 @@ class TurboMindInstance:
             while not state or state.status == 0:
                 await sem.acquire()
                 state = shared_state.consume()
+
+            self.model_inst.clear_grammar()
             logger.info(f'[async_stream_infer] session {session_id} done')
 
     def _get_error_output(self, status):

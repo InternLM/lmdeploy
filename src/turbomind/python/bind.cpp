@@ -498,7 +498,14 @@ PYBIND11_MODULE(_turbomind, m)
                 model_request->setGrammar(grammar);
             },
             py::call_guard<py::gil_scoped_release>(),
-            "grammar"_a);
+            "grammar"_a)
+        .def(
+            "clear_grammar",
+            [](ModelRequest* model_request) {
+                TM_LOG_INFO("Release grammar for model_request");
+                model_request->clearGrammar();
+            },
+            py::call_guard<py::gil_scoped_release>());
 
     // transformer model
     using ft::LlamaTritonModel;
