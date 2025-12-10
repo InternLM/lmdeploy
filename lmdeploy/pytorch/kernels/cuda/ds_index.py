@@ -31,6 +31,7 @@ def _fp8_index_kernel(
     stride_om,
     stride_on: tl.constexpr,
     max_q_seqlen,
+    causal: tl.constexpr,
     BLOCK_H: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_D: tl.constexpr,
@@ -69,6 +70,7 @@ def _fp8_index_kernel(
     o_ptrs = out_ptr + q_pos * stride_om + offs_n * stride_on + split_id * BLOCK_N * stride_on
     boff_ptr = block_offset_ptr + batch_id * stride_boff0 + split_id * stride_boff1
 
+    causal_pos = k_seqlen - q_seqlen + q_id
     num_blocks = tl.cdiv(k_seqlen, BLOCK_N)
     for boff_id in tl.range(split_id, num_blocks, NUM_SPLIT, num_stages=3):
         boff = tl.load(boff_ptr)
@@ -80,6 +82,11 @@ def _fp8_index_kernel(
         logits = tl.dot(q, k, acc=logits)
         logits = tl.maximum(logits, 0) * q_s[:, None]
         logits_sum = tl.sum(logits, axis=0) * k_s
+
+        if causal:
+            mask_off = boff_id * BLOCK_N + offs_n
+            mask = mask_off <= causal_pos
+            logits_sum = tl.where(mask, logits_sum, float('-inf'))
 
         tl.store(o_ptrs, logits_sum, mask=offs_n + boff_id * BLOCK_N < k_seqlen)
         boff_ptr += NUM_SPLIT * stride_boff1
@@ -94,7 +101,8 @@ def fp8_index(q: torch.Tensor,
               k_seqlens: torch.Tensor,
               block_offset: torch.Tensor,
               max_q_seqlen: int = None,
-              max_k_seqlen: int = None):
+              max_k_seqlen: int = None,
+              causal: bool = False):
     """Fp8 index.
 
     q: (cum_seqlen, num_heads, head_dim)
@@ -158,6 +166,7 @@ def fp8_index(q: torch.Tensor,
                             *block_offset.stride(),
                             *out.stride(),
                             max_q_seqlen=max_q_seqlen,
+                            causal=causal,
                             BLOCK_H=num_heads,
                             BLOCK_N=block_size,
                             BLOCK_D=head_dim,

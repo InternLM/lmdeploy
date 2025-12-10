@@ -94,7 +94,7 @@ def _bitonic_topk_kernel0(score_ptr,
                           K: tl.constexpr,
                           fill: tl.constexpr,
                           descending: tl.constexpr = core.CONSTEXPR_0,
-                          sorted: tl.constexpr = False):
+                          sorted: tl.constexpr = True):
     """kernel0."""
     batch_id = tl.program_id(0).to(tl.int64)
     block_id = tl.program_id(1).to(tl.int64)
@@ -147,6 +147,7 @@ def _bitonic_topk_kernel1(score_ptr,
                           stride_m,
                           K: tl.constexpr,
                           fill: tl.constexpr,
+                          threshold: tl.constexpr,
                           descending: tl.constexpr = core.CONSTEXPR_0):
     """kernel1."""
     batch_id = tl.program_id(0).to(tl.int64)
@@ -159,7 +160,7 @@ def _bitonic_topk_kernel1(score_ptr,
     # initialize
     pos = offs_k
     mask = pos < seqlen
-    scores = tl.load(score_ptrs, mask=mask, other=-1e6)
+    scores = tl.load(score_ptrs, mask=mask, other=threshold)
     ids = tl.load(ids_ptrs, mask=mask, other=fill)
 
     pos = 2 * K - 1 - offs_k
@@ -169,7 +170,7 @@ def _bitonic_topk_kernel1(score_ptr,
     stage: tl.constexpr = _log2(2 * K)
     for k in tl.range(K, seqlen, K, num_stages=3):
         mask = pos < seqlen
-        new_scores = tl.load(score_ptrs, mask=mask, other=-1e6)
+        new_scores = tl.load(score_ptrs, mask=mask, other=threshold)
         new_ids = tl.load(ids_ptrs, mask=mask, other=fill)
 
         merged_scores = _concate(scores, new_scores)
@@ -184,6 +185,7 @@ def _bitonic_topk_kernel1(score_ptr,
         pos += K
 
     out_ptrs = out_ptr + batch_id * K + offs_k
+    ids = tl.where(scores <= threshold, fill, ids)
     tl.store(out_ptrs, ids)
 
 
@@ -193,7 +195,8 @@ def bitonic_topk(scores: torch.Tensor,
                  k: int,
                  fill: int = -1,
                  descending: bool = True,
-                 sorted: bool = True):
+                 sorted: bool = True,
+                 threshold: float = -1e6):
     """Bitnoic topk."""
     num_tokens = scores.size(0)
     max_kv_len = scores.size(-1)
@@ -227,5 +230,6 @@ def bitonic_topk(scores: torch.Tensor,
                                           K=k,
                                           fill=fill,
                                           descending=1 if descending else 0,
+                                          threshold=threshold,
                                           num_warps=num_warps * 2)
     return out
