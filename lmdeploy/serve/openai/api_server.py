@@ -470,7 +470,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         adapter_name=adapter_name,
         enable_thinking=request.enable_thinking,
         add_vision_id=request.add_vision_id,
-    )
+        mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_stream_response_json(index: int,
                                     delta_message: DeltaMessage,
@@ -911,7 +911,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
 @router.post('/generate', dependencies=[Depends(check_api_key)])
 async def generate(request: GenerateReqInput, raw_request: Request = None):
-
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -965,7 +964,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         sequence_start=True,
         sequence_end=True,
         do_preprocess=False,
-    )
+        mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
         # only output router experts in last chunk
