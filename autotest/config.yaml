@@ -75,6 +75,8 @@ turbomind_chat_model:
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
         - Qwen/Qwen2.5-0.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - Qwen/Qwen2.5-32B-Instruct
@@ -139,6 +141,8 @@ pytorch_chat_model:
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
         - Qwen/Qwen2.5-0.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - Qwen/Qwen2.5-32B-Instruct
@@ -192,6 +196,8 @@ turbomind_vl_model:
         - OpenGVLab/InternVL2-2B
         - OpenGVLab/InternVL2-40B
         - OpenGVLab/InternVL2-Llama3-76B-AWQ
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
         - Qwen/Qwen2.5-VL-7B-Instruct
         - Qwen/Qwen2.5-VL-32B-Instruct
         - Qwen/Qwen2-VL-2B-Instruct
@@ -220,6 +226,8 @@ pytorch_vl_model:
         - OpenGVLab/InternVL2-4B
         - OpenGVLab/InternVL2-40B
         - OpenGVLab/Mono-InternVL-2B
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
         - Qwen/Qwen2.5-VL-7B-Instruct
@@ -284,6 +292,8 @@ turbomind_quantization:
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-30B-A3B-Base
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
         - Qwen/Qwen2.5-0.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - Qwen/Qwen2.5-32B-Instruct
@@ -401,4 +411,5 @@ evaluate_model:
 mllm_evaluate_model:
   - internlm/Intern-S1-mini
   - OpenGVLab/InternVL3-8B
-  - Qwen/Qwen2.5-VL-32B-Instruct
+  - Qwen/Qwen3-VL-8B-Instruct
+  - Qwen/Qwen3-VL-32B-Instruct
