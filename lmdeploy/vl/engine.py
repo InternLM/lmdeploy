@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Union
 
@@ -21,6 +22,11 @@ def _raise_exception_on_finish(task: asyncio.Task) -> None:
         return
     except Exception as e:
         raise e
+
+
+def _accepts_arg(func, arg_name: str) -> bool:
+    """Check if a function accepts a specific keyword argument."""
+    return arg_name in inspect.signature(func).parameters
 
 
 class ImageEncoder:
@@ -45,8 +51,11 @@ class ImageEncoder:
                          messages: List[Dict],
                          mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Preprocess multimodal data in the messages."""
-        future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages,
-                                                          mm_processor_kwargs)
+        if _accepts_arg(self.model.preprocess, 'mm_processor_kwargs'):
+            future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages,
+                                                              mm_processor_kwargs)
+        else:
+            future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
