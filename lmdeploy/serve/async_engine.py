@@ -691,7 +691,7 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
                                 reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                                enable_thinking: Optional[bool] = None,
+                                chat_template_kwargs: Optional[Dict] = None,
                                 **kwargs):
         # Change multimodal data to openai text messages, i.e.,
         # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
@@ -709,9 +709,8 @@ class AsyncEngine(LogitsMixin):
         prompt = chat_template.messages2prompt(prompt,
                                                sequence_start,
                                                tools=tools,
-                                               enable_thinking=enable_thinking,
                                                reasoning_effort=reasoning_effort,
-                                               **kwargs)
+                                               **chat_template_kwargs)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -768,7 +767,7 @@ class AsyncEngine(LogitsMixin):
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
-            add_vision_id: Optional[bool] = False,
+            chat_template_kwargs: Optional[Dict] = None,
             mm_processor_kwargs: Optional[Dict[str, Any]] = None,
             **kwargs):
         """Generate responses.
@@ -811,6 +810,14 @@ class AsyncEngine(LogitsMixin):
         if gen_config.n > 1:
             logger.warning(f'n({gen_config.n}) > 1 hasn\'t been supported yet. Fallback to 1')
             gen_config.n = 1
+        chat_template_kwargs = chat_template_kwargs or {}
+        if enable_thinking is not None:
+            logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
+            if chat_template_kwargs.get('enable_thinking') is None:
+                chat_template_kwargs['enable_thinking'] = enable_thinking
+            else:
+                logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
+                               'the value will not be overwritten by enable_thinking')
         if messages:
             prompt = messages
             self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
@@ -820,9 +827,8 @@ class AsyncEngine(LogitsMixin):
                                                         adapter_name,
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
-                                                        enable_thinking=enable_thinking,
-                                                        add_vision_id=add_vision_id,
                                                         mm_processor_kwargs=mm_processor_kwargs,
+                                                        chat_template_kwargs=chat_template_kwargs or None,
                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']

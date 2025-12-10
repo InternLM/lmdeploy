@@ -55,8 +55,7 @@ class VLAsyncEngine(AsyncEngine):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
-                                enable_thinking: Optional[bool] = None,
-                                add_vision_id: Optional[bool] = False,
+                                chat_template_kwargs: Optional[Dict] = None,
                                 mm_processor_kwargs: Optional[Dict[str, Any]] = None,
                                 **kwargs):
         """Process messages and return the required data for the inference
@@ -71,8 +70,7 @@ class VLAsyncEngine(AsyncEngine):
                                                    sequence_start,
                                                    adapter_name,
                                                    tools=tools,
-                                                   enable_thinking=enable_thinking,
-                                                   add_vision_id=add_vision_id,
+                                                   chat_template_kwargs=chat_template_kwargs,
                                                    **kwargs)
         elif isinstance(messages, List):
             has_multimodal_input = any(
@@ -84,8 +82,7 @@ class VLAsyncEngine(AsyncEngine):
                                                        sequence_start,
                                                        adapter_name,
                                                        tools,
-                                                       enable_thinking=enable_thinking,
-                                                       add_vision_id=add_vision_id,
+                                                       chat_template_kwargs=chat_template_kwargs,
                                                        **kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
@@ -105,8 +102,7 @@ class VLAsyncEngine(AsyncEngine):
                                                                self.tokenizer,
                                                                sequence_start,
                                                                tools=tools,
-                                                               enable_thinking=enable_thinking,
-                                                               add_vision_id=add_vision_id)
+                                                               chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
@@ -115,8 +111,7 @@ class VLAsyncEngine(AsyncEngine):
                                                              self.tokenizer,
                                                              sequence_start,
                                                              tools=tools,
-                                                             enable_thinking=enable_thinking,
-                                                             add_vision_id=add_vision_id)
+                                                             chat_template_kwargs=chat_template_kwargs)
         return results
 
     @classmethod

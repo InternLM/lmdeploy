@@ -230,7 +230,7 @@ class InternVLVisionModel(VisionModel):
         chat_template,
         sequence_start,
         tools: Optional[List[object]] = None,
-        enable_thinking: Optional[bool] = None,
+        chat_template_kwargs: Optional[Dict] = None,
     ):
         """Apply chat template to get the prompt."""
         prompt_messages = []
@@ -263,10 +263,7 @@ class InternVLVisionModel(VisionModel):
                     else:
                         raise ValueError(f'Unsupported message type: {item["type"]}')
                 prompt_messages.append(dict(role='user', content=''.join(_content)))
-        prompt = chat_template.messages2prompt(prompt_messages,
-                                               sequence_start,
-                                               tools=tools,
-                                               enable_thinking=enable_thinking)
+        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
         return prompt, self.image_token
 
     def to_pytorch(self,
@@ -275,13 +272,13 @@ class InternVLVisionModel(VisionModel):
                    tokenizer,
                    sequence_start,
                    tools: Optional[List[object]] = None,
-                   enable_thinking: Optional[bool] = None,
+                   chat_template_kwargs: Optional[Dict] = None,
                    **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,
                                                  sequence_start,
                                                  tools=tools,
-                                                 enable_thinking=enable_thinking)
+                                                 chat_template_kwargs=chat_template_kwargs or {})
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self,
@@ -290,11 +287,11 @@ class InternVLVisionModel(VisionModel):
                      tokenizer,
                      sequence_start,
                      tools: Optional[List[object]] = None,
-                     enable_thinking: Optional[bool] = None,
+                     chat_template_kwargs: Optional[Dict] = None,
                      **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,
                                                  sequence_start,
                                                  tools=tools,
-                                                 enable_thinking=enable_thinking)
+                                                 **(chat_template_kwargs or {}))
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

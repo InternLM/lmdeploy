@@ -53,7 +53,7 @@ class Qwen3VLModel(VisionModel):
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
-    def proc_messages(self, messages, chat_template, sequence_start, add_vision_id: Optional[bool] = False):
+    def proc_messages(self, messages, chat_template, sequence_start, chat_template_kwargs):
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -71,7 +71,7 @@ class Qwen3VLModel(VisionModel):
                 prompt_messages.append(dict(role='user', content=prompt))
         else:
             prompt_messages = messages
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, add_vision_id=add_vision_id)
+        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, **chat_template_kwargs)
         return prompt, self.image_token
 
     def to_pytorch(self,
@@ -79,10 +79,10 @@ class Qwen3VLModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   add_vision_id: Optional[bool] = False,
+                   chat_template_kwargs: Optional[Dict] = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, add_vision_id)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs or {})
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def build_model(self):
@@ -99,7 +99,7 @@ class Qwen3VLModel(VisionModel):
                      chat_template,
                      tokenizer,
                      sequence_start,
-                     add_vision_id: Optional[bool] = False,
+                     chat_template_kwargs: Optional[Dict] = None,
                      **kwargs):
         # TODO: implement for turbomind
         pass
