@@ -1,4 +1,4 @@
-name: mlln_api_eval
+name: mllm_api_eval
 
 on:
   workflow_dispatch:
@@ -212,7 +212,7 @@ jobs:
             pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" -n ${{matrix.n}} --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
-            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.backend}} and eval" -n 4 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and eval" -n 4 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           exit $overall_exit
       - name: Clear workspace

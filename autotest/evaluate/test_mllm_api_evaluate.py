@@ -10,7 +10,7 @@ def prepare_environment(request, config, worker_id):
     param = request.param
     model = param['model']
     backend = param['backend']
-    param['extra'] = ' '.join([param.get('extra', ''), '--model-name', model])
+    param['extra'] = ' '.join([param.get('extra', ''), '--model-name', model, '--cache-max-entry-count 0.6'])  # noqa
     model_path = config.get('model_path') + '/' + model
     pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
     yield param
@@ -30,7 +30,8 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
             'tp_num':
             2,
             'extra':
-            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 46000 --model-name Qwen2.5-32B-Instruct'
+            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 46000'
+            '--model-name Qwen2.5-32B-Instruct'
             '--cache-max-entry-count 0.7 '.format(port),
             'cuda_prefix':
             None
