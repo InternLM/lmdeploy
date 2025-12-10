@@ -40,6 +40,7 @@ class Qwen3VLModel(VisionModel):
             input_min_pixels = mm_processor_kwargs.get('min_pixels', None)
             input_max_pixels = mm_processor_kwargs.get('max_pixels', None)
 
+            # boundary check for min_pixels and max_pixels
             if input_min_pixels is None:
                 if input_max_pixels is not None:
                     # only max_pixels is given in the input
