@@ -13,7 +13,7 @@ def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
         write_type = 'w'
     try:
         with open(log_file_path, write_type, encoding='utf-8') as log_file:
-            start_msg = f"执行命令: {cmd}\n"
+            start_msg = f'execute command: {cmd}\n'
             print(start_msg, end='')
             log_file.write(start_msg)
             log_file.flush()
@@ -32,9 +32,9 @@ def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
                 log_file.write(process.stdout)
 
             if process.returncode == 0:
-                result_msg = f"success: {process.returncode}\n"
+                result_msg = f'success: {process.returncode}\n'
             else:
-                result_msg = f"fail: {process.returncode}\n"
+                result_msg = f'fail: {process.returncode}\n'
 
             print(result_msg, end='')
             log_file.write(result_msg)
@@ -42,7 +42,7 @@ def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
             return process.returncode == 0, result_msg.strip()
 
     except Exception as e:
-        error_msg = f"exec fail: {str(e)}\n"
+        error_msg = f'exec fail: {str(e)}\n'
         print(error_msg, file=sys.stderr, end='')
 
         with open(log_file_path, 'a', encoding='utf-8') as log_file:
