@@ -42,6 +42,7 @@ def get_output_file(model_path, backend, server_config):
     params = [
         ('bs', server_config['max_batch_size']),
         ('tp', server_config.get('tp', 1)),
+        ('cp', server_config.get('cp', 1)),
         ('cache', server_config.get('cache_max_entry_count', 0.8)),
         ('mptk', server_config.get('max_prefill_token_num', '')),
     ]
@@ -169,9 +170,8 @@ def benchmark_proxy(backend: str, server_config: Dict, data_config: Dict | List[
     try:
         # Wait for the proxy_server to be ready
         model_name = get_served_model_name(server_ip, server_port)
-        model_name = model_name.replace('/', '_')
         # Run benchmarks
-        output_file = f'benchmark_proxy_{model_name}_{backend}.csv'
+        output_file = f'benchmark_proxy_{backend}.csv'
         for data in data_config:
             data = data.copy()
             data['output_file'] = output_file
@@ -195,14 +195,14 @@ def main(backend: str, config_path: str, model_path: Optional[str] = None):
     """
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
-        server_config = config['server']
-        engine_configs = config['engine']
         data_config = config['data']
-
+        server_config = config['server']
         server_type = server_config.get('type', 'api_server')
         if server_type == 'proxy':
             benchmark_proxy(backend, server_config, data_config)
             return
+        
+        engine_configs = config['engine']
         if isinstance(engine_configs, Dict):
             engine_configs = [engine_configs]
         assert isinstance(engine_configs, List) and all(isinstance(s, Dict) for s in engine_configs)
