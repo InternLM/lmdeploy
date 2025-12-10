@@ -31,11 +31,6 @@ class Qwen3VLModel(VisionModel):
 
     def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
-        # update processor if needed
-        if mm_processor_kwargs is not None and mm_processor_kwargs != self.mm_processor_kwargs:
-            self.processor = AutoProcessor.from_pretrained(self.model_path, **mm_processor_kwargs)
-            self.mm_processor_kwargs = mm_processor_kwargs
-
         images = self.collect_images(messages)
         optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
@@ -44,7 +39,10 @@ class Qwen3VLModel(VisionModel):
 
             item = dict(type='image', image=image)
             item.update({key: params[key] for key in params.keys() if key in optional_keys})
-            result = self.processor.image_processor(images=image, videos=None, return_tensors='pt')
+            result = self.processor.image_processor(images=image,
+                                                    videos=None,
+                                                    return_tensors='pt',
+                                                    **mm_processor_kwargs)
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
