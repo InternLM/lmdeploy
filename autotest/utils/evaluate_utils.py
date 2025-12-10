@@ -355,7 +355,7 @@ def mllm_eval_test(config,
         cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode infer'  # noqa
 
     elif test_type == 'eval':
-        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge Qwen2.5-32B-Instruct --judge-base-url http://127.0.0.1:8000/v1'  # noqa
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {simple_model_name} --base-url http://127.0.0.1:empty/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge Qwen2.5-32B-Instruct --judge-base-url http://127.0.0.1:{port}/v1'  # noqa
 
     print(f'Work directory: {work_dir}')
 
