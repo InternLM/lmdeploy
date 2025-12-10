@@ -214,6 +214,7 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq, prealloc_size)
+            self.block_trie.allocate(seq)
             if self.is_ssm:
                 self.state_manager.allocate(seq)
             _to_running(seq)
@@ -369,4 +370,5 @@ class Scheduler:
             waiting_seqs=self.num_waiting() + self.num_ready(),
             total_blocks=self.block_manager.num_gpu_blocks,
             free_blocks=self.block_manager.get_num_free_gpu_blocks(),
+            prefix_cache_hit_rate=self.block_trie.hit_rate(),
         )

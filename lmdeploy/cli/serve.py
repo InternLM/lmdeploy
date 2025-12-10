@@ -237,6 +237,7 @@ class SubCliServe:
                 dllm_denoising_steps=args.dllm_denoising_steps,
                 dllm_confidence_threshold=args.dllm_confidence_threshold,
                 enable_return_routed_experts=args.enable_return_routed_experts,
+                distributed_executor_backend=args.distributed_executor_backend,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig

@@ -258,10 +258,6 @@ class EngineLoop:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
-            routed_experts = msg.routed_experts if msg.return_routed_experts and finish else None
-            if routed_experts is not None and self.config.enable_transfer_obj_ref:
-                # only serialize for api server
-                routed_experts = self.executor.serialize(routed_experts)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -269,7 +265,7 @@ class EngineLoop:
                               cache_block_ids=cache_block_ids,
                               req_metrics=req_metrics,
                               logprobs=cur_logprobs,
-                              routed_experts=routed_experts)
+                              routed_experts=msg.routed_experts)
             outputs[session_id] = out
 
             if msg.return_logits:

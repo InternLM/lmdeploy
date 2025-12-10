@@ -34,7 +34,7 @@ def test_return_with_prompt(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -62,7 +62,7 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -88,7 +88,7 @@ def test_return_with_multi_prompt(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_with_prompt, args=(config, model, backend, file_name))
 
     p.start()
@@ -116,7 +116,7 @@ def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -143,7 +143,7 @@ def test_return_with_message(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -171,7 +171,7 @@ def test_return_with_message_stream(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -204,7 +204,7 @@ def test_return_with_message_batch(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -238,7 +238,7 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -265,7 +265,7 @@ def test_return_check_logprobs(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -294,7 +294,7 @@ def test_return_check_logprobs_stream(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -325,7 +325,7 @@ def test_backend_config_session_len(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -356,7 +356,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_min_new_tokens_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -388,7 +388,7 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_stop_words_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_stop_words, args=(config, model, backend, file_name))
 
     p.start()
@@ -418,7 +418,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_bad_words_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_bad_words, args=(config, model, backend, file_name))
 
     p.start()
@@ -455,7 +455,7 @@ def test_gen_config_special_words_false(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_special_words_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_special_words, args=(config, model, backend, file_name))
 
     p.start()
@@ -492,7 +492,7 @@ def test_gen_config_special_words_true(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_special_words_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_special_words, args=(config, model, backend, file_name))
 
     p.start()
@@ -521,7 +521,7 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id
 
     file_name = f'pipeline_log_repetition_penalty_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_repetition_penalty, args=(config, model, backend, file_name))
 
     p.start()
@@ -549,7 +549,7 @@ def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend, wor
 
     file_name = f'pipeline_log_repetition_penalty_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_repetition_penalty, args=(config, model, backend, file_name))
 
     p.start()
@@ -577,7 +577,7 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -607,7 +607,7 @@ def test_gen_config_minimun_topk(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -636,7 +636,7 @@ def test_gen_config_diff_random_seed(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -665,7 +665,7 @@ def test_gen_config_same_random_seed(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -692,7 +692,7 @@ def test_gen_config_do_sample_batch(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase, args=(config, model, backend, file_name))
 
     p.start()
@@ -723,7 +723,7 @@ def test_gen_config_max_new_tokens(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_max_new_tokens_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_max_new_tokens, args=(config, model, backend, file_name))
 
     p.start()
@@ -754,7 +754,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
 
     file_name = f'pipeline_log_ignore_eos_{worker_id}.txt'
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     p = Process(target=run_pipeline_testcase_ignore_eos, args=(config, model, backend, file_name))
 
     p.start()
@@ -768,7 +768,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_backend_config_input_validation(config, model, backend, worker_id):
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -805,7 +805,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_backend_config_validate_turbomind(config, model, backend, worker_id):
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     model_path = '/'.join([config.get('model_path'), model])
     with pytest.raises(pydantic.ValidationError, match='tp must be a positive integer'):
         backend_config = backend(tp=0)
@@ -843,7 +843,7 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
 @pytest.mark.parametrize('backend', [PytorchEngineConfig])
 def test_backend_config_validate_pytorch(config, model, backend, worker_id):
     if 'gw' in worker_id:
-        set_device_env_variable(worker_id, tp_num=2)
+        set_device_env_variable(worker_id, parallel_config=2)
     model_path = '/'.join([config.get('model_path'), model])
     with pytest.raises(AssertionError):
         backend_config = backend(tp=0)
@@ -874,7 +874,7 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
 def test_backend_config_tp(config, model, backend, worker_id):
     with pytest.raises(AssertionError):
         if 'gw' in worker_id:
-            set_device_env_variable(worker_id, tp_num=2)
+            set_device_env_variable(worker_id, parallel_config=2)
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=100)
         pipe = init_pipeline(model_path, backend_config=backend_config)

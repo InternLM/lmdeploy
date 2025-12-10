@@ -118,7 +118,9 @@ class LoggingStatLogger(StatLoggerBase):
                    f'Unfinished: {scheduler_stats.num_total_reqs-scheduler_stats.num_finished_reqs} reqs, '
                    f'Running: {scheduler_stats.num_running_reqs} reqs, '
                    f'Waiting: {scheduler_stats.num_waiting_reqs} reqs, '
-                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%')
+                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, '
+                   f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%')
+
         print(log_msg, flush=True)
         self.log_spec_msg()
 

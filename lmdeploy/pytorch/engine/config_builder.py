@@ -35,6 +35,8 @@ class ConfigBuilder:
 
         if engine_config.dp != 1:
             if engine_config.tp == 1 and engine_config.ep == 1:
+                logger.warning('Data parallelism is enabled but tensor parallelism and '
+                               'expert parallelism are not enabled. Setting dp=1.')
                 engine_config.dp = 1
                 engine_config.dp_rank = 0
 
