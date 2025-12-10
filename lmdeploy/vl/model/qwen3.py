@@ -31,6 +31,9 @@ class Qwen3VLModel(VisionModel):
 
     def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
+        if mm_processor_kwargs is None:
+            mm_processor_kwargs = {}
+
         images = self.collect_images(messages)
         optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
