@@ -47,17 +47,16 @@ void GuidedDecodeMaskLayer<T>::Forward(TensorMap& args)
 
     TM_CHECK(bsz == matchers_.size());
 
-    const auto           bitmask_size  = bitmask_buf_.shape(1);
-    std::vector<int64_t> bitmask_shape = {bsz, bitmask_size};
+    const auto           bitmask_size   = bitmask_buf_.shape(1);
+    std::vector<int64_t> bitmask_shape  = {bsz, bitmask_size};
+    int32_t*             data           = bitmask_buf_.data();
+    size_t               total_elements = bitmask_shape[0] * bitmask_shape[1];
+    bool                 need_apply     = false;
+    DLTensor             bitmask_dltensor{
+        data, DLDevice{kDLCPU, 0}, bitmask_buf_.ndim(), xgrammar::GetBitmaskDLType(), bitmask_shape.data(), nullptr, 0};
 
-    DLTensor bitmask_dltensor{bitmask_buf_.data(),
-                              DLDevice{kDLCPU, 0},
-                              bitmask_buf_.ndim(),
-                              xgrammar::GetBitmaskDLType(),
-                              bitmask_shape.data(),
-                              nullptr,
-                              0};
-    bool     need_apply = false;
+    std::fill(data, data + total_elements, 0xffffffff);
+
     for (size_t i = 0; i < bsz; ++i) {
         const auto& matcher = matchers_[i];
         if (matcher) {
