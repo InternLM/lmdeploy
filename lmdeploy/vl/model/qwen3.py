@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
+from transformers import AutoProcessor
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
@@ -22,14 +23,19 @@ class Qwen3VLModel(VisionModel):
 
     def build_preprocessor(self):
         check_transformers()
-        from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
+        self.mm_processor_kwargs = None
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
+        # update processor if needed
+        if mm_processor_kwargs is not None and mm_processor_kwargs != self.mm_processor_kwargs:
+            self.processor = AutoProcessor.from_pretrained(self.model_path, **mm_processor_kwargs)
+            self.mm_processor_kwargs = mm_processor_kwargs
+
         images = self.collect_images(messages)
         optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []

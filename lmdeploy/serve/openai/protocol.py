@@ -153,6 +153,8 @@ class ChatCompletionRequest(BaseModel):
     add_vision_id: Optional[bool] = False
     return_token_ids: Optional[bool] = False
     include_stop_str_in_output: Optional[bool] = False
+    # kwargs for mm_processor
+    mm_processor_kwargs: Optional[Dict[str, Any]] = Field(default=None, examples=[None])
 
 
 class FunctionCall(BaseModel):

@@ -470,7 +470,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         adapter_name=adapter_name,
         enable_thinking=request.enable_thinking,
         add_vision_id=request.add_vision_id,
-    )
+        mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_stream_response_json(index: int,
                                     delta_message: DeltaMessage,

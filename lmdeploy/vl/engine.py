@@ -2,7 +2,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 
@@ -41,9 +41,12 @@ class ImageEncoder:
         self.executor = ThreadPoolExecutor(max_workers=1)
         torch.cuda.empty_cache()
 
-    async def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    async def preprocess(self,
+                         messages: List[Dict],
+                         mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Preprocess multimodal data in the messages."""
-        future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages)
+        future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages,
+                                                          mm_processor_kwargs)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs

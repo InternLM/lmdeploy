@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import PIL
 
@@ -57,6 +57,7 @@ class VLAsyncEngine(AsyncEngine):
                                 tools: Optional[List[object]] = None,
                                 enable_thinking: Optional[bool] = None,
                                 add_vision_id: Optional[bool] = False,
+                                mm_processor_kwargs: Optional[Dict[str, Any]] = None,
                                 **kwargs):
         """Process messages and return the required data for the inference
         engines.
@@ -91,7 +92,7 @@ class VLAsyncEngine(AsyncEngine):
 
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_convert_to_pil_images(messages)
-        results = await self.vl_encoder.preprocess(messages)
+        results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
         if self.backend == 'turbomind':
             # for tm engine, this module perform vision embedding after image
             # preprocessing. It utilizes the hf model's vision embeddings
