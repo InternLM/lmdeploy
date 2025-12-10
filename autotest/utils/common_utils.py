@@ -32,14 +32,16 @@ def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
                 log_file.write(process.stdout)
 
             if process.returncode == 0:
+                result = True
                 result_msg = f'success: {process.returncode}\n'
             else:
+                result = False
                 result_msg = f'fail: {process.returncode}\n'
 
             print(result_msg, end='')
             log_file.write(result_msg)
 
-            return process.returncode == 0, result_msg.strip()
+            return result, result_msg.strip()
 
     except Exception as e:
         error_msg = f'exec fail: {str(e)}\n'
