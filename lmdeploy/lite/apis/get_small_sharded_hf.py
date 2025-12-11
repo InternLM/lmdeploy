@@ -38,7 +38,7 @@ def main():
 
     checkpoints = set(index['weight_map'].values())
     for ckpt in checkpoints:
-        state_dict = torch.load(os.path.join(args.src_dir, ckpt), map_location='cuda')
+        state_dict = torch.load(os.path.join(args.src_dir, ckpt), map_location='cuda', weights_only=True)
         keys = sorted(list(state_dict.keys()))
         for k in keys:
             new_state_dict_name = 'pytorch_model-{:05d}-of-{:05d}.bin'.format(cnt, n_shard)
