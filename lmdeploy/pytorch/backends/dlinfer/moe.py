@@ -35,10 +35,12 @@ class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
 class DlinferFusedMoEImpl(FusedMoEImpl):
     """Dlinfer fused moe implementation."""
 
-    def __init__(self, top_k: int, num_experts: int, renormalize: bool = False):
+    def __init__(self, top_k: int, num_experts: int, renormalize: bool = False, ep_size: int = 1, ep_group: torch.distributed.ProcessGroup = None):
         self.top_k = top_k
         self.num_experts = num_experts
         self.renormalize = renormalize
+        self.ep_size = ep_size
+        self.ep_group = ep_group
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         """Update weights."""
@@ -68,8 +70,11 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         """forward."""
         assert gate_up_bias is None
         assert down_bias is None
+        # from lmdeploy.utils import get_logger
+        # logger = get_logger('lmdeploy')
+        # logger.error(f'###### {expert_list=}')
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
-                         self.renormalize)
+                         self.renormalize, self.ep_size, self.ep_group, expert_list)
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder):
@@ -85,4 +90,4 @@ class DlinferFusedMoEBuilder(FusedMoEBuilder):
               layer_idx: int = 0,
               out_dtype: torch.dtype = torch.bfloat16):
         """Build from mlp."""
-        return DlinferFusedMoEImpl(top_k=top_k, num_experts=num_experts, renormalize=renormalize)
+        return DlinferFusedMoEImpl(top_k=top_k, num_experts=num_experts, renormalize=renormalize, ep_size=ep_size, ep_group=ep_group)
