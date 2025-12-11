@@ -196,13 +196,15 @@ class Session:
                  gen_config: Optional[GenerationConfig] = None,
                  stream_response: bool = True,
                  do_preprocess: bool = True,
-                 adapter_name: str = None) -> Union[Response, Iterator[Response]]:
+                 adapter_name: str = None,
+                 **kwargs) -> Union[Response, Iterator[Response]]:
         self._engine.chat(prompt,
                           gen_config=gen_config or self._gen_config,
                           stream_response=stream_response,
                           do_preprocess=do_preprocess,
                           session=self,
-                          adapter_name=adapter_name)
+                          adapter_name=adapter_name,
+                          **kwargs)
         if stream_response:
             return self.generator
         else:
@@ -691,7 +693,7 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
                                 reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                                chat_template_kwargs: Optional[Dict] = None,
+                                chat_template_kwargs: Dict = {},
                                 **kwargs):
         # Change multimodal data to openai text messages, i.e.,
         # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
@@ -828,7 +830,7 @@ class AsyncEngine(LogitsMixin):
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
                                                         mm_processor_kwargs=mm_processor_kwargs,
-                                                        chat_template_kwargs=chat_template_kwargs or None,
+                                                        chat_template_kwargs=chat_template_kwargs,
                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']

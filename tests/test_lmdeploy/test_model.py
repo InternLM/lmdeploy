@@ -449,5 +449,5 @@ def test_HFChatTemplate_Qwen3_VL_with_vision_id(model_path):
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     expected = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, add_vision_id=True)
     chat_template_kwargs = dict(add_vision_id=True)
-    lm_res = model.messages2prompt(messages, chat_template_kwargs=chat_template_kwargs)
+    lm_res = model.messages2prompt(messages, **chat_template_kwargs)
     assert expected == lm_res

@@ -55,7 +55,7 @@ class VLAsyncEngine(AsyncEngine):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
-                                chat_template_kwargs: Optional[Dict] = None,
+                                chat_template_kwargs: Dict = {},
                                 mm_processor_kwargs: Optional[Dict[str, Any]] = None,
                                 **kwargs):
         """Process messages and return the required data for the inference
