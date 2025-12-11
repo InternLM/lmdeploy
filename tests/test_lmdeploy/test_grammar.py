@@ -95,3 +95,51 @@ def test_guided_matrix(model_id, backend_name, backend_factory, schema_type):
                 assert re.fullmatch(schema, response[0].text)
     finally:
         pipe.close()
+
+
+@pytest.mark.parametrize('model_id', MODEL_IDS)
+@pytest.mark.parametrize('backend_name,backend_factory', BACKEND_FACTORIES)
+def test_mix_guided_matrix(model_id, backend_name, backend_factory):
+    pipe = pipeline(
+        model_id,
+        backend_config=backend_factory(),
+        log_level='INFO',
+    )
+
+    schema_type = 'json_schema'
+    response_format = {'type': schema_type}
+    schema = SCHEMA_MAP[schema_type]
+    response_format[schema_type] = dict(name='test', schema=schema)
+
+    prompts = ['Make a self introduction please.'] * 4
+    try:
+        config = GenerationConfig(response_format=response_format)
+
+        gen_config = [None if idx % 3 else config for idx in range(4)]
+
+        responses = pipe.batch_infer(prompts, gen_config=gen_config)
+
+        for resp, c in zip(responses, gen_config):
+            if c is None:
+                # Unguided generation: ensure we get some text, and that it does not
+                # accidentally produce JSON that conforms to the guided schema.
+                assert resp and resp.text
+                try:
+                    data = json.loads(resp.text)
+                except json.JSONDecodeError:
+                    # Not valid JSON, so it cannot conform to the schema.
+                    continue
+                else:
+                    try:
+                        validate(instance=data, schema=schema)
+                    except Exception:
+                        # JSON is present but does not satisfy the schema.
+                        continue
+                    else:
+                        pytest.fail(
+                            "Unguided generation unexpectedly produced schema-conformant JSON"
+                        )
+            else:
+                validate(instance=json.loads(resp.text), schema=schema)
+    finally:
+        pipe.close()
