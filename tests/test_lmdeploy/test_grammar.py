@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 
@@ -5,7 +6,7 @@ import pytest
 from jsonschema import validate
 
 from lmdeploy import pipeline
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, TurbomindEngineConfig
 
 MODEL_IDS = [
     'Qwen/Qwen3-0.6B',
@@ -95,3 +96,55 @@ def test_guided_matrix(model_id, backend_name, backend_factory, schema_type):
                 assert re.fullmatch(schema, response[0].text)
     finally:
         pipe.close()
+
+
+async def collect(*aiters):
+    results = [[] for _ in range(len(aiters))]
+
+    async def drain(idx, aiter):
+        async for item in aiter:
+            results[idx].append(item)
+
+    await asyncio.gather(*(drain(idx, aiter) for idx, aiter in enumerate(aiters)))
+
+    responses = []
+    for r in results:
+        resp = Response(text='', input_token_len=0, generate_token_len=0)
+        responses.append(resp)
+        for out in r:
+            resp.text += out.response
+            resp.input_token_len = out.input_token_len
+            resp.generate_token_len = out.generate_token_len
+            resp.finish_reason = out.finish_reason
+
+    return responses
+
+
+@pytest.mark.parametrize('model_id', MODEL_IDS)
+@pytest.mark.parametrize('backend_name,backend_factory', BACKEND_FACTORIES)
+def test_mix_guided_matrix(model_id, backend_name, backend_factory):
+    pipe = pipeline(
+        model_id,
+        backend_config=backend_factory(),
+        log_level='INFO',
+    )
+
+    schema_type = 'json_schema'
+    response_format = {'type': schema_type}
+    schema = SCHEMA_MAP[schema_type]
+    response_format[schema_type] = dict(name='test', schema=schema)
+
+    gen_config = GenerationConfig(response_format=response_format)
+
+    configs = [None if idx % 3 else gen_config for idx in range(4)]
+    tasks = [
+        pipe.generate(messages='Make a self introduction please.', session_id=session_id, gen_config=gen_config)
+        for session_id, gen_config in enumerate(configs)
+    ]
+
+    responses = asyncio.run(collect(*tasks))
+    for resp, config in zip(responses, configs):
+        if config is None:
+            assert '}' not in resp.text
+        else:
+            validate(instance=json.loads(resp.text), schema=schema)
