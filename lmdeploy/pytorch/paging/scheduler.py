@@ -366,7 +366,7 @@ class Scheduler:
     @property
     def schedule_metrics(self):
         return ScheduleMetrics(
-            activate_seqs=self.num_running(),
+            active_seqs=self.num_running(),
             waiting_seqs=self.num_waiting() + self.num_ready(),
             total_blocks=self.block_manager.num_gpu_blocks,
             free_blocks=self.block_manager.get_num_free_gpu_blocks(),
