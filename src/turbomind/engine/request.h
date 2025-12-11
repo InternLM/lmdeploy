@@ -201,6 +201,38 @@ void serdes(Archive& ar, GenerationConfig& g)
 }
 
 template<class Archive>
+void save_req_output(Archive& ar, const TensorMap& map)
+{
+    // clang-format off
+    ar & map.size();
+    for (const auto& [k, t] : map) {
+        TM_CHECK(t.device().type == kCPU);
+        ar & k;
+        ar & t.layout();
+        ar & t.dtype();
+    }
+    // clang-format on
+}
+
+template<class Archive>
+void load_req_output(Archive& ar, TensorMap& map)
+{
+    // clang-format off
+    decltype(map.size()) size;
+    ar & size;
+    for (int i = 0; i < size; ++i) {
+        std::string k;
+        Layout      layout;
+        DataType    dtype;
+        ar & k;
+        ar & layout;
+        ar & dtype;
+        map.emplace(std::move(k), Tensor{layout, dtype, kCPU});
+    }
+    // clang-format on
+}
+
+template<class Archive>
 void serdes(Archive& ar, Request& r)
 {
     // clang-format off
@@ -210,12 +242,14 @@ void serdes(Archive& ar, Request& r)
     ar & r.gen_cfg;
     ar & r.stream_output;
     ar & r.inputs;
-    // TODO: skip copy output contents(logits, hidden states, etc.)
-    ar & r.outputs;
+    if constexpr(Archive::is_loading::value) {
+        load_req_output(ar, r.outputs);
+        r.output_ids      = r.outputs.at("output_ids");
+        r.sequence_length = r.outputs.at("sequence_length");
+    } else {
+        save_req_output(ar, r.outputs);
+    }
     ar & r.ec;
-
-    r.output_ids      = r.outputs.at("output_ids");
-    r.sequence_length = r.outputs.at("sequence_length");
     // clang-format on
 }
 

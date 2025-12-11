@@ -64,6 +64,9 @@ inline constexpr bool is_array_wrapper_v<ArrayWrapper<T>> = std::true_type{};
 
 template<class Derived>
 struct OutputArchive {
+    using is_loading = std::false_type;
+    using is_saving  = std::true_type;
+
     template<class T>
     void operator&(T&& x)
     {
@@ -84,6 +87,9 @@ struct OutputArchive {
 
 template<class Derived>
 struct InputArchive {
+    using is_loading = std::true_type;
+    using is_saving  = std::false_type;
+
     template<class T>
     void operator&(T&& x)
     {
