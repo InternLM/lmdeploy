@@ -449,6 +449,11 @@ class GenerateReqInput(BaseModel):
     spaces_between_special_tokens: Optional[bool] = True
     include_stop_str_in_output: Optional[bool] = False
     return_routed_experts: Optional[bool] = False
+    # kwargs for hf processor
+    mm_processor_kwargs: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=('Additional kwargs to pass to the HF processor'),
+    )
 
 
 class GenerateReqMetaOutput(BaseModel):
