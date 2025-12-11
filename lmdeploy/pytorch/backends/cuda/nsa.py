@@ -57,7 +57,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                            k_seqlens,
                            block_offset,
                            max_q_seqlen=max_q_seqlen,
-                           max_k_seqlen=max_kv_seqlen)
+                           max_k_seqlen=max_kv_seqlen,
+                           causal=True)
         return bitonic_topk(scores, q_seqlens, k_seqlens, self.topk, fill=self.fill, descending=True)
 
 
