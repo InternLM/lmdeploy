@@ -132,7 +132,7 @@ struct ThreadCommImpl: public HostCommImpl {
         }
     }
 
-    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) override
+    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy, ser_fn ser, des_fn des) override
     {
         TM_CHECK(copy);
         if (n_ranks_ == 1) {
@@ -165,7 +165,7 @@ struct ThreadCommImpl: public HostCommImpl {
         }
     }
 
-    void AllGather(void* data, int count, DataType dtype, copy_fn copy) override
+    void AllGather(void* data, int count, DataType dtype, copy_fn copy, ser_fn ser, des_fn des) override
     {
         TM_CHECK(copy);
         if (n_ranks_ == 1) {

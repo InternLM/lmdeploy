@@ -124,7 +124,7 @@ private:
 
 typedef void (*ReduceFunc)(void*, const void*, const void*, size_t);
 
-struct GlooCommImpl: public IpcHostCommImpl {
+struct GlooCommImpl: public HostCommImpl {
 
     struct SplitInfo {
         int color;
@@ -192,7 +192,67 @@ struct GlooCommImpl: public IpcHostCommImpl {
         ::gloo::barrier(opts);
     }
 
-    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) override
+    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy, ser_fn ser, des_fn des) override
+    {
+        // trivially copyable if no ser/des function
+        if (!ser || !des) {
+            return Broadcast(data, count, dtype, root);
+        }
+
+        // broadcast buffer size
+        size_t size;
+        if (root == rank()) {
+            ser(data, 0, count, size, nullptr);
+        }
+        Broadcast(&size, 1, data_type_v<size_t>, root);
+
+        // serialize data on root rank
+        std::vector<std::byte> bytes;
+        bytes.reserve(size);
+        if (root == rank()) {
+            ser(data, 0, count, size, bytes.data());
+        }
+
+        // broadcast serialized data
+        Broadcast(bytes.data(), size, data_type_v<uint8_t>, root);
+
+        // deserialize data on all ranks
+        if (root != rank()) {
+            des(data, 0, count, bytes.data(), size);
+        }
+    }
+
+    void AllGather(void* data, int count, DataType dtype, copy_fn copy, ser_fn ser, des_fn des) override
+    {
+        // trivially copyable if no ser/des function
+        if (!ser || !des) {
+            return AllGather(data, count, dtype);
+        }
+
+        // get buffer size on each rank and find max size
+        size_t size;
+        ser(data, count * rank(), count, size, nullptr);
+        std::vector<size_t> sizes(n_ranks());
+        sizes[rank()] = size;
+        AllGather(sizes.data(), 1, data_type_v<size_t>);
+        auto max_size = *std::max_element(sizes.begin(), sizes.end());
+
+        // serialize data on each rank
+        std::vector<std::byte> bytes(max_size * n_ranks());
+        ser(data, count * rank(), count, size, bytes.data() + rank() * max_size);
+
+        // gather serialized data
+        AllGather(bytes.data(), max_size, data_type_v<uint8_t>);
+
+        // deserialize data on each rank
+        for (int i = 0; i < n_ranks(); ++i) {
+            if (i != rank()) {
+                des(data, i * count, count, bytes.data() + i * max_size, sizes[i]);
+            }
+        }
+    }
+
+    void Broadcast(void* data, int count, DataType dtype, int root)
     {
         ::gloo::BroadcastOptions opts(context_);
         opts.setRoot(root);
@@ -201,7 +261,7 @@ struct GlooCommImpl: public IpcHostCommImpl {
         ::gloo::broadcast(opts);
     }
 
-    void AllGather(void* data, int count, DataType dtype, copy_fn copy) override
+    void AllGather(void* data, int count, DataType dtype)
     {
         ::gloo::AllgatherOptions opts(context_);
         opts.setTimeout(kTimeOut);

@@ -8,7 +8,7 @@ namespace turbomind::comm {
 extern std::unique_ptr<HostGroupId> CreateThreadGroupId();
 extern std::unique_ptr<HostGroupId> CreateGlooGroupId();
 
-struct HybridCommImpl: public HybridHostCommImpl {
+struct HybridCommImpl: public HostCommImpl {
 
     HybridCommImpl(int n_ranks, int rank, int node_rank, HostGroupId* gloo_group_id, HostGroupId* thread_group_id):
         n_ranks_{n_ranks},  //
@@ -88,26 +88,6 @@ struct HybridCommImpl: public HybridHostCommImpl {
         return n_ranks_;
     }
 
-    IpcHostCommImpl* inter_comm() const override
-    {
-        return inter_comm_->as<IpcHostCommImpl>();
-    }
-
-    HostCommImpl* intra_comm() const override
-    {
-        return intra_comm_;
-    }
-
-    const std::unordered_map<int, int>& get_rank_to_intra() const override
-    {
-        return rank_to_intra_;
-    }
-
-    const std::vector<int>& get_rank_to_inter() const
-    {
-        return rank_to_inter_;
-    }
-
     bool is_same_process() const override
     {
         return same_process_;
@@ -121,7 +101,25 @@ struct HybridCommImpl: public HybridHostCommImpl {
         intra_comm_->Sync(blocking);
     }
 
-    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) override
+    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy, ser_fn ser, des_fn des) override
+    {
+        if (!ser || !des) {
+            return Broadcast(data, count, dtype, root, copy);
+        }
+
+        bool root_node = rank_to_intra_.count(root) > 0;  // root on this node
+        if (root_node) {
+            intra_comm_->Broadcast(data, count, kNull, rank_to_intra_.at(root), copy);
+        }
+        if (intra_comm_->rank() == 0) {
+            inter_comm_->Broadcast(data, count, kNull, rank_to_inter_.at(root), copy, ser, des);
+        }
+        if (!root_node) {
+            intra_comm_->Broadcast(data, count, kNull, 0, copy);
+        }
+    }
+
+    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy)
     {
         if (is_same_process()) {
             return intra_comm_->Broadcast(data, count, dtype, root, copy);
@@ -139,7 +137,16 @@ struct HybridCommImpl: public HybridHostCommImpl {
         }
     }
 
-    void AllGather(void* data, int count, DataType dtype, copy_fn copy) override
+    void AllGather(void* data, int count, DataType dtype, copy_fn copy, ser_fn ser, des_fn des) override
+    {
+        if (!ser || !des) {
+            return AllGather(data, count, dtype, copy);
+        }
+
+        return gloo_comm_->AllGather(data, count, dtype, copy, ser, des);
+    }
+
+    void AllGather(void* data, int count, DataType dtype, copy_fn copy)
     {
         if (is_same_process()) {
             return intra_comm_->AllGather(data, count, dtype, copy);

@@ -16,13 +16,6 @@
 
 namespace turbomind::comm {
 
-enum class CommType
-{
-    kIntra,
-    kInter,
-    kHybrid,
-};
-
 enum class RedOp
 {
     kSum,
@@ -34,20 +27,13 @@ typedef void (*copy_fn)(void* src, int n, void* dst, int offset);
 
 typedef void (*reduce_fn)(void* src, int n, void* dst, int offset);
 
+typedef void (*ser_fn)(void* data, int offset, int n, size_t& size, void* out);
+
+typedef void (*des_fn)(void* data, int offset, int n, void* in, size_t size);
+
 class HostCommImpl {
 public:
     virtual ~HostCommImpl();
-
-    virtual void* query(CommType type) const
-    {
-        return nullptr;
-    }
-
-    template<typename T>
-    T* as() const
-    {
-        return static_cast<T*>(query(T::kCommType));
-    }
 
     virtual int rank() const = 0;
 
@@ -59,45 +45,22 @@ public:
 
     virtual void Sync(bool blocking = false) = 0;
 
-    virtual void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) = 0;
+    virtual void Broadcast(void*    data,  //
+                           int      count,
+                           DataType dtype,
+                           int      root,
+                           copy_fn  copy,
+                           ser_fn   ser = nullptr,
+                           des_fn   des = nullptr) = 0;
 
-    virtual void AllGather(void* data, int count, DataType dtype, copy_fn copy) = 0;
+    virtual void AllGather(void*    data,  //
+                           int      count,
+                           DataType dtype,
+                           copy_fn  copy,
+                           ser_fn   ser = nullptr,
+                           des_fn   des = nullptr) = 0;
 
     virtual void AllReduce(void* data, int count, DataType dtype, RedOp red_op) = 0;
-};
-
-class IpcHostCommImpl: public HostCommImpl {
-public:
-    static constexpr CommType kCommType = CommType::kInter;
-
-    virtual void* query(CommType type) const override
-    {
-        if (type == kCommType) {
-            return const_cast<IpcHostCommImpl*>(this);
-        }
-        return HostCommImpl::query(type);
-    }
-};
-
-class HybridHostCommImpl: public HostCommImpl {
-public:
-    static constexpr CommType kCommType = CommType::kHybrid;
-
-    virtual IpcHostCommImpl* inter_comm() const = 0;
-
-    virtual HostCommImpl* intra_comm() const = 0;
-
-    virtual const std::unordered_map<int, int>& get_rank_to_intra() const = 0;
-
-    virtual const std::vector<int>& get_rank_to_inter() const = 0;
-
-    virtual void* query(CommType type) const override
-    {
-        if (type == kCommType) {
-            return const_cast<HybridHostCommImpl*>(this);
-        }
-        return HostCommImpl::query(type);
-    }
 };
 
 class HostComm {
@@ -127,6 +90,34 @@ void copy_fn(void* src, int n, void* dst, int offset)
     std::copy_n((T*)src + offset, n, (T*)dst + offset);
 }
 
+template<class T>
+void ser_fn(void* data, int offset, int n, size_t& size, void* out)
+{
+    if (out == nullptr) {
+        size = 0;
+        core::BinarySizeArchive sa;
+        for (int i = 0; i < n; ++i) {
+            sa&((T*)data)[offset + i];
+        }
+        size = sa.size();
+    }
+    else {
+        core::BinaryOutputExArchive oa(core::ArrayWrapper((std::byte*)out, size));
+        for (int i = 0; i < n; ++i) {
+            oa&((T*)data)[offset + i];
+        }
+    }
+}
+
+template<class T>
+void des_fn(void* data, int offset, int n, void* in, size_t size)
+{
+    core::BinaryInputExArchive ia(core::ArrayWrapper((std::byte*)in, size));
+    for (int i = 0; i < n; ++i) {
+        ia&((T*)data)[offset + i];
+    }
+}
+
 }  // namespace detail
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -143,55 +134,7 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
             comm->Broadcast(data, n, kNull, root, detail::copy_fn<T>);
         }
         else {
-            auto process = [&](IpcHostCommImpl* ipc_comm, int root) {
-                // serialize on root rank and deserialize on other ranks
-                core::BinarySizeArchive sa;
-                if (ipc_comm->rank() == root) {
-                    for (int i = 0; i < n; ++i) {
-                        sa& data[i];
-                    }
-                }
-                size_t buf_size = sa.size();
-                ipc_comm->Broadcast(&buf_size, 1, data_type_v<size_t>, root, detail::copy_fn<size_t>);
-
-                core::BinaryOutputArchive oa(buf_size);
-                if (ipc_comm->rank() == root) {
-                    for (int i = 0; i < n; ++i) {
-                        oa& data[i];
-                    }
-                    TM_CHECK_EQ(oa.bytes().size(), buf_size);
-                }
-                else {
-                    oa.bytes().resize(buf_size);
-                }
-                ipc_comm->Broadcast(oa.bytes().data(), buf_size, data_type_v<uint8_t>, root, detail::copy_fn<uint8_t>);
-
-                if (ipc_comm->rank() != root) {
-                    core::BinaryInputArchive ia(std::move(oa.bytes()));
-                    for (int i = 0; i < n; ++i) {
-                        ia& data[i];
-                    }
-                }
-            };
-            if (auto hybrid_comm = comm->as<HybridHostCommImpl>(); hybrid_comm) {
-                auto  inter_comm    = TM_CHECK_NOTNULL(hybrid_comm->inter_comm());
-                auto  intra_comm    = TM_CHECK_NOTNULL(hybrid_comm->intra_comm());
-                auto& rank_to_intra = hybrid_comm->get_rank_to_intra();
-                auto& rank_to_inter = hybrid_comm->get_rank_to_inter();
-                bool  root_node     = rank_to_intra.count(root) > 0;  // root on this node
-                if (root_node) {
-                    intra_comm->Broadcast(data, n, kNull, rank_to_intra.at(root), detail::copy_fn<T>);
-                }
-                if (intra_comm->rank() == 0) {
-                    process(inter_comm, rank_to_inter[root]);
-                }
-                if (!root_node) {
-                    intra_comm->Broadcast(data, n, kNull, 0, detail::copy_fn<T>);
-                }
-            }
-            else {
-                process(TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>()), root);
-            }
+            comm->Broadcast(data, n, kNull, root, detail::copy_fn<T>, detail::ser_fn<T>, detail::des_fn<T>);
         }
     }
 }
@@ -208,36 +151,7 @@ void AllGather(HostCommImpl* comm, T* data, int n)
             comm->AllGather(data, n, kNull, detail::copy_fn<T>);
         }
         else {
-            // buf may have different size on different ranks
-            core::BinarySizeArchive sa;
-            for (int i = 0; i < n; ++i) {
-                sa& data[comm->rank() * n + i];
-            }
-
-            std::vector<int> sizes(comm->n_ranks());
-            sizes[comm->rank()] = sa.size();
-            comm->AllGather(sizes.data(), 1, data_type_v<int>, detail::copy_fn<int>);
-            auto max_size = *std::max_element(sizes.begin(), sizes.end());
-
-            std::vector<std::byte> bytes;
-            bytes.reserve(max_size * comm->n_ranks());
-            auto buffer = core::ArrayWrapper(bytes.data(), max_size * comm->n_ranks());
-            auto oa     = core::BinaryOutputExArchive(buffer).offset(comm->rank() * max_size);
-            for (int i = 0; i < n; ++i) {
-                oa& data[comm->rank() * n + i];
-            }
-            comm->AllGather(bytes.data(), max_size, data_type_v<uint8_t>, detail::copy_fn<uint8_t>);
-
-            for (int i = 0; i < comm->n_ranks(); ++i) {
-                if (i != comm->rank()) {
-                    // some field in data may be not shared by all rank
-                    auto buffer_i = core::ArrayWrapper<std::byte>(bytes.data() + i * max_size, sizes[i]);
-                    core::BinaryInputExArchive ia(buffer_i);
-                    for (int j = 0; j < n; ++j) {
-                        ia& data[n * i + j];
-                    }
-                }
-            }
+            comm->AllGather(data, n, kNull, detail::copy_fn<T>, detail::ser_fn<T>, detail::des_fn<T>);
         }
     }
 }
