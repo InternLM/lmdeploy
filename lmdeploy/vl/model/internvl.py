@@ -294,5 +294,5 @@ class InternVLVisionModel(VisionModel):
                                                  chat_template,
                                                  sequence_start,
                                                  tools=tools,
-                                                 chat_template_kwargs=chat_template_kwargs)
+                                                 chat_template_kwargs=chat_template_kwargs or {})
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
