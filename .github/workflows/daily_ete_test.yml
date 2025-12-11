@@ -397,12 +397,36 @@ jobs:
         timeout-minutes: 30
         run: |
           pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_generate.py -v -k "not interns1" -m "not logprob" --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful api
         if:  matrix.model == 'Intern-S1'
         timeout-minutes: 30
         run: |
           pytest autotest/interface/restful/test_restful_chat_func.py -n 20 -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_generate.py -v -k "not internlm2_5" -m "not logprob" --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Kill api server
+        if:  matrix.model != 'internlm2_5-20b'
+        run: |
+          kill -15 "$restful_pid"
+      - name: Start restful generate logprobs
+        if:  matrix.model != 'internlm2_5-20b'
+        run: |
+          lmdeploy serve api_server /nvme/qa_test_models/internlm/${{matrix.model}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} --logprobs-mode raw_logprobs > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_start_chat_restful_logprobs.log 2>&1 &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          sleep 900s
+      - name: Test lmdeploy - restful api
+        if:  matrix.model == 'internlm2_5-20b-chat'
+        timeout-minutes: 30
+        run: |
+          pytest autotest/interface/restful/test_restful_generate.py -v -k "not interns1" -m "logprob" --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - restful api
+        if:  matrix.model == 'Intern-S1'
+        timeout-minutes: 30
+        run: |
+          pytest autotest/interface/restful/test_restful_generate.py -v -k "not internlm2_5" -m "logprob" --alluredir=${{env.REPORT_DIR}}/interface-${{matrix.model}}-${{matrix.backend}}_ ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
         if:  matrix.model != 'internlm2_5-20b'
