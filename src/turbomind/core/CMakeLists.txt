@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.11)
 
 add_library(core STATIC
         check.cc

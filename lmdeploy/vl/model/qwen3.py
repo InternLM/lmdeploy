@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
+from transformers import AutoProcessor
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 
@@ -22,14 +23,17 @@ class Qwen3VLModel(VisionModel):
 
     def build_preprocessor(self):
         check_transformers()
-        from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
+        self.mm_processor_kwargs = None
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
+        if mm_processor_kwargs is None:
+            mm_processor_kwargs = {}
+
         images = self.collect_images(messages)
         optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
@@ -38,7 +42,10 @@ class Qwen3VLModel(VisionModel):
 
             item = dict(type='image', image=image)
             item.update({key: params[key] for key in params.keys() if key in optional_keys})
-            result = self.processor.image_processor(images=image, videos=None, return_tensors='pt')
+            result = self.processor.image_processor(images=image,
+                                                    videos=None,
+                                                    return_tensors='pt',
+                                                    **mm_processor_kwargs)
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))

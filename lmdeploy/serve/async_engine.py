@@ -769,6 +769,7 @@ class AsyncEngine(LogitsMixin):
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
             add_vision_id: Optional[bool] = False,
+            mm_processor_kwargs: Optional[Dict[str, Any]] = None,
             **kwargs):
         """Generate responses.
 
@@ -821,6 +822,7 @@ class AsyncEngine(LogitsMixin):
                                                         reasoning_effort=reasoning_effort,
                                                         enable_thinking=enable_thinking,
                                                         add_vision_id=add_vision_id,
+                                                        mm_processor_kwargs=mm_processor_kwargs,
                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
