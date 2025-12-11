@@ -53,14 +53,14 @@ def test_qwen3vl_preprocess_with_custom_pixels(qwen3vl_model, sample_messages):
     # Default processing without custom arguments
     default_processed_messages = qwen3vl_model.preprocess(messages=copy.deepcopy(sample_messages))
     default_content = default_processed_messages[-1]['content']
-    default_shape = default_content[0]['pixel_values'].shape
+    default_shape = default_content[0]['pixel_values'].shape  # [280, 1536]
 
     # Processing with smaller pixel range
     mm_processor_kwargs = {'min_pixels': 10 * 32 * 32, 'max_pixels': 20 * 32 * 32}
     custom_processed_messages = qwen3vl_model.preprocess(messages=copy.deepcopy(sample_messages),
                                                          mm_processor_kwargs=mm_processor_kwargs)
     custom_content = custom_processed_messages[-1]['content']
-    custom_shape = custom_content[0]['pixel_values'].shape
+    custom_shape = custom_content[0]['pixel_values'].shape  # [60, 1536]
 
     assert default_shape != custom_shape, \
         'Default and custom processing should result in different shapes.'
@@ -72,7 +72,7 @@ def test_qwen3vl_preprocess_with_custom_pixels(qwen3vl_model, sample_messages):
     custom_processed_messages = qwen3vl_model.preprocess(messages=copy.deepcopy(sample_messages),
                                                          mm_processor_kwargs=mm_processor_kwargs)
     custom_content = custom_processed_messages[-1]['content']
-    custom_shape = custom_content[0]['pixel_values'].shape
+    custom_shape = custom_content[0]['pixel_values'].shape  # [468, 1536]
 
     assert default_shape != custom_shape, \
         'Default and custom processing should result in different shapes.'
