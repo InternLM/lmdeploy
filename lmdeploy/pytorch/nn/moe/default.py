@@ -136,6 +136,9 @@ class FusedMoE(FusedMoEBase):
         dist_ctx = get_dist_manager().current_context()
         self.ep_size, rank = get_ep_world_rank()
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoE)
+        # from lmdeploy.utils import get_logger
+        # logger = get_logger('lmdeploy')
+        # logger.error(f'FusedMoE ep_size: {self.ep_size}, rank: {rank}, {dist_ctx.ep_gpu_group.rank()=}')
         self.impl = impl_builder.build(
             top_k,
             num_experts,
