@@ -105,7 +105,7 @@ class ImageEncoder:
                                            tokenizer,
                                            sequence_start,
                                            tools=tools,
-                                           chat_template_kwargs=chat_template_kwargs or {})
+                                           chat_template_kwargs=chat_template_kwargs)
         else:
             result = self.model.to_pytorch_with_input_ids(messages)
         # clear data

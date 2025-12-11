@@ -232,6 +232,7 @@ class InternVLVisionModel(VisionModel):
         tools: Optional[List[object]] = None,
         chat_template_kwargs: Optional[Dict] = None,
     ):
+        chat_template_kwargs = chat_template_kwargs or {}
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -293,5 +294,5 @@ class InternVLVisionModel(VisionModel):
                                                  chat_template,
                                                  sequence_start,
                                                  tools=tools,
-                                                 **(chat_template_kwargs or {}))
+                                                 chat_template_kwargs=chat_template_kwargs)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

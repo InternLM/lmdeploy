@@ -693,7 +693,7 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
                                 reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                                chat_template_kwargs: Dict = {},
+                                chat_template_kwargs: Optional[Dict] = None,
                                 **kwargs):
         # Change multimodal data to openai text messages, i.e.,
         # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
@@ -708,6 +708,7 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt = chat_template.messages2prompt(prompt,
                                                sequence_start,
                                                tools=tools,
