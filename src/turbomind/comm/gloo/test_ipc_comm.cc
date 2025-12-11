@@ -11,42 +11,13 @@
 
 using namespace turbomind::comm;
 
-#define TEST_TRIVIALLY_COPYABLE 0
-#define SKIP_SERIALIZE 1
+#define TEST_TRIVIALLY_COPYABLE 1
+
+// #define SKIP_SERIALIZE 0 // useless now
 
 // const std::string backend = "";
 const std::string backend = "hybrid";
 // const std::string backend = "gloo";
-
-namespace turbomind::comm {
-
-template<>
-char* serialize(char* data, size_t& size, const std::shared_ptr<std::vector<int>>& vec)
-{
-    TM_CHECK(vec != nullptr);
-#if SKIP_SERIALIZE
-    data = serialize(nullptr, size, *vec);
-#else
-    data = serialize(data, size, *vec);
-#endif
-    return data;
-}
-
-template<>
-char* deserialize(std::shared_ptr<std::vector<int>>& vec, char* data)
-{
-    if (vec == nullptr) {
-        vec = std::make_shared<std::vector<int>>();
-    }
-#if SKIP_SERIALIZE
-    // do nothing
-#else
-    data = deserialize(*vec, data);
-#endif
-    return data;
-}
-
-}  // namespace turbomind::comm
 
 struct Store {
     std::string hostname_;
@@ -163,15 +134,25 @@ struct TestGlooComm {
         const int count = 10;
 
         auto fun = [&](HostComm& comm, int rank) {
-            std::vector<int> data(count);
-
             for (int r = 0; r < comm->n_ranks(); ++r) {
+
+#if TEST_TRIVIALLY_COPYABLE
+                std::vector<int> data(count);
+#else
+                std::shared_ptr<std::vector<int>> data_ptr = std::make_shared<std::vector<int>>(count);
+                int*                              data     = data_ptr->data();
+#endif
+
                 for (int i = 0; i < count; ++i) {
                     data[i] = i + rank * count;  // i + rank * count
                 }
 
+#if TEST_TRIVIALLY_COPYABLE
                 Broadcast(comm, data.data(), count, r);
-
+#else
+                Broadcast(comm, data_ptr, r);
+                data = data_ptr->data();
+#endif
                 // check result
                 for (int i = 0; i < count; ++i) {
                     int expected = i + r * count;
@@ -198,14 +179,25 @@ struct TestGlooComm {
 
     void test_allgather()
     {
-        const int count = 10;
+        const int count = 40;
 
         auto fun = [&](HostComm& comm, int rank) {
+
+#if TEST_TRIVIALLY_COPYABLE
             std::vector<int> data(count * comm->n_ranks());
             for (int i = 0; i < count; ++i) {
                 data[i + count * comm->rank()] = i + rank * count;  // i + rank * count
             }
+#else
+            std::vector<std::shared_ptr<std::vector<int>>> data_ptrs(comm->n_ranks());
+            data_ptrs[comm->rank()] = std::make_shared<std::vector<int>>(count);
+            int* data = data_ptrs[comm->rank()]->data();
+            for (int i = 0; i < count; ++i) {
+                data[i] = i + rank * count;  // i + rank * count
+            }
+#endif
 
+#if TEST_TRIVIALLY_COPYABLE
             AllGather(comm, data.data(), count);
             for (int r = 0; r < comm->n_ranks(); ++r) {
                 for (int j = 0; j < count; ++j) {
@@ -219,6 +211,22 @@ struct TestGlooComm {
                     }
                 }
             }
+#else
+            AllGather(comm, data_ptrs.data(), 1);
+            for (int r = 0; r < comm->n_ranks(); ++r) {
+                data = data_ptrs[r]->data();
+                for (int j = 0; j < count; ++j) {
+                    int expected = j + r * count;
+                    if (data[j] != expected) {
+                        printf("Rank %d: AllGather failed, index %d, got %d, expected %d\n",
+                               rank,
+                               j + r * count,
+                               data[j],
+                               expected);
+                    }
+                }
+            }
+#endif
         };
 
         std::vector<std::thread> threads;
@@ -378,11 +386,11 @@ int main(int argc, char* argv[])
         TestGlooComm test(host, port, nnodes, node_rank, n_ranks_per_node);
         test.init();
 
-        // test.test_broadcast();
-        // test.test_allgather();
-        // test.test_allreduce();
+        test.test_broadcast();
+        test.test_allgather();
+        test.test_allreduce();
 
-        test.test_perf();
+        // test.test_perf();
     }
 
     return 0;

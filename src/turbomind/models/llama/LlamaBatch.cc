@@ -26,6 +26,7 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/context.h"
+#include "src/turbomind/core/serdes.h"
 #include "src/turbomind/core/tensor.h"
 
 #include "src/turbomind/macro.h"
@@ -45,7 +46,6 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 
-#include "src/turbomind/comm/serialize.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -1348,55 +1348,18 @@ struct RequestData {
     bool             abort;
 };
 
+template<class Archive>
+void serdes(Archive& ar, RequestData& r)
+{
+    // clang-format off
+    ar & r.infer;
+    ar & r.kill;
+    ar & r.cancel;
+    ar & r.abort;
+    // clang-format on
+}
+
 }  // namespace
-
-#ifdef BUILD_MULTI_GPU
-namespace comm {
-
-template<>
-char* serialize(char* data, size_t& size, const std::shared_ptr<RequestData>& req)
-{
-    TM_CHECK(req != nullptr);
-    data = serialize(data, size, (int)req->infer.size());
-    for (const auto& r : req->infer) {
-        data = serialize(data, size, *r);
-    }
-    data = serialize(data, size, (int)req->kill.size());
-    for (const auto& r : req->kill) {
-        data = serialize(data, size, *r);
-    }
-    data = serialize(data, size, req->cancel);
-    data = serialize(data, size, req->abort);
-    return data;
-}
-
-template<>
-char* deserialize(std::shared_ptr<RequestData>& req, char* data)
-{
-    if (req == nullptr) {
-        req = std::make_shared<RequestData>();
-    }
-
-    auto process = [](std::vector<std::shared_ptr<Request>>& vec, char* data) {
-        int size;
-        data = deserialize(size, data);
-        vec.resize(size);
-        for (auto& r : vec) {
-            r    = std::make_shared<Request>();
-            data = deserialize(*r, data);
-        }
-        return data;
-    };
-    data = process(req->infer, data);
-    data = process(req->kill, data);
-    data = deserialize(req->cancel, data);
-    data = deserialize(req->abort, data);
-    return data;
-}
-
-}  // namespace comm
-
-#endif  // BUILD_MULTI_GPU
 
 void LlamaBatch::InternalThreadEntry()
 {

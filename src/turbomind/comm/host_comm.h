@@ -6,11 +6,12 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
-#include "src/turbomind/comm/serialize.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/serdes.h"
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind::comm {
@@ -69,8 +70,6 @@ class IpcHostCommImpl: public HostCommImpl {
 public:
     static constexpr CommType kCommType = CommType::kInter;
 
-    virtual char* create_buffer(size_t size) = 0;
-
     virtual void* query(CommType type) const override
     {
         if (type == kCommType) {
@@ -122,7 +121,6 @@ private:
 };
 
 namespace detail {
-
 template<class T>
 void copy_fn(void* src, int n, void* dst, int offset)
 {
@@ -147,50 +145,52 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
         else {
             auto process = [&](IpcHostCommImpl* ipc_comm, int root) {
                 // serialize on root rank and deserialize on other ranks
-                size_t& buf_size = *reinterpret_cast<size_t*>(ipc_comm->create_buffer(sizeof(size_t)));
+                core::BinarySizeArchive sa;
                 if (ipc_comm->rank() == root) {
-                    buf_size = 0;
-                    serialize(nullptr, buf_size, data, n);
+                    for (int i = 0; i < n; ++i) {
+                        sa& data[i];
+                    }
                 }
+                size_t buf_size = sa.size();
                 ipc_comm->Broadcast(&buf_size, 1, data_type_v<size_t>, root, detail::copy_fn<size_t>);
 
-                int   count = buf_size;
-                char* buf   = ipc_comm->create_buffer(count);
+                core::BinaryOutputArchive oa(buf_size);
                 if (ipc_comm->rank() == root) {
-                    size_t sz{};
-                    serialize(buf, sz, data, n);
-                }
-                ipc_comm->Broadcast(buf, count, data_type_v<uint8_t>, root, detail::copy_fn<uint8_t>);
-
-                if (ipc_comm->rank() != root) {
-                    deserialize(data, n, buf);
-                }
-            };
-
-            try {
-                if (auto hybrid_comm = comm->as<HybridHostCommImpl>(); hybrid_comm) {
-                    auto  inter_comm    = TM_CHECK_NOTNULL(hybrid_comm->inter_comm());
-                    auto  intra_comm    = TM_CHECK_NOTNULL(hybrid_comm->intra_comm());
-                    auto& rank_to_intra = hybrid_comm->get_rank_to_intra();
-                    auto& rank_to_inter = hybrid_comm->get_rank_to_inter();
-                    bool  root_node     = rank_to_intra.count(root) > 0;  // root on this node
-                    if (root_node) {
-                        intra_comm->Broadcast(data, n, kNull, rank_to_intra.at(root), detail::copy_fn<T>);
+                    for (int i = 0; i < n; ++i) {
+                        oa& data[i];
                     }
-                    if (intra_comm->rank() == 0) {
-                        process(inter_comm, rank_to_inter[root]);
-                    }
-                    if (!root_node) {
-                        intra_comm->Broadcast(data, n, kNull, 0, detail::copy_fn<T>);
-                    }
+                    TM_CHECK_EQ(oa.bytes().size(), buf_size);
                 }
                 else {
-                    process(TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>()), root);
+                    oa.bytes().resize(buf_size);
+                }
+                ipc_comm->Broadcast(oa.bytes().data(), buf_size, data_type_v<uint8_t>, root, detail::copy_fn<uint8_t>);
+
+                if (ipc_comm->rank() != root) {
+                    core::BinaryInputArchive ia(std::move(oa.bytes()));
+                    for (int i = 0; i < n; ++i) {
+                        ia& data[i];
+                    }
+                }
+            };
+            if (auto hybrid_comm = comm->as<HybridHostCommImpl>(); hybrid_comm) {
+                auto  inter_comm    = TM_CHECK_NOTNULL(hybrid_comm->inter_comm());
+                auto  intra_comm    = TM_CHECK_NOTNULL(hybrid_comm->intra_comm());
+                auto& rank_to_intra = hybrid_comm->get_rank_to_intra();
+                auto& rank_to_inter = hybrid_comm->get_rank_to_inter();
+                bool  root_node     = rank_to_intra.count(root) > 0;  // root on this node
+                if (root_node) {
+                    intra_comm->Broadcast(data, n, kNull, rank_to_intra.at(root), detail::copy_fn<T>);
+                }
+                if (intra_comm->rank() == 0) {
+                    process(inter_comm, rank_to_inter[root]);
+                }
+                if (!root_node) {
+                    intra_comm->Broadcast(data, n, kNull, 0, detail::copy_fn<T>);
                 }
             }
-            catch (const std::invalid_argument& e) {
-                TM_LOG_ERROR("Broadcast failed: %s", e.what());
-                throw;
+            else {
+                process(TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>()), root);
             }
         }
     }
@@ -208,27 +208,35 @@ void AllGather(HostCommImpl* comm, T* data, int n)
             comm->AllGather(data, n, kNull, detail::copy_fn<T>);
         }
         else {
-            try {
-                // buf may have different size on different ranks
-                auto    ipc_comm = TM_CHECK_NOTNULL(comm->as<IpcHostCommImpl>());
-                size_t& sz_i     = *reinterpret_cast<size_t*>(ipc_comm->create_buffer(sizeof(size_t)));
-                sz_i             = 0;
-                serialize(nullptr, sz_i, data, n);
-                comm->AllReduce(&sz_i, 1, data_type_v<size_t>, RedOp::kMax);
-                size_t sz_max = sz_i;
-                char*  buf    = ipc_comm->create_buffer(sz_max * comm->n_ranks());
-                serialize(buf + comm->rank() * sz_max, sz_i, data, n);
-                comm->AllGather(buf, sz_max, data_type_v<uint8_t>, detail::copy_fn<uint8_t>);
-                for (int i = 0; i < comm->n_ranks(); ++i) {
-                    if (i != comm->rank()) {
-                        // some field in data may be not shared by all rank
-                        deserialize(data + n * i, n, buf + i * sz_max);
+            // buf may have different size on different ranks
+            core::BinarySizeArchive sa;
+            for (int i = 0; i < n; ++i) {
+                sa& data[comm->rank() * n + i];
+            }
+
+            std::vector<int> sizes(comm->n_ranks());
+            sizes[comm->rank()] = sa.size();
+            comm->AllGather(sizes.data(), 1, data_type_v<int>, detail::copy_fn<int>);
+            auto max_size = *std::max_element(sizes.begin(), sizes.end());
+
+            std::vector<std::byte> bytes;
+            bytes.reserve(max_size * comm->n_ranks());
+            auto buffer = core::ArrayWrapper(bytes.data(), max_size * comm->n_ranks());
+            auto oa     = core::BinaryOutputExArchive(buffer).offset(comm->rank() * max_size);
+            for (int i = 0; i < n; ++i) {
+                oa& data[comm->rank() * n + i];
+            }
+            comm->AllGather(bytes.data(), max_size, data_type_v<uint8_t>, detail::copy_fn<uint8_t>);
+
+            for (int i = 0; i < comm->n_ranks(); ++i) {
+                if (i != comm->rank()) {
+                    // some field in data may be not shared by all rank
+                    auto buffer_i = core::ArrayWrapper<std::byte>(bytes.data() + i * max_size, sizes[i]);
+                    core::BinaryInputExArchive ia(buffer_i);
+                    for (int j = 0; j < n; ++j) {
+                        ia& data[n * i + j];
                     }
                 }
-            }
-            catch (const std::invalid_argument& e) {
-                TM_LOG_ERROR("AllGather failed: %s", e.what());
-                throw;
             }
         }
     }

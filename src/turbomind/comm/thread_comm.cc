@@ -11,6 +11,7 @@
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/serdes.h"
 namespace turbomind::comm {
 
 struct ThreadCommImpl: public HostCommImpl {
@@ -346,6 +347,18 @@ private:
 std::unique_ptr<HostGroupId> CreateThreadGroupId()
 {
     return std::make_unique<ThreadGroupId>();
+}
+
+template<class Archive>
+void save(Archive& ar, const std::shared_ptr<ThreadCommImpl::State>& p)
+{
+    TM_CHECK(false) << "should never be called";
+}
+
+template<class Archive>
+void load(Archive& ar, std::shared_ptr<ThreadCommImpl::State>& p)
+{
+    TM_CHECK(false) << "should never be called";
 }
 
 }  // namespace turbomind::comm

@@ -11,6 +11,7 @@
 #include <ostream>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/serdes.h"
 #include "src/turbomind/utils/metrics.h"
 
 namespace xgrammar {
@@ -174,6 +175,48 @@ inline void UpdateState(Request& r, int status, int seq_len)
     catch (...) {
         TM_LOG_ERROR("Unknown error invoking callback for (%lu)", r.id);
     }
+}
+
+template<class Archive>
+void serdes(Archive& ar, GenerationConfig& g)
+{
+    // clang-format off
+    ar & g.max_new_tokens;
+    ar & g.min_new_tokens;
+    ar & g.eos_ids;
+    ar & g.stop_ids[0];
+    ar & g.stop_ids[1];
+    ar & g.bad_ids[0];
+    ar & g.bad_ids[1];
+    ar & g.top_k;
+    ar & g.top_p;
+    ar & g.min_p;
+    ar & g.temperature;
+    ar & g.repetition_penalty;
+    ar & g.random_seed;
+    ar & g.output_logprobs;
+    ar & g.output_last_hidden_state;
+    ar & g.output_logits;
+    // clang-format on
+}
+
+template<class Archive>
+void serdes(Archive& ar, Request& r)
+{
+    // clang-format off
+    ar & r.id;
+    ar & r.unique_id;
+    ar & r.session;
+    ar & r.gen_cfg;
+    ar & r.stream_output;
+    ar & r.inputs;
+    // TODO: skip copy output contents(logits, hidden states, etc.)
+    ar & r.outputs;
+    ar & r.ec;
+
+    r.output_ids      = r.outputs.at("output_ids");
+    r.sequence_length = r.outputs.at("sequence_length");
+    // clang-format on
 }
 
 }  // namespace turbomind

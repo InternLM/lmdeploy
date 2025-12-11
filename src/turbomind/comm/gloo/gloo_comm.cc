@@ -106,7 +106,7 @@ public:
         while (getline(ss, local, STORE_INFO_DELIM)) {
             keys.push_back(std::move(local));
         }
-        FT_CHECK(keys.size() == 3);
+        TM_CHECK(keys.size() == 3);
 
         std::string host   = keys[0];
         int         port   = stoi(keys[1]);
@@ -150,14 +150,6 @@ struct GlooCommImpl: public IpcHostCommImpl {
     }
 
     ~GlooCommImpl() {}
-
-    char* create_buffer(size_t size) override
-    {
-        if (buffer_ == nullptr || size > buffer_->byte_size()) {
-            buffer_ = std::make_shared<::turbomind::core::Buffer_<uint8_t>>(size, kCPU);
-        }
-        return static_cast<char*>(buffer_->raw_data());
-    }
 
     int rank() const override
     {
@@ -290,9 +282,6 @@ struct GlooCommImpl: public IpcHostCommImpl {
     std::shared_ptr<Store>                       store_;
     int                                          rank_;
     int                                          n_ranks_;
-
-    // reduce the overhead caused by repeatedly creating buffers.
-    std::shared_ptr<::turbomind::core::Buffer_<uint8_t>> buffer_;
 };
 
 class GlooGroupId: public HostGroupId {
@@ -317,7 +306,7 @@ class GlooGroupId: public HostGroupId {
 
     HostComm CreateCommunicator(int n_ranks, int rank, int node_rank = 0) override
     {
-        FT_CHECK(info_ != "");
+        TM_CHECK(info_ != "");
         auto impl = std::make_shared<GlooCommImpl>(GlobalStoreFactory::Instance().Load(info_), n_ranks, rank);
         return std::static_pointer_cast<HostCommImpl>(impl);
     }
