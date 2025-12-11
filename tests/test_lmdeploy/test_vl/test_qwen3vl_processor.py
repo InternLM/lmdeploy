@@ -44,7 +44,7 @@ def sample_messages():
 def test_qwen3vl_preprocess_with_custom_pixels(qwen3vl_model, sample_messages):
     """Test that mm_processor_kwargs with min/max pixels takes effect."""
 
-    # compression ratio for qwen3vl is 32 = patch_size * spatrial_merge_size = 16 * 2
+    # compression ratio for qwen3vl is 32 = patch_size * spatial_merge_size = 16 * 2
     # qwen3vl_model.processor.image_processor.size['shortest_edge'] = 66536
     # 65536 = 64 * 32 * 32, indicates 64 image token budget
     # qwen3vl_model.processor.image_processor.size['longest_edge'] = 16777216
