@@ -421,3 +421,5 @@ mllm_evaluate_model:
   - Qwen/Qwen3-VL-8B-Instruct
   - Qwen/Qwen3-VL-32B-Instruct
   - Qwen/Qwen3-VL-30B-A3B-Instruct
+  - internlm/Intern-S1
+  - Qwen/Qwen3-235B-A22B

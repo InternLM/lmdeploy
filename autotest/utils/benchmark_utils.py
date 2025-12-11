@@ -55,12 +55,12 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
             get_max_cache_entry(model, backend), '--csv ', csv_path
         ])
 
-        returncode, stderr = execute_command_with_logging(cmd, benchmark_log)
+        result, stderr = execute_command_with_logging(cmd, benchmark_log)
         allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
-        if returncode == 0 and not os.path.isfile(csv_path):
+        if result and not os.path.isfile(csv_path):
             return False, 'result is empty'
-        if returncode != 0:
+        if not result:
             return False, stderr
 
     return True, 'success'
