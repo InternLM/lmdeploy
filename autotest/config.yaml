@@ -41,6 +41,7 @@ tp_config:
     InternVL2-Llama3-76B-AWQ: 4
     gpt-oss-20b-BF16: 2
     gpt-oss-120b-BF16: 4
+    InternVL3_5-30B-A3B: 2
 
 
 
@@ -59,6 +60,7 @@ turbomind_chat_model:
         - internlm/internlm3-8b-instruct-awq
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-20b-chat
+        - OpenGVLab/InternVL3_5-30B-A3B
         - OpenGVLab/InternVL3-2B
         - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
@@ -125,6 +127,7 @@ pytorch_chat_model:
         - internlm/internlm3-8b-instruct
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-20b-chat
+        - OpenGVLab/InternVL3_5-30B-A3B
         - OpenGVLab/InternVL3-2B
         - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
@@ -190,6 +193,7 @@ turbomind_vl_model:
         - internlm/Intern-S1-mini
         - OpenGVLab/InternVL2_5-26B-MPO
         - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
+        - OpenGVLab/InternVL3_5-30B-A3B
         - OpenGVLab/InternVL3-2B
         - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
@@ -220,6 +224,7 @@ pytorch_vl_model:
         - internlm/Intern-S1-mini
         - OpenGVLab/InternVL2_5-26B-MPO
         - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
+        - OpenGVLab/InternVL3_5-30B-A3B
         - OpenGVLab/InternVL3-2B
         - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL3-38B
@@ -423,3 +428,4 @@ mllm_evaluate_model:
   - Qwen/Qwen3-VL-30B-A3B-Instruct
   - internlm/Intern-S1
   - Qwen/Qwen3-235B-A22B
+  - OpenGVLab/InternVL3_5-30B-A3B
