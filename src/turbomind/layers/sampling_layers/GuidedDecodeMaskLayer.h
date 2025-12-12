@@ -18,6 +18,8 @@
 
 #include <vector>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
 
 #include "src/turbomind/engine/request.h"

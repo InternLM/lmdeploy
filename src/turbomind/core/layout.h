@@ -173,4 +173,23 @@ inline std::string to_string(const Layout& x)
     return ss.str();
 }
 
+// clang-format off
+template<class Archive>
+void save(Archive& ar, const Layout& layout)
+{
+    ar & layout.shape();
+    ar & layout.stride();
+}
+
+template<class Archive>
+void load(Archive& ar, Layout& layout)
+{
+    vector<ssize_t> shape;
+    vector<ssize_t> stride;
+    ar & shape;
+    ar & stride;
+    layout = Layout(std::move(shape), std::move(stride));
+}
+// clang-format on
+
 }  // namespace turbomind::core

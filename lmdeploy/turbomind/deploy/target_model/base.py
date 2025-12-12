@@ -162,9 +162,10 @@ class BaseOutputModel(ABC):
                     torch_tensor = torch_tensor.bfloat16()
                 else:
                     torch_tensor = torch_tensor.half()
-            for tm_tensor in tm_params[name]:
-                tm_tensor.copy_from(torch_tensor)
-            tm_params.pop(name)
+            if name in tm_params:
+                for tm_tensor in tm_params[name]:
+                    tm_tensor.copy_from(torch_tensor)
+                tm_params.pop(name)
         else:
             tprint('skip export', name, param.shape)
 

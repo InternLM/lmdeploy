@@ -10,6 +10,7 @@
 #include "src/turbomind/core/common.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/serdes.h"
 
 namespace turbomind::core {
 
@@ -339,5 +340,28 @@ inline T* Copy(const T* a, ssize_t n, T* b)
 void Clear(Ref<Buffer> b_, const Stream& stream);
 
 void Clear(Ref<Buffer> b_);
+
+// clang-format off
+template<class Archive>
+void save(Archive& ar, const Buffer& buffer)
+{
+    TM_CHECK(buffer.device().type == kCPU);
+    ar & buffer.size();
+    ar & buffer.dtype();
+    ar & ArrayWrapper((char*)buffer.raw_data(), buffer.byte_size());
+}
+
+template<class Archive>
+void load(Archive& ar, Buffer& buffer)
+{
+    decltype(buffer.size())  size;
+    decltype(buffer.dtype()) dtype;
+
+    ar & size;
+    ar & dtype;
+    buffer = Buffer(size, dtype, kCPU);
+    ar & ArrayWrapper((char*)buffer.raw_data(), buffer.byte_size());
+}
+// clang-format on
 
 }  // namespace turbomind::core

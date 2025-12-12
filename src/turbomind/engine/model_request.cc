@@ -6,6 +6,8 @@
 #include <type_traits>
 #include <utility>
 
+#include <xgrammar/xgrammar.h>
+
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/utils/constant.h"
