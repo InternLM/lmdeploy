@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Optional
+
 import torch
 import triton
 import triton.language as tl
@@ -9,6 +11,26 @@ from lmdeploy.utils import get_logger
 from .utils import get_device_props
 
 logger = get_logger('lmdeploy')
+
+
+@triton.jit
+def fast_log2_ceil(x):
+    bits_x = tl.cast(x, tl.uint32, bitcast=True)
+    exp_x = (bits_x >> 23) & 0xFF
+    man_bits = bits_x & ((1 << 23) - 1)
+    tmp = exp_x - 127 + tl.where(man_bits != 0, 1, 0)
+    return tl.cast(tmp, tl.int32)
+
+
+@triton.jit
+def fast_pow2(x):
+    bits_x = (x + 127) << 23
+    return tl.cast(bits_x, tl.float32, bitcast=True)
+
+
+@triton.jit
+def fast_round_scale(amax, fp8_max_inv):
+    return fast_pow2(fast_log2_ceil(amax * fp8_max_inv))
 
 
 @triton.jit(do_not_specialize=['M', 'M_out'])
@@ -28,6 +50,7 @@ def _quant_fp8_kernel(
     stride_ok: tl.constexpr,
     stride_sm,
     stride_sg,
+    ROUND_SCALE: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     NUM_STAGES: tl.constexpr,
 ):
@@ -60,8 +83,12 @@ def _quant_fp8_kernel(
         a = a.reshape(num_groups_per_cta, GROUP_SIZE)
         a_max = tl.max(tl.abs(a), axis=1)
         a_max = tl.maximum(a_max, 1e-6).to(tl.float32)
-        scale = a_max * rfp8_max
-        rscale = fp8_max / a_max  # triton does not support rcp
+        if ROUND_SCALE == 1:
+            scale = fast_round_scale(a_max, rfp8_max)
+            rscale = 1 / scale
+        else:
+            scale = a_max * rfp8_max
+            rscale = fp8_max / a_max  # triton does not support rcp
         out = a.to(tl.float32) * rscale[:, None]
 
         out = tl.clamp(out, fp8_min, fp8_max)
@@ -75,8 +102,10 @@ def _quant_fp8_kernel(
         s_ptr += m_id_stride * stride_sm
 
 
-def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor):
+def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor, scale_fmt: Optional[str] = None):
     """Quant online."""
+    assert scale_fmt in (None, 'ue8m0')
+    round_scale = 1 if scale_fmt == 'ue8m0' else 0
     M, K = A.shape
     M_out = out.size(0)
 
@@ -117,6 +146,7 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
         stride_ok=out.stride(1),
         stride_sm=scales.stride(0),
         stride_sg=scales.stride(1),
+        ROUND_SCALE=round_scale,
         GROUP_SIZE=group_size,
         NUM_STAGES=num_stages,
         num_warps=num_warps,
@@ -126,7 +156,11 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
     return out, scales
 
 
-def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn, trans_scale: bool = False):
+def quant_fp8(A: Tensor,
+              group_size: int,
+              dtype: torch.dtype = torch.float8_e4m3fn,
+              trans_scale: bool = False,
+              scale_fmt: Optional[str] = None):
     """Quant fp8."""
     assert A.dim() == 2
     M, K = A.shape
@@ -137,10 +171,13 @@ def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3
         scales = A.new_empty(num_groups, M, dtype=torch.float32).T
     else:
         scales = A.new_empty(M, num_groups, dtype=torch.float32)
-    return _quant_fp8_launcher(A, group_size, out, scales)
+    return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
 
 
-def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
+def quant_fp8_tma(A: Tensor,
+                  group_size: int,
+                  dtype: torch.dtype = torch.float8_e4m3fn,
+                  scale_fmt: Optional[str] = None):
     """Quant fp8 tma."""
     from lmdeploy.pytorch.third_party.deep_gemm import ceil_div, get_m_alignment_for_contiguous_layout
     assert A.dim() == 2
@@ -151,7 +188,7 @@ def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_
     aligned_M = ceil_div(M, alignment) * alignment
     out = A.new_empty(aligned_M, K, dtype=dtype)
     scales = A.new_empty(num_groups, aligned_M, dtype=torch.float32).T
-    return _quant_fp8_launcher(A, group_size, out, scales)
+    return _quant_fp8_launcher(A, group_size, out, scales, scale_fmt=scale_fmt)
 
 
 def _gemm_fp8_tma_pre_hook(nargs):
