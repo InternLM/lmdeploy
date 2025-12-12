@@ -146,6 +146,7 @@ struct GlooCommImpl: public HostCommImpl {
     {
         device_  = createGlooDevice();
         context_ = std::make_shared<::gloo::rendezvous::Context>(rank_, n_ranks_);
+        context_->setTimeout(kTimeOut);
         context_->connectFullMesh(store_, device_);
     }
 
@@ -168,7 +169,6 @@ struct GlooCommImpl: public HostCommImpl {
 
     std::shared_ptr<HostCommImpl> Split(int color, int key) override
     {
-        // don't know why key was set to 0
         auto vec  = comm::AllGather(this, SplitInfo{color, rank_});
         auto last = std::stable_partition(vec.begin(), vec.end(), [&](auto x) {  //
             return x.color == color;
@@ -188,7 +188,6 @@ struct GlooCommImpl: public HostCommImpl {
     void Sync(bool blocking) override
     {
         ::gloo::BarrierOptions opts(context_);
-        opts.setTimeout(kTimeOut);
         ::gloo::barrier(opts);
     }
 
@@ -256,7 +255,6 @@ struct GlooCommImpl: public HostCommImpl {
     {
         ::gloo::BroadcastOptions opts(context_);
         opts.setRoot(root);
-        opts.setTimeout(kTimeOut);
         opts.setOutput((char*)data, count * byte_size(dtype));
         ::gloo::broadcast(opts);
     }
@@ -264,7 +262,6 @@ struct GlooCommImpl: public HostCommImpl {
     void AllGather(void* data, int count, DataType dtype)
     {
         ::gloo::AllgatherOptions opts(context_);
-        opts.setTimeout(kTimeOut);
         opts.setOutput((char*)data, count * byte_size(dtype) * n_ranks_);
         ::gloo::allgather(opts);
     }
@@ -313,7 +310,6 @@ struct GlooCommImpl: public HostCommImpl {
     void AllReduce(void* data, int count, DataType dtype, RedOp red_op) override
     {
         ::gloo::AllreduceOptions opts(context_);
-        opts.setTimeout(kTimeOut);
         opts.setReduceFunction(getReduceFunc(dtype, red_op));
         switch (dtype) {
             case kInt32:

@@ -112,7 +112,6 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
     cfg.devices = cfg.devices[:cfg.device_num // cfg.nnodes]
     assert len(cfg.devices) == cfg.device_num // cfg.nnodes
-    # for simplicity, each node has dp
 
 
 class TurboMind:
