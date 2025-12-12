@@ -66,7 +66,6 @@ class Qwen3VLModel(VisionModel):
                 max_pixels = input_max_pixels
             min_pixels = input_min_pixels
 
-        assert min_pixels <= max_pixels, f'min_pixels {min_pixels} should be <= max_pixels {max_pixels}'
         return min_pixels, max_pixels
 
     def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
