@@ -4,7 +4,10 @@ from typing import Any, Dict, List, Optional
 import torch
 from transformers import AutoProcessor
 
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
+
+logger = get_logger('lmdeploy')
 
 
 def check_transformers():
@@ -29,23 +32,59 @@ class Qwen3VLModel(VisionModel):
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
         self.mm_processor_kwargs = None
 
+    def get_processor_args(self, mm_processor_kwargs: Optional[Dict[str, Any]] = None):
+        min_pixels = self.processor.image_processor.size['shortest_edge']
+        max_pixels = self.processor.image_processor.size['longest_edge']
+
+        if mm_processor_kwargs is None:
+            return min_pixels, max_pixels
+
+        input_min_pixels = mm_processor_kwargs.get('min_pixels', None)
+        input_max_pixels = mm_processor_kwargs.get('max_pixels', None)
+
+        # boundary check for min_pixels and max_pixels
+        if input_min_pixels is None:
+            if input_max_pixels is not None:
+                # only max_pixels is given in the input
+                if input_max_pixels < min_pixels:
+                    logger.warning(
+                        f'input max_pixels {input_max_pixels} < default min_pixels {min_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
+                max_pixels = input_max_pixels
+        else:
+            if input_max_pixels is None:
+                # only min_pixels is given in the input
+                if input_min_pixels > max_pixels:
+                    logger.warning(
+                        f'input min_pixels {input_min_pixels} > default max_pixels {max_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
+            else:
+                if input_min_pixels > input_max_pixels:
+                    logger.warning(
+                        f'input min_pixels {input_min_pixels} > max_pixels {input_max_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
+                max_pixels = input_max_pixels
+            min_pixels = input_min_pixels
+
+        return min_pixels, max_pixels
+
     def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
-        if mm_processor_kwargs is None:
-            mm_processor_kwargs = {}
+
+        min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
 
         images = self.collect_images(messages)
-        optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
 
-            item = dict(type='image', image=image)
-            item.update({key: params[key] for key in params.keys() if key in optional_keys})
             result = self.processor.image_processor(images=image,
                                                     videos=None,
-                                                    return_tensors='pt',
-                                                    **mm_processor_kwargs)
+                                                    size={
+                                                        'shortest_edge': min_pixels,
+                                                        'longest_edge': max_pixels
+                                                    },
+                                                    return_tensors='pt')
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
