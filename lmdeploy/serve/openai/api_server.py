@@ -1005,6 +1005,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         text = ''
         output_ids = []
         logprobs = []
+        res = None
         async for res in result_generator:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
@@ -1015,13 +1016,21 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
             if res.logprobs:
                 for tok, tok_logprobs in zip(res.token_ids, res.logprobs):
                     logprobs.append((tok_logprobs[tok], tok))
-        nonlocal response
-        meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
-                                     output_token_logprobs=logprobs or None,
-                                     prompt_tokens=res.input_token_len,
-                                     routed_experts=res.routed_experts,
-                                     completion_tokens=res.generate_token_len)
-        response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
+        nonlocal response, input_ids
+        if res is not None:
+            meta = GenerateReqMetaOutput(finish_reason=dict(type=res.finish_reason) if res.finish_reason else None,
+                                         output_token_logprobs=logprobs or None,
+                                         prompt_tokens=res.input_token_len,
+                                         routed_experts=res.routed_experts,
+                                         completion_tokens=res.generate_token_len)
+            response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
+        else:
+            meta = GenerateReqMetaOutput(finish_reason=dict(type='error'),
+                                         output_token_logprobs=None,
+                                         prompt_tokens=len(input_ids) if input_ids is None else 0,
+                                         routed_experts=None,
+                                         completion_tokens=len(output_ids))
+            response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 
     await _inner_call()
     return response
