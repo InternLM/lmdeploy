@@ -12,13 +12,6 @@ from ..default import DefaultOpsBackend
 logger = get_logger('lmdeploy')
 
 
-def _get_meta_flashmla(kv_seqlens, num_attention_heads):
-    """Get meta for flashmla."""
-    import flash_mla
-    tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(kv_seqlens.to(torch.int32), num_attention_heads, 1)
-    return tile_scheduler_metadata, num_splits
-
-
 def _get_meta_flashattn(
         batch_size: int,
         max_seqlen_q: int,
@@ -112,6 +105,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.LinearBlockedF8:
             from .blockedf8_modules import TritonLinearBlockedF8Builder
             return TritonLinearBlockedF8Builder
+        elif layer_type == OpType.NSAIndexFP8:
+            from .nsa import TritonNSAIndexFP8Builder
+            return TritonNSAIndexFP8Builder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
@@ -151,10 +147,19 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
 
     @classmethod
-    def update_meta_flashmla(cls, attn_metadata, num_attention_heads):
+    def update_meta_flashmla(cls, attn_metadata, model_config: ModelConfig, decoding_query_len: int):
         """Update meta for flashmla."""
-        tile_scheduler_metadata, num_splits = _get_meta_flashmla(attn_metadata.kv_seqlens.to(torch.int32),
-                                                                 num_attention_heads)
+        import flash_mla
+        num_attention_heads = model_config.num_attention_heads * decoding_query_len
+        is_fp8_kvcache = model_config.use_mla_fp8_cache
+        index_topk = model_config.mla_index_topk
+        num_heads_q = None if index_topk is None else num_attention_heads
+        tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
+                                                                         num_attention_heads,
+                                                                         num_heads_k=1,
+                                                                         num_heads_q=num_heads_q,
+                                                                         is_fp8_kvcache=is_fp8_kvcache,
+                                                                         topk=index_topk)
         attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
         attn_metadata.num_splits = num_splits
 
@@ -188,17 +193,20 @@ class CudaOpsBackend(DefaultOpsBackend):
         """Update step context."""
         attn_meta_cls = cls.get_attention_metadata_cls()
         q_seqlens = step_context.q_seqlens
-        q_start_loc = q_seqlens.cumsum(0) - q_seqlens
         kv_seqlens = step_context.kv_seqlens
         kv_start_loc = None
         kv_flatten_size = None
         use_flash_mla = step_context.model_config.use_flash_mla
         use_flash_attn3_decoding = step_context.model_config.model_paradigm == 'ar_spec'
 
-        cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(q_seqlens, dim=0, dtype=torch.int32), (1, 0))
-        cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(kv_seqlens, dim=0, dtype=torch.int32), (1, 0))
+        # pad and cumsum requires 4 kernels, so we fuse seqlens cumsum into one kernel
+        seqlens = torch.stack([q_seqlens, kv_seqlens], dim=0)
+        cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens, dim=1, dtype=torch.int32), (1, 0))
+        cu_seqlens_q = cu_seqlens[0]
+        cu_seqlens_k = cu_seqlens[1]
+        q_start_loc = step_context.q_start_loc
         if not step_context.is_decoding:
-            kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
+            kv_start_loc = cu_seqlens_k[:-1].to(kv_seqlens.dtype)
             kv_flatten_size = step_context.sum_kv_seqlen
 
         attn_metadata = attn_meta_cls(
@@ -213,13 +221,12 @@ class CudaOpsBackend(DefaultOpsBackend):
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
         )
-        if use_flash_mla:
-            if step_context.is_decoding is True:
+        if step_context.is_decoding:
+            if use_flash_mla:
+                model_config = step_context.model_config
                 decode_query_len = step_context.input_ids.size(1) // q_seqlens.size(0)
-                cls.update_meta_flashmla(attn_metadata,
-                                         step_context.model_config.num_attention_heads * decode_query_len)
-        elif use_flash_attn3_decoding:
-            if step_context.is_decoding is True:
+                cls.update_meta_flashmla(attn_metadata, model_config, decode_query_len)
+            elif use_flash_attn3_decoding:
                 attn_metadata = cls.update_meta_flashattn(attn_metadata, step_context)
 
         cross_seqlens = step_context.cross_seqlens

@@ -200,16 +200,14 @@ class ExecutorBase:
 
         vocal_size = self.model_config.vocab_size
         tp = self.dist_config.attn_tp
-        cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, tp,
-                                                            cache_config.quant_policy)
+        cache_block_size = CacheEngine.get_cache_block_size(cache_config, model_config, tp)
         spec_cache_config = None
         spec_model_config = None
         spec_cache_block_size = 0
         if self.specdecode_config:
             spec_model_config = self.specdecode_config.model_config
             if spec_cache_config := self.specdecode_config.cache_config:
-                spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config.block_size,
-                                                                         spec_model_config)
+                spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, 1)
 
         runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mem, cache_block_size + spec_cache_block_size,
                                                                     vocal_size)

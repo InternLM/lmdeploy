@@ -145,6 +145,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
                  bias: bool = False,
                  renormalize: bool = False,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 scale_fmt: Optional[str] = None,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
@@ -156,6 +157,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
         # init distributed tp arguments
         self.block_size = 128
         self.init_dist_args(all_reduce)
+        self.scale_fmt = scale_fmt
 
         super().__init__(
             tp=self.tp,
@@ -176,6 +178,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
                                        out_dtype=dtype,
                                        layer_idx=layer_idx,
                                        custom_gateup_act=act_func is not None)
+        self.impl.set_scale_fmt(scale_fmt)
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)

@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
+from functools import wraps
 
 import torch
 import torch.nn.functional as F
@@ -10,6 +11,35 @@ from ..rotary_embedding import (FopeParameters, Llama3Parameters, LongRoPEScalin
                                 RotaryEmbeddingBuilder, RotaryEmbeddingImpl, YarnParameters)
 
 
+def safe_torch_compile(**compile_kwargs):
+    """Auto fallback."""
+
+    def decorator(func):
+        compiled_func = None
+        compile_failed = False
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            nonlocal compiled_func, compile_failed
+
+            if compile_failed:
+                return func(*args, **kwargs)
+
+            if compiled_func is None:
+                try:
+                    compiled_func = torch.compile(func, **compile_kwargs)
+                except Exception:
+                    compile_failed = True
+                    return func(*args, **kwargs)
+
+            return compiled_func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+@safe_torch_compile(dynamic=True)
 def _rotary_embedding_fwd(position_ids: torch.Tensor,
                           inv_freq: torch.Tensor,
                           scaling_factor: float,
@@ -28,7 +58,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
     # See https://github.com/huggingface/transformers/pull/29285
     device_type = device_type if isinstance(device_type, str) and device_type != 'mps' else 'cpu'
     with torch.autocast(device_type=device_type, enabled=False):
-        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        freqs = (inv_freq_expanded.float() * position_ids_expanded.float()).transpose(1, 2)
         emb = freqs.repeat(1, 1, 2)
         cos = emb.cos()
         sin = emb.sin()

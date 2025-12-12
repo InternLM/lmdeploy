@@ -64,6 +64,7 @@ def build_fused_moe(
             fp8_dtype = torch.float8_e5m2
         else:
             raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        scale_fmt = quant_config.get('scale_fmt', None)
         from .blocked_fp8 import FusedMoEBlockedF8
         return FusedMoEBlockedF8(
             hidden_dim=hidden_dim,
@@ -73,6 +74,7 @@ def build_fused_moe(
             bias=bias,
             renormalize=renormalize,
             fp8_dtype=fp8_dtype,
+            scale_fmt=scale_fmt,
             dtype=dtype,
             device=device,
             all_reduce=all_reduce,

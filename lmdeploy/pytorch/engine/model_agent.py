@@ -124,10 +124,7 @@ class AgentProfiler:
         self.dp = dist_ctx.dist_config.dp
         self.stream = stream
         self.profiler = None
-        if self.dp == 1:
-            self.name = f'rank[{self.rank}]'
-        else:
-            self.name = f'dp_rank[{self.dp_rank}]'
+        self.name = f'rank[{self.rank}]'
 
         self.delay = envs.torch_profile_delay
         self.duration = envs.torch_profile_duration
@@ -166,7 +163,7 @@ class AgentProfiler:
 
         try:
             self.profiler.stop()
-            rank = self.rank if self.dp == 1 else self.dp_rank
+            rank = self.rank
             dump_path = f'{self.prefix}{rank}.json'
             self.profiler.export_chrome_trace(dump_path)
             logger.warning(f'Profiler {self.name} dump to {dump_path}.')
@@ -235,6 +232,7 @@ def model_forward(
         context = ctx_mgr.build_context(
             inputs=inputs,
             model_config=cache_engine.model_config,
+            cache_config=cache_engine.cache_config,
             kv_caches=cache_engine.gpu_cache,
             state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
