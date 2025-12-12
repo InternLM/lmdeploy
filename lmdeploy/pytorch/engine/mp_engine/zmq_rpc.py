@@ -23,7 +23,6 @@ def _task_callback(task: asyncio.Task) -> None:
         task.result()
     except asyncio.CancelledError:
         logger.debug(f'Task <{task_name}> cancelled.')
-        return
     except Exception:
         logger.exception(f'Task <{task_name}> failed')
     finally:

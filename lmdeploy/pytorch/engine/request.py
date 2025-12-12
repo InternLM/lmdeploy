@@ -3,7 +3,7 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Coroutine, Dict, List
 
 from lmdeploy.messages import RequestMetrics, ResponseType
 from lmdeploy.utils import get_logger
@@ -108,7 +108,7 @@ class RequestSender:
         resps = []
         for rtype, rdata in zip(req_types, data):
             event = asyncio.Event()
-            resp = Response(type=ResponseType.HANDLER_NOT_EXIST,
+            resp = Response(type=ResponseType.INTERNAL_ENGINE_ERROR,
                             sender_id=self.sender_id,
                             event=event,
                             data=None,
@@ -179,7 +179,7 @@ class RequestManager:
         event_loop = asyncio.get_event_loop()
         assert self._loop_coro is not None, ('Please set loop task with manager.start_loop')
         loop_unshielded = event_loop.create_task(self._loop_coro(), name='EngineMainLoop')
-        self._loop_task = asyncio.shield(loop_unshielded)
+        self._loop_task = loop_unshielded
         self.requests = asyncio.Queue()
         return self._loop_task
 
@@ -191,7 +191,7 @@ class RequestManager:
         else:
             return self._loop_task.get_loop()
 
-    def start_loop(self, loop: asyncio.Task):
+    def set_main_loop_func(self, loop: Callable[[Coroutine], asyncio.Task]):
         """Start main loop."""
         self._loop_coro = loop
 

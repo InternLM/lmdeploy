@@ -2,6 +2,7 @@
 from typing import List
 
 import torch
+from torch.profiler import record_function
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
@@ -41,6 +42,7 @@ class ARSamplingStrategy(SamplingStrategy):
         self.pad_token_id = pad_token_id
         self.session_to_cleanup = []
 
+    @record_function('make_sampling_inputs')
     def make_sampling_inputs(self, seqs: SeqList) -> SamplingInputs:
         """Create sampling inputs from the sequences."""
         batch_size = len(seqs)
