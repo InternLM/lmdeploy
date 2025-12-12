@@ -61,30 +61,8 @@ def get_turbomind_model_list(parallel_config: Optional[Union[int, Dict[str, int]
     if parallel_config is not None:
         filtered_models = []
 
-        target_config = {}
-        if isinstance(parallel_config, int):
-            target_config = {'tp': parallel_config}
-        elif isinstance(parallel_config, dict):
-            target_config = parallel_config
-
         for model in all_models:
-
-            model_config = get_parallel_config(config, model)
-
-            if not model_config:
-
-                if not target_config or (len(target_config) == 1 and 'tp' in target_config
-                                         and target_config['tp'] == 1):
-                    filtered_models.append(model)
-                continue
-
-            match = True
-            for key, target_value in target_config.items():
-                if key not in model_config or model_config[key] != target_value:
-                    match = False
-                    break
-
-            if match:
+            if is_model_in_list(config, parallel_config, model):
                 filtered_models.append(model)
 
         all_models = filtered_models
@@ -137,21 +115,7 @@ def get_torch_model_list(parallel_config: Optional[Union[int, Dict[str, int]]] =
         for model in all_models:
 
             model_config = get_parallel_config(config, model)
-
-            if not model_config:
-
-                if not target_config or (len(target_config) == 1 and 'tp' in target_config
-                                         and target_config['tp'] == 1):
-                    filtered_models.append(model)
-                continue
-
-            match = True
-            for key, target_value in target_config.items():
-                if key not in model_config or model_config[key] != target_value:
-                    match = False
-                    break
-
-            if match:
+            if is_model_in_list(config, parallel_config, model):
                 filtered_models.append(model)
 
         all_models = filtered_models
@@ -275,25 +239,8 @@ def get_vl_model_list(parallel_config: Optional[Union[int, Dict[str, int]]] = No
     if parallel_config is not None:
         filtered_models = []
 
-        target_config = {}
-        if isinstance(parallel_config, int):
-            target_config = {'tp': parallel_config}
-        elif isinstance(parallel_config, dict):
-            target_config = parallel_config
-
         for model in vl_models:
-            model_config = get_parallel_config(config, model)
-
-            if not model_config:
-                continue
-
-            match = True
-            for key, target_value in target_config.items():
-                if key not in model_config or model_config[key] != target_value:
-                    match = False
-                    break
-
-            if match:
+            if is_model_in_list(config, parallel_config, model):
                 filtered_models.append(model)
 
         vl_models = filtered_models
@@ -354,37 +301,23 @@ def get_vl_model_list(parallel_config: Optional[Union[int, Dict[str, int]]] = No
 
 def get_evaluate_turbomind_model_list(parallel_config: Optional[Union[int, Dict[str, int]]] = None,
                                       is_longtext: bool = False,
+                                      is_mllm: bool = False,
                                       kvint_list: list = []):
 
     config = get_config()
 
     if is_longtext:
         case_list_base = [item for item in config.get('longtext_model', [])]
+    elif is_mllm:
+        case_list_base = config.get('mllm_evaluate_model', [])
     else:
         case_list_base = config.get('evaluate_model', [])
 
     if parallel_config is not None:
         filtered_models = []
 
-        target_config = {}
-        if isinstance(parallel_config, int):
-            target_config = {'tp': parallel_config}
-        elif isinstance(parallel_config, dict):
-            target_config = parallel_config
-
         for model in case_list_base:
-            model_config = get_parallel_config(config, model)
-
-            if not model_config:
-                continue
-
-            match = True
-            for key, target_value in target_config.items():
-                if key not in model_config or model_config[key] != target_value:
-                    match = False
-                    break
-
-            if match:
+            if is_model_in_list(config, parallel_config, model):
                 filtered_models.append(model)
 
         case_list_base = filtered_models
@@ -474,37 +407,23 @@ def get_evaluate_turbomind_model_list(parallel_config: Optional[Union[int, Dict[
 
 def get_evaluate_pytorch_model_list(parallel_config: Optional[Union[int, Dict[str, int]]] = None,
                                     is_longtext: bool = False,
+                                    is_mllm: bool = False,
                                     kvint_list: list = []):
 
     config = get_config()
 
     if is_longtext:
         case_list_base = [item for item in config.get('longtext_model', [])]
+    elif is_mllm:
+        case_list_base = config.get('mllm_evaluate_model', [])
     else:
         case_list_base = config.get('evaluate_model', [])
 
     if parallel_config is not None:
         filtered_models = []
 
-        target_config = {}
-        if isinstance(parallel_config, int):
-            target_config = {'tp': parallel_config}
-        elif isinstance(parallel_config, dict):
-            target_config = parallel_config
-
         for model in case_list_base:
-            model_config = get_parallel_config(config, model)
-
-            if not model_config:
-                continue
-
-            match = True
-            for key, target_value in target_config.items():
-                if key not in model_config or model_config[key] != target_value:
-                    match = False
-                    break
-
-            if match:
+            if is_model_in_list(config, parallel_config, model):
                 filtered_models.append(model)
 
         case_list_base = filtered_models
@@ -576,25 +495,9 @@ def get_benchmark_model_list(parallel_config: Optional[Union[int, Dict[str, int]
     if parallel_config is not None:
         filtered_models = []
 
-        target_config = {}
-        if isinstance(parallel_config, int):
-            target_config = {'tp': parallel_config}
-        elif isinstance(parallel_config, dict):
-            target_config = parallel_config
-
         for model in case_list_base:
-            model_config = get_parallel_config(config, model)
 
-            if not model_config:
-                continue
-
-            match = True
-            for key, target_value in target_config.items():
-                if key not in model_config or model_config[key] != target_value:
-                    match = False
-                    break
-
-            if match:
+            if is_model_in_list(config, parallel_config, model):
                 filtered_models.append(model)
 
         case_list_base = filtered_models
@@ -801,3 +704,25 @@ def unset_device_env_variable():
     else:
         if 'CUDA_VISIBLE_DEVICES' in os.environ:
             del os.environ['CUDA_VISIBLE_DEVICES']
+
+
+def is_model_in_list(config, parallel_config, model):
+    model_config = get_parallel_config(config, model)
+
+    target_config = {}
+    if isinstance(parallel_config, int):
+        target_config = {'tp': parallel_config}
+    elif isinstance(parallel_config, dict):
+        target_config = parallel_config
+
+    if not model_config:
+        if not target_config or (len(target_config) == 1 and 'tp' in target_config and target_config['tp'] == 1):
+            return True
+
+    match = True
+    for key, target_value in target_config.items():
+        if key not in model_config or model_config[key] != target_value:
+            match = False
+            break
+
+    return match

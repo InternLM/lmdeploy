@@ -2,6 +2,7 @@ model_path: /mnt/shared-storage-user/auto-eval-pipeline/qa-llm-cicd/model
 resource_path: /mnt/shared-storage-user/auto-eval-pipeline/qa-llm-cicd/resource
 log_path: /mnt/shared-storage-user/auto-eval-pipeline/qa-llm-cicd/log
 eval_log_path: /mnt/shared-storage-user/auto-eval-pipeline/qa-llm-cicd/evaluation_report
+mllm_eval_log_path: /mnt/shared-storage-user/auto-eval-pipeline/qa-llm-cicd/mllm_evaluation_report
 benchmark_path: /mnt/shared-storage-user/auto-eval-pipeline/qa-llm-cicd/benchmark-reports
 dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 prefix_dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/prefix_cache_test.json
@@ -204,3 +205,7 @@ evaluate_model:
     - deepseek/DeepSeek-V3.1
     - moonshotai/Kimi-K2-Instruct-0905
     - Qwen/Qwen3-235B-A22B-Thinking-2507
+
+mllm_evaluate_model:
+    - internlm/Intern-S1
+    - internlm/Intern-S1-mini
