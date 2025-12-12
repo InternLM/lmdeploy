@@ -33,7 +33,8 @@ public:
                        int                   vocab_size,
                        int                   vocab_size_padded,
                        cudaStream_t          stream,
-                       const cudaDeviceProp* device_prop);
+                       const cudaDeviceProp* device_prop,
+                       int                   tp_rank);
 
     ~DynamicDecodeLayer();
 
@@ -42,6 +43,7 @@ public:
     void Forward(TensorMap& args);
 
 private:
+    int                                                  tp_rank_;
     std::vector<std::unique_ptr<BaseDynamicDecodeLayer>> layers_;
 };
 

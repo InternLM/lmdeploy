@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/layers/sampling_layers/GuidedDecodeUpdateLayer.h"
+#include "src/turbomind/core/context.h"
 
 namespace turbomind {
 
@@ -29,7 +30,7 @@ void GuidedDecodeUpdateLayer<T>::Setup(const std::vector<const Request*>& rs, co
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     matchers_.clear();
     for (const auto& r : rs) {
-        matchers_.push_back(r->matcher);
+        matchers_.push_back(r->matchers[tp_rank_]);
     }
 }
 
@@ -45,6 +46,7 @@ void GuidedDecodeUpdateLayer<T>::Forward(TensorMap& args)
 
     FT_CHECK(bsz == matchers_.size());
     Copy(output_ids.slice(step * bsz, bsz), output_ids_buf);
+    core::Context::stream().Sync();
 
     for (size_t i = 0; i < bsz; ++i) {
         const auto& matcher = matchers_[i];
