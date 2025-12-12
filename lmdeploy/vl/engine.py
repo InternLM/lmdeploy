@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
+import inspect
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 
@@ -23,6 +24,11 @@ def _raise_exception_on_finish(task: asyncio.Task) -> None:
         raise e
 
 
+def _accepts_arg(func, arg_name: str) -> bool:
+    """Check if a function accepts a specific keyword argument."""
+    return arg_name in inspect.signature(func).parameters
+
+
 class ImageEncoder:
     """Image encoder."""
 
@@ -41,9 +47,15 @@ class ImageEncoder:
         self.executor = ThreadPoolExecutor(max_workers=1)
         torch.cuda.empty_cache()
 
-    async def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    async def preprocess(self,
+                         messages: List[Dict],
+                         mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Preprocess multimodal data in the messages."""
-        future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages)
+        if _accepts_arg(self.model.preprocess, 'mm_processor_kwargs'):
+            future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages,
+                                                              mm_processor_kwargs)
+        else:
+            future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
@@ -69,6 +81,7 @@ class ImageEncoder:
         sequence_start,
         tools: Optional[List[object]] = None,
         enable_thinking: Optional[bool] = None,
+        add_vision_id: Optional[bool] = False,
     ) -> List[Dict]:
         """
         Args:
@@ -93,7 +106,8 @@ class ImageEncoder:
                                            tokenizer,
                                            sequence_start,
                                            tools=tools,
-                                           enable_thinking=enable_thinking)
+                                           enable_thinking=enable_thinking,
+                                           add_vision_id=add_vision_id)
         else:
             result = self.model.to_pytorch_with_input_ids(messages)
         # clear data
@@ -110,6 +124,7 @@ class ImageEncoder:
         sequence_start,
         tools: Optional[List[object]] = None,
         enable_thinking: Optional[bool] = None,
+        add_vision_id: Optional[bool] = False,
     ) -> Dict:
         """
         Args:
@@ -130,7 +145,8 @@ class ImageEncoder:
                                          tokenizer,
                                          sequence_start,
                                          tools=tools,
-                                         enable_thinking=enable_thinking)
+                                         enable_thinking=enable_thinking,
+                                         add_vision_id=add_vision_id)
         # clear data
         for i, message in enumerate(messages):
             if isinstance(message['content'], List):

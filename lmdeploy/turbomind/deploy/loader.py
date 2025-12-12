@@ -119,7 +119,7 @@ class PytorchLoader(BaseLoader):
         params = defaultdict(dict)
         for shard in self.shards:
             misc = {}
-            tmp = torch.load(shard, map_location='cpu')
+            tmp = torch.load(shard, map_location='cpu', weights_only=True)
             for k, v in tmp.items():
                 match = re.findall(self.pattern, k)
                 if not match:

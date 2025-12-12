@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import base64
 import contextlib
 import json
 import os
@@ -354,13 +353,6 @@ class RayExecutor(ExecutorBase):
             self.update_configs()
         self.collective_rpc('wakeup', (tags, ))
 
-    def serialize(self, obj) -> str:
-        """Serialize obj."""
-        ref = ray.put(obj)
-        data = ray.cloudpickle.dumps(ref)
-        data = base64.b64encode(data).decode('utf-8')
-        return data
-
     def get_input_processor(self):
         """Build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
@@ -561,13 +553,14 @@ class RayExecutor(ExecutorBase):
     def _init_distributed_environment_by_device(self, device_str: str):
         """Init distributed environment."""
         driver_ip = _get_master_addr()
-        if device_str in ['cuda', 'maca']:
+        if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
 
         elif device_str == 'ascend':
             self._init_ascend_distributed_environment(driver_ip)
-        elif device_str == 'camb':
-            self._init_camb_distributed_environment(driver_ip)
+        elif device_str in ['camb', 'maca']:
+            self.workers = self._sort_workers(driver_ip, self.workers)
+            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
         else:
             raise ValueError(f'Unsupported device type: {device_str}')
 
@@ -589,10 +582,6 @@ class RayExecutor(ExecutorBase):
             ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
         else:
             self.workers = self._sort_workers(driver_ip, self.workers)
-
-    def _init_camb_distributed_environment(self, driver_ip):
-        self.workers = self._sort_workers(driver_ip, self.workers)
-        ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
 
     """ PD Disaggregation API Begin """
 

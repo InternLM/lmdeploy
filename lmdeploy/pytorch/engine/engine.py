@@ -113,17 +113,20 @@ def _build_scheduler_config(engine_config: PytorchEngineConfig):
 
 def _build_cache_config(engine_config: PytorchEngineConfig):
     """Build cache config."""
-    cache_config = CacheConfig(max_batches=engine_config.max_batch_size,
-                               block_size=engine_config.block_size,
-                               num_cpu_blocks=engine_config.num_cpu_blocks,
-                               num_gpu_blocks=engine_config.num_gpu_blocks,
-                               cache_max_entry_count=engine_config.cache_max_entry_count,
-                               max_prefill_token_num=engine_config.max_prefill_token_num,
-                               enable_prefix_caching=engine_config.enable_prefix_caching,
-                               quant_policy=engine_config.quant_policy,
-                               device_type=engine_config.device_type,
-                               migration_backend=engine_config.migration_backend,
-                               role=engine_config.role)
+    cache_config = CacheConfig(
+        max_batches=engine_config.max_batch_size,
+        block_size=engine_config.block_size,
+        num_cpu_blocks=engine_config.num_cpu_blocks,
+        num_gpu_blocks=engine_config.num_gpu_blocks,
+        cache_max_entry_count=engine_config.cache_max_entry_count,
+        max_prefill_token_num=engine_config.max_prefill_token_num,
+        enable_prefix_caching=engine_config.enable_prefix_caching,
+        quant_policy=engine_config.quant_policy,
+        device_type=engine_config.device_type,
+        migration_backend=engine_config.migration_backend,
+        role=engine_config.role,
+        # reserve 1 blocks for dummy input and padding
+        num_reserved_gpu_blocks=1)
     return cache_config
 
 
@@ -542,7 +545,8 @@ class Engine(EngineBase):
     def _get_max_session_len(self):
         """Get max session len."""
         session_len = self.scheduler_config.max_session_len
-        max_tokens = (self.cache_config.num_gpu_blocks * self.cache_config.block_size)
+        num_gpu_blocks = self.cache_config.num_gpu_blocks - self.cache_config.num_reserved_gpu_blocks
+        max_tokens = (num_gpu_blocks * self.cache_config.block_size)
         window_size = self.cache_config.window_size
         if window_size > 0 and window_size <= max_tokens:
             max_tokens = (1 << 63) - 1
@@ -877,7 +881,7 @@ class Engine(EngineBase):
         self,
         batched_outputs: BatchedOutputs,
         running: SeqList,
-        is_decoding: bool,
+        model_inputs: ModelInputs,
     ):
         """Make infer output."""
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -890,7 +894,7 @@ class Engine(EngineBase):
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.LOCKED for seq in running]
-        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, is_decoding=is_decoding)
+        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, model_inputs=model_inputs)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
@@ -918,15 +922,11 @@ class Engine(EngineBase):
                 cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
             # get spec stats info
             spec_info = None
-            if self.specdecode_config is not None and is_decoding and self.engine_config.enable_metrics:
+            if self.specdecode_config is not None and model_inputs.is_decoding and self.engine_config.enable_metrics:
                 num_draft_tokens = self.specdecode_config.num_speculative_tokens
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens)
             req_metrics = RequestMetrics(new_token_timestamp, msg.engine_events, spec_info=spec_info)
-            routed_experts = msg.routed_experts if msg.return_routed_experts and finish else None
-            if routed_experts is not None and self.engine_config.enable_transfer_obj_ref:
-                # only serialize for api server
-                routed_experts = self.executor.serialize(routed_experts)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -934,7 +934,7 @@ class Engine(EngineBase):
                               cache_block_ids=cache_block_ids,
                               req_metrics=req_metrics,
                               logprobs=cur_logprobs,
-                              routed_experts=routed_experts)
+                              routed_experts=msg.routed_experts)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -1199,7 +1199,7 @@ class Engine(EngineBase):
 
             forward_event.set()
             num_loops = forward_inputs['loop_count']
-            is_decoding = forward_inputs['inputs'].is_decoding
+            model_inputs = forward_inputs['inputs']
             running = next_running
             next_running = None
             scheduler.lock_running(running)
@@ -1212,7 +1212,7 @@ class Engine(EngineBase):
                 # send output
                 out = await self.executor.get_output_async()
                 if out is not None:
-                    step_outputs = self._make_infer_outputs(out, running=running, is_decoding=is_decoding)
+                    step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs)
                     resp_que.put_nowait(step_outputs)
 
                 # lock forward event

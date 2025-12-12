@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import PIL
 
@@ -56,6 +56,8 @@ class VLAsyncEngine(AsyncEngine):
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
                                 enable_thinking: Optional[bool] = None,
+                                add_vision_id: Optional[bool] = False,
+                                mm_processor_kwargs: Optional[Dict[str, Any]] = None,
                                 **kwargs):
         """Process messages and return the required data for the inference
         engines.
@@ -70,6 +72,7 @@ class VLAsyncEngine(AsyncEngine):
                                                    adapter_name,
                                                    tools=tools,
                                                    enable_thinking=enable_thinking,
+                                                   add_vision_id=add_vision_id,
                                                    **kwargs)
         elif isinstance(messages, List):
             has_multimodal_input = any(
@@ -82,13 +85,14 @@ class VLAsyncEngine(AsyncEngine):
                                                        adapter_name,
                                                        tools,
                                                        enable_thinking=enable_thinking,
+                                                       add_vision_id=add_vision_id,
                                                        **kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
 
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_convert_to_pil_images(messages)
-        results = await self.vl_encoder.preprocess(messages)
+        results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
         if self.backend == 'turbomind':
             # for tm engine, this module perform vision embedding after image
             # preprocessing. It utilizes the hf model's vision embeddings
@@ -101,7 +105,8 @@ class VLAsyncEngine(AsyncEngine):
                                                                self.tokenizer,
                                                                sequence_start,
                                                                tools=tools,
-                                                               enable_thinking=enable_thinking)
+                                                               enable_thinking=enable_thinking,
+                                                               add_vision_id=add_vision_id)
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
@@ -110,7 +115,8 @@ class VLAsyncEngine(AsyncEngine):
                                                              self.tokenizer,
                                                              sequence_start,
                                                              tools=tools,
-                                                             enable_thinking=enable_thinking)
+                                                             enable_thinking=enable_thinking,
+                                                             add_vision_id=add_vision_id)
         return results
 
     @classmethod

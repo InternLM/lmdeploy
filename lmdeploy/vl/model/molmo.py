@@ -6,14 +6,14 @@ import torch
 from transformers import AutoModelForCausalLM, AutoProcessor
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class MolmoVisionModel(VisonModel):
+class MolmoVisionModel(VisionModel):
     """Molmo's vision model."""
 
     _arch = 'MolmoForCausalLM'
