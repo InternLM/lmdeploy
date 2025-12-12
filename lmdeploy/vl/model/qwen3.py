@@ -4,7 +4,10 @@ from typing import Any, Dict, List, Optional
 import torch
 from transformers import AutoProcessor
 
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
+
+logger = get_logger('lmdeploy')
 
 
 def check_transformers():
@@ -43,15 +46,23 @@ class Qwen3VLModel(VisionModel):
         if input_min_pixels is None:
             if input_max_pixels is not None:
                 # only max_pixels is given in the input
-                assert input_max_pixels >= min_pixels, \
-                    f'input max_pixels {input_max_pixels} should be >= default min_pixels {min_pixels}'
+                if input_max_pixels < min_pixels:
+                    logger.warning(
+                        f'input max_pixels {input_max_pixels} < default min_pixels {min_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
                 max_pixels = input_max_pixels
         else:
             if input_max_pixels is None:
                 # only min_pixels is given in the input
-                assert input_min_pixels <= max_pixels, \
-                    f'input min_pixels {input_min_pixels} should be <= default max_pixels {max_pixels}'
+                if input_min_pixels > max_pixels:
+                    logger.warning(
+                        f'input min_pixels {input_min_pixels} > default max_pixels {max_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
             else:
+                if input_min_pixels > input_max_pixels:
+                    logger.warning(
+                        f'input min_pixels {input_min_pixels} > max_pixels {input_max_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
                 max_pixels = input_max_pixels
             min_pixels = input_min_pixels
 
