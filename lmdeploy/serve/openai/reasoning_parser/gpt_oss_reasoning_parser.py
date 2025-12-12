@@ -54,10 +54,8 @@ class GPTOssReasoningParser(ReasoningParser):
             return None
         # Remove any tag-like tokens and common fragments produced by split
         text = re.sub(r'<\|[^>]*?\|>', '', text)
-
         # Also drop standalone fragments likely from tag splits
-        text = re.sub(r'(?i)(analysis|final|assistant)', '', text)
-
+        text = re.sub(r'(?:analysis|final|assistant)', '', text)
         return text
 
 
