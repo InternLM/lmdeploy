@@ -6,6 +6,9 @@ import torch
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.nn.linear import build_rowwise_linear
+
+from ..patch import get_build_model_context
 
 
 class DeployModelMixin:
@@ -49,6 +52,52 @@ class DeployModelMixin:
     def get_input_processor(self) -> BaseModelInputProcessor:
         """Get input processor."""
         return None
+
+
+class DeployModelMixinV1(DeployModelMixin):
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        """Compute logits of the model output."""
+        if hidden_states.dtype != self.get_lm_head().weight.dtype:
+            hidden_states = hidden_states.to(dtype=self.get_lm_head().weight.dtype)
+        hidden_states = self.get_lm_head()(hidden_states)
+        return hidden_states
+
+    def get_lm_head(self):
+        """Get lm_head."""
+        return self.lm_head
+
+    def get_input_embeddings(self):
+        """Get embeds."""
+        raise NotImplementedError('Not Implemented')
+
+    def update_weights(self):
+        """Update weights."""
+        if getattr(self.config, 'tie_word_embeddings', False):
+            if getattr(self.config, 'enforce_fp32_head', False) is True:
+                self.get_input_embeddings().update_weight_dtype(torch.float32)
+            self.get_lm_head().weight = self.get_input_embeddings().weight
+
+    def build_lm_head(self,
+                      hidden_size: int,
+                      vocab_size: int,
+                      bias: bool = False,
+                      dtype: Optional[torch.dtype] = None,
+                      device: Optional[torch.device] = None,
+                      **kwargs):
+        """Build LM Head."""
+        bm_ctx = get_build_model_context()
+        self.config.enforce_fp32_head = bm_ctx.enforce_fp32_head
+        dtype = torch.float32 if self.config.enforce_fp32_head else dtype
+        lm_head = build_rowwise_linear(
+            hidden_size,
+            vocab_size,
+            bias,
+            dtype=dtype,
+            device=device,
+            **kwargs,
+        )
+        return lm_head
 
 
 def vlm_model(vlm_cls):
