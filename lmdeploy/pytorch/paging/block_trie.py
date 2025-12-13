@@ -28,13 +28,19 @@ class PrefixCacheStats:
 class Node:
     """Node of block trie."""
 
-    def __init__(self, hash_key: int, block: int, tokens: np.ndarray, num_matched: int = 0):
+    def __init__(self,
+                 hash_key: int,
+                 block: int,
+                 tokens: np.ndarray,
+                 num_matched: int = 0,
+                 routed_experts: np.ndarray = None):
         self.hash_key = hash_key
         self.block = block
         self.tokens = tokens
         self.num_matched = num_matched
         self.children: Dict[int, 'Node'] = dict()
         self._parent: 'Node' = None
+        self.routed_experts = routed_experts
 
     @property
     def parent(self):
@@ -97,10 +103,14 @@ class BlockTrie:
         num_matched = curr.num_matched
 
         def __match_success(node: Node):
-            nonlocal curr, num_matched
+            nonlocal curr, num_matched, matched_routed_experts
             matched_blocks.append(node.block)
+            if seq.return_routed_experts and node.routed_experts is not None:
+                matched_routed_experts.append(node.routed_experts)
             curr = node
             num_matched += block_size
+
+        matched_routed_experts = []
 
         while num_matched + block_size < seq.num_valid_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
@@ -120,7 +130,15 @@ class BlockTrie:
             self.allocator.update_access_time(matched_blocks)
             self.allocator.add_ref_count(matched_blocks, 1)
             seq.logical_blocks.append(matched_blocks)
-            seq.set_step(num_matched)
+            if len(matched_routed_experts) > 0:
+                matched_routed_experts = np.concatenate(matched_routed_experts, axis=0)
+            else:
+                matched_routed_experts = None
+            seq.set_step(num_matched, routed_experts=matched_routed_experts)
+
+        # record prefix hit
+        self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
+        self.stats.num_hit_tokens += num_matched - init_num_matched
 
         # record prefix hit
         self.stats.num_query_tokens += seq.num_all_ids - init_num_matched
@@ -154,7 +172,8 @@ class BlockTrie:
         free_blocks = []
         while num_matched + block_size <= num_valid_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
-
+            routed_experts = seq.all_routed_experts.get_real()[num_matched:num_matched +
+                                                               block_size] if seq.return_routed_experts else None
             block = logical_blocks[block_id]
 
             hash_key = hash(('random', tuple(curr_tokens)))
@@ -167,7 +186,11 @@ class BlockTrie:
                 free_blocks.append(block)
                 logical_blocks[block_id] = node.block
             else:
-                node = Node(hash_key=hash_key, block=block, tokens=curr_tokens, num_matched=num_matched + block_size)
+                node = Node(hash_key=hash_key,
+                            block=block,
+                            tokens=curr_tokens,
+                            num_matched=num_matched + block_size,
+                            routed_experts=routed_experts)
                 node.parent = parent
             blocks.append(node.block)
             num_matched += block_size
@@ -232,3 +255,23 @@ class BlockTrie:
         self.allocator.free(np.array(evicted_blocks))
 
         return len(evicted_blocks)
+
+    def reset(self):
+        """Reset block trie."""
+        if not self.enable:
+            return
+
+        self.stats.reset()
+        nodes = list(self._roots.values())
+        self._roots = dict()
+        self.leaves = set()
+
+        blocks = []
+        while len(nodes):
+            node = nodes.pop(0)
+            if node.block >= 0:
+                blocks.append(node.block)
+            nodes += list(node.children.values())
+
+        if len(blocks):
+            self.allocator.free(np.asanyarray(blocks))

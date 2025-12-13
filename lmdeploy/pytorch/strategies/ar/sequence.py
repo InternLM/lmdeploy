@@ -59,7 +59,7 @@ class SchedulerSequenceDefault(SchedulerSequence):
         if model_meta is not None:
             self.model_meta = model_meta
 
-    def set_step(self, step: int):
+    def set_step(self, step: int, routed_experts: np.ndarray = None):
         """Set step."""
         num_all_ids = self.num_all_ids
         # update step for vlm
@@ -80,7 +80,10 @@ class SchedulerSequenceDefault(SchedulerSequence):
             self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
 
         if self.return_routed_experts:
-            self.all_routed_experts.resize(step)
+            if routed_experts is not None:
+                self.all_routed_experts.append(routed_experts)
+            else:
+                self.all_routed_experts.resize(step)
 
 
 class ARSequenceStrategy(SequenceStrategy):
