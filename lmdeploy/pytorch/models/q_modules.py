@@ -16,7 +16,7 @@ class QTensor:
     This class wraps around a regular Pytorch tensor and adds quantization- specific parameters.
     """
     tensor: torch.Tensor
-    scale: torch.Tensor
+    weight_scale_inv: torch.Tensor
     zero_point: torch.Tensor = None
 
     def __post_init__(self):
@@ -58,7 +58,7 @@ class QRMSNorm(nn.Module):
         """Defines the computation performed at every call.
 
         Performs RMS normalization followed by dynamic quantization on hidden_states. Returns a QTensor which wraps the
-        quantized tensor along with its scale factor.
+        quantized tensor along with its weight_scale_inv factor.
         """
         hidden_states_quant, rms_scale = rms_norm_dynamic_quant(hidden_states,
                                                                 self.weight,
@@ -91,7 +91,7 @@ class QLinear(nn.Module):
         self.out_features = out_features
         self.quant_dtype = quant_dtype
         self.register_buffer('weight', torch.empty((out_features, in_features), device=device, dtype=quant_dtype))
-        self.register_buffer('scale', torch.empty((out_features, 1), device=device, dtype=torch.float32))
+        self.register_buffer('weight_scale_inv', torch.empty((out_features, 1), device=device, dtype=torch.float32))
         if bias:
             self.register_buffer('bias', torch.empty(out_features, **factory_kwargs))
         else:
@@ -112,9 +112,9 @@ class QLinear(nn.Module):
                     quant_dtype=quant_dtype)
 
         if initialization:
-            weight_quant, scale = per_channel_quant(mod.weight.detach(), quant_dtype)
+            weight_quant, weight_scale_inv = per_channel_quant(mod.weight.detach(), quant_dtype)
             q_mod.weight.data = weight_quant
-            q_mod.scale = scale
+            q_mod.weight_scale_inv = weight_scale_inv
 
         if mod.bias is not None:
             q_mod.bias.data = mod.bias.detach()
@@ -132,12 +132,12 @@ class QLinear(nn.Module):
             input_quant, input_scale = per_token_quant_int8(input, 1e-7, quant_dtype=self.quant_dtype)
         else:
             assert isinstance(input, QTensor)
-            input_quant, input_scale = input.tensor, input.scale
+            input_quant, input_scale = input.tensor, input.weight_scale_inv
 
         out = matmul_kernel_dynamic_quant(input_quant,
                                           self.weight,
                                           input_scale,
-                                          self.scale,
+                                          self.weight_scale_inv,
                                           output_dtype=torch.float16,
                                           bias=self.bias)
         return out
