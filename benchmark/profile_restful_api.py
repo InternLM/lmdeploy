@@ -459,7 +459,9 @@ ASYNC_REQUEST_FUNCS = {
     'sglang': async_request_sglang_generate,
     'sglang-native': async_request_sglang_generate,
     'sglang-oai': async_request_openai_completions,
+    'sglang-oai-chat': async_request_openai_chat_completions,
     'vllm': async_request_openai_completions,
+    'vllm-chat': async_request_openai_chat_completions,
     'lmdeploy': async_request_openai_completions,
     'lmdeploy-chat': async_request_openai_chat_completions,
     'trt': async_request_trt_llm,
@@ -540,8 +542,6 @@ class DatasetRow:
     text_prompt_len: Optional[int] = None
     vision_prompt_len: Optional[int] = None
     image_data: Optional[List[str]] = None
-
-    # timestamp: Optional[float] = None
 
     def __post_init__(self):
         if self.text_prompt_len is None:
@@ -876,7 +876,7 @@ def sample_image_requests(
     print(f'#Input tokens: {np.sum([x.prompt_len for x in dataset])}')
     print(f'#Output tokens: {np.sum([x.output_len for x in dataset])}')
     print(f'\nCreated {len(dataset)} {image_content} {image_format} images \
-            with avg {total_image_bytes // num_requests} bytes per request')
+            with average {total_image_bytes // num_requests} bytes per request')
     return dataset
 
 
