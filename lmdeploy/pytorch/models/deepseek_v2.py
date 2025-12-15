@@ -581,10 +581,11 @@ class MoEGate(nn.Module):
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
-        self.weight = nn.Parameter(torch.empty((self.n_routed_experts, self.gating_dim), dtype=dtype, device=device))
+        self.weight = nn.Parameter(
+            torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
         if self.topk_method == 'noaux_tc':
             self.e_score_correction_bias = nn.Parameter(
-                torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
+                torch.empty((self.n_routed_experts, ), dtype=torch.float32, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
@@ -603,7 +604,7 @@ class MoEGate(nn.Module):
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
         sequence_length, hidden_dim = hidden_states.shape
-        router_logits = F.linear(hidden_states, self.weight)
+        router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.
