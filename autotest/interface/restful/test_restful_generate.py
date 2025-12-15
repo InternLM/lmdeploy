@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -7,11 +8,12 @@ from typing import Any, Dict, List
 
 import pytest
 import requests
+from transformers import AutoTokenizer
 from utils.toolkit import encode_text, parse_sse_stream
 
 BASE_HTTP_URL = 'http://127.0.0.1'
 DEFAULT_PORT = 23333
-MODEL_LIST = ['internlm/internlm2_5-20b-chat', 'internlm/Intern-S1']
+MODEL_LIST = ['Qwen/Qwen3-0.6B', 'Qwen/Qwen3-VL-2B-Instruct', 'Qwen/Qwen3-30B-A3B']
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
@@ -25,11 +27,12 @@ class TestGenerateComprehensive:
         self.model_name = model_name
 
         test_name = request.node.name
+        safe_test_name = re.sub(r'[^\w\.-]', '_', test_name)
         safe_model_name = self.model_name.replace('/', '_')
         log_base = config.get('log_path', './logs')
         self.log_dir = os.path.join(log_base, safe_model_name)
         os.makedirs(self.log_dir, exist_ok=True)
-        self.log_file = os.path.join(self.log_dir, f'{test_name}.log')
+        self.log_file = os.path.join(self.log_dir, f'{safe_test_name}.log')
 
     def _log_request_response(self, payload, response_data, stream_raw=None):
         log_entry = {
@@ -114,8 +117,8 @@ class TestGenerateComprehensive:
                                       data: Dict[str, Any],
                                       expected_fields: List[str] = None,
                                       validate_tokens: bool = True,
-                                      expect_logprobs: bool = False) -> None:
-
+                                      expect_logprobs: bool = False,
+                                      validate_experts: bool = False) -> None:
         assert isinstance(data, dict), f'Response should be a dict, got {type(data)}'
 
         required_fields = ['text']
@@ -125,6 +128,33 @@ class TestGenerateComprehensive:
 
         assert isinstance(data['text'], str), \
             f"text should be string, got {type(data['text'])}"
+
+        if validate_experts:
+            assert 'routed_experts' in data[
+                'meta_info'], "Response should contain 'routed_experts' when validate_experts=True"
+
+            experts_data = data['meta_info']['routed_experts']
+
+            assert isinstance(experts_data, list)
+            assert len(experts_data) > 0
+
+            total_steps = len(experts_data)
+
+            for step_idx in range(total_steps):
+                token_experts = experts_data[step_idx]
+
+                assert isinstance(token_experts, list)
+                assert len(token_experts) > 0
+
+                for layer_idx in range(len(token_experts)):
+                    layer_experts = token_experts[layer_idx]
+
+                    assert isinstance(layer_experts, list)
+                    assert len(layer_experts) == 8
+
+                    for expert_idx, expert_id in enumerate(layer_experts):
+                        assert isinstance(expert_id, int)
+                        assert 0 <= expert_id < 256, f'Invalid expert_id: {expert_id}. Must be in [0, 256)'
 
         if validate_tokens:
             assert 'output_ids' in data, "Response should contain 'output_ids'"
@@ -639,6 +669,39 @@ class TestGenerateComprehensive:
         except json.JSONDecodeError:
             print(f'  Non-JSON error: {exc.value.response.text[:100]}')
 
+    def test_input_ids_rejected(self):
+        print(f'\n[Model: {self.model_name}] Running input_ids invalid cases test')
+
+        invalid_cases = [{
+            'case': {
+                'input_ids': [],
+                'max_tokens': 5
+            },
+            'desc': 'Empty input_ids list'
+        }, {
+            'case': {
+                'input_ids': 'not_a_list',
+                'max_tokens': 5
+            },
+            'desc': 'input_ids is a string, not list'
+        }, {
+            'case': {
+                'max_tokens': 5
+            },
+            'desc': 'Missing input_ids field'
+        }]
+
+        for invalid_case in invalid_cases:
+            test_desc = invalid_case['desc']
+            payload = invalid_case['case']
+
+            with pytest.raises(requests.HTTPError) as exc_info:
+                self._post(payload)
+
+            response = exc_info.value.response
+            assert response.status_code in [400, 422], (f"Bad Request for case '{test_desc}', "
+                                                        f'but got {response.status_code}')
+
     def test_stress_concurrent_requests(self):
         print(f'\n[Model: {self.model_name}] Running stress concurrent requests test')
 
@@ -683,7 +746,7 @@ class TestGenerateComprehensive:
                     print(f'  Req {i}: ✗')
 
         success_rate = success_count / 20
-        assert success_rate >= 0.8, \
+        assert success_rate == 1.0, \
             f'Stress test failed: success rate {success_rate*100}% < 80%'
 
         if success_count > 0:
@@ -850,38 +913,29 @@ class TestGenerateComprehensive:
         assert reason_ignore == 'length', \
             f'ignore_eos=True must end due to length, actual: {reason_ignore}'
 
-    def test_skip_special_tokens(self):
-        print(f'\n[Model: {self.model_name}] Running skip_special_tokens test')
-        user_content = 'Hello world'
+    def test_skip_special_tokens(self, config):
+        print(f'[Model: {self.model_name}] Running skip_special_tokens test')
+        model_path = os.path.join(config.get('model_path'), self.model_name)
+        user_content = 'Hello [world]! This is a [test].'
 
-        print('  [1/2] Executing skip_special_tokens=True')
-        payload_true = {'prompt': user_content, 'max_tokens': 10, 'skip_special_tokens': True, 'stream': False}
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        special_tokens_map = tokenizer.special_tokens_map
 
-        special_patterns = ['\n', '\t', '»', '«', '<|', '|>']
+        special_patterns = list(special_tokens_map.values())
+        special_patterns = [
+            item for sublist in special_patterns for item in (sublist if isinstance(sublist, list) else [sublist])
+        ]
 
+        print('Special patterns:', special_patterns)
+
+        print(' Executing skip_special_tokens=True')
+        payload_true = {'prompt': user_content, 'max_tokens': 100, 'skip_special_tokens': True, 'stream': False}
         resp_true = self._post(payload_true)
-
         data_true = resp_true.json()
         self._validate_generation_response(data=data_true, validate_tokens=True)
-
         generated_text = data_true['text']
-        assert any(pattern in generated_text for pattern in special_patterns), \
-            f'Expected special patterns in output, got: {generated_text[:50]}'
-
-        print('  [2/2] Executing skip_special_tokens=False')
-        payload_false = payload_true.copy()
-        payload_false['skip_special_tokens'] = False
-
-        resp_false = self._post(payload_false)
-
-        data_false = resp_false.json()
-        self._validate_generation_response(data=data_false, validate_tokens=True)
-
-        text_false = data_false['text']
-
-        assert any(pattern in text_false for pattern in special_patterns), \
-            f'Expected special patterns in output when skip_special_tokens=False, ' \
-            f'got: {text_false[:50]}'
+        assert not any(pattern in generated_text for pattern in special_patterns), \
+            'Expected no special pattern in the generated text but found one.'
 
     def test_stop_token_ids(self):
         print(f'\n[Model: {self.model_name}] Running stop_token_ids test')
@@ -987,8 +1041,15 @@ class TestGenerateComprehensive:
         resp2 = self._post({'prompt': 'Max tokens test', 'max_tokens': 2048, 'stream': False})
         assert resp2.status_code == 200
 
-        with pytest.raises(requests.HTTPError):
+        with pytest.raises(requests.HTTPError) as exc:
             self._post({'prompt': 'Test', 'max_tokens': -2, 'stream': False})
+
+        assert exc.value.response.status_code == 400
+
+        with pytest.raises(requests.HTTPError) as exc:
+            self._post({'prompt': 'Test', 'max_tokens': 0, 'stream': False})
+
+        assert exc.value.response.status_code == 400
 
         print('  Max tokens boundary test passed')
 
@@ -1068,37 +1129,41 @@ class TestGenerateComprehensive:
 
         print(f"  Stop at '.': generated '{text2}' (Reason: {finish_reason})")
 
-    def test_spaces_between_special_tokens(self):
-        print(f'\n[Model: {self.model_name}] Running spaces between special tokens test')
-        user_content = 'Hello world'
+    def test_spaces_between_special_tokens(self, config):
+        print(f'[Model: {self.model_name}] Running spaces_between_special_tokens test')
+        model_path = os.path.join(config.get('model_path'), self.model_name)
+        user_content = 'Hello [world]! This is a [test].'
 
-        payload_true = {
-            'prompt': user_content,
-            'max_tokens': 20,
-            'skip_special_tokens': False,
-            'spaces_between_special_tokens': True,
-            'stream': False
-        }
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        special_tokens_map = tokenizer.special_tokens_map
 
-        resp_true = self._post(payload_true)
+        special_patterns = list(special_tokens_map.values())
+        special_patterns = [
+            item for sublist in special_patterns for item in (sublist if isinstance(sublist, list) else [sublist])
+        ]
 
-        data_true = resp_true.json()
-        text_true = data_true.get('text', '')
-        print(f"  [True] Content preview: '{text_true[:50]}'")
-
-        assert '\n\n' in text_true, \
-            f'Expected newlines in output when spaces_between_special_tokens=True, ' \
-            f'got: {text_true[:100]}'
-
-        payload_false = payload_true.copy()
-        payload_false['spaces_between_special_tokens'] = False
-
+        print(' Executing skip_special_tokens=False and checking spaces between special tokens')
+        payload_false = {'prompt': user_content, 'max_tokens': 100, 'skip_special_tokens': False, 'stream': False}
         resp_false = self._post(payload_false)
-
         data_false = resp_false.json()
-        text_false = data_false.get('text', '')
-        print(f"  [False] Content preview: '{text_false[:50]}'")
+        self._validate_generation_response(data=data_false, validate_tokens=True)
+        generated_text = data_false['text']
 
-        assert '\n\n' not in text_false, \
-            f'Unexpected newlines in output when spaces_between_special_tokens=False, ' \
-            f'got: {text_false[:100]}'
+        for i in range(len(generated_text) - 1):
+            if generated_text[i] in special_patterns and generated_text[i + 1] not in [' ', '\n']:
+                assert False, f'Expected space after special token {generated_text[i]} but found none.'
+
+    @pytest.mark.experts
+    @pytest.mark.pytorch
+    def test_request_returns_experts(self):
+        print(f'\n[Model: {self.model_name}] Running request with experts test')
+        resp1 = self._post({
+            'prompt': 'Deterministic generation',
+            'max_tokens': 50,
+            'temperature': 0.8,
+            'return_routed_experts': True
+        })
+        assert resp1.status_code == 200
+        data1 = resp1.json()
+
+        self._validate_generation_response(data1, validate_experts=True)
