@@ -213,7 +213,8 @@ def _patch_quantization_config(model_config: PretrainedConfig, model_format: str
 
     if model_format == 'fp8':
         logger.debug('Patch quantization config for fp8.')
-        quantization_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128])
+        from lmdeploy.pytorch.envs import scale_fmt
+        quantization_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128], scale_fmt=scale_fmt)
     else:
         raise RuntimeError(f'Unsupported weight quantization method: {model_format}')
     model_config.quantization_config = quantization_config
