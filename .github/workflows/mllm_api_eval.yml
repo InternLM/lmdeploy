@@ -17,7 +17,7 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: "['pytorch']"
+        default: "['turbomind', 'pytorch']"
       execution_mode:
         required: false
         description: 'Select execution mode: infer, eval, or both. Default is "both"'
@@ -152,7 +152,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["pytorch"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
         include:
           - n: 8

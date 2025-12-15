@@ -153,6 +153,11 @@ class ChatCompletionRequest(BaseModel):
     add_vision_id: Optional[bool] = False
     return_token_ids: Optional[bool] = False
     include_stop_str_in_output: Optional[bool] = False
+    # kwargs for hf processor
+    mm_processor_kwargs: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=('Additional kwargs to pass to the HF processor'),
+    )
 
 
 class FunctionCall(BaseModel):
