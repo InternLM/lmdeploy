@@ -316,7 +316,7 @@ class TestGenerateComprehensive:
             print(f'\n[Test: input_ids - {test_name}]')
 
             try:
-                input_ids = encode_text(model_path, test_case['text'], add_bos=True)
+                input_ids = encode_text(model_path, test_case['text'])
             except Exception as e:
                 pytest.skip(f'Tokenizer failed for {test_case["name"]}: {e}')
 
@@ -459,7 +459,7 @@ class TestGenerateComprehensive:
             print(f'\n[Test: logprob - {test_name}]')
 
             try:
-                input_ids = encode_text(model_path, test_case['text'], add_bos=True)
+                input_ids = encode_text(model_path, test_case['text'])
             except Exception as e:
                 pytest.skip(f'Tokenizer failed for {test_case["name"]}: {e}')
 
