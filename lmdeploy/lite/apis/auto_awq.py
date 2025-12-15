@@ -98,7 +98,7 @@ def auto_awq(model: str,
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]
     norm2fcs = NORM_FCS_MAP[layer_type]
-    input_stats = torch.load(osp.join(work_dir, 'inputs_stats.pth'))
+    input_stats = torch.load(osp.join(work_dir, 'inputs_stats.pth'), weights_only=True)
     layers = collect_target_modules(model, layer_type)
     fcs = {}
     for l_name, layer in layers.items():

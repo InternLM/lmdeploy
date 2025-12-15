@@ -42,7 +42,7 @@ class TestRequestHander:
                     return
 
         sender = manager.build_sender()
-        manager.start_loop(__dummy_loop)
+        manager.set_main_loop_func(__dummy_loop)
 
         # test not bind
         resp = sender.send_async(RequestType.STOP_ENGINE, None)

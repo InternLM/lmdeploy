@@ -19,7 +19,7 @@ def load_weight_ckpt(ckpt: str) -> Dict[str, torch.Tensor]:
     if ckpt.endswith('.safetensors'):
         return load_file(ckpt)
     else:
-        return torch.load(ckpt)
+        return torch.load(ckpt, weights_only=True)
 
 
 def get_used_weight_files(folder: str, state_dict: Dict[str, torch.Tensor]) -> List[str]:

@@ -35,8 +35,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             if evict_seq.num_blocks == 0:
                 continue
 
-            block_manager.free(evict_seq)
-            evict_seq.set_step(0)
+            evict_seq.state.free()
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True
@@ -77,9 +76,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
                 continue
 
             # free sequence
-            block_manager.free(evict_seq)
-            evict_seq.set_step(0)
-            state_manager.free(evict_seq)
+            evict_seq.state.free()
             has_free_state = True
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
