@@ -133,7 +133,7 @@ def eval_test(config, run_id, prepare_environment, worker_id='gw0', port=DEFAULT
     try:
         model_name = prepare_environment['model']
         backend_type = prepare_environment['backend']
-        communicator = prepare_environment.get('communicator', 'cuda-ipc')
+        communicator = prepare_environment.get('communicator', 'nccl')
         quant_policy = prepare_environment.get('quant_policy', 0)
 
         parallel_config = prepare_environment.get('parallel_config', 1)
@@ -342,7 +342,7 @@ def mllm_eval_test(config,
     model_name = prepare_environment['model']
     backend_type = prepare_environment['backend']
     tp_num = prepare_environment.get('tp_num', 1)
-    communicator = prepare_environment.get('communicator', 'cuda-ipc')
+    communicator = prepare_environment.get('communicator', 'nccl')
     quant_policy = prepare_environment.get('quant_policy', 0)
 
     summary_model_name = model_name
@@ -378,12 +378,13 @@ def mllm_eval_test(config,
     log_file = os.path.join(log_path, log_filename)
     result, msg = execute_command_with_logging(cmd, log_file)
 
-    mllm_summary(simple_model_name,
-                 summary_model_name,
-                 tp_num,
-                 result,
-                 backend_type,
-                 communicator,
-                 work_dir,
-                 dataset_list=['MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI'])
+    if test_type == 'eval':
+        mllm_summary(simple_model_name,
+                    summary_model_name,
+                    tp_num,
+                    result,
+                    backend_type,
+                    communicator,
+                    work_dir,
+                    dataset_list=['MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI'])
     return result, msg
