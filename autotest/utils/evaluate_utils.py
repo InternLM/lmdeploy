@@ -121,7 +121,8 @@ def mllm_summary(model_name,
             df = pd.read_csv(score_file)
             cur_score = df['Overall'].iloc[0]
             if dataset == 'MMBench_V11_MINI':
-                cur_score = df.loc[df['split'] == 'dev', 'Overall'].values * 100
+                cur_score = df.loc[df['split'] == 'dev', 'Overall'].values
+            cur_score = cur_score * 100
             metrics[dataset] = f'{cur_score.item():.2f}'  # noqa: E231
 
     write_to_summary(summary_model_name, tp_num, result, backend_type, communicator, metrics, work_dir)
