@@ -58,7 +58,7 @@ def smooth_quant(model: str,
 
     # calibrate function exports the calibration statistics
     # (inputs, outputs, keys and values) to `work_dir`.
-    inp_stats = torch.load(work_dir / 'inputs_stats.pth')
+    inp_stats = torch.load(work_dir / 'inputs_stats.pth', weights_only=True)
     act_scales = inp_stats['absmax']
 
     model_type = type(model).__name__

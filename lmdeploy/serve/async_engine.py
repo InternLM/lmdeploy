@@ -21,7 +21,7 @@ from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, ResponseType, SpeculativeConfig,
                                TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
-from lmdeploy.metrics.stats import IterationStats, RequestState, SpeculativeDecodingStats
+from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
@@ -196,13 +196,15 @@ class Session:
                  gen_config: Optional[GenerationConfig] = None,
                  stream_response: bool = True,
                  do_preprocess: bool = True,
-                 adapter_name: str = None) -> Union[Response, Iterator[Response]]:
+                 adapter_name: str = None,
+                 **kwargs) -> Union[Response, Iterator[Response]]:
         self._engine.chat(prompt,
                           gen_config=gen_config or self._gen_config,
                           stream_response=stream_response,
                           do_preprocess=do_preprocess,
                           session=self,
-                          adapter_name=adapter_name)
+                          adapter_name=adapter_name,
+                          **kwargs)
         if stream_response:
             return self.generator
         else:
@@ -691,7 +693,7 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
                                 reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                                enable_thinking: Optional[bool] = None,
+                                chat_template_kwargs: Optional[Dict] = None,
                                 **kwargs):
         # Change multimodal data to openai text messages, i.e.,
         # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
@@ -706,12 +708,12 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt = chat_template.messages2prompt(prompt,
                                                sequence_start,
                                                tools=tools,
-                                               enable_thinking=enable_thinking,
                                                reasoning_effort=reasoning_effort,
-                                               **kwargs)
+                                               **chat_template_kwargs)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -768,6 +770,8 @@ class AsyncEngine(LogitsMixin):
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
+            chat_template_kwargs: Optional[Dict] = None,
+            mm_processor_kwargs: Optional[Dict[str, Any]] = None,
             **kwargs):
         """Generate responses.
 
@@ -809,6 +813,14 @@ class AsyncEngine(LogitsMixin):
         if gen_config.n > 1:
             logger.warning(f'n({gen_config.n}) > 1 hasn\'t been supported yet. Fallback to 1')
             gen_config.n = 1
+        chat_template_kwargs = chat_template_kwargs or {}
+        if enable_thinking is not None:
+            logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
+            if chat_template_kwargs.get('enable_thinking') is None:
+                chat_template_kwargs['enable_thinking'] = enable_thinking
+            else:
+                logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
+                               'the value will not be overwritten by enable_thinking')
         if messages:
             prompt = messages
             self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
@@ -818,7 +830,8 @@ class AsyncEngine(LogitsMixin):
                                                         adapter_name,
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
-                                                        enable_thinking=enable_thinking,
+                                                        mm_processor_kwargs=mm_processor_kwargs,
+                                                        chat_template_kwargs=chat_template_kwargs,
                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
@@ -842,7 +855,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.max_new_tokens = max(0, self.session_len - self.id2step[session_id] - len(input_ids))
             if gen_config.max_new_tokens == 0:
                 logger.error(f'run out of tokens. session={session_id}.')
-                yield GenOut(response='run out of tokens',
+                yield GenOut(response='',
                              history_token_len=self.id2step[session_id],
                              input_token_len=len(input_ids),
                              generate_token_len=0,
@@ -889,12 +902,12 @@ class AsyncEngine(LogitsMixin):
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
                 hit_stop_token = 0
-                req_state = RequestState(prompt_tokens=input_len)  # per-requst state
+                req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
                 async for outputs in gen:
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
-                    metrics_processor.queue_update((outputs, req_state, iteration_stats, specdecode_stats))
+                    metrics_processor.queue_update((outputs, req_stats, iteration_stats, specdecode_stats))
                     # decode res
                     if is_error(outputs.status):
                         break

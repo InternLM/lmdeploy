@@ -3,7 +3,7 @@ from typing import Dict, List, Tuple
 
 import torch
 
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 
@@ -22,7 +22,7 @@ def check_qwen_vl_deps_install():
 
 
 @VISION_MODELS.register_module()
-class Qwen2VLModel(VisonModel):
+class Qwen2VLModel(VisionModel):
     """Qwen2VL model."""
 
     _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration']
@@ -124,12 +124,13 @@ class Qwen2VLModel(VisonModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    def proc_messages(self, messages, chat_template, sequence_start):
+    def proc_messages(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisonModel.IMAGE_TOKEN_included(messages):
+        if VisionModel.IMAGE_TOKEN_included(messages):
             # backward compatibility
             for message in messages:
                 role, content = message['role'], message['content']
@@ -184,13 +185,13 @@ class Qwen2VLModel(VisonModel):
         mrope_position_delta = torch.tensor([st_idx - seq_len], dtype=torch.long)
         return mrope_position_ids, mrope_position_delta
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
         """Return to the information needed by pytorch engine."""
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
         info = super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess'][0]
         grid_thws = [x['image_grid_thw'].tolist()[0] for x in inputs]

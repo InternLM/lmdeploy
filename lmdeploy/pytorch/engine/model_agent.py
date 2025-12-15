@@ -28,7 +28,7 @@ from ..models.patch import BuildModelContext, add_adapters, build_patched_model,
 from ..spec_decode import build_spec_agent
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
-from ..utils import get_gpu_memory
+from ..utils import get_gpu_memory, monkey_patch_hf_modules_cache
 from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
 from .cache_engine import CacheEngine, StateCacheEngine
 from .guided_process import GuidedDecodingManager
@@ -323,6 +323,7 @@ class BaseModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
         # use raw tokenizer
+        monkey_patch_hf_modules_cache()
         self.tokenizer = Tokenizer(model_path).model.model
 
         self._pre_in_que = None
@@ -438,6 +439,9 @@ class BaseModelAgent:
             # warmup decoding(with cuda graph)
             capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
             capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
+            if self.cache_config.role == EngineRole.Prefill:
+                # do not warmup decoding for prefill engine
+                capture_batch_sizes = []
             for num_tokens in capture_batch_sizes:
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
@@ -868,16 +872,17 @@ class BaseModelAgent:
         keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
-
+            forward_inputs_cuda = {}
+            forward_inputs_cuda.update(forward_inputs)
             logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
                 for k in keys:
-                    if k not in forward_inputs:
+                    if k not in forward_inputs_cuda:
                         continue
-                    forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
+                    forward_inputs_cuda[k] = _try_to_cuda(forward_inputs_cuda[k], non_blocking=non_blocking)
                 self.out_stream.synchronize()
             logger.debug('preprocessing forward inputs done.')
-            self._in_que.put_nowait(forward_inputs)
+            self._in_que.put_nowait(forward_inputs_cuda)
             if forward_event is not None:
                 forward_event.clear()
 

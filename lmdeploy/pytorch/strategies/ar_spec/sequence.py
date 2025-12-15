@@ -10,6 +10,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
 from lmdeploy.pytorch.messages import (InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
                                        SchedulerSession, UpdateTokenMode, _to_ndarray)
+from lmdeploy.pytorch.model_inputs import ModelInputs
 
 from ..ar.sequence import ARSequenceStrategy, SchedulerSequenceDefault
 
@@ -155,7 +156,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
                                        resp_cache=resp_cache,
                                        preserve_cache=preserve_cache)
 
-    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, is_decoding: bool) -> None:
+    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs') -> None:
         """Update running sequences."""
         next_token_ids = batched_outputs.next_token_ids
         extra_outputs = batched_outputs.extra_outputs
@@ -173,17 +174,17 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
         else:
             draft_token_ids = extra_outputs.draft_token_ids.numpy()
         stop_pos = stop_pos.tolist()
-        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
+        update_mode = UpdateTokenMode.DECODE if model_inputs.is_decoding else UpdateTokenMode.PREFILL
 
         for idx, token in enumerate(next_token_ids):
             msg = running[idx]
             stop = stopped[idx]
             model_meta = model_metas[idx]
-            if msg.status != MessageStatus.LOCKED:
+            if msg.status != MessageStatus.RUNNING:
                 continue
             cur_draft_tokens = draft_token_ids[idx]
             # fill token
             msg.update_token_ids(token, draft_token_ids=cur_draft_tokens, model_meta=model_meta, mode=update_mode)
             if stop:
                 msg.set_stop_pos(stop_pos[idx])
-                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
+                msg.state.finish()

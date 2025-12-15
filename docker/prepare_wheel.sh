@@ -23,7 +23,6 @@ if [[ ${PYTHON_VERSION} = "3.13" ]]; then
 fi
 
 if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
-
     GDRCOPY_VERSION=2.5.1
     DEEP_EP_VERSION=9af0e0d  # v1.2.1
     DEEP_GEMM_VERSION=c9f8b34  # v2.1.1.post3
@@ -53,6 +52,5 @@ if [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
     && tar -xzf v${GDRCOPY_VERSION}.tar.gz && rm v${GDRCOPY_VERSION}.tar.gz \
     && cd gdrcopy-${GDRCOPY_VERSION}/packages \
     && CUDA=/usr/local/cuda ./build-deb-packages.sh \
-    && mkdir -p /debs \
-    && mv ./*.deb /debs/
+    && mv ./*.deb /wheels
 fi

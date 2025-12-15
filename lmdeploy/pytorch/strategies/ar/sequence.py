@@ -10,6 +10,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
 from lmdeploy.pytorch.messages import (InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
                                        SchedulerSequence, SchedulerSession, UpdateTokenMode, _to_ndarray)
+from lmdeploy.pytorch.model_inputs import ModelInputs
 
 from ..base.sequence import SequenceStrategy
 
@@ -103,7 +104,7 @@ class ARSequenceStrategy(SequenceStrategy):
             preserve_cache=preserve_cache,
         )
 
-    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, is_decoding: bool) -> None:
+    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs') -> None:
         """Update running sequences."""
         next_token_ids = batched_outputs.next_token_ids
         stopped = batched_outputs.stopped
@@ -113,22 +114,18 @@ class ARSequenceStrategy(SequenceStrategy):
             model_metas = [None] * len(running)
 
         next_token_ids = next_token_ids.numpy()
-        all_routed_experts = [None] * len(running)
-        if is_decoding:
-            num_tokens = [1] * len(running)
-        else:
-            num_tokens = [msg.num_token_ids for msg in running]
-
+        num_tokens = model_inputs.seq_length.tolist()
+        all_routed_experts = [None] * len(num_tokens)
         if batched_outputs.all_routed_experts is not None:
             all_routed_experts = batched_outputs.all_routed_experts.split(num_tokens, dim=0)
             all_routed_experts = [experts.numpy() for experts in all_routed_experts]
-        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
+        update_mode = UpdateTokenMode.DECODE if model_inputs.is_decoding else UpdateTokenMode.PREFILL
         for token, msg, stop, model_meta, routed_experts in zip(next_token_ids, running, stopped, model_metas,
                                                                 all_routed_experts):
-            if msg.status != MessageStatus.LOCKED:
+            if msg.status != MessageStatus.RUNNING:
                 continue
 
             # fill token
             msg.update_token_ids(token, model_meta=model_meta, mode=update_mode, routed_experts=routed_experts)
             if stop:
-                msg.status = MessageStatus.TO_BE_MIGRATED if msg.preserve_cache else MessageStatus.STOPPED
+                msg.state.finish()

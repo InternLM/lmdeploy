@@ -5,7 +5,7 @@ import torch
 from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
@@ -64,7 +64,7 @@ def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnai
 
 
 @VISION_MODELS.register_module()
-class InternVLVisionModel(VisonModel):
+class InternVLVisionModel(VisionModel):
     """InternVL vision model."""
 
     _arch = 'InternVLChatModel'
@@ -230,13 +230,14 @@ class InternVLVisionModel(VisonModel):
         chat_template,
         sequence_start,
         tools: Optional[List[object]] = None,
-        enable_thinking: Optional[bool] = None,
+        chat_template_kwargs: Optional[Dict] = None,
     ):
+        chat_template_kwargs = chat_template_kwargs or {}
         """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisonModel.IMAGE_TOKEN_included(messages):
+        if VisionModel.IMAGE_TOKEN_included(messages):
             # backward compatibility
             for message in messages:
                 role, content = message['role'], message['content']
@@ -263,10 +264,7 @@ class InternVLVisionModel(VisonModel):
                     else:
                         raise ValueError(f'Unsupported message type: {item["type"]}')
                 prompt_messages.append(dict(role='user', content=''.join(_content)))
-        prompt = chat_template.messages2prompt(prompt_messages,
-                                               sequence_start,
-                                               tools=tools,
-                                               enable_thinking=enable_thinking)
+        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, tools=tools, **chat_template_kwargs)
         return prompt, self.image_token
 
     def to_pytorch(self,
@@ -275,13 +273,13 @@ class InternVLVisionModel(VisonModel):
                    tokenizer,
                    sequence_start,
                    tools: Optional[List[object]] = None,
-                   enable_thinking: Optional[bool] = None,
+                   chat_template_kwargs: Optional[Dict] = None,
                    **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,
                                                  sequence_start,
                                                  tools=tools,
-                                                 enable_thinking=enable_thinking)
+                                                 chat_template_kwargs=chat_template_kwargs)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self,
@@ -290,11 +288,11 @@ class InternVLVisionModel(VisonModel):
                      tokenizer,
                      sequence_start,
                      tools: Optional[List[object]] = None,
-                     enable_thinking: Optional[bool] = None,
+                     chat_template_kwargs: Optional[Dict] = None,
                      **kwargs):
         prompt, IMAGE_TOKEN = self.proc_messages(messages,
                                                  chat_template,
                                                  sequence_start,
                                                  tools=tools,
-                                                 enable_thinking=enable_thinking)
+                                                 chat_template_kwargs=chat_template_kwargs)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

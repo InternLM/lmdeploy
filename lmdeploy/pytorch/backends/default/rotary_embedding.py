@@ -315,10 +315,14 @@ class FopeRotaryEmbeddingImpl(RotaryEmbeddingImpl):
         self.params = params
 
         inv_freq = self.params.inv_freq
-        inv_freq_idx_selected = inv_freq > 2 * torch.pi / self.max_position_embeddings
-        if self.params.num_inv_freq is not None and inv_freq_idx_selected.sum() > (inv_freq.shape[-1] -
-                                                                                   self.params.num_inv_freq):
-            inv_freq_idx_selected[-self.params.num_inv_freq:] = False
+        inv_freq_idx_selected = torch.ones_like(inv_freq, dtype=torch.bool)
+        if self.params.num_inv_freq is not None:
+            num_inv_freq = self.params.num_inv_freq
+            inv_freq_idx_selected[num_inv_freq:] = False
+        else:
+            inv_freq_idx_selected = inv_freq > (2.0 * torch.pi / self.max_position_embeddings)
+            num_inv_freq = inv_freq_idx_selected.sum().item()
+
         self.inv_freq = inv_freq[inv_freq_idx_selected]
         self.register_buffer('inv_freq', self.inv_freq, persistent=False)
 

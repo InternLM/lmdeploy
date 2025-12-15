@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import PIL
 
@@ -55,7 +55,8 @@ class VLAsyncEngine(AsyncEngine):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
-                                enable_thinking: Optional[bool] = None,
+                                chat_template_kwargs: Optional[Dict] = None,
+                                mm_processor_kwargs: Optional[Dict[str, Any]] = None,
                                 **kwargs):
         """Process messages and return the required data for the inference
         engines.
@@ -69,7 +70,7 @@ class VLAsyncEngine(AsyncEngine):
                                                    sequence_start,
                                                    adapter_name,
                                                    tools=tools,
-                                                   enable_thinking=enable_thinking,
+                                                   chat_template_kwargs=chat_template_kwargs,
                                                    **kwargs)
         elif isinstance(messages, List):
             has_multimodal_input = any(
@@ -81,14 +82,14 @@ class VLAsyncEngine(AsyncEngine):
                                                        sequence_start,
                                                        adapter_name,
                                                        tools,
-                                                       enable_thinking=enable_thinking,
+                                                       chat_template_kwargs=chat_template_kwargs,
                                                        **kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
 
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_convert_to_pil_images(messages)
-        results = await self.vl_encoder.preprocess(messages)
+        results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs)
         if self.backend == 'turbomind':
             # for tm engine, this module perform vision embedding after image
             # preprocessing. It utilizes the hf model's vision embeddings
@@ -101,7 +102,7 @@ class VLAsyncEngine(AsyncEngine):
                                                                self.tokenizer,
                                                                sequence_start,
                                                                tools=tools,
-                                                               enable_thinking=enable_thinking)
+                                                               chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
@@ -110,7 +111,7 @@ class VLAsyncEngine(AsyncEngine):
                                                              self.tokenizer,
                                                              sequence_start,
                                                              tools=tools,
-                                                             enable_thinking=enable_thinking)
+                                                             chat_template_kwargs=chat_template_kwargs)
         return results
 
     @classmethod

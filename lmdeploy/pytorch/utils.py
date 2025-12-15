@@ -142,3 +142,40 @@ def maybe_register_config_serialize_by_value(trust_remote_code: bool) -> None:
             ' lead to a later error. If remote code is not needed'
             ' remove `--trust-remote-code`',
             exc_info=e)
+
+
+def monkey_patch_hf_modules_cache():
+    """Monkey patch HF_MODULES_CACHE to a temporary directory per process. This
+    is necessary to avoid conflicts when multiple processes try to read/write
+    to the same HF_MODULES_CACHE directory, especially in multi-GPU setups.
+
+    modified from: https://github.com/InternLM/xtuner/blob/main/xtuner/v1/utils/misc.py
+    """
+    import os
+
+    import transformers
+    from huggingface_hub import constants
+
+    # When using `remote_code` in HF components like tokenizer or config
+    # (e.g., `AutoConfig.from_pretrained(hf_model_path, trust_remote_code=True)`),
+    # the hf_model_path is copied to HF_MODULES_CACHE.
+    # On multi-GPU machines (e.g., 8 GPUs), simultaneous read/write operations
+    # by multiple processes on this shared directory can cause conflicts.
+    # Therefore, we set HF_MODULES_CACHE to a temporary directory per process.
+
+    HF_PATCH_MODULES_CACHE_PREFIX = 'modules_pid_'
+    modules_cache = os.path.join(constants.HF_HOME, f'{HF_PATCH_MODULES_CACHE_PREFIX}{os.getpid()}')
+    os.environ['HF_MODULES_CACHE'] = modules_cache
+
+    transformers.utils.hub.HF_MODULES_CACHE = modules_cache
+
+    # During import, Python creates a new name HF_MODULES_CACHE in the namespace
+    # of the dynamic_module_utils module, binding it to the object referenced by
+    # transformers.utils.HF_MODULES_CACHE at that moment.
+    # Hence, we also need to set transformers.dynamic_module_utils.HF_MODULES_CACHE
+    # to the new modules_cache.
+
+    transformers.dynamic_module_utils.HF_MODULES_CACHE = modules_cache
+    transformers.utils.HF_MODULES_CACHE = modules_cache
+
+    logger.info(f'Set HF_MODULES_CACHE to {modules_cache} for current process {os.getpid()}')

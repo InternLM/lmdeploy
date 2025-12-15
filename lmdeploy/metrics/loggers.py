@@ -8,7 +8,7 @@ from typing import List
 
 import numpy as np
 
-from lmdeploy.metrics.stats import FinishedRequestStats, IterationStats, SchedulerStats, SpeculativeDecodingStats
+from lmdeploy.metrics.stats import IterationStats, RequestStats, SchedulerStats, SpeculativeDecodingStats
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -70,18 +70,18 @@ class LoggingStatLogger(StatLoggerBase):
         self.num_accepted_tokens += stats.num_accepted_tokens
         self.num_accepted_tokens_per_pos += stats.num_accepted_tokens_per_pos
 
-    def record_finish(self, stats: FinishedRequestStats):
+    def record_finish(self, stats: RequestStats):
         pass
 
-    def _get_log_spec_msg(self):
+    def log_spec_msg(self):
         """Get spec decoding logging msg."""
         if self.num_drafts == 0:
-            return ''
+            return
 
         draft_acceptance_rate = (self.num_accepted_tokens / self.num_draft_tokens *
                                  100 if self.num_draft_tokens > 0 else float('nan'))
 
-        # Conventionally, mean acceptance length includes the bonus token
+        # conventionally, mean acceptance length includes the bonus token
         mean_acceptance_length = 1 + (self.num_accepted_tokens / self.num_drafts)
 
         acceptance_rates = self.num_accepted_tokens_per_pos / self.num_drafts
@@ -93,23 +93,23 @@ class LoggingStatLogger(StatLoggerBase):
                    f'Accepted: {self.num_accepted_tokens} tokens, '
                    f'Drafted: {self.num_draft_tokens} tokens, '
                    f'Per-position acceptance rate: {rates_str}')
-        return log_msg
+        print(log_msg, flush=True)
 
     def log(self):
         now = time.perf_counter()
+
+        # skip logging if no tokens were processed
         if self.total_prompt_tokens == 0 and self.total_generation_tokens == 0:
-            # Not show the metrics log in console
             self._reset(now)
             return
 
+        # derive log information
         prompt_throughput = self.total_prompt_tokens / (now - self.last_log_time)
         generation_throughput = self.total_generation_tokens / (now - self.last_log_time)
-
-        spec_log_msg = self._get_log_spec_msg()
+        scheduler_stats = self.last_scheduler_stats
         self._reset(now)
 
-        scheduler_stats = self.last_scheduler_stats
-        # Format and print output.
+        # format and print
         log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} "
                    f'DP{self.dp_rank}] '
                    f'Avg prompt throughput: {prompt_throughput:.1f} tokens/s, '
@@ -118,10 +118,11 @@ class LoggingStatLogger(StatLoggerBase):
                    f'Unfinished: {scheduler_stats.num_total_reqs-scheduler_stats.num_finished_reqs} reqs, '
                    f'Running: {scheduler_stats.num_running_reqs} reqs, '
                    f'Waiting: {scheduler_stats.num_waiting_reqs} reqs, '
-                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%')
+                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%, '
+                   f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%')
+
         print(log_msg, flush=True)
-        if spec_log_msg:
-            print(spec_log_msg, flush=True)
+        self.log_spec_msg()
 
 
 class PrometheusStatLogger(StatLoggerBase):
@@ -136,12 +137,12 @@ class PrometheusStatLogger(StatLoggerBase):
 
         self.dp_rank = dp_rank
 
-        # Unregister any existing lmdeploy collectors
+        # unregister any existing lmdeploy collectors
         for collector in list(prometheus_client.REGISTRY._collector_to_names):
             if hasattr(collector, '_name') and 'lmdeploy' in collector._name:
                 prometheus_client.REGISTRY.unregister(collector)
 
-        # Config information
+        # config information
         self.info_backend_config = prometheus_client.Info(name='lmdeploy:backend_config',
                                                           documentation='information of backend_config')
 
@@ -319,13 +320,13 @@ class PrometheusStatLogger(StatLoggerBase):
         if stats.itl:
             self.histogram_iter_token_latency.observe(stats.itl)
 
-    def record_finish(self, stats: FinishedRequestStats) -> None:
+    def record_finish(self, stats: RequestStats) -> None:
         self.counter_request_success[stats.finish_reason].inc()
         self.histogram_e2e_time_request.observe(stats.e2e_latency)
-        self.histogram_queue_time_request.observe(stats.queued_time)
-        self.histogram_prefill_time_request.observe(stats.prefill_time)
-        self.histogram_inference_time_request.observe(stats.inference_time)
-        self.histogram_decode_time_request.observe(stats.decode_time)
+        self.histogram_queue_time_request.observe(stats.queued_time_interval)
+        self.histogram_prefill_time_request.observe(stats.prefill_time_interval)
+        self.histogram_inference_time_request.observe(stats.inference_time_interval)
+        self.histogram_decode_time_request.observe(stats.decode_time_interval)
         self.histogram_num_prompt_tokens_request.observe(stats.prompt_tokens)
         self.histogram_num_generation_tokens_request.observe(stats.generation_tokens)
 

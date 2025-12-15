@@ -546,6 +546,7 @@ class ScheduleMetrics:
     active_blocks: int = 0
     cached_blocks: int = 0
     free_blocks: int = 0
+    prefix_cache_hit_rate: float = 0
 
 
 @dataclass
@@ -586,7 +587,7 @@ class EngineOutput:
 
 @dataclass
 class VisionConfig:
-    """Vison model configs.
+    """Vision model configs.
 
     Args:
         max_batch_size (int): the max image size passed to the model, since

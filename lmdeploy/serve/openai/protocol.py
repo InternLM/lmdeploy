@@ -149,9 +149,19 @@ class ChatCompletionRequest(BaseModel):
     seed: Optional[int] = None
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
     min_p: float = 0.0
-    enable_thinking: Optional[bool] = None
+    enable_thinking: Optional[bool] = None  # will be deprecated in the future
     return_token_ids: Optional[bool] = False
     include_stop_str_in_output: Optional[bool] = False
+    chat_template_kwargs: dict[str, Any] | None = Field(
+        default=None,
+        description=('Additional keyword args to pass to the template renderer. '
+                     'Will be accessible by the chat template.'),
+    )
+    # kwargs for hf processor
+    mm_processor_kwargs: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=('Additional kwargs to pass to the HF processor'),
+    )
 
 
 class FunctionCall(BaseModel):
@@ -443,6 +453,11 @@ class GenerateReqInput(BaseModel):
     spaces_between_special_tokens: Optional[bool] = True
     include_stop_str_in_output: Optional[bool] = False
     return_routed_experts: Optional[bool] = False
+    # kwargs for hf processor
+    mm_processor_kwargs: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=('Additional kwargs to pass to the HF processor'),
+    )
 
 
 class GenerateReqMetaOutput(BaseModel):

@@ -88,6 +88,7 @@ Documentation
 
    benchmark/benchmark.md
    benchmark/evaluate_with_opencompass.md
+   benchmark/evaluate_with_vlmevalkit.md
 
 .. toctree::
    :maxdepth: 1

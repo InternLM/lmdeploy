@@ -768,10 +768,10 @@ class HFChatTemplate(BaseChatTemplate):
             'Each message should be a dict with "role" and "content" keys.'
 
         if 'enable_thinking' in kwargs and kwargs['enable_thinking'] is None:
-            # Workaround for internlm/Intern-S1: the chat template expects a <think> tag appended,
-            # but when enable_thinking=None is specified, the <think> tag is omitted.
+            # Workaround for internlm/Intern-S1: when enable_thinking=None passed apply_chat_template,
+            # the <think> tag is not generated.
             kwargs.pop('enable_thinking')
-        if 'reasoning_effort' in kwargs and kwargs.get('reasoning_effort', None) is None:
+        if 'reasoning_effort' in kwargs and kwargs['reasoning_effort'] is None:
             kwargs.pop('reasoning_effort')
         add_generation_prompt = messages[-1]['role'] != 'assistant'
         if sequence_start:

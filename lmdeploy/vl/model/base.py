@@ -12,7 +12,7 @@ from lmdeploy.archs import get_model_arch
 VISION_MODELS = Registry('vision_model')
 
 
-class VisonModel(ABC):
+class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: Union[str, List[str]] = None
 
@@ -132,7 +132,7 @@ class VisonModel(ABC):
         if self.backend == 'turbomind':
             raise NotImplementedError()
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
         """Pack the preprocessing results in a format compatible with what is
         required by pytorch engine. ONLY implement it when the backend is
         pytorch engine.
@@ -142,11 +142,13 @@ class VisonModel(ABC):
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
             sequence_start: starting flag of a sequence
+            chat_template_kwargs: additional arguments for chat template
+                processing, such as `add_vision_id` and `enable_thinking`
         """
         if self.backend == 'pytorch':
             raise NotImplementedError()
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
         """Pack the forwarding results in a format compatible with what is
         required by turbomind engine. ONLY implement it when the backend is
         turbomind engine.
@@ -156,6 +158,8 @@ class VisonModel(ABC):
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
             sequence_start: starting flag of a sequence
+            chat_template_kwargs: additional arguments for chat template
+                processing, such as `add_vision_id` and `enable_thinking`
         """
         if self.backend == 'turbomind':
             raise NotImplementedError()

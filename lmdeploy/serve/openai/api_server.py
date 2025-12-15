@@ -457,6 +457,15 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 tools = [item.function.model_dump() for item in request.tools]
     # text completion for string input
     do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
+    chat_template_kwargs = request.chat_template_kwargs or {}
+    if request.enable_thinking is not None:
+        logger.warning('`enable_thinking` will be deprecated in the future, '
+                       'please use `chat_template_kwargs` instead.')
+        if chat_template_kwargs.get('enable_thinking') is None:
+            chat_template_kwargs['enable_thinking'] = request.enable_thinking
+        else:
+            logger.warning('`enable_thinking` in `chat_template_kwargs` will override the value in request.')
+    enable_thinking = chat_template_kwargs.get('enable_thinking', None)
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
@@ -468,8 +477,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         sequence_end=True,
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
-        enable_thinking=request.enable_thinking,
-    )
+        chat_template_kwargs=chat_template_kwargs or None,
+        mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_stream_response_json(index: int,
                                     delta_message: DeltaMessage,
@@ -542,8 +551,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 elif (request.tool_choice != 'none' and request.tools is not None
                       and VariableInterface.tool_parser is None):
                     logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
-
-                if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
+                if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
                     reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
                         previous_text=previous_text,
                         current_text=current_text,
@@ -616,7 +624,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
             logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-        if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
+        if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
             reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
         message = ChatMessage(role='assistant',
@@ -910,7 +918,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
 @router.post('/generate', dependencies=[Depends(check_api_key)])
 async def generate(request: GenerateReqInput, raw_request: Request = None):
-
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -964,7 +971,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         sequence_start=True,
         sequence_end=True,
         do_preprocess=False,
-    )
+        mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_generate_response_json(res, text, output_ids, logprobs, finish_reason, routed_experts=None):
         # only output router experts in last chunk
@@ -1327,10 +1334,9 @@ def create_lifespan_handler(backend_config: Union[PytorchEngineConfig, Turbomind
                     while True:
                         await asyncio.sleep(log_interval)
 
-                        # Since scheduled metrics is not changed as frequently as iteration statistics,
-                        # we conduct its statistics every `log_interval` seconds
+                        # periodically update schedule metrics, as they change less frequently than iteration stats
                         schedule_metrics = async_engine.get_schedule_metrics()
-                        await metrics_processor.udpate_schedule_stats(schedule_metrics)
+                        await metrics_processor.update_schedule_stats(schedule_metrics)
 
                         await async_engine.do_log_stats()
 
