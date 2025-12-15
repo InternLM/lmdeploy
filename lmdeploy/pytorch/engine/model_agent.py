@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import base64
 import functools
 import time
 from contextlib import contextmanager
@@ -10,6 +9,7 @@ from os import getenv
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pybase64
 import torch
 import torch.distributed as dist
 from torch.profiler import ProfilerActivity, profile, record_function
@@ -1127,7 +1127,7 @@ class BaseModelAgent:
             if isinstance(serialized_data, list):
                 serialized_data = serialized_data[self.dist_ctx.tp_group.rank]
             model = self.patched_model.get_model()
-            weights = ForkingPickler.loads(base64.b64decode(serialized_data))
+            weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
             if request.load_format == 'flattened_bucket':
                 metadata: List[FlattenedTensorMetadata] = weights['metadata']
                 if metadata:

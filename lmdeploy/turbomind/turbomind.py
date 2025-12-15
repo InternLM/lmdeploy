@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-import base64
 import copy
 import json
 import math
@@ -16,6 +15,7 @@ from queue import Queue
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pybase64
 import torch
 import yaml
 from torch.nn.utils.rnn import pad_sequence
@@ -328,7 +328,7 @@ class TurboMind:
 
         with torch.cuda.device(self.devices[0]):
             if isinstance(request.serialized_named_tensors, str):
-                weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
+                weights = ForkingPickler.loads(pybase64.b64decode(request.serialized_named_tensors))
                 weights = {k: _construct(v) for k, v in weights}
             else:
                 weights = request.serialized_named_tensors

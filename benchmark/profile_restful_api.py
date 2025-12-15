@@ -833,7 +833,7 @@ def sample_image_requests(
         num=num_requests,
     )
 
-    def _gen_random_image_data_uri(width: int = width, height: int = height) -> (Image, str, int):
+    def _gen_random_image_data_uri(width: int = width, height: int = height) -> Tuple[Image, str, int]:
         if image_content == 'blank':
             # Generate blank white image
             arr = np.full((height, width, 3), 255, dtype=np.uint8)
