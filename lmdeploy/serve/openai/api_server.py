@@ -1025,11 +1025,11 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
                                          completion_tokens=res.generate_token_len)
             response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
         else:
-            meta = GenerateReqMetaOutput(finish_reason=dict(type='error'),
+            meta = GenerateReqMetaOutput(finish_reason=dict(type='abort'),
                                          output_token_logprobs=None,
-                                         prompt_tokens=len(input_ids) if input_ids is None else 0,
+                                         prompt_tokens=len(input_ids) if input_ids is not None else 0,
                                          routed_experts=None,
-                                         completion_tokens=len(output_ids))
+                                         completion_tokens=0)
             response = GenerateReqOutput(text=text, output_ids=output_ids, meta_info=meta)
 
     await _inner_call()
