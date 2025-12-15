@@ -28,6 +28,7 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                  renormalize: bool = False,
                  block_size: int = 128,
                  out_dtype: torch.dtype = torch.float16):
+        super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
         self.renormalize = renormalize
@@ -57,8 +58,10 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         """forward."""
         input_size = hidden_states.shape
         hidden_states = hidden_states.flatten(0, -2)
-        input_quant, input_scale = quant_fp8(hidden_states, self.block_size, dtype=gate_up_weights.dtype)
-
+        input_quant, input_scale = quant_fp8(hidden_states,
+                                             self.block_size,
+                                             dtype=gate_up_weights.dtype,
+                                             scale_fmt=self.scale_fmt)
         expert_offset = 0
         num_experts = None
         if expert_list is not None and len(expert_list) != self.num_experts:

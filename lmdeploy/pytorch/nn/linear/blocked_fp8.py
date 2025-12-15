@@ -24,6 +24,7 @@ class BlockedF8Linear(LinearBase):
         dtype: Optional[torch.dtype] = None,
         device: Optional[torch.device] = None,
         fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+        scale_fmt: Optional[str] = None,
         colwise: bool = True,
         is_tp: bool = False,
         all_reduce: bool = True,
@@ -39,6 +40,7 @@ class BlockedF8Linear(LinearBase):
                          layer_type=layer_type)
         self.block_size = 128
         self.fp8_dtype = fp8_dtype
+        self.scale_fmt = scale_fmt
         if self.is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
         impl_builder = get_backend().get_layer_impl_builder(OpType.LinearBlockedF8)
@@ -47,6 +49,7 @@ class BlockedF8Linear(LinearBase):
                                        block_size=128,
                                        bias=bias is not None,
                                        dtype=self.dtype)
+        self.impl.set_scale_fmt(scale_fmt)
         weight, weight_scale_inv, bias = self.create_weights(in_features, out_features, bias, self.dtype, self.device)
         self.register_all_parameters(weight, weight_scale_inv, bias)
 
@@ -164,6 +167,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
                  all_out_features: List[int],
                  bias: bool,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 scale_fmt: Optional[str] = None,
                  replicate: Optional[List[bool]] = None,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
@@ -191,6 +195,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
                          dtype,
                          device,
                          fp8_dtype=fp8_dtype,
+                         scale_fmt=scale_fmt,
                          colwise=True,
                          is_tp=is_tp,
                          dp_gather=dp_gather,
@@ -270,6 +275,7 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                  head_size_v: int,
                  bias: bool = False,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 scale_fmt: Optional[str] = None,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
@@ -293,6 +299,7 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                          all_out_features,
                          dtype=dtype,
                          fp8_dtype=fp8_dtype,
+                         scale_fmt=scale_fmt,
                          bias=bias,
                          device=device,
                          is_tp=is_tp,
