@@ -70,6 +70,7 @@ class RequestFuncOutput:
     ttft: float = 0.0  # Time to first token
     itl: List[float] = field(default_factory=list)  # List of inter-token latencies
     prompt_len: int = 0
+    output_len: int = 0
     error: str = ''
     output_len: int = 0
 
@@ -833,7 +834,7 @@ def sample_image_requests(
         num=num_requests,
     )
 
-    def _gen_random_image_data_uri(width: int = width, height: int = height) -> Tuple[Image, str, int]:
+    def _gen_random_image_data_uri(width: int = width, height: int = height) -> Tuple[Image.Image, str, int]:
         if image_content == 'blank':
             # Generate blank white image
             arr = np.full((height, width, 3), 255, dtype=np.uint8)
