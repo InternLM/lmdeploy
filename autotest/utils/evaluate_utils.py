@@ -25,11 +25,11 @@ def write_to_summary(model_name, tp_num, result, backend_type, communicator, met
     summary_dataset_metrics = ' | '.join(dataset_metrics)
 
     summary_file = os.environ.get('GITHUB_STEP_SUMMARY', '')
-    md_summamary_file = f'{work_dir}/summary.md'
+    md_summary_file = f'{work_dir}/summary.md'
     summary_line = f'| {model_name} | {backend_type} | {communicator} | TP{tp_num} | {status} | {summary_dataset_metrics} |\n'  # noqa: E501
 
-    write_header = not os.path.exists(md_summamary_file) or os.path.getsize(md_summamary_file) == 0
-    with open(md_summamary_file, 'a') as f:
+    write_header = not os.path.exists(md_summary_file) or os.path.getsize(md_summary_file) == 0
+    with open(md_summary_file, 'a') as f:
         if write_header:
             dash_line = '-----|' * (len(metrics.keys()))
             f.write('## Model Evaluation Results\n')
