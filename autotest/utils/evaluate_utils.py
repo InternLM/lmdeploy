@@ -380,11 +380,11 @@ def mllm_eval_test(config,
 
     if test_type == 'eval':
         mllm_summary(simple_model_name,
-                    summary_model_name,
-                    tp_num,
-                    result,
-                    backend_type,
-                    communicator,
-                    work_dir,
-                    dataset_list=['MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI'])
+                     summary_model_name,
+                     tp_num,
+                     result,
+                     backend_type,
+                     communicator,
+                     work_dir,
+                     dataset_list=['MMBench_V11_MINI', 'MMStar_MINI', 'AI2D_MINI', 'OCRBench_MINI'])
     return result, msg
