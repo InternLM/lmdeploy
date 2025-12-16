@@ -35,7 +35,12 @@ class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
 class DlinferFusedMoEImpl(FusedMoEImpl):
     """Dlinfer fused moe implementation."""
 
-    def __init__(self, top_k: int, num_experts: int, renormalize: bool = False, ep_size: int = 1, ep_group: torch.distributed.ProcessGroup = None):
+    def __init__(self,
+                 top_k: int,
+                 num_experts: int,
+                 renormalize: bool = False,
+                 ep_size: int = 1,
+                 ep_group: torch.distributed.ProcessGroup = None):
         self.top_k = top_k
         self.num_experts = num_experts
         self.renormalize = renormalize
@@ -87,4 +92,8 @@ class DlinferFusedMoEBuilder(FusedMoEBuilder):
               layer_idx: int = 0,
               out_dtype: torch.dtype = torch.bfloat16):
         """Build from mlp."""
-        return DlinferFusedMoEImpl(top_k=top_k, num_experts=num_experts, renormalize=renormalize, ep_size=ep_size, ep_group=ep_group)
+        return DlinferFusedMoEImpl(top_k=top_k,
+                                   num_experts=num_experts,
+                                   renormalize=renormalize,
+                                   ep_size=ep_size,
+                                   ep_group=ep_group)
