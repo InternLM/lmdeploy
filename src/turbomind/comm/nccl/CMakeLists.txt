@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.11)
 
 add_library(nccl_comm STATIC nccl.cu)
 target_link_libraries(nccl_comm PRIVATE rms_norm core ${NCCL_LIBRARIES} logger)

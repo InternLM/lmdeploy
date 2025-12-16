@@ -171,9 +171,9 @@ def get_turbomind_model_list(tp_num):
     new_model_list = []
     for model in model_list:
         if 'Qwen3-235B-A22B-Thinking-2507' in model['model']:
-            model['extra'] = '--session-len 65536 --cache-max-entry-count 0.9 --max-batch-size 1024 '
+            model['extra'] += '--session-len 65536 --cache-max-entry-count 0.9 --max-batch-size 1024 '
         else:
-            model['extra'] = '--session-len 65536 --cache-max-entry-count 0.9 '
+            model['extra'] += '--session-len 65536 --cache-max-entry-count 0.9 '
         model['cuda_prefix'] = None
         new_model_list.append(model)
     return new_model_list
@@ -184,9 +184,9 @@ def get_pytorch_model_list(tp_num):
     new_model_list = []
     for model in model_list:
         if 'Qwen3-235B-A22B-Thinking-2507' in model['model']:
-            model['extra'] = '--session-len 65536 --cache-max-entry-count 0.9 --max-batch-size 1024 '
+            model['extra'] += '--session-len 65536 --cache-max-entry-count 0.9 --max-batch-size 1024 '
         else:
-            model['extra'] = '--session-len 65536 --cache-max-entry-count 0.9 '
+            model['extra'] += '--session-len 65536 --cache-max-entry-count 0.9 '
         model['cuda_prefix'] = None
         new_model_list.append(model)
     return new_model_list

@@ -1,9 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
+from transformers import AutoProcessor
 
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
+
+logger = get_logger('lmdeploy')
 
 
 def check_transformers():
@@ -22,23 +26,65 @@ class Qwen3VLModel(VisionModel):
 
     def build_preprocessor(self):
         check_transformers()
-        from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]
+        self.mm_processor_kwargs = None
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+    def get_processor_args(self, mm_processor_kwargs: Optional[Dict[str, Any]] = None):
+        min_pixels = self.processor.image_processor.size['shortest_edge']
+        max_pixels = self.processor.image_processor.size['longest_edge']
+
+        if mm_processor_kwargs is None:
+            return min_pixels, max_pixels
+
+        input_min_pixels = mm_processor_kwargs.get('min_pixels', None)
+        input_max_pixels = mm_processor_kwargs.get('max_pixels', None)
+
+        # boundary check for min_pixels and max_pixels
+        if input_min_pixels is None:
+            if input_max_pixels is not None:
+                # only max_pixels is given in the input
+                if input_max_pixels < min_pixels:
+                    logger.warning(
+                        f'input max_pixels {input_max_pixels} < default min_pixels {min_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
+                max_pixels = input_max_pixels
+        else:
+            if input_max_pixels is None:
+                # only min_pixels is given in the input
+                if input_min_pixels > max_pixels:
+                    logger.warning(
+                        f'input min_pixels {input_min_pixels} > default max_pixels {max_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
+            else:
+                if input_min_pixels > input_max_pixels:
+                    logger.warning(
+                        f'input min_pixels {input_min_pixels} > max_pixels {input_max_pixels}, fall back to default.')
+                    return min_pixels, max_pixels
+                max_pixels = input_max_pixels
+            min_pixels = input_min_pixels
+
+        return min_pixels, max_pixels
+
+    def preprocess(self, messages: List[Dict], mm_processor_kwargs: Optional[Dict[str, Any]] = None) -> List[Dict]:
         """Refer to `super().preprocess()` for spec."""
+
+        min_pixels, max_pixels = self.get_processor_args(mm_processor_kwargs)
+
         images = self.collect_images(messages)
-        optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
 
-            item = dict(type='image', image=image)
-            item.update({key: params[key] for key in params.keys() if key in optional_keys})
-            result = self.processor.image_processor(images=image, videos=None, return_tensors='pt')
+            result = self.processor.image_processor(images=image,
+                                                    videos=None,
+                                                    size={
+                                                        'shortest_edge': min_pixels,
+                                                        'longest_edge': max_pixels
+                                                    },
+                                                    return_tensors='pt')
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
@@ -46,8 +92,9 @@ class Qwen3VLModel(VisionModel):
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
-    def proc_messages(self, messages, chat_template, sequence_start, add_vision_id: Optional[bool] = False):
+    def proc_messages(self, messages, chat_template, sequence_start, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
@@ -64,7 +111,7 @@ class Qwen3VLModel(VisionModel):
                 prompt_messages.append(dict(role='user', content=prompt))
         else:
             prompt_messages = messages
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, add_vision_id=add_vision_id)
+        prompt = chat_template.messages2prompt(prompt_messages, sequence_start, **chat_template_kwargs)
         return prompt, self.image_token
 
     def to_pytorch(self,
@@ -72,10 +119,10 @@ class Qwen3VLModel(VisionModel):
                    chat_template,
                    tokenizer,
                    sequence_start,
-                   add_vision_id: Optional[bool] = False,
+                   chat_template_kwargs: Optional[Dict] = None,
                    **kwargs):
         """Return to the information needed by pytorch engine."""
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, add_vision_id)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, chat_template_kwargs)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def build_model(self):
@@ -92,7 +139,7 @@ class Qwen3VLModel(VisionModel):
                      chat_template,
                      tokenizer,
                      sequence_start,
-                     add_vision_id: Optional[bool] = False,
+                     chat_template_kwargs: Optional[Dict] = None,
                      **kwargs):
         # TODO: implement for turbomind
         pass

@@ -28,7 +28,7 @@ from ..models.patch import BuildModelContext, add_adapters, build_patched_model,
 from ..spec_decode import build_spec_agent
 from ..strategies import build_strategy_factory
 from ..strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
-from ..utils import get_gpu_memory
+from ..utils import get_gpu_memory, monkey_patch_hf_modules_cache
 from ..weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
 from .cache_engine import CacheEngine, StateCacheEngine
 from .guided_process import GuidedDecodingManager
@@ -124,10 +124,7 @@ class AgentProfiler:
         self.dp = dist_ctx.dist_config.dp
         self.stream = stream
         self.profiler = None
-        if self.dp == 1:
-            self.name = f'rank[{self.rank}]'
-        else:
-            self.name = f'dp_rank[{self.dp_rank}]'
+        self.name = f'rank[{self.rank}]'
 
         self.delay = envs.torch_profile_delay
         self.duration = envs.torch_profile_duration
@@ -166,7 +163,7 @@ class AgentProfiler:
 
         try:
             self.profiler.stop()
-            rank = self.rank if self.dp == 1 else self.dp_rank
+            rank = self.rank
             dump_path = f'{self.prefix}{rank}.json'
             self.profiler.export_chrome_trace(dump_path)
             logger.warning(f'Profiler {self.name} dump to {dump_path}.')
@@ -325,6 +322,7 @@ class BaseModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
         # use raw tokenizer
+        monkey_patch_hf_modules_cache()
         self.tokenizer = Tokenizer(model_path).model.model
 
         self._pre_in_que = None
@@ -440,6 +438,9 @@ class BaseModelAgent:
             # warmup decoding(with cuda graph)
             capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
             capture_batch_sizes = sorted(capture_batch_sizes, reverse=True)
+            if self.cache_config.role == EngineRole.Prefill:
+                # do not warmup decoding for prefill engine
+                capture_batch_sizes = []
             for num_tokens in capture_batch_sizes:
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,

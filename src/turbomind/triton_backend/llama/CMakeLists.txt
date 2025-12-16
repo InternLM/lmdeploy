@@ -15,7 +15,7 @@
 
 # Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/triton_backend/multi_gpu_gpt/CMakeLists.txt
 
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.11)
 
 set(llama_triton_backend_files
     LlamaTritonModel.cc
