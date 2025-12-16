@@ -2,34 +2,12 @@ import os
 import time
 
 import pytest
+import utils.constant as constant
 from utils.config_utils import get_evaluate_pytorch_model_list, get_evaluate_turbomind_model_list, get_workerid
-from utils.evaluate_utils import restful_test
+from utils.evaluate_utils import eval_test
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api
-
-DEFAULT_PORT = 23333
-PROXY_PORT = 8000
-
-EVAL_CONFIGS = {
-    'default': {
-        'query_per_second': 4,
-        'max_out_len': 64000,
-        'max_seq_len': 65536,
-        'batch_size': 500,
-        'temperature': 0.6,
-    },
-    'gpt': {
-        'query_per_second': 4,
-        'max_out_len': 64000,
-        'max_seq_len': 65536,
-        'batch_size': 500,
-        'temperature': 0.6,
-        'openai_extra_kwargs': {
-            'reasoning_effort': 'high',
-        }
-    }
-}
 
 
 @pytest.fixture(scope='function')
@@ -46,9 +24,9 @@ def prepare_environment(request, config, worker_id):
 @pytest.fixture(scope='function')
 def prepare_environment_judge_evaluate(request, config, worker_id):
     if get_workerid(worker_id) is None:
-        port = PROXY_PORT
+        port = constant.PROXY_PORT
     else:
-        port = PROXY_PORT + get_workerid(worker_id)
+        port = constant.PROXY_PORT + get_workerid(worker_id)
     judge_config = {
         'model': 'Qwen/Qwen2.5-32B-Instruct',
         'backend': 'turbomind',
@@ -92,25 +70,25 @@ def _run_ray_distributed_test(
     assert manager is not None, 'Manager instance must be provided'
     if 'gpt' in model_param.get('model', '').lower():
         eval_config_name = 'gpt'
-        preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+        preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
     if manager.is_master:
         model_name = model_param['model']
         model_path = os.path.join(config['model_path'], model_name)
-        preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+        preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
         # Start API Server for current model (master node starts/stops, worker nodes verify)
         manager.start_lmdeploy_api_server(model_path=model_path, model_param=model_param)
 
         try:
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
-            result, msg = restful_test(config,
-                                       run_id,
-                                       model_param,
-                                       worker_id=worker_id,
-                                       port=PROXY_PORT,
-                                       test_type=test_type,
-                                       **preset_config)
+            result, msg = eval_test(config,
+                                    run_id,
+                                    model_param,
+                                    worker_id=worker_id,
+                                    port=constant.PROXY_PORT,
+                                    test_type=test_type,
+                                    **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
             print(f'✅ {test_type} test passed')
 
@@ -134,7 +112,7 @@ def _run_proxy_distributed_test(config,
     if 'gpt' in model_param.get('model', '').lower():
         eval_config_name = 'gpt'
 
-    preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
     model_name = model_param['model']
     model_path = os.path.join(config['model_path'], model_name)
 
@@ -146,13 +124,13 @@ def _run_proxy_distributed_test(config,
             api_server.wait_until_ready()
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
 
-            result, msg = restful_test(config,
-                                       run_id,
-                                       model_param,
-                                       worker_id=worker_id,
-                                       port=PROXY_PORT,
-                                       test_type=test_type,
-                                       **preset_config)
+            result, msg = eval_test(config,
+                                    run_id,
+                                    model_param,
+                                    worker_id=worker_id,
+                                    port=constant.PROXY_PORT,
+                                    test_type=test_type,
+                                    **preset_config)
             assert result, f'❌ {test_type} test failed: {msg}'
             print(f'✅ {test_type} test passed')
 
@@ -196,29 +174,29 @@ def run_test(config, run_id, prepare_environment, worker_id, test_type='infer', 
     """Run test with specified evaluation configuration."""
     if 'gpt' in prepare_environment.get('model', '').lower():
         eval_config_name = 'gpt'
-    preset_config = EVAL_CONFIGS.get(eval_config_name, {})
+    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
     if test_type == 'infer':
-        port = DEFAULT_PORT
+        port = constant.DEFAULT_PORT
     else:  # eval
-        port = PROXY_PORT
+        port = constant.PROXY_PORT
 
     if get_workerid(worker_id) is None:
-        result, msg = restful_test(config,
-                                   run_id,
-                                   prepare_environment,
-                                   worker_id=worker_id,
-                                   port=port,
-                                   test_type=test_type,
-                                   **preset_config)
+        result, msg = eval_test(config,
+                                run_id,
+                                prepare_environment,
+                                worker_id=worker_id,
+                                port=port,
+                                test_type=test_type,
+                                **preset_config)
     else:
-        result, msg = restful_test(config,
-                                   run_id,
-                                   prepare_environment,
-                                   worker_id=worker_id,
-                                   port=port + get_workerid(worker_id),
-                                   test_type=test_type,
-                                   **preset_config)
+        result, msg = eval_test(config,
+                                run_id,
+                                prepare_environment,
+                                worker_id=worker_id,
+                                port=port + get_workerid(worker_id),
+                                test_type=test_type,
+                                **preset_config)
     return result, msg
 
 

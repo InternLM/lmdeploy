@@ -1,4 +1,4 @@
-name: api_eval
+name: mllm_api_eval
 
 on:
   workflow_dispatch:
@@ -38,14 +38,16 @@ env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/evaluation-reports/allure_report/${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/mllm_evaluation_report/allure_report/${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: '--lf'
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
-  COMPASS_DATA_CACHE: /nvme/qa_test_models/compass_data_cache
+  LMUData: /nvme/qa_test_models/LMUData
+  LOCAL_LLM: Qwen2.5-32B-Instruct
+  OPENAI_API_KEY: sk-empty
   HF_DATASETS_OFFLINE: 1
   HF_DATASETS_CACHE: /nvme/qa_test_models/hf_datasets
   HF_HUB_OFFLINE: 1
@@ -98,7 +100,6 @@ jobs:
           path: builder/manywheel/${{ env.OUTPUT_FOLDER }}
           retention-days: 1
           name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
-
 
   download_pkgs:
     needs: linux-build
@@ -189,12 +190,12 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-      - name: Install opencompass
+      - name: Install vlmeval
         run: |
-          git clone https://github.com/open-compass/opencompass.git --depth 1
-          cd opencompass
-          python3 -m pip install .
-          python3 -m pip install langdetect
+          python3 -m pip install pandas datasets scikit-learn pylatexenc math_verify
+          apt update && apt install -y libgl1 libglib2.0-0
+          cp -r /nvme/qa_test_models/offline_pkg/VLMEvalKit .
+          cd VLMEvalKit && pip install .
       - name: Check env
         run: |
           python3 -m pip list
@@ -204,15 +205,14 @@ jobs:
       - name: Setup paths for evaluation
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind')
         run: |
-          overall_exit=0
-          ln -s /mnt/104/opencompass-data/data ./data
-          ln -s /nvme/qa_test_models/resource/nltk_data /usr/share/nltk_data
+          unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
+          cd VLMEvalKit && cp -r ../autotest .
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" -n ${{matrix.n}} --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and infer" -n ${{matrix.n}} --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and eval" -n 4 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_mllm_api_evaluate.py -m "${{matrix.gpu_num}} and ${{matrix.backend}} and eval" -n 4 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           exit $overall_exit
       - name: Clear workspace
