@@ -368,11 +368,13 @@ class AsyncEngine(LogitsMixin):
 
         # build stat loggers
         self._build_stat_loggers()
+        self.session_abort_events = {}  # session_id -> abort flag, used to abort or stop a session
 
     def close(self):
         self.internal_thread.close()
         self.free_insts = None
         self.instances.clear()
+        self.session_abort_events = {}
         self.engine.close()
 
     def __enter__(self):
@@ -465,6 +467,9 @@ class AsyncEngine(LogitsMixin):
     async def stop_all_session(self):
         """Stop all running sessions."""
         logger.info('stop all sessions')
+        for session_id, abort_event in self.session_abort_events.items():
+            abort_event.set()
+
         tasks = []
         session_ids = []
         for session_id in list(self.id2inst.keys()):
@@ -724,22 +729,56 @@ class AsyncEngine(LogitsMixin):
     @asynccontextmanager
     async def model_inst(self, session_id: int):
         """A context manager to make sure server's safe running."""
+        logger.warning(f'[model_inst] session_id {session_id} applying for a model instance')
         assert session_id not in self.id2inst
-        free_insts = self._get_free_insts()
-        inst = await free_insts.get()
-        inst._active = asyncio.Event()
-        self.id2inst[session_id] = inst
+
+        # create an abort event for each session
+        abort_event = asyncio.Event()
+        self.session_abort_events[session_id] = abort_event
         try:
-            yield inst
-        except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-            logger.error(f'[model_inst] exception caught: {e}')
-            if self.backend == 'pytorch':
-                # manually end pytorch session
-                await inst.async_end(session_id)
+            # wait until a free instance is available or the abort event is set
+            free_insts = self._get_free_insts()
+            done, pending = await asyncio.wait(
+                [asyncio.create_task(free_insts.get()),
+                 asyncio.create_task(abort_event.wait())],
+                return_when=asyncio.FIRST_COMPLETED)
+
+            async def _cancel_pending_tasks():
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+            # if the abort event is triggered, cancel pending tasks
+            if abort_event.is_set():
+                await _cancel_pending_tasks()
+                logger.warning(f'[model_inst] session_id {session_id} aborted while waiting')
+                yield None
+                return
+            # get a free instance
+            inst = done.pop().result()
+            inst._active = asyncio.Event()
+            self.id2inst[session_id] = inst
+            logger.warning(f'[model_inst] session_id {session_id} acquired a model instance')
+            # cancel pending tasks if any
+            await _cancel_pending_tasks()
+            try:
+                yield inst
+            except (Exception, asyncio.CancelledError, GeneratorExit) as e:
+                logger.error(f'[model_inst] session_id {session_id} exception caught: {e}')
+                if self.backend == 'pytorch':
+                    # manually end pytorch session
+                    await inst.async_end(session_id)
+            finally:
+                self.id2inst.pop(session_id)
+                inst._active.set()
+                free_insts.put_nowait(inst)
         finally:
-            self.id2inst.pop(session_id)
-            inst._active.set()
-            free_insts.put_nowait(inst)
+            # clean up abort event
+            logger.warning(f'[model_inst] session_id {session_id} releasing abort event')
+            self.session_abort_events.pop(session_id, None)
 
     @asynccontextmanager
     async def safe_run(self, inst, session_id, **kwargs):
@@ -885,6 +924,15 @@ class AsyncEngine(LogitsMixin):
 
         metrics_processor.increment_total_requests()
         async with self.model_inst(session_id) as inst:
+            if inst is None:
+                logger.info(f'session {session_id} failed to get a model instance')
+                yield GenOut(response='',
+                             history_token_len=self.id2step[session_id],
+                             input_token_len=len(input_ids),
+                             generate_token_len=0,
+                             finish_reason='abort',
+                             token_ids=[])
+                return
             token_ids = input_ids.copy()
             history_len = self.id2step[session_id]
             input_len = len(input_ids)
@@ -901,6 +949,7 @@ class AsyncEngine(LogitsMixin):
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
+                logger.warning(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
                 async for outputs in gen:
