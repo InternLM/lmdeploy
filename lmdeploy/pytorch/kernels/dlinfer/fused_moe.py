@@ -15,7 +15,6 @@ def fused_moe(
     renormalize: bool,
     ep_size: int,
     ep_group: torch.distributed.ProcessGroup = None,
-    expert_list: List[int] = None,
 ):
     """Dlinfer fused moe."""
-    return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize, ep_size, ep_group, expert_list)
+    return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize, ep_size, ep_group)
