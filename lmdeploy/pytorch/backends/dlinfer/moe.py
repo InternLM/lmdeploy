@@ -70,11 +70,8 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         """forward."""
         assert gate_up_bias is None
         assert down_bias is None
-        # from lmdeploy.utils import get_logger
-        # logger = get_logger('lmdeploy')
-        # logger.error(f'###### {expert_list=}')
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
-                         self.renormalize, self.ep_size, self.ep_group, expert_list)
+                         self.renormalize, self.ep_size, self.ep_group)
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder):
