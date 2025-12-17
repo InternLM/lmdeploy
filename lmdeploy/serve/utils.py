@@ -112,7 +112,7 @@ class LogitsMixin:
 
         # TODO: a better way to determine `max_input_len`, at most allocate
         # 2G mem for logits with shape [bs, max_input_len, vocab_size]
-        vocab_size = self.hf_tm_cfg.vocab_size
+        vocab_size = self.hf_cfg.vocab_size
         max_input_len = 2 * 1024**3 // (vocab_size * 4)
         sizes = [len(_) for _ in input_ids]
         result = []
