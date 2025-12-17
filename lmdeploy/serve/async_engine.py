@@ -735,36 +735,50 @@ class AsyncEngine(LogitsMixin):
         # create an abort event for each session
         abort_event = asyncio.Event()
         self.session_abort_events[session_id] = abort_event
-        try:
-            # wait until a free instance is available or the abort event is set
-            free_insts = self._get_free_insts()
-            done, pending = await asyncio.wait(
-                [asyncio.create_task(free_insts.get()),
-                 asyncio.create_task(abort_event.wait())],
-                return_when=asyncio.FIRST_COMPLETED)
 
-            async def _cancel_pending_tasks():
-                for task in pending:
-                    task.cancel()
+        inst = None
+        free_insts = self._get_free_insts()
+        get_inst_task = asyncio.create_task(free_insts.get())
+        wait_abort_task = asyncio.create_task(abort_event.wait())
+
+        try:
+            # Wait for either an instance or an abort signal
+            done, pending = await asyncio.wait([get_inst_task, wait_abort_task], return_when=asyncio.FIRST_COMPLETED)
+
+            # Check if we actually got an instance even if aborted
+            if get_inst_task in done:
+                inst = get_inst_task.result()
+
+            if abort_event.is_set():
+                logger.warning(f'[model_inst] session {session_id} aborted while waiting')
+                if inst is not None:
+                    logger.warning('[model_inst] Instance retrieved during abort, returning to queue.')
+                    free_insts.put_nowait(inst)
+                else:
+                    # If we didn't get it yet, cancel the pending get_inst_task
+                    get_inst_task.cancel()
                     try:
-                        await task
+                        await get_inst_task
                     except asyncio.CancelledError:
                         pass
-
-            # if the abort event is triggered, cancel pending tasks
-            if abort_event.is_set():
-                await _cancel_pending_tasks()
-                logger.warning(f'[model_inst] session {session_id} aborted while waiting')
-                self.session_abort_events.pop(session_id, None)
+                    # Edge case: Task might finish during cancellation
+                    if not get_inst_task.cancelled() and get_inst_task.exception() is None:
+                        free_insts.put_nowait(get_inst_task.result())
+                # yield None to indicate the session is aborted and failed to acquire an instance
                 yield None
                 return
-            # get a free inference instance
-            inst = done.pop().result()
+
+            # Clean up the unused abort waiter
+            wait_abort_task.cancel()
+            try:
+                await wait_abort_task
+            except asyncio.CancelledError:
+                pass
+
             inst._active = asyncio.Event()
             self.id2inst[session_id] = inst
             logger.warning(f'[model_inst] session {session_id} acquired an instance')
-            # cancel pending tasks if any
-            await _cancel_pending_tasks()
+
             try:
                 yield inst
             except (Exception, asyncio.CancelledError, GeneratorExit) as e:
@@ -773,7 +787,7 @@ class AsyncEngine(LogitsMixin):
                     # manually end pytorch session
                     await inst.async_end(session_id)
             finally:
-                self.id2inst.pop(session_id)
+                self.id2inst.pop(session_id, None)
                 inst._active.set()
                 free_insts.put_nowait(inst)
         finally:
@@ -787,7 +801,7 @@ class AsyncEngine(LogitsMixin):
         try:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
+            logger.error(f'[safe_run] session {session_id} exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
             await inst.async_cancel(session_id)
             raise e
@@ -930,7 +944,7 @@ class AsyncEngine(LogitsMixin):
                 # TODO: metrics_processor.increment_failed_requests('abort')
                 metrics_processor.increment_finished_requests()
                 yield GenOut(response='',
-                             history_token_len=self.id2step[session_id],
+                             history_token_len=0,
                              input_token_len=len(input_ids),
                              generate_token_len=0,
                              finish_reason='abort',
@@ -955,7 +969,11 @@ class AsyncEngine(LogitsMixin):
                 logger.warning(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
+                is_first = True  # whether this is the first iteration
                 async for outputs in gen:
+                    if is_first:
+                        logger.warning(f'[generate] session {session_id} got first token')
+                        is_first = False
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
@@ -1028,9 +1046,9 @@ class AsyncEngine(LogitsMixin):
                             not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
                         routed_experts = routed_experts[:-1]
 
-                    logger.info(f'session {session_id} finished, reason '
-                                f'"{finish_reason}", input_tokens '
-                                f'{len(input_ids)}, output_tokens {gen_len}')
+                    logger.warning(f'session {session_id} finished, reason '
+                                   f'"{finish_reason}", input_tokens '
+                                   f'{len(input_ids)}, output_tokens {gen_len}')
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),
@@ -1049,7 +1067,7 @@ class AsyncEngine(LogitsMixin):
                             output_len = gen_len
                         self.id2step[session_id] += input_len + output_len
                 else:
-                    logger.error(f'session {session_id} finished, {outputs.status}, '
+                    logger.error(f'[generate] session {session_id} finished, {outputs.status}, '
                                  'reason "error"')
                     yield GenOut(response=f'internal error happened, status code {outputs.status}',
                                  history_token_len=self.id2step[session_id],
