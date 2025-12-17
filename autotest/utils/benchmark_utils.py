@@ -102,6 +102,8 @@ def longtext_throughput_test(config,
             command += ' --model-format awq'
         command = command + f' --quant-policy {quant_policy}'
 
+    result = True
+    msg = ''
     for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', 20),
                                                                     (1, 65536, 10, '64k', 10),
                                                                     (65536, 1024, 15, '64k-1k', 15),
@@ -122,10 +124,12 @@ def longtext_throughput_test(config,
         allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if returncode == 0 and not os.path.isfile(csv_path):
-            return False, 'result is empty'
+            result = False
+            msg = 'result is empty'
         if returncode != 0:
-            return returncode == 0, stderr
-    return True, ''
+            result = False
+            msg = stderr
+    return result, msg
 
 
 def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
