@@ -2,6 +2,7 @@
 from typing import Any, Sequence, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
@@ -23,15 +24,32 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     return hadamard_transform(x, scale=hidden_size**-0.5)
 
 
+class LayerNorm(nn.Module):
+    """Layer Normalization."""
+
+    def __init__(self, dim: int, eps: float = 1e-6, device: torch.device = None):
+        super().__init__()
+        if device is None:
+            device = 'cuda'
+        self.dim = dim
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim, dtype=torch.float32, device=device))
+        self.bias = nn.Parameter(torch.zeros(dim, dtype=torch.float32, device=device))
+
+    def forward(self, x: torch.Tensor):
+        return F.layer_norm(x.float(), (self.dim, ), self.weight, self.bias, self.eps).type_as(x)
+
+
 class Indexer(nn.Module):
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         try:
             import fast_hadamard_transform  # noqa: F401
         except ImportError:
             raise ImportError('Please install fast_hadamard_transform package.')
         quant_config = getattr(config, 'quantization_config', None)
+        self.layer_idx = layer_idx
         # self.dim: int = 2048
         self.dim: int = config.hidden_size
         self.n_heads: int = config.index_n_heads
@@ -54,7 +72,7 @@ class Indexer(nn.Module):
                                        device=device,
                                        is_tp=False,
                                        quant_config=quant_config)
-        self.k_norm = nn.LayerNorm(self.head_dim, dtype=dtype, device=device)
+        self.k_norm = LayerNorm(self.head_dim, device=device)
         self.weights_proj = build_colwise_linear(self.dim,
                                                  self.n_heads,
                                                  bias=False,
@@ -102,8 +120,9 @@ class Indexer(nn.Module):
 
 class DeepseekV32Attention(DeepseekV2Attention):
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         nn.Module.__init__(self)
+        self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
         self.q_lora_rank = config.q_lora_rank
         self.hidden_size = config.hidden_size
@@ -141,7 +160,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
             self.q_a_layernorm = RMSNorm(config.q_lora_rank,
                                          1e-6,
                                          quant_config=quantization_config,
-                                         dtype=dtype,
+                                         dtype=torch.float32,
                                          device=device)
             self.q_b_proj = build_colwise_linear(
                 config.q_lora_rank,
@@ -166,7 +185,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
         self.kv_a_layernorm = RMSNorm(config.kv_lora_rank,
                                       1e-6,
                                       quant_config=quantization_config,
-                                      dtype=dtype,
+                                      dtype=torch.float32,
                                       device=device)
         self.kc = DeepseekV2BMM(self.num_heads,
                                 config.qk_nope_head_dim,
@@ -204,7 +223,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
             quant_config=quantization_config,
         )
 
-        self.indexer = Indexer(config, dtype=dtype, device=device)
+        self.indexer = Indexer(config, layer_idx, dtype=dtype, device=device)
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
         """Q proj."""
@@ -306,7 +325,7 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
 
         # build attention layer
         if getattr(config, 'use_mla', True):
-            self.self_attn = DeepseekV32Attention(config, dtype=dtype, device=device)
+            self.self_attn = DeepseekV32Attention(config, layer_idx, dtype=dtype, device=device)
         else:
             # deepseek-vl2-tiny uses MHA LlamaAttention structure
             from lmdeploy.pytorch.models.llama import LlamaAttention
@@ -321,11 +340,14 @@ class DeepseekV32DecoderLayer(DeepseekV2DecoderLayer):
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        config.rms_norm_eps,
                                        quant_config=quantization_config,
-                                       dtype=dtype,
+                                       dtype=torch.float32,
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                dtype=torch.float32,
+                                                device=device)
 
 
 class DeepseekV32Model(DeepseekV2Model):
@@ -349,7 +371,11 @@ class DeepseekV32Model(DeepseekV2Model):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, quant_config=None, dtype=dtype, device=device)
+        self.norm = RMSNorm(config.hidden_size,
+                            config.rms_norm_eps,
+                            quant_config=None,
+                            dtype=torch.float32,
+                            device=device)
 
         emb_type = RopeType.LinearScaling
         rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //

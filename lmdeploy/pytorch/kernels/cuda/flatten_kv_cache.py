@@ -49,7 +49,7 @@ def _flatten_kv_cache(
     start_loc = tl.load(start_loc_ptr + batch_id)
     # fill last block to prevent attention nan
     if batch_id == num_batches - 1:
-        seqlen = OUT_SIZE - start_loc
+        seqlen = (OUT_SIZE - start_loc).to(seqlen.dtype)
     if page_id * BLOCK_BS >= seqlen:
         return
 
