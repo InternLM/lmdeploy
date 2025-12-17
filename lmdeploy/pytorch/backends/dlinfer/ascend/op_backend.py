@@ -91,6 +91,7 @@ class AscendOpsBackend(DlinferOpsBackend):
     enable_graph = False
     half_negative_inf = torch.finfo(torch.float16).min
     total_slots = None
+    max_batches = None
 
     @staticmethod
     def get_name() -> str:
@@ -265,6 +266,8 @@ class AscendOpsBackend(DlinferOpsBackend):
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
         """Build graph runner."""
+        AscendOpsBackend.enable_graph = not backend_config.eager_mode
+        AscendOpsBackend.max_batches = cache_config.max_batches
         from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import AscendGraphRunner
         return AscendGraphRunner(model, model_config, cache_config, backend_config, device)
 
