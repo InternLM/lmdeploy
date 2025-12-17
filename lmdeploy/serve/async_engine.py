@@ -466,7 +466,7 @@ class AsyncEngine(LogitsMixin):
 
     async def stop_all_session(self):
         """Stop all running sessions."""
-        logger.info('stop all sessions')
+        logger.warning('stop all sessions')
         for session_id, abort_event in self.session_abort_events.items():
             abort_event.set()
 
@@ -754,20 +754,21 @@ class AsyncEngine(LogitsMixin):
             # if the abort event is triggered, cancel pending tasks
             if abort_event.is_set():
                 await _cancel_pending_tasks()
-                logger.warning(f'[model_inst] session_id {session_id} aborted while waiting')
+                logger.warning(f'[model_inst] session {session_id} aborted while waiting')
+                self.session_abort_events.pop(session_id, None)
                 yield None
                 return
-            # get a free instance
+            # get a free inference instance
             inst = done.pop().result()
             inst._active = asyncio.Event()
             self.id2inst[session_id] = inst
-            logger.warning(f'[model_inst] session_id {session_id} acquired a model instance')
+            logger.warning(f'[model_inst] session {session_id} acquired an instance')
             # cancel pending tasks if any
             await _cancel_pending_tasks()
             try:
                 yield inst
             except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-                logger.error(f'[model_inst] session_id {session_id} exception caught: {e}')
+                logger.error(f'[model_inst] session {session_id} exception caught: {e}')
                 if self.backend == 'pytorch':
                     # manually end pytorch session
                     await inst.async_end(session_id)
@@ -777,7 +778,7 @@ class AsyncEngine(LogitsMixin):
                 free_insts.put_nowait(inst)
         finally:
             # clean up abort event
-            logger.warning(f'[model_inst] session_id {session_id} releasing abort event')
+            logger.warning(f'[model_inst] session {session_id} releasing abort event')
             self.session_abort_events.pop(session_id, None)
 
     @asynccontextmanager
@@ -925,7 +926,9 @@ class AsyncEngine(LogitsMixin):
         metrics_processor.increment_total_requests()
         async with self.model_inst(session_id) as inst:
             if inst is None:
-                logger.info(f'session {session_id} failed to get a model instance')
+                logger.info(f'session {session_id} failed to get an inference instance')
+                # TODO: metrics_processor.increment_failed_requests('abort')
+                metrics_processor.increment_finished_requests()
                 yield GenOut(response='',
                              history_token_len=self.id2step[session_id],
                              input_token_len=len(input_ids),
