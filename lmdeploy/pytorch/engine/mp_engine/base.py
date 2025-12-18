@@ -15,7 +15,6 @@ class MPEngine(EngineBase):
     def __init__(self) -> None:
         """Initialize mp engine."""
         self.engine_config = self._collective_rpc('get_engine_config')
-        self.model_config = self._collective_rpc('get_model_config')
 
     def _collective_rpc(self, func, *args, **kwargs):
         """Collective rpc call."""
