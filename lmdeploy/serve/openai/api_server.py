@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import re
+import threading
 import time
 from contextlib import asynccontextmanager
 from functools import partial
@@ -53,20 +54,34 @@ logger = get_logger('lmdeploy')
 
 
 class VariableInterface:
-    """A IO interface maintaining variables."""
+    """Application configuration."""
+
+    # Thread lock for protecting session_id increment operation
+    _session_lock = threading.Lock()
+
+    # Runtime variables
     async_engine: AsyncEngine = None
     session_id: int = 0
     api_keys: Optional[List[str]] = None
     request_hosts = []
-    # following are for registering to proxy server
+
+    # Proxy server configuration
     proxy_url: Optional[str] = None
     api_server_url: Optional[str] = None
-    # following are for reasoning parsers
+
+    # parser configuration
     reasoning_parser: Optional[ReasoningParser] = None
-    # following is for tool parsers
     tool_parser: Optional[ToolParser] = None
+
+    # feature flags
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
+
+    @classmethod
+    def get_next_session_id(cls) -> int:
+        with cls._session_lock:
+            cls.session_id += 1
+            return cls.session_id
 
 
 router = APIRouter()
@@ -373,8 +388,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         migration_request = MigrationRequest.model_validate(migration_request)
 
     if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
+        request.session_id = VariableInterface.get_next_session_id()
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -731,8 +745,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         migration_request = MigrationRequest.model_validate(migration_request)
 
     if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
+        request.session_id = VariableInterface.get_next_session_id()
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -919,8 +932,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 @router.post('/generate', dependencies=[Depends(check_api_key)])
 async def generate(request: GenerateReqInput, raw_request: Request = None):
     if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
+        request.session_id = VariableInterface.get_next_session_id()
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
