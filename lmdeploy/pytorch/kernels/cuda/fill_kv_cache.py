@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
+from typing import Literal, Optional
 
+import torch
 import triton
 import triton.language as tl
 from torch import Tensor
@@ -397,9 +398,9 @@ def _fill_kv_cache_quant_kernel(
 
 
 def fill_kv_cache(k_states: Tensor,
-                  v_states: Tensor,
+                  v_states: Optional[Tensor],
                   k_caches: Tensor,
-                  v_caches: Tensor,
+                  v_caches: Optional[Tensor],
                   q_start_loc: Tensor,
                   q_seq_length: Tensor,
                   kv_seq_length: Tensor,
@@ -416,6 +417,10 @@ def fill_kv_cache(k_states: Tensor,
         b_dim, s_dim, h_dim, d_dim = (0, 2, 1, 3)
     else:
         raise RuntimeError('Unsupported layout.')
+    if v_states is None:
+        v_states = k_states[..., :0]
+    if v_caches is None:
+        v_caches = k_caches[..., :0]
 
     block_offsets = block_offsets.contiguous()
     batch_size = block_offsets.size(0)
@@ -516,3 +521,241 @@ def fill_kv_cache(k_states: Tensor,
             num_warps=4,
             num_stages=1,
         )
+
+
+@triton.jit
+def _quant_blocked_fp8(x,
+                       fp8_min: tl.constexpr,
+                       fp8_max: tl.constexpr,
+                       dtype: tl.constexpr,
+                       GROUP_SIZE: tl.constexpr = 128):
+    x = x.to(tl.float32)
+    M: tl.constexpr = x.shape[0]
+    N: tl.constexpr = x.shape[1]
+    rfp8_max: tl.constexpr = 1 / fp8_max
+    x = x.reshape(M, N // GROUP_SIZE, GROUP_SIZE)
+    scale = tl.maximum(tl.max(tl.abs(x), axis=2, keep_dims=True), 1e-6) * rfp8_max
+    out = x / scale
+
+    out = tl.clamp(out, fp8_min, fp8_max)
+    out = out.to(dtype)
+    out = out.reshape(M, N)
+    scale = scale.reshape(M, N // GROUP_SIZE)
+    return out, scale
+
+
+@triton.jit
+def _fill_kv_cache_blocked_fp8_kernel(
+    KStates,
+    VStates,
+    KCaches,
+    VCaches,
+    KSCaches,
+    VSCaches,
+    cu_seqlen_q_ptr,
+    KVSeqLens,
+    BlockOffsets,
+    fp8_min: tl.constexpr,
+    fp8_max: tl.constexpr,
+    is_decoding: tl.constexpr,
+    head_dim: tl.constexpr,
+    head_dim_v: tl.constexpr,
+    stride_kss,
+    stride_ksh,
+    stride_ksd,
+    stride_vss,
+    stride_vsh,
+    stride_vsd,
+    stride_kcn: tl.constexpr,
+    stride_kcb: tl.constexpr,
+    stride_kch: tl.constexpr,
+    stride_kcd: tl.constexpr,
+    stride_vcn: tl.constexpr,
+    stride_vcb: tl.constexpr,
+    stride_vch: tl.constexpr,
+    stride_vcd: tl.constexpr,
+    stride_kscn: tl.constexpr,
+    stride_kscb: tl.constexpr,
+    stride_ksch: tl.constexpr,
+    stride_kscd: tl.constexpr,
+    stride_vscn: tl.constexpr,
+    stride_vscb: tl.constexpr,
+    stride_vsch: tl.constexpr,
+    stride_vscd: tl.constexpr,
+    stride_boff,
+    GROUP_SIZE: tl.constexpr,
+    BLOCK: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    BLOCK_DV: tl.constexpr,
+):
+    """Fill kv cache kernel."""
+    batch_id = tl.program_id(2)
+    head_id = tl.program_id(0)
+    block_id = tl.program_id(1)
+
+    q_startloc = tl.load(cu_seqlen_q_ptr + batch_id)
+    q_seqlen = tl.load(cu_seqlen_q_ptr + batch_id + 1) - q_startloc
+    kv_seqlen = tl.load(KVSeqLens + batch_id)
+    history_seqlen = kv_seqlen - q_seqlen
+
+    kv_block_id = history_seqlen // BLOCK + block_id
+
+    if kv_seqlen <= 0:
+        return
+
+    if kv_block_id * BLOCK >= kv_seqlen:
+        return
+
+    if is_decoding:
+        page_offs = tl.full((1, ), history_seqlen % BLOCK, dtype=tl.int32)
+        kv_mask = tl.full((1, ), 1, dtype=tl.int1)
+        q_offs = tl.full((1, ), q_startloc, dtype=tl.int32)
+    else:
+        page_offs = tl.arange(0, BLOCK)
+        kv_offs = kv_block_id * BLOCK + page_offs
+        kv_mask = (kv_offs >= history_seqlen) & (kv_offs < kv_seqlen)
+        token_off = q_startloc + kv_block_id * BLOCK - history_seqlen
+        q_offs = token_off + page_offs
+
+    block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
+
+    d_off = tl.arange(0, BLOCK_D)
+    mask_ks = kv_mask[:, None]
+    mask_kc = mask_ks & (d_off[None, :] < head_dim)
+    d_off = d_off % head_dim
+
+    BLOCK_DS: tl.constexpr = (BLOCK_D + GROUP_SIZE - 1) // GROUP_SIZE
+    ds_off = tl.arange(0, BLOCK_DS)
+
+    ks_ptr = KStates + head_id * stride_ksh
+    ks_ptrs = ks_ptr + q_offs[:, None] * stride_kss + d_off[None, :] * stride_ksd
+    kc_ptr = KCaches + block_off * stride_kcn + head_id * stride_kch
+    kc_ptrs = kc_ptr + page_offs[:, None] * stride_kcb + d_off[None, :] * stride_kcd
+    ksc_ptr = KSCaches + block_off * stride_kscn + head_id * stride_ksch
+    ksc_ptrs = ksc_ptr + page_offs[:, None] * stride_kscb + ds_off[None, :] * stride_kscd
+
+    if BLOCK_DV > 0:
+        dv_off = tl.arange(0, BLOCK_DV)
+        mask_vs = kv_mask[:, None]
+        mask_vc = mask_vs & (dv_off[None, :] < head_dim_v)
+
+        BLOCK_DVS: tl.constexpr = (BLOCK_DV + GROUP_SIZE - 1) // GROUP_SIZE
+        dvs_off = tl.arange(0, BLOCK_DVS)
+
+        dv_off = dv_off % head_dim_v
+        vs_ptr = VStates + head_id * stride_vsh
+        vs_ptrs = vs_ptr + q_offs[:, None] * stride_vss + dv_off[None, :] * stride_vsd
+        vc_ptr = VCaches + block_off * stride_vcn + head_id * stride_vch
+        vc_ptrs = vc_ptr + page_offs[:, None] * stride_vcb + dv_off[None, :] * stride_vcd
+        vsc_ptr = VSCaches + block_off * stride_vscn + head_id * stride_vsch
+        vsc_ptrs = vsc_ptr + page_offs[:, None] * stride_vscb + dvs_off[None, :] * stride_vscd
+
+    k = tl.load(ks_ptrs, mask=mask_ks)
+    if BLOCK_DV > 0:
+        v = tl.load(vs_ptrs, mask=mask_vs)
+    kc, kcs = _quant_blocked_fp8(k, fp8_min, fp8_max, KCaches.dtype.element_ty, GROUP_SIZE)
+    tl.store(kc_ptrs, kc, mask=mask_kc)
+    tl.store(ksc_ptrs, kcs, mask=kv_mask[:, None] & (ds_off[None, :] < tl.cdiv(head_dim, GROUP_SIZE)))
+    if BLOCK_DV > 0:
+        vc, vcs = _quant_blocked_fp8(v, fp8_min, fp8_max, VCaches.dtype.element_ty, GROUP_SIZE)
+        tl.store(vc_ptrs, vc, mask=mask_vc)
+        tl.store(vsc_ptrs, vcs, mask=kv_mask[:, None] & (ds_off[None, :] < tl.cdiv(head_dim_v, GROUP_SIZE)))
+
+
+def fill_kv_cache_blocked_fp8(k_states: Tensor,
+                              v_states: Optional[Tensor],
+                              k_caches: Tensor,
+                              v_caches: Optional[Tensor],
+                              ks_caches: Tensor,
+                              vs_caches: Optional[Tensor],
+                              cu_seqlen_q: Tensor,
+                              kv_seqlens: Tensor,
+                              max_q_seqlen: int,
+                              block_offsets: Tensor,
+                              group_size: int = 128,
+                              kv_layout: str = 'bshd'):
+    """Fill key/value state to cache for paged attention with fp8
+    quantization."""
+
+    if kv_layout == 'bshd':
+        b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
+    elif kv_layout == 'bhsd':
+        b_dim, s_dim, h_dim, d_dim = (0, 2, 1, 3)
+    else:
+        raise RuntimeError('Unsupported layout.')
+
+    if v_states is None:
+        v_states = k_states[..., :0]
+    if v_caches is None:
+        v_caches = k_caches[..., :0]
+    if vs_caches is None:
+        vs_caches = ks_caches[..., :0]
+
+    block_offsets = block_offsets.contiguous()
+    batch_size = block_offsets.size(0)
+    block_size = k_caches.size(s_dim)
+    num_heads = k_caches.size(h_dim)
+    head_dim = k_caches.size(d_dim)
+    head_dim_v = v_states.size(-1)
+    if max_q_seqlen == 1:
+        max_num_blocks = 1
+    else:
+        max_num_blocks = triton.cdiv(max_q_seqlen, block_size) + 1
+
+    BLOCK = block_size
+    BLOCK_D = triton.next_power_of_2(head_dim)
+    BLOCK_DV = triton.next_power_of_2(head_dim_v)
+    if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
+        BLOCK_DV = 0
+
+    dtype = k_caches.dtype
+    finfo = torch.finfo(dtype)
+    fmin = finfo.min
+    fmax = finfo.max
+
+    grid = (num_heads, max_num_blocks, batch_size)
+    is_decoding = max_q_seqlen == 1
+    _fill_kv_cache_blocked_fp8_kernel[grid](
+        k_states,
+        v_states,
+        k_caches,
+        v_caches,
+        ks_caches,
+        vs_caches,
+        cu_seqlen_q,
+        kv_seqlens,
+        block_offsets,
+        fp8_min=fmin,
+        fp8_max=fmax,
+        is_decoding=is_decoding,
+        head_dim=head_dim,
+        head_dim_v=head_dim_v,
+        stride_kss=k_states.stride(-3),
+        stride_ksh=k_states.stride(-2),
+        stride_ksd=k_states.stride(-1),
+        stride_vss=v_states.stride(-3),
+        stride_vsh=v_states.stride(-2),
+        stride_vsd=v_states.stride(-1),
+        stride_kcn=k_caches.stride(b_dim),
+        stride_kcb=k_caches.stride(s_dim),
+        stride_kch=k_caches.stride(h_dim),
+        stride_kcd=k_caches.stride(d_dim),
+        stride_vcn=v_caches.stride(b_dim),
+        stride_vcb=v_caches.stride(s_dim),
+        stride_vch=v_caches.stride(h_dim),
+        stride_vcd=v_caches.stride(d_dim),
+        stride_kscn=ks_caches.stride(b_dim),
+        stride_kscb=ks_caches.stride(s_dim),
+        stride_ksch=ks_caches.stride(h_dim),
+        stride_kscd=ks_caches.stride(d_dim),
+        stride_vscn=vs_caches.stride(b_dim),
+        stride_vscb=vs_caches.stride(s_dim),
+        stride_vsch=vs_caches.stride(h_dim),
+        stride_vscd=vs_caches.stride(d_dim),
+        stride_boff=block_offsets.stride(0),
+        GROUP_SIZE=group_size,
+        BLOCK=BLOCK,
+        BLOCK_D=BLOCK_D,
+        BLOCK_DV=BLOCK_DV,
+        num_warps=4,
+    )
