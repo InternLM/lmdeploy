@@ -326,8 +326,8 @@ class AsyncEngine(LogitsMixin):
 
         self.tokenizer = Tokenizer(model_path)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
-        self.arch, cfg = get_model_arch(model_path)
-        self.session_len = (_get_and_verify_max_len(cfg, None)
+        self.arch, self.hf_cfg = get_model_arch(model_path)
+        self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
                             if backend_config.session_len is None else backend_config.session_len)
         backend_config.session_len = self.session_len
         if speculative_config is not None and backend == 'turbomind':
@@ -335,13 +335,11 @@ class AsyncEngine(LogitsMixin):
         # build backend engine
         if backend == 'turbomind':
             self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
-            self.hf_tm_cfg = self.engine.config
         elif backend == 'pytorch':
             self.engine = self._build_pytorch(model_path=model_path,
                                               backend_config=backend_config,
                                               speculative_config=speculative_config,
                                               **kwargs)
-            self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config
