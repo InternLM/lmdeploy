@@ -64,17 +64,15 @@ ENV CUDA_VERSION_SHORT=cu118
 FROM ${CUDA_VERSION}-base AS final
 ARG PYTHON_VERSION=3.10
 
+# Some dependencies such as timm(required by InternVL models) are missed in the docker image
+# We need to install them via pip. Since these dependencies are listed in requirements/serve.txt,
+# we copy the requirements directory here.
+COPY requirements /tmp/requirements
 COPY docker/install.sh /tmp/install.sh
-
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/wheels,from=builder,source=/wheels \
     --mount=type=cache,target=/nccl,from=builder,source=/nccl \
     /tmp/install.sh
-
-# missed dependencies when serving some models are in serve.txt,
-# for instance, timm for InternVL models. Install them here.
-RUN python3 -m pip install -r requirements/serve.txt && \
-    rm -rf /root/.cache/pip
 
 # explicitly set ptxas path for triton
 ENV PATH=/opt/py3/bin:$PATH
