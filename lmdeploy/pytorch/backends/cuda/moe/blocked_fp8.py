@@ -62,7 +62,6 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                                              self.block_size,
                                              dtype=gate_up_weights.dtype,
                                              scale_fmt=self.scale_fmt)
-
         expert_offset = 0
         num_experts = None
         if expert_list is not None and len(expert_list) != self.num_experts:

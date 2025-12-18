@@ -507,9 +507,6 @@ class Engine(EngineBase):
             return True
         return False
 
-    def get_model_config(self):
-        return self.model_config
-
     def get_engine_config(self):
         return self.engine_config
 

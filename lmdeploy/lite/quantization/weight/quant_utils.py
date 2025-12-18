@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Optional, Sequence, Union
+
 import torch
 
 
@@ -6,8 +8,49 @@ def _aligned_size(a, b):
     return (a + b - 1) // b * b
 
 
-def quant_blocked_fp8(weight: torch.Tensor, fp8_dtype: torch.dtype, block_size: int = 128):
+def fast_log2_ceil_torch(x: torch.Tensor) -> torch.Tensor:
+    bits_x = x.view(torch.int32)
+    exp_x = (bits_x >> 23) & 0xFF
+    man_bits = bits_x & ((1 << 23) - 1)
+    result = (exp_x - 127).to(torch.int32)
+    result = result + torch.where(man_bits != 0, 1, 0)
+
+    return result.to(torch.int32)
+
+
+def fast_pow2_torch(x: torch.Tensor) -> torch.Tensor:
+    bits_x = (x + 127) << 23
+    return bits_x.view(torch.float32)
+
+
+def fast_round_scale_torch(amax: torch.Tensor, fp8_max: torch.Tensor) -> torch.Tensor:
+    return fast_pow2_torch(fast_log2_ceil_torch(amax / fp8_max))
+
+
+def _get_quant_scaling(weight: torch.Tensor,
+                       fp8_dtype: torch.dtype,
+                       dim: Union[int, Sequence[int]],
+                       scale_fmt: Optional[str] = None):
+    """Get the scaling factor for FP8 quantization."""
+    finfo = torch.finfo(fp8_dtype)
+    fmax = finfo.max
+    amax = weight.abs().amax(dim, keepdim=True).clamp_min(1e-6).float()
+
+    if scale_fmt == 'ue8m0':
+        return fast_round_scale_torch(amax, fmax)
+    else:
+        # default
+        scaling = amax / fmax
+    return scaling
+
+
+def quant_blocked_fp8(weight: torch.Tensor,
+                      fp8_dtype: torch.dtype,
+                      block_size: int = 128,
+                      scale_fmt: Optional[str] = None):
     """Quantize the weight tensor to blocked FP8 format."""
+    assert scale_fmt in (None, 'ue8m0'), f'Unsupported scale_fmt: {scale_fmt}'
+
     weight_shape = weight.shape
     K, N = weight_shape[-2:]
     aligned_k = _aligned_size(K, block_size)
@@ -25,9 +68,7 @@ def quant_blocked_fp8(weight: torch.Tensor, fp8_dtype: torch.dtype, block_size: 
     weight = weight.to(torch.float32)
 
     # get scaling
-    finfo = torch.finfo(fp8_dtype)
-    fmax = finfo.max
-    scaling = weight.abs().amax((-3, -1), keepdim=True).clamp_min(1e-6) / fmax
+    scaling = _get_quant_scaling(weight, fp8_dtype, dim=(-3, -1), scale_fmt=scale_fmt)
 
     # get quantized weight
     quantized_weight = weight / scaling

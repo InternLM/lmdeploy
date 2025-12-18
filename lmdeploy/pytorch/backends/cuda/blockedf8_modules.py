@@ -41,7 +41,12 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
                                              trans_scale=True,
                                              scale_fmt=self.scale_fmt)
 
-        out = blocked_gemm_fp8(input_quant, input_scale, weight.t(), scale.t(), out_dtype=x.dtype)
+        out = blocked_gemm_fp8(input_quant,
+                               input_scale,
+                               weight.t(),
+                               scale.t(),
+                               out_dtype=x.dtype,
+                               scale_fmt=self.scale_fmt)
         if bias is not None:
             out += bias
 

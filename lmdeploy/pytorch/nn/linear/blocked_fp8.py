@@ -120,7 +120,10 @@ class BlockedF8Linear(LinearBase):
         """Weight loader with weight quant."""
         if loaded_weight.dtype != param.dtype:
             # quant loaded weight
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device),
+                                                        param.dtype,
+                                                        self.block_size,
+                                                        scale_fmt=self.scale_fmt)
             self.weight_loader(self.weight, quanted_weight)
             self.weight_loader(self.weight_scale_inv, scaling)
         else:
@@ -248,7 +251,10 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         """Weight loader with weight quant."""
         if loaded_weight.dtype != param.dtype:
             # quant loaded weight
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device),
+                                                        param.dtype,
+                                                        self.block_size,
+                                                        scale_fmt=self.scale_fmt)
             self.weight_loader(self.weight, quanted_weight, shard_id)
             self.weight_loader(self.weight_scale_inv, scaling, shard_id)
         else:
@@ -340,7 +346,10 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
         """Weight loader with weight quant."""
         if loaded_weight.dtype != param.dtype:
             # quant loaded weight
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device),
+                                                        param.dtype,
+                                                        self.block_size,
+                                                        scale_fmt=self.scale_fmt)
             self.weight_loader(self.weight, quanted_weight, shard_id)
             self.weight_loader(self.weight_scale_inv, scaling, shard_id)
         else:
