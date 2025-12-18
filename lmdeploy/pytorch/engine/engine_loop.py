@@ -289,6 +289,7 @@ class EngineLoop:
         forward_inputs: Dict[str, Any],
     ):
         """Get outputs and prefetch."""
+        self.forward_event.set()
         num_loops = forward_inputs['loop_count']
         model_inputs = forward_inputs['inputs']
         for idx in range(num_loops):
@@ -338,7 +339,6 @@ class EngineLoop:
                     await __no_running_warning()
                     continue
 
-            forward_event.set()
             with scheduler.seqs_activation(next_running):
                 forward_inputs, next_running = await self._main_loop_get_outputs(
                     running=next_running,
