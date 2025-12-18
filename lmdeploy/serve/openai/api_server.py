@@ -457,6 +457,15 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 tools = [item.function.model_dump() for item in request.tools]
     # text completion for string input
     do_preprocess = False if isinstance(request.messages, str) else request.do_preprocess
+    chat_template_kwargs = request.chat_template_kwargs or {}
+    if request.enable_thinking is not None:
+        logger.warning('`enable_thinking` will be deprecated in the future, '
+                       'please use `chat_template_kwargs` instead.')
+        if chat_template_kwargs.get('enable_thinking') is None:
+            chat_template_kwargs['enable_thinking'] = request.enable_thinking
+        else:
+            logger.warning('`enable_thinking` in `chat_template_kwargs` will override the value in request.')
+    enable_thinking = chat_template_kwargs.get('enable_thinking', None)
     result_generator = VariableInterface.async_engine.generate(
         request.messages,
         request.session_id,
@@ -468,8 +477,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         sequence_end=True,
         do_preprocess=do_preprocess,
         adapter_name=adapter_name,
-        enable_thinking=request.enable_thinking,
-        add_vision_id=request.add_vision_id,
+        chat_template_kwargs=chat_template_kwargs or None,
         mm_processor_kwargs=request.mm_processor_kwargs)
 
     def create_stream_response_json(index: int,
@@ -543,8 +551,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 elif (request.tool_choice != 'none' and request.tools is not None
                       and VariableInterface.tool_parser is None):
                     logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
-
-                if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
+                if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
                     reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
                         previous_text=previous_text,
                         current_text=current_text,
@@ -617,7 +624,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
             logger.error('Please launch the api_server with --tool-call-parser if you want to use tool.')
 
-        if VariableInterface.reasoning_parser is not None and request.enable_thinking is not False:
+        if VariableInterface.reasoning_parser is not None and enable_thinking is not False:
             reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
         message = ChatMessage(role='assistant',
@@ -918,7 +925,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
     if error_check_ret is not None:
         return error_check_ret
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id `{request.session_id}` is occupied.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
 
     prompt = request.prompt
     input_ids = request.input_ids

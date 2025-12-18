@@ -2,9 +2,10 @@
 import pytest
 import torch
 
-from lmdeploy.pytorch.messages import SchedulerSession, SequenceManager, SequenceMeta
-from lmdeploy.pytorch.paging.block_manager import DefaultBlockManager, WindowBlockManager
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+from lmdeploy.pytorch.messages import SequenceMeta
 from lmdeploy.pytorch.paging.block_manager.base_block_manager import LogicalAllocator
+from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 # yapf: enable
 
@@ -86,18 +87,39 @@ class TestDefaultBlockManager:
         yield 4
 
     @pytest.fixture
-    def block_mgr(self, num_cpu_blocks, num_gpu_blocks):
-        yield DefaultBlockManager(num_cpu_blocks, num_gpu_blocks)
+    def max_batch_size(self):
+        yield 4
 
     @pytest.fixture
-    def seq_manager(self, block_size):
+    def cache_config(self, block_size, num_cpu_blocks, num_gpu_blocks, max_batch_size):
+        yield CacheConfig(max_batches=max_batch_size,
+                          block_size=block_size,
+                          num_cpu_blocks=num_cpu_blocks,
+                          num_gpu_blocks=num_gpu_blocks)
+
+    @pytest.fixture
+    def scheduler_config(self, max_batch_size):
+        yield SchedulerConfig(max_batches=max_batch_size,
+                              max_session_len=128,
+                              max_request_output_len=64,
+                              eviction_type='recompute')
+
+    @pytest.fixture
+    def seq_meta(self, block_size):
         from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
         strategy = ARSequenceStrategy()
-        seq_meta = SequenceMeta(block_size, strategy=strategy)
-        yield SequenceManager(seq_meta)
+        yield SequenceMeta(block_size, strategy=strategy)
 
-    def test_alloc(self, block_mgr, seq_manager, num_gpu_blocks):
-        sess = SchedulerSession(0, seq_manager)
+    @pytest.fixture
+    def scheduler(self, cache_config, scheduler_config, seq_meta):
+        yield Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    @pytest.fixture
+    def block_mgr(self, scheduler):
+        yield scheduler.block_manager
+
+    def test_alloc(self, scheduler, block_mgr, num_gpu_blocks):
+        sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
 
         # test alloc
@@ -121,9 +143,9 @@ class TestDefaultBlockManager:
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
 
-    def test_num_required_blocks(self, block_mgr, seq_manager, num_gpu_blocks):
+    def test_num_required_blocks(self, scheduler, block_mgr):
         from lmdeploy.pytorch.messages import InputEmbeddings
-        sess = SchedulerSession(0, seq_manager)
+        sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
 
         token_ids = torch.tensor([1])
@@ -142,8 +164,8 @@ class TestDefaultBlockManager:
         num_required = block_mgr.num_required_blocks(msg)
         assert num_required == 3
 
-    def test_append_slot(self, block_mgr, seq_manager, num_gpu_blocks):
-        sess = SchedulerSession(0, seq_manager)
+    def test_append_slot(self, scheduler, block_mgr, num_gpu_blocks):
+        sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
 
         # test append
@@ -168,8 +190,8 @@ class TestDefaultBlockManager:
         assert len(block_table) == 2
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks - 2
 
-    def test_swap(self, block_mgr, seq_manager, num_gpu_blocks):
-        sess = SchedulerSession(0, seq_manager)
+    def test_swap(self, scheduler, block_mgr, num_gpu_blocks):
+        sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
 
         token_ids = torch.tensor([1] * (block_size + 1))
@@ -227,18 +249,40 @@ class TestWindowBlockManager:
         yield 4
 
     @pytest.fixture
-    def seq_manager(self, block_size):
-        from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
-        strategy = ARSequenceStrategy()
-        seq_meta = SequenceMeta(block_size, strategy=strategy)
-        yield SequenceManager(seq_meta)
+    def max_batch_size(self):
+        yield 4
 
     @pytest.fixture
-    def block_mgr(self, num_cpu_blocks, num_gpu_blocks, window_size):
-        yield WindowBlockManager(num_cpu_blocks, num_gpu_blocks, window_size)
+    def cache_config(self, block_size, num_cpu_blocks, num_gpu_blocks, max_batch_size, window_size):
+        yield CacheConfig(max_batches=max_batch_size,
+                          block_size=block_size,
+                          num_cpu_blocks=num_cpu_blocks,
+                          num_gpu_blocks=num_gpu_blocks,
+                          window_size=window_size)
 
-    def test_alloc(self, block_mgr, seq_manager, num_gpu_blocks):
-        sess = SchedulerSession(0, seq_manager)
+    @pytest.fixture
+    def scheduler_config(self, max_batch_size):
+        yield SchedulerConfig(max_batches=max_batch_size,
+                              max_session_len=128,
+                              max_request_output_len=64,
+                              eviction_type='recompute')
+
+    @pytest.fixture
+    def seq_meta(self, block_size):
+        from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+        strategy = ARSequenceStrategy()
+        yield SequenceMeta(block_size, strategy=strategy)
+
+    @pytest.fixture
+    def scheduler(self, cache_config, scheduler_config, seq_meta):
+        yield Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    @pytest.fixture
+    def block_mgr(self, scheduler):
+        yield scheduler.block_manager
+
+    def test_alloc(self, scheduler, block_mgr, num_gpu_blocks):
+        sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
 
         # test alloc
@@ -262,8 +306,8 @@ class TestWindowBlockManager:
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
 
-    def test_win_alloc(self, block_mgr, seq_manager, num_gpu_blocks, window_size):
-        sess = SchedulerSession(0, seq_manager)
+    def test_win_alloc(self, scheduler, block_mgr, num_gpu_blocks, window_size):
+        sess = scheduler.add_session(0)
 
         # 2 win block
         token_ids = torch.tensor([1] * window_size)

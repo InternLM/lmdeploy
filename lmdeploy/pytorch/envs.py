@@ -156,6 +156,9 @@ with set_envs():
     # model agent
     skip_warmup = env_to_bool('LMD_SKIP_WARMUP', False)
 
+    # model format
+    scale_fmt = os.getenv('LMD_SCALE_FMT', None)
+
 
 def get_all_envs():
     """Get all environment variables."""

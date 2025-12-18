@@ -196,13 +196,15 @@ class Session:
                  gen_config: Optional[GenerationConfig] = None,
                  stream_response: bool = True,
                  do_preprocess: bool = True,
-                 adapter_name: str = None) -> Union[Response, Iterator[Response]]:
+                 adapter_name: str = None,
+                 **kwargs) -> Union[Response, Iterator[Response]]:
         self._engine.chat(prompt,
                           gen_config=gen_config or self._gen_config,
                           stream_response=stream_response,
                           do_preprocess=do_preprocess,
                           session=self,
-                          adapter_name=adapter_name)
+                          adapter_name=adapter_name,
+                          **kwargs)
         if stream_response:
             return self.generator
         else:
@@ -324,8 +326,8 @@ class AsyncEngine(LogitsMixin):
 
         self.tokenizer = Tokenizer(model_path)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
-        self.arch, cfg = get_model_arch(model_path)
-        self.session_len = (_get_and_verify_max_len(cfg, None)
+        self.arch, self.hf_cfg = get_model_arch(model_path)
+        self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
                             if backend_config.session_len is None else backend_config.session_len)
         backend_config.session_len = self.session_len
         if speculative_config is not None and backend == 'turbomind':
@@ -333,13 +335,11 @@ class AsyncEngine(LogitsMixin):
         # build backend engine
         if backend == 'turbomind':
             self.engine = self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
-            self.hf_tm_cfg = self.engine.config
         elif backend == 'pytorch':
             self.engine = self._build_pytorch(model_path=model_path,
                                               backend_config=backend_config,
                                               speculative_config=speculative_config,
                                               **kwargs)
-            self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
         else:
             raise ValueError(f'unsupported backend {backend}')
         self.backend_config = self.engine.engine_config
@@ -691,7 +691,7 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
                                 reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                                enable_thinking: Optional[bool] = None,
+                                chat_template_kwargs: Optional[Dict] = None,
                                 **kwargs):
         # Change multimodal data to openai text messages, i.e.,
         # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
@@ -706,12 +706,12 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
+        chat_template_kwargs = chat_template_kwargs or {}
         prompt = chat_template.messages2prompt(prompt,
                                                sequence_start,
                                                tools=tools,
-                                               enable_thinking=enable_thinking,
                                                reasoning_effort=reasoning_effort,
-                                               **kwargs)
+                                               **chat_template_kwargs)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -768,7 +768,7 @@ class AsyncEngine(LogitsMixin):
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
             enable_thinking: Optional[bool] = None,
-            add_vision_id: Optional[bool] = False,
+            chat_template_kwargs: Optional[Dict] = None,
             mm_processor_kwargs: Optional[Dict[str, Any]] = None,
             **kwargs):
         """Generate responses.
@@ -811,6 +811,14 @@ class AsyncEngine(LogitsMixin):
         if gen_config.n > 1:
             logger.warning(f'n({gen_config.n}) > 1 hasn\'t been supported yet. Fallback to 1')
             gen_config.n = 1
+        chat_template_kwargs = chat_template_kwargs or {}
+        if enable_thinking is not None:
+            logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
+            if chat_template_kwargs.get('enable_thinking') is None:
+                chat_template_kwargs['enable_thinking'] = enable_thinking
+            else:
+                logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
+                               'the value will not be overwritten by enable_thinking')
         if messages:
             prompt = messages
             self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
@@ -820,9 +828,8 @@ class AsyncEngine(LogitsMixin):
                                                         adapter_name,
                                                         tools=tools,
                                                         reasoning_effort=reasoning_effort,
-                                                        enable_thinking=enable_thinking,
-                                                        add_vision_id=add_vision_id,
                                                         mm_processor_kwargs=mm_processor_kwargs,
+                                                        chat_template_kwargs=chat_template_kwargs,
                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
