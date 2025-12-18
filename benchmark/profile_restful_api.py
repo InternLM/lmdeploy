@@ -1190,8 +1190,11 @@ def run_benchmark(args_: argparse.Namespace):
             'sglang': 30000,
             'sglang-native': 30000,
             'sglang-oai': 30000,
+            'sglang-oai-chat': 30000,
             'lmdeploy': 23333,
+            'lmdeploy-chat': 23333,
             'vllm': 8000,
+            'vllm-chat': 8000,
             'trt': 8000,
             'gserver': 9988,
         }.get(args.backend, 30000)
@@ -1203,7 +1206,7 @@ def run_benchmark(args_: argparse.Namespace):
     elif args.backend in ['sglang-oai', 'vllm', 'lmdeploy']:
         api_url = (f'{args.base_url}/v1/completions'
                    if args.base_url else f'http://{args.host}:{args.port}/v1/completions')
-    elif args.backend in ['lmdeploy-chat']:
+    elif args.backend in ['lmdeploy-chat', 'vllm-chat', 'sglang-oai-chat']:
         api_url = (f'{args.base_url}/v1/chat/completions'
                    if args.base_url else f'http://{args.host}:{args.port}/v1/chat/completions')
     elif args.backend == 'trt':
