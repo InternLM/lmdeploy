@@ -31,6 +31,7 @@ class OpType(Enum):
     FusedMoEW8A8 = auto()
     LinearBlockedF8 = auto()
     FusedMoEBlockedF8 = auto()
+    Embedding = auto()
 
 
 class OpsBackend(ABC):

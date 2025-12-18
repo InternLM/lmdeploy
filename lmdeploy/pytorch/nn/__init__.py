@@ -3,6 +3,7 @@
 # https://github.com/vllm-project/vllm/blob/main/vllm/attention/
 from .activation import GeluAndMul, SiluAndMul  # noqa: F401
 from .attention import Attention, FlashAttention  # noqa: F401
+from .embedding import ParallelEmbedding
 from .norm import LayerNorm, RMSNorm  # noqa: F401
 from .rotary_embedding import ApplyRotaryEmb  # noqa: F401
 from .rotary_embedding import RopeType  # noqa: F401

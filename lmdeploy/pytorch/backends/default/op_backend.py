@@ -45,6 +45,9 @@ class DefaultOpsBackend(OpsBackend):
         elif layer_type == OpType.SoftmaxTopK:
             from .moe import DefaultSoftmaxTopKBuilder
             return DefaultSoftmaxTopKBuilder
+        elif layer_type == OpType.Embedding:
+            from .embedding import DefaultEmbeddingBuilder
+            return DefaultEmbeddingBuilder
         else:
             raise RuntimeError(f'{layer_type} not supported.')
 
