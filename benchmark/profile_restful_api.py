@@ -312,7 +312,6 @@ async def async_request_openai_chat_completions(
 
                                     # Decoding phase
                                     else:
-                                        output.text_chunks.append(content)
                                         output.itl.append(timestamp - most_recent_timestamp)
 
                                     most_recent_timestamp = timestamp
