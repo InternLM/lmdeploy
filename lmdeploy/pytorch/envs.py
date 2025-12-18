@@ -109,7 +109,7 @@ with set_envs():
     dp_master_addr = os.getenv('LMDEPLOY_DP_MASTER_ADDR', None)
     dp_master_port = os.getenv('LMDEPLOY_DP_MASTER_PORT', None)
     # timeout to wait for dp inputs
-    dp_input_timeout = env_to_float('LMD_DPINPUT_TIMEOUT', 0.04)
+    dp_input_timeout = env_to_float('LMDEPLOY_DPINPUT_TIMEOUT', 0.04)
 
     # executor
     executor_backend = os.getenv('LMDEPLOY_EXECUTOR_BACKEND', None)
@@ -154,10 +154,10 @@ with set_envs():
     os.getenv('DG_JIT_PRINT_COMPILER_COMMAND', '0')
 
     # model agent
-    skip_warmup = env_to_bool('LMD_SKIP_WARMUP', False)
+    skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
 
     # model format
-    scale_fmt = os.getenv('LMD_SCALE_FMT', None)
+    scale_fmt = os.getenv('LMDEPLOY_SCALE_FMT', None)
 
 
 def get_all_envs():
