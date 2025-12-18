@@ -71,6 +71,11 @@ RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/nccl,from=builder,source=/nccl \
     /tmp/install.sh
 
+# missed dependencies when serving some models are in serve.txt,
+# for instance, timm for InternVL models. Install them here.
+RUN python3 -m pip install -r requirements/serve.txt && \
+    rm -rf /root/.cache/pip
+
 # explicitly set ptxas path for triton
 ENV PATH=/opt/py3/bin:$PATH
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
