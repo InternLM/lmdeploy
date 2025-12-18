@@ -193,13 +193,6 @@ struct BinaryOutputExArchive: OutputArchive<BinaryOutputExArchive> {
 
     BinaryOutputExArchive(ArrayWrapper<std::byte> external): external_{external}, ptr_{} {}
 
-    BinaryOutputExArchive offset(size_t offset)
-    {
-        TM_CHECK_LE(offset, external_.count());
-        auto external = ArrayWrapper<std::byte>(external_.data() + offset, external_.count() - offset);
-        return BinaryOutputExArchive(external);
-    }
-
     template<class T>
     void write(const T& x)
     {
@@ -227,13 +220,6 @@ struct BinaryInputExArchive: InputArchive<BinaryInputExArchive> {
     size_t                  ptr_;
 
     BinaryInputExArchive(ArrayWrapper<std::byte> external): external_{external}, ptr_{} {}
-
-    BinaryInputExArchive offset(size_t offset)
-    {
-        TM_CHECK_LE(offset, external_.count());
-        auto external = ArrayWrapper<std::byte>(external_.data() + offset, external_.count() - offset);
-        return BinaryInputExArchive(external);
-    }
 
     template<class T>
     void read(T& x)
