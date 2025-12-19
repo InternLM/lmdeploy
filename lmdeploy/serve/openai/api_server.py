@@ -961,6 +961,7 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         include_stop_str_in_output=request.include_stop_str_in_output,
         return_routed_experts=request.return_routed_experts,
     )
+
     result_generator = VariableInterface.async_engine.generate(
         messages=prompt,
         session_id=request.session_id,
