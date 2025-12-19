@@ -399,7 +399,8 @@ class AsyncEngine(LogitsMixin):
 
         if getattr(self.backend_config, 'enable_metrics', False):
             from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
-            dp_rank = self.backend_config.dp_rank if self.backend == 'pytorch' else self.backend_config.node_rank
+            # currently, metrics in TM engine doesn't support dp
+            dp_rank = self.backend_config.dp_rank if self.backend == 'pytorch' else 0
 
             logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
             self.stat_loggers = [
