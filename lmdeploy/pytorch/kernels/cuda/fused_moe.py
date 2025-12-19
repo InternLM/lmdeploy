@@ -410,7 +410,6 @@ def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device, z
         return torch.empty(shape, dtype=dtype, device=device)
 
 
-
 @triton.jit
 def _moe_reduce_kernel(
     hidden_states_ptr,
@@ -458,10 +457,7 @@ def _moe_reduce_kernel(
     tl.store(o_ptrs, o, mask=mask_n)
 
 
-
-def moe_reduce(hidden_states: torch.Tensor,
-               topk_weights: torch.Tensor,
-               fp32_acc: bool = False) -> torch.Tensor:
+def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc: bool = False) -> torch.Tensor:
     """Moe reduce."""
     assert hidden_states.dim() == 3
     assert topk_weights.dim() == 2
@@ -475,7 +471,7 @@ def moe_reduce(hidden_states: torch.Tensor,
     num_warps = 1
     BLOCK_N = num_warps * 512 // hidden_states.element_size()
     grid = (M * triton.cdiv(N, BLOCK_N), )
-    
+
     _moe_reduce_kernel[grid](
         hidden_states,
         topk_weights,

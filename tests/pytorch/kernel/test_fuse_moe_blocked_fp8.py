@@ -169,7 +169,7 @@ class TestFusedMoEFP8KernelLauncher:
         yield exp_end - exp_tok_cnt
 
     @pytest.fixture
-    def gt(self, A, B, bias, top_k, sorted_idx, exp_start, exp_end,  M):
+    def gt(self, A, B, bias, top_k, sorted_idx, exp_start, exp_end, M):
         from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
