@@ -9,19 +9,25 @@ from typing import Any, Dict, List
 import pytest
 import requests
 from transformers import AutoTokenizer
+from utils.constant import BACKEND_LIST
 from utils.toolkit import encode_text, parse_sse_stream
 
 BASE_HTTP_URL = 'http://127.0.0.1'
 DEFAULT_PORT = 23333
-MODEL_LIST = ['Qwen/Qwen3-0.6B', 'Qwen/Qwen3-VL-2B-Instruct', 'Qwen/Qwen3-30B-A3B']
+MODEL_LIST = [
+    'Qwen/Qwen3-0.6B', 'Qwen/Qwen3-VL-2B-Instruct', 'Qwen/Qwen3-30B-A3B', 'internlm/Intern-S1',
+    'internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-32B',
+    'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct'
+]
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
 @pytest.mark.parametrize('model_name', MODEL_LIST)
+@pytest.mark.parametrize('backend', BACKEND_LIST)
 class TestGenerateComprehensive:
 
     @pytest.fixture(autouse=True)
-    def setup_api(self, request, config, model_name):
+    def setup_api(self, request, config, model_name, backend):
         self.api_url = f'{BASE_URL}/generate'
         self.headers = {'Content-Type': 'application/json'}
         self.model_name = model_name
@@ -32,7 +38,7 @@ class TestGenerateComprehensive:
         log_base = config.get('log_path', './logs')
         self.log_dir = os.path.join(log_base, safe_model_name)
         os.makedirs(self.log_dir, exist_ok=True)
-        self.log_file = os.path.join(self.log_dir, f'{safe_test_name}.log')
+        self.log_file = os.path.join(self.log_dir, f'{backend}_{safe_test_name}.log')
 
     def _log_request_response(self, payload, response_data, stream_raw=None):
         log_entry = {
@@ -318,7 +324,7 @@ class TestGenerateComprehensive:
             try:
                 input_ids = encode_text(model_path, test_case['text'])
             except Exception as e:
-                pytest.skip(f'Tokenizer failed for {test_case["name"]}: {e}')
+                pytest.skip(f'Tokenizer failed for {test_name}: {e}')
 
             assert isinstance(input_ids, list), \
                 f'input_ids should be list, got {type(input_ids)}'
@@ -461,7 +467,7 @@ class TestGenerateComprehensive:
             try:
                 input_ids = encode_text(model_path, test_case['text'])
             except Exception as e:
-                pytest.skip(f'Tokenizer failed for {test_case["name"]}: {e}')
+                pytest.skip(f'Tokenizer failed for {test_name}: {e}')
 
             request_payload = {'input_ids': input_ids, 'max_tokens': test_case['max_tokens'], 'return_logprob': True}
 
@@ -497,9 +503,9 @@ class TestGenerateComprehensive:
         print(f'\n[Model: {self.model_name}] Running stop_str with include flag test')
         test_cases = [{
             'name': 'simple stop word',
-            'prompt': 'Count: 1, 2, 3, ',
+            'prompt': 'Count to 10: 1, 2, 3, ',
             'stop_word': '6',
-            'max_tokens': 10,
+            'max_tokens': 20,
         }]
 
         for test_case in test_cases:
@@ -605,10 +611,10 @@ class TestGenerateComprehensive:
 
                         event_count += 1
                         if delta_text.strip():
-                            print(f"    +'{delta_text}'")
+                            print(f"+'{delta_text}'")
 
                     except Exception as e:
-                        print(f'    [Parse warning]: {e}')
+                        print(f'[Parse warning]: {e}')
                         continue
 
         assert len(full_text_from_delta.strip()) > 0, \
@@ -918,7 +924,7 @@ class TestGenerateComprehensive:
         model_path = os.path.join(config.get('model_path'), self.model_name)
         user_content = 'Hello [world]! This is a [test].'
 
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         special_tokens_map = tokenizer.special_tokens_map
 
         special_patterns = list(special_tokens_map.values())
@@ -1134,7 +1140,7 @@ class TestGenerateComprehensive:
         model_path = os.path.join(config.get('model_path'), self.model_name)
         user_content = 'Hello [world]! This is a [test].'
 
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         special_tokens_map = tokenizer.special_tokens_map
 
         special_patterns = list(special_tokens_map.values())

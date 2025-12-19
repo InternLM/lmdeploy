@@ -174,6 +174,8 @@ def run_test(config, run_id, prepare_environment, worker_id, test_type='infer', 
     """Run test with specified evaluation configuration."""
     if 'gpt' in prepare_environment.get('model', '').lower():
         eval_config_name = 'gpt'
+    if str(config.get('env_tag')) == 'a100':
+        eval_config_name = f'{eval_config_name}-32k'
     preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
     if test_type == 'infer':

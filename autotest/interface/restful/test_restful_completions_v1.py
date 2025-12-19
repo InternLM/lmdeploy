@@ -1,4 +1,5 @@
 import pytest
+from utils.constant import BACKEND_LIST
 from utils.restful_return_check import assert_completions_batch_return, assert_completions_stream_return
 
 from lmdeploy.serve.openai.api_client import APIClient
@@ -9,15 +10,16 @@ MODEL = 'internlm/internlm2_5-20b'
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
+@pytest.mark.parametrize('backend', BACKEND_LIST)
 class TestRestfulInterfaceBase:
 
     @pytest.mark.internlm2_5
-    def test_get_model(self, config):
+    def test_get_model(self, config, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         assert model_name == '/'.join([config.get('model_path'), MODEL]), api_client.available_models
 
-    def test_encode(self):
+    def test_encode(self, backend):
         api_client = APIClient(BASE_URL)
         input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
         input_ids2, length2 = api_client.encode('Hi, pls intro yourself', add_bos=False)
@@ -35,7 +37,7 @@ class TestRestfulInterfaceBase:
         assert length5 == length2 * 100
         assert input_ids5 == input_ids2 * 100
 
-    def test_return(self):
+    def test_return(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for item in api_client.completions_v1(
@@ -51,7 +53,7 @@ class TestRestfulInterfaceBase:
             assert item.get('choices')[0].get('finish_reason') in ['length']
         assert_completions_batch_return(item, model_name)
 
-    def test_return_streaming(self):
+    def test_return_streaming(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         outputList = []
@@ -65,7 +67,7 @@ class TestRestfulInterfaceBase:
         for index in range(0, len(outputList) - 1):
             assert_completions_stream_return(outputList[index], model_name)
 
-    def test_max_tokens(self):
+    def test_max_tokens(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for item in api_client.completions_v1(model=model_name,
@@ -78,7 +80,7 @@ class TestRestfulInterfaceBase:
             assert completion_tokens >= 16
             assert item.get('choices')[0].get('finish_reason') in ['length']
 
-    def test_single_stopword(self):
+    def test_single_stopword(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for item in api_client.completions_v1(model=model_name,
@@ -89,7 +91,7 @@ class TestRestfulInterfaceBase:
             assert ' Shanghai' not in item.get('choices')[0].get('text')
             assert item.get('choices')[0].get('finish_reason') in ['stop', 'length']
 
-    def test_array_stopwords(self):
+    def test_array_stopwords(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for item in api_client.completions_v1(model=model_name,
@@ -102,7 +104,7 @@ class TestRestfulInterfaceBase:
             assert ' China' not in item.get('choices')[0].get('text')
             assert item.get('choices')[0].get('finish_reason') in ['stop', 'length']
 
-    def test_completions_stream(self):
+    def test_completions_stream(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         outputList = []
@@ -120,7 +122,7 @@ class TestRestfulInterfaceBase:
         output_last = outputList[len(outputList) - 1]
         assert output_last.get('choices')[0].get('finish_reason') in ['stop', 'length']
 
-    def test_completions_stream_stopword(self):
+    def test_completions_stream_stopword(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         outputList = []
@@ -144,7 +146,7 @@ class TestRestfulInterfaceBase:
         assert output_last.get('choices')[0].get('text') == ''
         assert output_last.get('choices')[0].get('finish_reason') in ['stop', 'length']
 
-    def test_completions_stream_stopwords(self):
+    def test_completions_stream_stopwords(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         outputList = []
@@ -170,7 +172,7 @@ class TestRestfulInterfaceBase:
         assert output_last.get('choices')[0].get('text') == ''
         assert output_last.get('choices')[0].get('finish_reason') in ['stop', 'length']
 
-    def test_batch_prompt_order(self):
+    def test_batch_prompt_order(self, backend):
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for item in api_client.completions_v1(model=model_name,
