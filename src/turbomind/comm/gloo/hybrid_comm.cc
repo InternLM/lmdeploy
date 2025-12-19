@@ -15,28 +15,16 @@ struct HybridCommImpl: public HostCommImpl {
         rank_{rank},
         node_rank_(node_rank)
     {
-
-        gloo_comm_    = gloo_group_id->CreateCommunicator(n_ranks, rank);
-        auto r2nr     = ::turbomind::comm::AllGather(gloo_comm_, node_rank);
-        same_process_ = r2nr.front() == r2nr.back();
+        gloo_comm_     = gloo_group_id->CreateCommunicator(n_ranks, rank);
+        rank_to_nodes_ = ::turbomind::comm::AllGather(gloo_comm_, node_rank);
+        same_process_  = rank_to_nodes_.front() == rank_to_nodes_.back();
         if (same_process_) {
             intra_comm_ = thread_group_id->CreateCommunicator(n_ranks, rank);
-            return;
         }
-
-        for (int r = 0; r < n_ranks_; ++r) {
-            if (r2nr[r] == node_rank) {
-                rank_to_intra_[r] = static_cast<int>(ranks_in_node_.size());
-                ranks_in_node_.push_back(r);
-            }
+        else {
+            init_inter_comm();
+            intra_comm_ = thread_group_id->CreateCommunicator(intra_n_ranks_, rank_to_intra_[rank_]);
         }
-
-        intra_comm_ = thread_group_id->CreateCommunicator(ranks_in_node_.size(), rank_to_intra_[rank]);
-        inter_comm_ = gloo_comm_->Split(rank_to_intra_[rank_] == 0, 0);
-
-        int inter_rank = inter_comm_->rank();
-        ::turbomind::comm::Broadcast(intra_comm_, inter_rank, 0);
-        rank_to_inter_ = ::turbomind::comm::AllGather(gloo_comm_, inter_rank);
     }
 
     HybridCommImpl(std::shared_ptr<HostCommImpl> gloo_comm, std::shared_ptr<HostCommImpl> intra_comm, int node_rank):
@@ -46,24 +34,35 @@ struct HybridCommImpl: public HostCommImpl {
         n_ranks_{gloo_comm_->n_ranks()},
         node_rank_(node_rank)
     {
-        auto r2nr     = ::turbomind::comm::AllGather(gloo_comm_, node_rank);
-        same_process_ = r2nr.front() == r2nr.back();
-        if (same_process_) {
-            return;
+        rank_to_nodes_ = ::turbomind::comm::AllGather(gloo_comm_, node_rank);
+        same_process_  = rank_to_nodes_.front() == rank_to_nodes_.back();
+        if (same_process_) {}
+        else {
+            init_inter_comm();
         }
+    }
 
+    void init_inter_comm()
+    {
+        int intra_n_ranks = 0;
+        int intra_rank    = -1;
         for (int r = 0; r < n_ranks_; ++r) {
-            if (r2nr[r] == node_rank) {
-                rank_to_intra_[r] = static_cast<int>(ranks_in_node_.size());
-                ranks_in_node_.push_back(r);
+            if (rank_to_nodes_[r] == node_rank_) {
+                if (r == rank_) {
+                    intra_rank = intra_n_ranks;
+                }
+                intra_n_ranks++;
             }
         }
 
-        inter_comm_ = gloo_comm_->Split(rank_to_intra_[rank_] == 0, 0);
+        intra_n_ranks_ = intra_n_ranks;
+        gloo_comm_->AllReduce(&intra_n_ranks_, 1, DataType::kInt, RedOp::kMin);
+        TM_CHECK_EQ(intra_n_ranks_, intra_n_ranks) << "The number of ranks in each node should be same.";
+        TM_CHECK_GT(intra_rank, -1) << "Invalid intra_rank.";
+        rank_to_intra_ = ::turbomind::comm::AllGather(gloo_comm_, intra_rank);
 
-        int inter_rank = inter_comm_->rank();
-        ::turbomind::comm::Broadcast(intra_comm_, inter_rank, 0);
-        rank_to_inter_ = ::turbomind::comm::AllGather(gloo_comm_, inter_rank);
+        inter_comm_    = gloo_comm_->Split(rank_to_intra_[rank_], 0);
+        rank_to_inter_ = ::turbomind::comm::AllGather(gloo_comm_, inter_comm_->rank());
     }
 
     std::shared_ptr<HostCommImpl> Split(int color, int key) override
@@ -107,16 +106,10 @@ struct HybridCommImpl: public HostCommImpl {
             return Broadcast(data, count, dtype, root, copy);
         }
 
-        bool root_node = rank_to_intra_.count(root) > 0;  // root on this node
-        if (root_node) {
-            intra_comm_->Broadcast(data, count, kNull, rank_to_intra_.at(root), copy);
+        if (rank_to_intra_[root] == rank_to_intra_[rank_]) {  // same ith rank in node
+            inter_comm_->Broadcast(data, count, dtype, rank_to_inter_[root], copy, ser, des);
         }
-        if (intra_comm_->rank() == 0) {
-            inter_comm_->Broadcast(data, count, kNull, rank_to_inter_.at(root), copy, ser, des);
-        }
-        if (!root_node) {
-            intra_comm_->Broadcast(data, count, kNull, 0, copy);
-        }
+        intra_comm_->Broadcast(data, count, dtype, rank_to_intra_[root], copy);
     }
 
     void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy)
@@ -125,16 +118,10 @@ struct HybridCommImpl: public HostCommImpl {
             return intra_comm_->Broadcast(data, count, dtype, root, copy);
         }
 
-        bool root_node = rank_to_intra_.count(root) > 0;
-        if (root_node) {
-            intra_comm_->Broadcast(data, count, dtype, rank_to_intra_[root], copy);
-        }
-        if (rank_to_intra_[rank_] == 0) {
+        if (rank_to_intra_[root] == rank_to_intra_[rank_]) {  // same ith rank in node
             inter_comm_->Broadcast(data, count, dtype, rank_to_inter_[root], copy);
         }
-        if (!root_node) {
-            intra_comm_->Broadcast(data, count, dtype, 0, copy);
-        }
+        intra_comm_->Broadcast(data, count, dtype, rank_to_intra_[root], copy);
     }
 
     void AllGather(void* data, int count, DataType dtype, copy_fn copy, ser_fn ser, des_fn des) override
@@ -176,10 +163,11 @@ struct HybridCommImpl: public HostCommImpl {
     int rank_;       // group rank
     int n_ranks_;    // group size
     int node_rank_;  // node rank
+    int intra_n_ranks_;
 
-    std::vector<int>             ranks_in_node_;    // group ranks in intra-node
-    std::unordered_map<int, int> rank_to_intra_{};  // map group rank to intra-node rank
-    std::vector<int>             rank_to_inter_{};  // map group rank to inter-node rank
+    std::vector<int> rank_to_nodes_{};  // map group rank to node rank (not global)
+    std::vector<int> rank_to_intra_{};  // map group rank to intra-node rank
+    std::vector<int> rank_to_inter_{};  // map group rank to inter-node rank
 
     bool same_process_;
 };
