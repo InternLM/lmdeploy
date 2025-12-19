@@ -479,11 +479,17 @@ jobs:
         run: |
           pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - completions_v1
-        if: contains(matrix.case_info, 'completions_v1')
+      - name: Test lmdeploy - completions_v1 - internlm2_5-20b
+        if: matrix.model == 'internlm2_5-20b' && contains(matrix.case_info, 'completions_v1')
         timeout-minutes: 60
         run: |
           pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
+      - name: Test lmdeploy - completions_v1 - other
+        if: matrix.model != 'internlm2_5-20b' && contains(matrix.case_info, 'completions_v1')
+        timeout-minutes: 60
+        run: |
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test generate - base
         if:  matrix.generate_type == 'base' && contains(matrix.case_info, 'generate')
@@ -504,6 +510,7 @@ jobs:
           pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Kill api server
+        if: always()
         run: |
           kill -15 "$restful_pid"
       - name: Clear workfile

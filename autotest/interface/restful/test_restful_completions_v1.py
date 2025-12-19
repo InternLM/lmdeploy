@@ -20,6 +20,7 @@ class TestRestfulInterfaceBase:
         model_name = api_client.available_models[0]
         assert model_name == '/'.join([config.get('model_path'), MODEL]), api_client.available_models
 
+    @pytest.mark.internlm2_5
     def test_encode(self, backend, model_case):
         api_client = APIClient(BASE_URL)
         input_ids1, length1 = api_client.encode('Hi, pls intro yourself')
