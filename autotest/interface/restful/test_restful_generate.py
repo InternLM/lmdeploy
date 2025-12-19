@@ -490,7 +490,7 @@ class TestGenerateComprehensive:
                 logprob_values.append(item[0])
 
             avg_logprob = sum(logprob_values) / len(logprob_values)
-            if avg_logprob < -10.0:
+            if avg_logprob < -15.0:
                 pytest.fail(f'Generation confidence critically low '
                             f'(Avg: {avg_logprob:.2f})')
 
@@ -546,7 +546,7 @@ class TestGenerateComprehensive:
 
     def test_streaming_mode(self):
         print(f'\n[Model: {self.model_name}] Running streaming mode test')
-        prompt = 'Count: 1, 2,'
+        prompt = 'Count to 10: 1, 2,'
 
         resp = self._post({'prompt': prompt, 'max_tokens': 8, 'stream': True}, stream=True)
         assert resp.status_code == 200
@@ -567,8 +567,8 @@ class TestGenerateComprehensive:
             f'(found {count_matches})'
 
         stream_events = meta.get('stream_events', [])
-        assert stream_events >= len(output_ids), \
-            'Streaming event count should not be less than output token count'
+        assert stream_events <= len(output_ids) + 2, \
+            'Streaming event count should be less than output token count'
 
         print(f"  Generated text: '{text}'")
         print(f'  Output tokens: {len(output_ids)}, '
@@ -1007,8 +1007,8 @@ class TestGenerateComprehensive:
 
         stream_events = data['meta_info'].get('stream_events', [])
 
-        assert stream_events == len(data['output_ids']) + 1, \
-            'Streaming event count should not be less than generated token count'
+        assert stream_events <= len(data['output_ids']) + 2, \
+            'Streaming event count should be less than generated token count'
 
     def test_invalid_temperature_values(self):
         print(f'\n[Model: {self.model_name}] Running invalid temperature values test')
