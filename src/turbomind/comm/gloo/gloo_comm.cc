@@ -330,7 +330,8 @@ struct GlooCommImpl: public HostCommImpl {
         ::gloo::allreduce(opts);
     }
 
-    static constexpr std::chrono::milliseconds kTimeOut = std::chrono::milliseconds(1000 * 60 * 30);  // 30 minutes
+    // there might be very long intervals between receiving requests.
+    static constexpr std::chrono::milliseconds kTimeOut = std::chrono::milliseconds(1000LL * 3600 * 24 * 365);
 
     int                                          n_split_{};
     std::shared_ptr<::gloo::transport::Device>   device_;
