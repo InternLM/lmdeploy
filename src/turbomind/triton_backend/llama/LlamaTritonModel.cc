@@ -435,8 +435,7 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
     // NOTE: This runs on Python main thread
     group_ids_.resize(engine_param_.outer_dp_size);
     for (size_t i = 0; i < group_ids_.size(); ++i) {
-        // TODO: fine-grained comm control
-        const std::string group_backend = (engine_param_.nnodes == 1) ? "" : "gloo";
+        const std::string group_backend = (engine_param_.nnodes == 1) ? "" : "hybrid";
 
         group_ids_[i] = comm::CreateHostGroupId(group_backend);
         group_ids_[i]->Initialize();
