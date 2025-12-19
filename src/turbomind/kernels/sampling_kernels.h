@@ -16,9 +16,10 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
-#include <stdint.h>
 
 namespace turbomind {
 

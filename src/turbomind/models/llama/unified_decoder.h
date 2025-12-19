@@ -20,9 +20,12 @@ public:
                    const AttentionParam& attn,
                    const MoeParam&       moe,
                    const LoraParam&      lora,
-                   const Context&        ctx);
+                   const Context&        ctx,
+                   int                   phases);
 
-    void Forward(TensorMap& args, const std::vector<WeightType*>& weights);
+    void Run(ExchOp op, int phase, TensorMap& env);
+
+    void Forward(int phase, TensorMap& env, const std::vector<WeightType*>& weights);
 
 private:
     const size_t layer_num_;
@@ -35,8 +38,7 @@ private:
 
     const int attn_tp_group_;
 
-    const float        rmsnorm_eps_;
-    cudaStream_t const stream_;
+    const float rmsnorm_eps_;
 
     comm::DeviceCommImpl* const d_comm_;
 

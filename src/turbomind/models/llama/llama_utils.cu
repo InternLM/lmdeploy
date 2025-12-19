@@ -161,7 +161,7 @@ int64_t& gSequenceIds(int batch_idx)
 
 bool& isTuning()
 {
-    thread_local bool value{};
+    static bool value{};
     return value;
 }
 

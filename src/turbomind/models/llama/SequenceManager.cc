@@ -212,21 +212,23 @@ struct Schedule {
 
     int last;
 
-    int remaining_input_count;
+    int max_fwd_tokens;
+    int max_tmp_tokens;
 
     Sequences        active;
     std::vector<int> block_counts;
     Sequences        inactive;
     Sequences        victims;
 
-    Schedule(Snapshot snapshot, int size, int max_input_count):
+    Schedule(Snapshot snapshot, int size, int max_fwd_tokens, int max_tmp_tokens):
         free(snapshot.free),
         cached(snapshot.cached),
         last(size),
         use_count_(std::move(snapshot.use_count)),
         unlocked_(size),
         it_(size),
-        remaining_input_count(max_input_count)
+        max_fwd_tokens{max_fwd_tokens},
+        max_tmp_tokens{max_tmp_tokens}
     {
     }
 
@@ -271,7 +273,8 @@ std::ostream& operator<<(std::ostream& os, const Schedule& s)
 struct Transaction {
     int index_;
     int block_count_;
-    int input_count_;
+    int input_len_;
+    int temp_len_;
 
     int allocate_{};
     int evict_{};
@@ -284,14 +287,20 @@ struct Transaction {
 
     std::shared_ptr<BlockTrie> block_trie_;
 
-    explicit Transaction(const Sequences& sequences, int index, int block_count, int input_count, Schedule& sched):
-        sequences_(sequences), schedule_(sched), index_(index), block_count_(block_count), input_count_(input_count)
+    explicit Transaction(
+        const Sequences& sequences, int index, int block_count, int input_len, int temp_len, Schedule& sched):
+        sequences_(sequences),
+        schedule_(sched),
+        index_(index),
+        block_count_(block_count),
+        input_len_(input_len),
+        temp_len_{temp_len}
     {
     }
 
     void Process()
     {
-        if (schedule_.remaining_input_count > 0) {
+        if (schedule_.max_fwd_tokens > 0 && schedule_.max_tmp_tokens >= temp_len_) {
             int count = block_count_;
 
             int tmp = std::min(schedule_.free, count);
@@ -344,9 +353,11 @@ struct Transaction {
         schedule_.active.push_back(sequences_[index_]);
         schedule_.block_counts.push_back(block_count_);
 
-        input_count_ = std::min(input_count_, schedule_.remaining_input_count);
-        schedule_.remaining_input_count -= input_count_;
-        const_cast<Sequence*>(sequences_[index_])->input_length = input_count_;
+        input_len_ = std::min(input_len_, schedule_.max_fwd_tokens);
+        schedule_.max_fwd_tokens -= input_len_;
+        const_cast<Sequence*>(sequences_[index_])->input_length = input_len_;
+
+        schedule_.max_tmp_tokens -= temp_len_;
     }
 };
 
@@ -359,34 +370,29 @@ std::ostream& operator<<(std::ostream& os, const Transaction& trans)
 
 }  // namespace
 
-void SequenceManager::SortByPriority(Sequences&                   sequences,
-                                     std::vector<int>&            context_lengths,
-                                     const std::vector<uint64_t>& priorities)
+template<class Key, class... Ts>
+static void SortByKey(const std::vector<Key>& keys, std::vector<Ts>&... vals)
 {
-    // sort according to priority
-    std::vector<int> idxs(sequences.size());
+    std::vector<int> idxs(keys.size());
     std::iota(idxs.begin(), idxs.end(), 0);
-    std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {
-        return priorities[i] < priorities[j];  //
-    });
-    Sequences        tmp_sequences(sequences.size());
-    std::vector<int> tmp_lengths(context_lengths.size());
-    for (int i = 0; i < sequences.size(); ++i) {
-        tmp_sequences[i] = sequences[idxs[i]];
-        tmp_lengths[i]   = context_lengths[idxs[i]];
-    }
-    sequences.swap(tmp_sequences);
-    context_lengths.swap(tmp_lengths);
+    std::sort(idxs.begin(), idxs.end(), [&](int i, int j) { return keys[i] < keys[j]; });
+    auto reorder = [&](auto& xs) {
+        std::remove_reference_t<decltype(xs)> ys(xs.size());
+        for (size_t i = 0; i < xs.size(); ++i) {
+            ys[i] = xs[idxs[i]];
+        }
+        xs.swap(ys);
+    };
+    (reorder(vals), ...);
 }
 
 std::vector<int> SequenceManager::CountRequiredBlocks(const Sequences&        sequences,
-                                                      const std::vector<int>& context_lengths,
-                                                      int                     step_length)
+                                                      const std::vector<int>& context_length)
 {
     std::vector<int> required(sequences.size());
     for (int i = 0; i < sequences.size(); ++i) {
-        int seq_len = context_lengths[i] + step_length;
-        int count   = (seq_len + block_seq_len_ - 1) / block_seq_len_ - static_cast<int>(sequences[i]->blocks.size());
+        int length  = context_length[i];
+        int count   = (length + block_seq_len_ - 1) / block_seq_len_ - static_cast<int>(sequences[i]->blocks.size());
         required[i] = std::max(0, count);
     }
     return required;
@@ -456,11 +462,12 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
     }
 }
 
-auto SequenceManager::Materialize(Sequences                    sequences,
-                                  std::vector<int>             context_lengths,
-                                  const std::vector<uint64_t>& priorities,
-                                  int                          step_length,
-                                  AdjustInputCount             adjust) -> Outcome
+auto SequenceManager::Materialize(Sequences             sequences,
+                                  std::vector<int>      context_length,
+                                  std::vector<int>      alpha,
+                                  std::vector<uint64_t> priorities,
+                                  int                   max_fwd_tokens,
+                                  int                   max_tmp_tokens) -> Outcome
 {
     ////////////////////////////////////////////////////////////////////////////////
     /// Schedule the assignment of blocks to sequences
@@ -468,7 +475,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // process deferred unlock and free operations
     CommitUnlockAndFree();
 
-    SortByPriority(sequences, context_lengths, priorities);
+    SortByKey(priorities, sequences, context_length, alpha);
 
     // Verify and lock cache sequences to avoid their blocks being evicted unnoticed
     // the blocks can still be preempted later
@@ -476,17 +483,19 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     PrefixMatch(sequences);
 
-    const int max_input_count = adjust(sequences, context_lengths);
+    std::vector required = CountRequiredBlocks(sequences, context_length);
 
-    std::vector<int> required = CountRequiredBlocks(sequences, context_lengths, step_length);
-    // dbg(required);
-
-    Schedule schedule(block_manager_->TakeSnapshot(), sequences.size(), max_input_count);
+    Schedule schedule(block_manager_->TakeSnapshot(), sequences.size(), max_fwd_tokens, max_tmp_tokens);
 
     // `schedule.last` is decreasing in the loop
     for (int i = 0; i < schedule.last; ++i) {
-        const int input_length = context_lengths[i] - sequences[i]->cache_len;
-        Transaction{sequences, i, required[i], input_length, schedule}.Process();
+        auto&     s         = *sequences[i];
+        const int input_len = context_length[i] - alpha[i] - s.cache_len;
+        // sanity check
+        TM_CHECK_GT(input_len, 0) << "Logical error: " << context_length[i] << " " << alpha[i] << " " << s.cache_len << " " << s.status;
+        // temp buffer for flatten KV cache
+        const int temp_len = (input_len > 1 || s.status != Sequence::kActive) ? context_length[i] : 0;
+        Transaction{sequences, i, required[i], input_len, temp_len, schedule}.Process();
     }
 
     // mark remaining sequences invalid
@@ -521,7 +530,7 @@ auto SequenceManager::Materialize(Sequences                    sequences,
 
     // release preempted blocks -> cached
     if (!schedule.victims.empty()) {
-        TM_LOG_INFO("[SeqMgr] #victim: %d", (int)schedule.victims.size());
+        TM_LOG_ERROR("[SeqMgr] #victim: %d", (int)schedule.victims.size());
         for (const auto& p : schedule.victims) {
             UpdateAndSetUnlock(*p);
         }

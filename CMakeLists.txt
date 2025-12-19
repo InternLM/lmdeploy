@@ -76,6 +76,7 @@ FetchContent_MakeAvailable(yaml-cpp)
 
 # the environment variable
 #   ASAN_OPTIONS=protect_shadow_gap=0,intercept_tls_get_addr=0
+#   LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.6:/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 # must be set at runtime
 # https://github.com/google/sanitizers/issues/1322
 if (LMDEPLOY_ASAN_ENABLE)

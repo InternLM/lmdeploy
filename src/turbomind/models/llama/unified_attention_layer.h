@@ -35,6 +35,8 @@
 
 namespace turbomind {
 
+struct AttentionData;
+
 class UnifiedAttentionLayer {
 public:
     using WeightType = LlamaAttentionWeight;
@@ -43,6 +45,7 @@ public:
     static constexpr int kMaxWorkspaceTokens = 4096;
 
     struct ForwardParam {
+        int               phase;
         Tensor            input;
         Tensor            output;
         const WeightType* weights;
@@ -56,20 +59,16 @@ public:
                           const EngineParam&    engine,
                           const LoraParam&      lora,
                           int                   tp_size,
-                          const Context&        context);
+                          const Context&        context,
+                          int                   phases);
+
+    void Run(ExchOp exop, int phase, TensorMap& env);
 
     void Forward(ForwardParam p);
 
-    void Initialize(TensorMap& args);
-
-    void Finalize();
-
-    const int* d_cu_q_len()
-    {
-        return d_cu_q_len_;
-    }
-
 private:
+    void Setup(int phase, TensorMap& env);
+
     Tensor forward_mla(const Tensor& hidden_state, const WeightType& weights);
 
     /// TODO: dropping the `T` here requires deep refactor of attention dispatch
@@ -91,51 +90,29 @@ private:
     const LoraParam      lora_param_;
     const Context&       context_;
 
-    cudaStream_t const stream_;
-    LlamaLinear&       linear_;
-    const int          arch_{};
+    LlamaLinear& linear_;
+    const int    arch_{};
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
     cudaEvent_t  aux_event_;
 
-    std::array<cudaStream_t, 2> streams_;
-
     RNG rng_;
 
     RopeKernelParam rope_param_{};
 
-    ///////////////////////////////////////////////////////
-    /// runtime states
-    int decode_num_;
-    int prefil_num_;
+    std::vector<std::shared_ptr<AttentionData>> data_;
 
+    Buffer_<float> rope_base_buf_;
+    Buffer_<int>   decode_token_pos_buf_;
+
+    ///////////////////////////////////////////////////////
+    /// temp runtime buffers
     Tensor_<float> partial_M_;
     Tensor_<float> partial_L_;
     Tensor_<float> partial_O_;
     Tensor_<int>   split_cnt_;
     Tensor_<int>   barriers_;  // always zero
-
-    Event event_;
-
-    Buffer_<int> h_q_len_;
-    Buffer_<int> h_k_len_;
-
-    Buffer_<int> d_cu_x_len_;
-    Buffer_<int> h_cu_x_len_;
-
-    // references into d/h_cu_x_len_
-    int* d_cu_q_len_;
-    int* d_cu_k_len_;
-    int* h_cu_q_len_;
-    int* h_cu_k_len_;
-
-    Buffer_<bool>  finished_;
-    Buffer_<float> rope_base_;
-
-    Buffer_<int>       cu_block_nums_;
-    Buffer_<uintptr_t> kv_block_ptrs_;
-    ///////////////////////////////////////////////////////
 };
 
 }  // namespace turbomind

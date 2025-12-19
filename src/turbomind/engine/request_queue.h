@@ -46,7 +46,7 @@ public:
 
         auto it = queue_.begin();
         int  count{};
-        while (rs.size() < max_rs_size && count < max_count && it != queue_.end()) {
+        while ((int)rs.size() < max_rs_size && count < max_count && it != queue_.end()) {
             if (!(*it)->session.start_flag) {
                 rs.push_back(std::move(*it));
                 ++count;

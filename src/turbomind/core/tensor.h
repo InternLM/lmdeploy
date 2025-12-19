@@ -133,7 +133,7 @@ public:
     template<class... Is>
     auto shapes(Is&&... is) const
     {
-        return layout_.shapes(((Is &&) is)...);
+        return layout_.shapes(((Is&&)is)...);
     }
 
     auto& stride() const noexcept
@@ -149,7 +149,7 @@ public:
     template<class... Is>
     auto strides(Is&&... is) const
     {
-        return layout_.strides(((Is &&) is)...);
+        return layout_.strides(((Is&&)is)...);
     }
 
     bool is_contiguous() const noexcept
@@ -263,10 +263,10 @@ struct Tensor_: public Tensor {
     {
     }
 
-    Tensor_(const Tensor_&) = default;
+    Tensor_(const Tensor_&)            = default;
     Tensor_& operator=(const Tensor_&) = default;
 
-    Tensor_(Tensor_&&) noexcept = default;
+    Tensor_(Tensor_&&) noexcept            = default;
     Tensor_& operator=(Tensor_&&) noexcept = default;
 
     Tensor_(const Tensor& other)
@@ -313,7 +313,7 @@ private:
     static decltype(auto) ensure_dtype(U&& u)
     {
         TM_CHECK_EQ(u.dtype(), data_type_v<T>);
-        return (U &&) u;
+        return (U&&)u;
     }
 };
 
@@ -338,6 +338,28 @@ public:
     bool contains(const std::string& key) const
     {
         return find(key) != end();
+    }
+
+    void produce(const std::string& key, Tensor value)
+    {
+        TM_CHECK(emplace(key, std::move(value)).second);
+    }
+
+    Tensor try_consume(const std::string& key)
+    {
+        if (auto it = find(key); it != end()) {
+            auto value = std::move(it->second);
+            erase(it);
+            return value;
+        }
+        return Tensor{};
+    }
+
+    Tensor consume(const std::string& key)
+    {
+        auto value = try_consume(key);
+        TM_CHECK(value) << get_out_of_range_msg(key);
+        return value;
     }
 
 private:

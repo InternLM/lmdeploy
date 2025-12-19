@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
@@ -21,7 +22,6 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     hidden_dim_(model.hidden_units),
     tp_size_(engine.mlp_tp_size),
     param_(param),
-    stream_(ctx.stream),
     linear_(*ctx.linear)
 {
     TM_CHECK(!param.expert_num.empty());
@@ -56,7 +56,7 @@ Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& ga
     Tensor_<float> logits{{input.shape(0), weight.shape(1)}, kDEVICE};
     linear_.Forward(input, gate, logits);
     sync_check_cuda_error();
-    ApplyBias(logits, gate.bias, stream_);
+    ApplyBias(logits, gate.bias, core::Context::stream().handle());
     sync_check_cuda_error();
     return logits;
 }
@@ -75,15 +75,17 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     TM_DEBUG_TENSOR(logits, "logits", 2);
 
-    check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, stream_));
-    check_cuda_error(cudaMemsetAsync(masks_.data(), -1, sizeof(int8_t) * expert_num * padded, stream_));
+    const auto st = core::Context::stream().handle();
+
+    check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, st));
+    check_cuda_error(cudaMemsetAsync(masks_.data(), -1, sizeof(int8_t) * expert_num * padded, st));
 
     // dump_logits(tokens, layer_id);
 
     bool softmax = true;
     if (param_.topk_method == "group_limited_greedy") {
         invokeMoeSoftmaxMaskTopKGroups(
-            logits.data(), tokens, expert_num, expert_num / param_.n_group, param_.topk_group, stream_);
+            logits.data(), tokens, expert_num, expert_num / param_.n_group, param_.topk_group, st);
         sync_check_cuda_error();
         softmax = false;
     }
@@ -104,7 +106,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                      softmax,
                      param_.norm_topk_prob,
                      param_.routed_scale,
-                     stream_);
+                     st);
     sync_check_cuda_error();
 
     if (isTuning()) {
@@ -118,21 +120,21 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         for (int i = 0; i < expert_num; ++i) {
             h_offsets_[i + 1] = h_offsets_[i] + cnt[i];
         }
-        check_cuda_error(cudaMemcpyAsync(
-            offsets_.data(), h_offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
+        check_cuda_error(
+            cudaMemcpyAsync(offsets_.data(), h_offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, st));
     }
 
     temp_ = Tensor{{param_.experts_per_token * tokens, hidden_dim_}, p.input.dtype(), p.input.device()};
 
     if (param_.method == MoeParam::kNaive) {
 
-        invokeMoeDispatch(temp_, p.input, f2n_.data(), param_.experts_per_token, stream_);
+        invokeMoeDispatch(temp_, p.input, f2n_.data(), param_.experts_per_token, st);
         sync_check_cuda_error();
 
-        check_cuda_error(cudaMemcpyAsync(
-            h_offsets_.data(), offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
+        check_cuda_error(
+            cudaMemcpyAsync(h_offsets_.data(), offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, st));
 
-        check_cuda_error(cudaStreamSynchronize(stream_));
+        check_cuda_error(cudaStreamSynchronize(st));
 
         TM_CHECK_EQ(h_offsets_[expert_num], tokens * param_.experts_per_token);
 
@@ -154,7 +156,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         sync_check_cuda_error();
 
         if (!block.is_fused_silu) {
-            Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, stream_);
+            Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, st);
             sync_check_cuda_error();
         }
 
@@ -181,7 +183,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
                      param_.experts_per_token,
                      1.f / tp_size_,
                      p.scale,
-                     stream_);
+                     core::Context::stream().handle());
     sync_check_cuda_error();
 
     temp_          = {};

@@ -160,16 +160,20 @@ inline bool operator!=(const Buffer& a, const Buffer& b)
     return !(a == b);
 }
 
-///////////////////////////////////////////////////////////
-// fill
+inline Buffer empty_like(const Buffer& buffer)
+{
+    return Buffer{buffer.size(), buffer.dtype(), buffer.device()};
+}
 
-void Fill(Buffer& b, const void* v);
+inline Buffer empty_like(const Buffer& buffer, Device device)
+{
+    return Buffer{buffer.size(), buffer.dtype(), device};
+}
 
-void Fill(Buffer&& b, const void* v);
-
-void Fill(Buffer& b, const void* v, const Stream& stream);
-
-void Fill(Buffer&& b, const void* v, const Stream& stream);
+inline Buffer empty_like(const Buffer& buffer, DataType dtype)
+{
+    return Buffer{buffer.size(), dtype, buffer.device()};
+}
 
 template<class T>
 struct Buffer_: public Buffer {
@@ -186,10 +190,10 @@ struct Buffer_: public Buffer {
 
     Buffer_(ssize_t size, Device device): Buffer{size, data_type_v<T>, device} {}
 
-    Buffer_(const Buffer_&) = default;
+    Buffer_(const Buffer_&)            = default;
     Buffer_& operator=(const Buffer_&) = default;
 
-    Buffer_(Buffer_&&) noexcept = default;
+    Buffer_(Buffer_&&) noexcept            = default;
     Buffer_& operator=(Buffer_&&) noexcept = default;
 
     Buffer_(const Buffer& b)
@@ -283,7 +287,7 @@ private:
     static decltype(auto) ensure_dtype(U&& u) noexcept
     {
         TM_CHECK_EQ(u.dtype(), data_type_v<T>);
-        return (U &&) u;
+        return (U&&)u;
     }
 };
 
@@ -322,22 +326,41 @@ inline void Copy_(const Buffer_<T>& a, ssize_t n, Buffer_<T>& b_)
     Copy((const Buffer&)a, n, (Buffer&)b_);
 }
 
+namespace detail {
+
 void* Copy(const void* a, ssize_t n, void* b, const Stream& stream);
+
+}  // namespace detail
 
 template<class T>
 inline T* Copy(const T* a, ssize_t n, T* b, const Stream& stream)
 {
-    return (T*)Copy((const void*)a, sizeof(T) * n, (void*)b, stream);
+    return (T*)detail::Copy((const void*)a, sizeof(T) * n, (void*)b, stream);
 }
 
 template<class T>
 inline T* Copy(const T* a, ssize_t n, T* b)
 {
-    return Copy(a, n, b, Context::stream());
+    return (T*)detail::Copy((const void*)a, sizeof(T) * n, (void*)b, Context::stream());
 }
+
+struct CopyT {
+    template<class... Args>
+    auto operator()(Args&&... args) const
+    {
+        return Copy(((Args&&)args)...);
+    }
+};
 
 void Clear(Ref<Buffer> b_, const Stream& stream);
 
 void Clear(Ref<Buffer> b_);
+
+template<class T>
+std::vector<T> to_vector(const Buffer_<T>& b)
+{
+    TM_CHECK(b.device().type == kCPU || b.device().type == kCPUpinned);
+    return std::vector<T>(b.begin(), b.end());
+}
 
 }  // namespace turbomind::core

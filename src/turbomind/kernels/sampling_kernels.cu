@@ -52,13 +52,13 @@ __global__ void sampling(const T*       logits,
             if (tid == min(BLOCK_SIZE - count, BLOCK_SIZE - 1)) {
                 selected             = min(i, n - 1);
                 output_ids[batch_id] = indices[selected];
-
-                if (sequence_length != nullptr) {
-                    sequence_length[batch_id] += 1;
-                }
             }
             break;
         }
+    }
+
+    if (tid == 0) {
+        sequence_length[batch_id] += 1;
     }
 
     if (sampled_logprobs != nullptr && sampled_indexes != nullptr && sampled_nums != nullptr) {

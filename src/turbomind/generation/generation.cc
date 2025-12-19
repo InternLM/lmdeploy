@@ -1,0 +1,334 @@
+
+#include <memory>
+
+#include "src/turbomind/generation/generation.h"
+
+#include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/check.h"
+#include "src/turbomind/core/copy.h"
+#include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/state.h"
+#include "src/turbomind/engine/request.h"
+
+#include "src/turbomind/generation/logits_processor.h"
+#include "src/turbomind/generation/sampling.h"
+#include "src/turbomind/generation/stop_criteria.h"
+
+#include "src/turbomind/kernels/sampling_topk_kernels.h"  // InitializeRandomStates
+
+#include "src/turbomind/models/llama/llama_kernels.h"  // invokePadLastTokenIds
+
+// #include "dbg.h"
+
+namespace turbomind {
+
+using std::unique_ptr;
+using std::shared_ptr;
+using std::vector;
+
+struct GenerationData {
+    Buffer_<uint8_t>  random_state;
+    Buffer_<uint64_t> random_seed;
+    Buffer_<bool>     random_init;
+    Buffer_<int>      max_seq_len;
+    Buffer_<int*>     token_ids_ptrs;
+    Buffer_<int>      output_ids;
+
+    bool random_init_needed;
+    int  generation_size;
+};
+
+struct Generation::Impl {
+
+    // child modules
+    unique_ptr<LogitsProcessor> logits_processor;
+    unique_ptr<Sampling>        sampling;
+    shared_ptr<StopCriteria>    stop_criteria;
+
+    // persistent
+    Tensor_<int> token_ids_;
+
+    // scheduling states
+    vector<int*> h_token_ids_ptrs_;
+    vector<int*> h_token_ids_free_;
+
+    // execution states
+    State random_state_;
+
+    // immutable states
+    Buffer_<int> output_ids_;
+
+    std::vector<std::unique_ptr<GenerationData>> data_;
+
+    // staging buffers
+    Buffer_<uint8_t>  random_state_buf_;
+    Buffer_<uint64_t> random_seed_buf_;
+    Buffer_<bool>     random_init_buf_;
+    Buffer_<int*>     token_ids_ptrs_buf_;
+    Buffer_<int>      token_ids_buf_;
+    Buffer_<int>      output_ids_buf_;
+
+    const int max_batch_size_;
+    const int session_len_;
+
+    Impl(DataType dtype, int max_batch_size, int session_len, int vocab_size, int vocab_size_padded, int phases):
+        max_batch_size_{max_batch_size}, session_len_{session_len}
+    {
+        TM_CHECK_EQ(dtype, kFloat32);
+        BaseGenerationParam base{max_batch_size, vocab_size, vocab_size_padded};
+        logits_processor = std::make_unique<LogitsProcessor>(base, phases);
+        sampling         = std::make_unique<Sampling>(base, phases);
+        stop_criteria    = std::make_unique<StopCriteria>(base, phases);
+
+        static_assert(sizeof(curandState_t) % alignof(curandState_t) == 0);
+        random_state_ = {{max_batch_size_, (int)sizeof(curandState_t)}, kUint8, kDEVICE};
+        token_ids_    = {{max_batch_size_, session_len_}, kDEVICE};
+        output_ids_   = {max_batch_size_, kDEVICE};
+        for (int i = 0; i < max_batch_size_; ++i) {
+            h_token_ids_free_.push_back(token_ids_.data() + i * token_ids_.stride(0));
+        }
+        h_token_ids_ptrs_.resize(max_batch_size_);
+
+        random_state_buf_ = {max_batch_size_ * (int)sizeof(curandState_t), kCPUpinned};
+        random_seed_buf_  = {max_batch_size_, kCPUpinned};
+        random_init_buf_  = {max_batch_size_, kCPUpinned};
+
+        token_ids_ptrs_buf_ = {max_batch_size_, kCPUpinned};
+        token_ids_buf_      = {max_batch_size_ * (ssize_t)session_len_, kCPUpinned};
+
+        output_ids_buf_ = {max_batch_size_, kCPUpinned};
+
+        for (int i = 0; i < phases; ++i) {
+            auto d = std::make_unique<GenerationData>();
+
+            d->random_state   = empty_like(random_state_buf_, kDEVICE);
+            d->random_seed    = empty_like(random_seed_buf_, kDEVICE);
+            d->random_init    = empty_like(random_init_buf_, kDEVICE);
+            d->token_ids_ptrs = empty_like(token_ids_ptrs_buf_, kDEVICE);
+            d->output_ids     = empty_like(output_ids_, kDEVICE);
+
+            data_.push_back(std::move(d));
+        }
+    }
+
+    void Setup(int phase, TensorMap& env)
+    {
+        auto& d = *data_.at(phase);
+
+        const Buffer_<RequestCache*> rc   = env.at("requests").buffer();
+        const Buffer_<int>           perm = env.at("permutation").buffer();
+
+        const int  bs0  = *env.at("bs0").buffer().data<int>();
+        const auto bsz  = perm.size();
+        auto&      copy = *env.at("copy").data<BatchCopy*>()[0];
+
+        // random states
+        d.random_init_needed = false;
+        for (int i = 0; i < perm.size(); ++i) {
+            const auto& c = *rc[i];
+            if (TM_LIKELY(perm[i] < bs0)) {  // existing
+                random_init_buf_[i] = false;
+            }
+            else if (c.random_state) {  // already initialized
+                std::copy_n(
+                    c.random_state, sizeof(curandState_t), random_state_buf_.data() + i * sizeof(curandState_t));
+            }
+            else {  // uninitialized
+                d.random_init_needed = true;
+                random_init_buf_[i]  = true;
+                random_seed_buf_[i]  = rc[i]->gen_cfg.random_seed;
+            }
+        }
+        copy(random_state_buf_, bsz, d.random_state);
+        if (d.random_init_needed) {
+            copy(random_init_buf_, bsz, d.random_init);
+            copy(random_seed_buf_, bsz, d.random_seed);
+        }
+
+        vector<int> used(bs0);
+        for (int i = 0; i < bsz; ++i) {
+            if (perm[i] < bs0) {
+                used[perm[i]] = 1;
+            }
+        }
+        for (int i = 0; i < bs0; ++i) {
+            if (!used[i]) {  // free unused chunks
+                h_token_ids_free_.push_back(h_token_ids_ptrs_[i]);
+            }
+        }
+        // swap-in token_ids
+        int* token_ids_buf = token_ids_buf_.data();
+        for (int i = 0; i < rc.size(); ++i) {
+            if (const auto& c = *rc[i]; TM_UNLIKELY(perm[i] >= bs0)) {
+                // allocation
+                TM_CHECK(!h_token_ids_free_.empty());
+                token_ids_ptrs_buf_[i] = h_token_ids_free_.back();
+                h_token_ids_free_.pop_back();
+                // copy to staging buffer
+                std::copy_n(c.token_ids, c.seq_len, token_ids_buf);
+                copy(token_ids_buf, c.seq_len, token_ids_ptrs_buf_[i]);
+                token_ids_buf += c.seq_len;
+            }
+            else {
+                token_ids_ptrs_buf_[i] = h_token_ids_ptrs_[perm[i]];
+            }
+        }
+
+        copy(token_ids_ptrs_buf_, bsz, d.token_ids_ptrs);
+
+        // update `h_token_ids_ptrs_`
+        std::copy_n(token_ids_ptrs_buf_.data(), bsz, h_token_ids_ptrs_.data());
+
+        d.generation_size = 0;
+        for (int i = 0; i < rc.size(); ++i) {
+            const auto& c = *rc[i];
+            d.generation_size += c.is_generate;
+        }
+        // dbg(d.generation_size);
+
+        logits_processor->Setup(phase, env);
+        sampling->Setup(phase, env);
+        stop_criteria->Setup(phase, env);
+    }
+
+    void Prepare(int phase, TensorMap& env)
+    {
+        auto& d = *data_.at(phase);
+
+        const Buffer_<int> perm = env.at("permutation").buffer();
+
+        const int bs0  = *env.at("bs0").buffer().data<int>();
+        const int bsz  = perm.size();
+        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
+
+        if (auto g = copy.group()) {
+            Warp(random_state_.front(), d.random_state, bs0, perm, random_state_.back(), copy);
+            random_state_.Swap();
+        }
+    }
+
+    void Unprep(int phase, TensorMap& env)
+    {
+        const int bsz  = *env.at("bsz").buffer().data<int>();
+        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
+
+        auto& d = *data_.at(phase);
+
+        // state -> data
+        copy(random_state_.front().buffer(), bsz * sizeof(curandState_t), d.random_state);
+        copy(output_ids_, bsz, d.output_ids);
+    }
+
+    void Fetch(int phase, TensorMap& env)
+    {
+        auto& d    = *data_.at(phase);
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
+
+        copy(d.random_state, d.random_state.size(), random_state_buf_);
+        env.produce("random_state", random_state_buf_);
+
+        copy(d.output_ids, d.output_ids.size(), output_ids_buf_);
+        env.produce("output_ids", output_ids_buf_);
+    }
+
+    void Forward(int phase, TensorMap& env)
+    {
+        auto& d = *data_.at(phase);
+
+        const Buffer_<int> perm = env.at("permutation").buffer();
+
+        const int bs0 = *env.at("bs0").buffer().data<int>();
+        const int bsz = *env.at("bsz").buffer().data<int>();
+
+        const auto stream = core::Context::stream().handle();
+
+        if (d.random_init_needed) {
+            InitializeRandomStates((curandState_t*)random_state_.front().raw_data(),
+                                   d.random_seed.data(),
+                                   d.random_init.data(),
+                                   bsz,
+                                   stream);
+            sync_check_cuda_error();
+        }
+
+        env.emplace("output_ids", output_ids_);              // out
+        env.emplace("curand_state", random_state_.front());  // inout
+
+        if (const int gs = d.generation_size) {
+
+            env.emplace("token_ids_ptrs", d.token_ids_ptrs.slice(0, gs));
+
+            auto logits = env.consume("logits");
+
+            if (logits.dtype() != kFloat32) {
+                auto tmp = empty_like(logits, kFloat32);
+                invokeCastFloat2D(logits, tmp, stream);
+                logits = std::move(tmp);
+            }
+
+            env.produce("logits", logits.slice(0, gs));
+
+            Buffer_<int> output_pos{max_batch_size_, kDEVICE};
+            Copy(env.at("sequence_length").buffer(), gs, output_pos);
+
+            logits_processor->Forward(phase, env);
+            sampling->Forward(phase, env);
+
+            AppendTokenIds(d.token_ids_ptrs.data(), output_ids_.data(), output_pos.data(), gs, stream);
+
+            stop_criteria->Forward(phase, env);
+        }
+    }
+};
+
+Generation::~Generation() = default;
+
+Generation::Generation(
+    DataType dtype, int max_batch_size, int session_len, int vocab_size, int vocab_size_padded, int phases):
+    impl_{std::make_unique<Impl>(dtype, max_batch_size, session_len, vocab_size, vocab_size_padded, phases)}
+{
+}
+
+void Generation::Run(ExchOp op, int phase, TensorMap& env)
+{
+    if (op == ExchOp::kSetup) {
+        return impl_->Setup(phase, env);
+    }
+    else if (op == BatchOp::kPrepare) {
+        return impl_->Prepare(phase, env);
+    }
+    else if (op == BatchOp::kForward) {
+        return impl_->Forward(phase, env);
+    }
+    else if (op == ExchOp::kUnprep) {
+        return impl_->Unprep(phase, env);
+    }
+    else if (op == BatchOp::kFetch) {
+        return impl_->Fetch(phase, env);
+    }
+}
+
+// void Generation::Forward(int phase, TensorMap& env)
+// {
+//     /**
+//      * @brief
+//      * input_tensors:
+//      *   \param  logits [batch_size, beam_width, vocab_size_padded]
+//      *   \param  input_lengths [batch_size, beam_width], optional
+//      *   \param  sequence_limit_length [batch_size]
+//      *   \param  local_batch_size [1] on cpu
+//      *
+//      * output_tensors:
+//      *   \param  output_ids [max_seq_len, batch_size, 1]
+//      *   \param  curand_state [local_batch_size]
+//      *   \param  finished [batch_size * beam_width], optional
+//      *   \param  sequence_length [batch_size * beam_width], optional
+//      *   \param  sampled_indexes [batch_size, 1, kMaxLogProb], optional
+//      *   \param  sampled_logprobs [batch_size, 1, kMaxLogProb], optional
+//      *   \param  sampled_nums [batch_size, 1], optional
+//      */
+
+//     return impl_->Forward(phase, env);
+// }
+
+}  // namespace turbomind

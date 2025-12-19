@@ -11,6 +11,7 @@
 #include <ostream>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/interval.h"
 #include "src/turbomind/utils/metrics.h"
 
 namespace turbomind {
@@ -35,8 +36,7 @@ struct GenerationConfig {
 
     int output_logprobs = 0;
 
-    enum OutType
-    {
+    enum OutType {
         kNone       = 0,
         kAll        = 1,
         kGeneration = 2
@@ -138,8 +138,7 @@ struct Request {
 
     int ec;  // set when disabling conflicting requests
 
-    enum
-    {
+    enum {
         kOk            = 0,
         kInvalid       = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict      = 2,  // Concurrent requests to the same sequence
@@ -169,5 +168,51 @@ inline void UpdateState(Request& r, int status, int seq_len)
         TM_LOG_ERROR("Unknown error invoking callback for (%lu)", r.id);
     }
 }
+
+class Sequence;
+
+// Unlike `Request` which is shared by all local TP ranks, each rank has its own `RequestCache`.
+struct RequestCache {
+    std::shared_ptr<Request> request;
+
+    const Sequence&         sequence;
+    const GenerationConfig& gen_cfg;
+
+    RequestCache(std::shared_ptr<Request> r, const Sequence& s):
+        request{std::move(r)}, sequence{s}, gen_cfg{request->gen_cfg}
+    {
+    }
+
+    int status = Request::kOk;
+
+    // These members may be opaque handles from individual modules (pointers to forward declared types), but we tend to
+    // keep it simple as long as the complexity is manageable
+
+    int*     token_ids    = nullptr;  // currently the `output_ids` buf of request
+    uint8_t* random_state = nullptr;
+
+    int step0       = 0;  // set at request init, constant, first prefill step
+    int prompt_len  = 0;  // set at request init, constant, first decode step
+    int max_seq_len = 0;  // set at request init, constant
+
+    int hidden_states_offset = 0;  // set at request init, constant
+    int logits_offset        = 0;  // set at request init, constant
+
+    int seq_len = 0;  // set at request init, updated per step
+
+    int input_len   = 0;  // set at schedule (set to `seq.input_len`)
+    int history_len = 0;  // set at schedule (set to `seq.cache_len`)
+
+    bool is_decoding = 0;  // `seq_len` and `input_ids` taken from the engine
+    bool is_generate = 0;  //
+
+    int alpha = 0;  // pending growth of cache_len (draft_len + input_len)
+    int beta  = 0;  // pending growth of seq_len (draft_len + {0,1})
+
+    float rope_base = 0.f;
+
+    Interval output_hidden_states;
+    Interval output_logits;
+};
 
 }  // namespace turbomind

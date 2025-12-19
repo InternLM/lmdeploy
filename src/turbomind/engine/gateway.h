@@ -174,9 +174,11 @@ public:
         }
     }
 
-    void notify(std::vector<Signal> signals)
+    void notify(std::vector<Signal> signals, bool pred = true)
     {
-        return signal_buffer_.push(std::move(signals));
+        if (pred) {
+            signal_buffer_.push(std::move(signals));
+        }
     }
 
 private:

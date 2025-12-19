@@ -5,6 +5,7 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -15,14 +16,24 @@
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
+#include "src/turbomind/engine/request.h"
+
+#include "src/turbomind/engine/batch_data.h"
+
 namespace turbomind {
+
+void UnifiedDecoder::Run(ExchOp op, int phase, TensorMap& env)
+{
+    attn_layer_->Run(op, phase, env);
+}
 
 UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
                                const EngineParam&    engine,
                                const AttentionParam& attn,
                                const MoeParam&       moe,
                                const LoraParam&      lora,
-                               const Context&        ctx):
+                               const Context&        ctx,
+                               int                   phases):
     layer_num_(model.layer_num),
     hidden_units_(model.hidden_units),
     attn_tp_size_(engine.attn_tp_size),
@@ -31,11 +42,10 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     mlp_tp_size_(engine.mlp_tp_size),
     attn_tp_group_(ctx.comm.d_tp_group),
     rmsnorm_eps_(model.norm_eps),
-    stream_(ctx.stream),
     d_comm_(ctx.comm.d_comm),
     tune_layer_num_(model.tune_layer_num)
 {
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, engine, lora, attn_tp_size_, ctx);
+    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, engine, lora, attn_tp_size_, ctx, phases);
 
     if (std::accumulate(moe.expert_num.begin(), moe.expert_num.end(), 0LL)) {
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(model, moe, engine, ctx);
@@ -56,6 +66,9 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                               const int*    local_token_nums)
 {
     const auto dtype = hidden_states.dtype();
+
+    const auto stream = core::Context::stream().handle();
+
     if (0) {}
     else if (group0 || group1) {
         d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states.raw_data(),
@@ -68,7 +81,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                                 group0,
                                                 group1,
                                                 local_token_nums,
-                                                stream_);
+                                                stream);
         sync_check_cuda_error();
     }
     else if (d_comm_) {
@@ -81,7 +94,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                               token_num,
                                               dtype,
                                               0,
-                                              stream_);
+                                              stream);
         sync_check_cuda_error();
     }
     else {
@@ -93,12 +106,12 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                   hidden_units_,
                                   token_num,
                                   rmsnorm_eps_,
-                                  stream_);
+                                  stream);
         sync_check_cuda_error();
     }
 }
 
-void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& weights)
+void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<WeightType*>& weights)
 {
     /**
      * input tensors:
@@ -118,42 +131,55 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
      *   \param block_ptrs [total_block_counts], void*
      */
 
-    const int decode_num = *args.at("decode_num").data<int>();
-    const int prefil_num = *args.at("prefil_num").data<int>();
-    const int batch_size = prefil_num + decode_num;
-
     constexpr auto device = kDEVICE;
 
-    Tensor_<int> local_token_nums = args.at("local_token_nums");
+    Tensor             local_residual   = args.consume("input_embeds");
+    const Buffer_<int> local_token_nums = args.at("local_token_nums").buffer();
 
-    Tensor local_residual       = args.at("decoder_input");
-    Tensor global_hidden_states = args.at("decoder_output");
+    const auto local_token_num  = local_residual.shape(0);
+    const auto global_token_num = std::accumulate(local_token_nums.begin(), local_token_nums.end(), ssize_t{});
 
-    Tensor local_hidden_states = global_hidden_states;
+    TM_CHECK_EQ(local_token_num, local_token_nums[attn_dp_rank_]);
 
-    const auto global_token_num = global_hidden_states.shape(0);
-    const auto local_token_num  = local_residual.size() ? local_residual.shape(0) : 0;
+    const DataType dtype = local_residual.dtype();
 
-    if (attn_dp_size_ > 1) {  // Offset hidden states buffer for mixed DP
-        TM_CHECK_EQ(local_token_nums.size(), attn_dp_size_);
-        std::vector cumul_token_nums(attn_dp_size_ + 1, 0);
-        std::inclusive_scan(
-            local_token_nums.data(), local_token_nums.data() + attn_dp_size_, cumul_token_nums.begin() + 1);
-        const int offset    = cumul_token_nums[attn_dp_rank_];
-        local_hidden_states = global_hidden_states.slice({offset, 0}, {local_token_num, -1});
+    Tensor global_hidden_states;
+    if (d_comm_) {
+        Buffer symm_buf      = args.at("symm_buf").buffer();
+        global_hidden_states = {symm_buf.view(dtype), {global_token_num, (int)hidden_units_}};
+    }
+    else {
+        global_hidden_states = {{global_token_num, (int)hidden_units_}, local_residual.dtype(), kDEVICE};
     }
 
-    attn_layer_->Initialize(args);
+    Tensor local_hidden_states;
+    if (attn_dp_size_ > 1) {  // Offset hidden states buffer for mixed DP
+        TM_CHECK_EQ(local_token_nums.size(), attn_dp_size_);
+        std::vector offsets(attn_dp_size_ + 1, 0);
+        std::inclusive_scan(local_token_nums.data(), local_token_nums.data() + attn_dp_size_, offsets.begin() + 1);
+        const int offset    = offsets[attn_dp_rank_];
+        local_hidden_states = global_hidden_states.slice({offset, 0}, {local_token_num, -1});
+    }
+    else {
+        local_hidden_states = global_hidden_states;
+    }
 
     TM_DEBUG_TENSOR(local_residual, "res", 1);
     TM_DEBUG_TENSOR(weights.at(0)->self_attn_norm, "norm_weight", 2);
 
-    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->self_attn_norm, rmsnorm_eps_, stream_);
+    const auto stream = core::Context::stream().handle();
+
+    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->self_attn_norm, rmsnorm_eps_, stream);
     sync_check_cuda_error();
 
     TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
 
+    // auto stack_alloc{core::Context::device_alloc().adapt<core::StackAllocatorImpl>()};
+    // core::ContextGuard ctx{Allocator{stack_alloc}};
+
     for (int layer = 0; layer < layer_num_; ++layer) {
+
+        // stack_alloc->iter();
 
         /// TODO: do not skip the layers when they are heterogeneous
         if (isTuning() && layer >= tune_layer_num_) {
@@ -162,10 +188,8 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
 
         /////////////////////////////////////////////
         /// self-attention
-        attn_layer_->Forward({local_hidden_states,  //
-                              local_hidden_states,
-                              weights.at(layer)->self_attn_weights.get(),
-                              layer});
+        attn_layer_->Forward(
+            {phase, local_hidden_states, local_hidden_states, weights.at(layer)->self_attn_weights.get(), layer});
 
         TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 2);
 
@@ -222,39 +246,43 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual1", layer), 2);
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", layer + 1), 2);
+
+        // if (layer == layer_num_ - 1) {
+        //     args.at("batch").data<BatchData*>()[0]->Notify();
+        // }
     }
 
-    /// TODO
-    using T = uint16_t;
+    // Token indices selected for decoding
+    const Buffer selected_pos = args.consume("selected_token_pos").buffer();
+    // When there are no prefill sequences, token selection is not needed
+    const bool reuse_hidden_states = selected_pos.size() == local_token_num;
 
-    auto last_token_hidden_units = (T*)args.at("last_token_hidden_units").raw_data();
+    const bool output_hidden_states = args.try_("output_hidden_states");
 
-    if (decode_num) {
-        check_cuda_error(cudaMemcpyAsync(last_token_hidden_units,
-                                         (T*)local_hidden_states.raw_data(),
-                                         sizeof(T) * decode_num * hidden_units_,
-                                         cudaMemcpyDefault,
-                                         stream_));
-        // TM_DEBUG_RAW(last_token_hidden_units, decode_num * hidden_units_, "dc_out", 2);
+    Tensor hidden_states{local_hidden_states};
+
+    if (d_comm_ && (output_hidden_states || reuse_hidden_states)) {
+        // The full `hidden_states` buffer is needed for output but it's a ref into `symm_buf` atm.
+        // Copy to residual buf so that `symm_buf` may be reused safely later
+        Copy(hidden_states, local_residual);
+        hidden_states = local_residual;
     }
 
-    if (prefil_num) {
-        invokeGetFeatureOfLastToken(last_token_hidden_units + decode_num * hidden_units_,  //
-                                    (T*)local_hidden_states.raw_data(),
-                                    attn_layer_->d_cu_q_len() + decode_num,
-                                    hidden_units_,
-                                    prefil_num,
-                                    stream_);
-        sync_check_cuda_error();
-        // TM_DEBUG_RAW(last_token_hidden_units + decode_num * hidden_units_, prefil_num * hidden_units_, "pf_out", 2);
+    Tensor selected_states;
+    if (reuse_hidden_states) {
+        selected_states = hidden_states;
     }
+    else {
+        selected_states = {{selected_pos.size(), (int)hidden_units_}, dtype, kDEVICE};
+        CollectHiddenStates(hidden_states, selected_pos, selected_states, stream);
+    }
+    args.produce("hidden_states", selected_states);
 
-    Buffer out(
-        (void*)last_token_hidden_units, (decode_num + prefil_num) * hidden_units_, local_residual.dtype(), kDEVICE);
+    // TM_DEBUG_TENSOR(selected_states.slice(0, selected_pos.size()), "out", 1);
 
-    TM_DEBUG_TENSOR(out, "out", 1);
-
-    attn_layer_->Finalize();
+    if (output_hidden_states) {
+        args.produce("full_hidden_states", hidden_states);
+    }
 }
 
 }  // namespace turbomind
