@@ -459,10 +459,11 @@ LlamaTritonModel::LlamaTritonModel(std::string                            model_
 
     for (int local_rank = 0; local_rank < device_per_node; ++local_rank) {
         auto& e = engine_params_[local_rank];
-        if (e.attn_tp_rank == 0) {
+        if (e.attn_tp_rank == 0 && e.attn_cp_rank == 0) {
             node_dp_ranks_.push_back(e.outer_dp_rank * e.attn_dp_size + e.attn_dp_rank);
         }
     }
+    is_dummy_node_ = node_dp_ranks_.size() == 0;
 
     gateway_ = std::make_shared<Gateway>(
         engine_param_.outer_dp_size, engine_param_.attn_dp_size, node_dp_ranks_, ffi_ctx_factory);
@@ -670,6 +671,11 @@ void LlamaTritonModel::wakeup(int device_id, const std::vector<std::string>& tag
         contexts_[device_id]->comm.h_comm->Sync();
         createEngine(device_id, rank);
     }
+}
+
+bool LlamaTritonModel::isDummyNode()
+{
+    return is_dummy_node_;
 }
 
 std::string LlamaTritonModel::toString()

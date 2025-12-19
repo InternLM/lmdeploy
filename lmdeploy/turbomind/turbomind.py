@@ -147,7 +147,6 @@ class TurboMind:
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
         update_parallel_config(_engine_config)
-        self.is_dummy = self._check_is_dummy(_engine_config)
         if _engine_config.nnodes > 1:
             logger.info(f'dist_init_addr={_engine_config.dist_init_addr}')
             assert _engine_config.dist_init_addr is not None
@@ -168,6 +167,7 @@ class TurboMind:
         if not osp.exists(model_path):
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
         self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config)
+        self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path)
         if not _engine_config.empty_init:
             self._load_weights()
@@ -586,14 +586,6 @@ class TurboMindInstance:
             self._model_inst = self._create_model_instance(0)
         return self._model_inst
 
-    def ensure_not_dummy(func):
-
-        def wrapper(self, *args, **kwargs):
-            assert self.tm_model.is_dummy is False, 'dummy node cannot do inference'
-            return func(self, *args, **kwargs)
-
-        return wrapper
-
     def _create_model_instance(self, device_id):
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)
         return model_inst
@@ -695,17 +687,14 @@ class TurboMindInstance:
 
         return inputs, input_len
 
-    @ensure_not_dummy
     async def async_cancel(self, session_id: int = None):
         self.model_inst.cancel()
 
-    @ensure_not_dummy
     def async_end_cb(self, fut: asyncio.Future, status: int):
         """Executing on engine's signaling thread."""
         logger.info(f'[async_end_cb] session ended, status = {status}')
         fut.get_loop().call_soon_threadsafe(fut.set_result, status)
 
-    @ensure_not_dummy
     async def async_end(self, session_id):
         fut = asyncio.get_running_loop().create_future()
         self.model_inst.end(partial(self.async_end_cb, fut), session_id)
@@ -715,7 +704,6 @@ class TurboMindInstance:
         """Executing on engine's signaling thread."""
         s.loop.call_soon_threadsafe(s.release)
 
-    @ensure_not_dummy
     async def async_stream_infer(self,
                                  session_id,
                                  input_ids,

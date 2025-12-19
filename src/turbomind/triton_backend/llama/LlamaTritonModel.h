@@ -56,6 +56,8 @@ public:
 
     void wakeup(int device_id, const std::vector<std::string>& tags, int rank);
 
+    bool isDummyNode();
+
     std::string toString();
 
     int getTensorParaSize();
@@ -94,6 +96,7 @@ private:
     std::vector<std::shared_ptr<Context>> contexts_;
 
     bool is_fp16_;
+    bool is_dummy_node_;
 
     std::string model_name_;
     std::string model_dir_;

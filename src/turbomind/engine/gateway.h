@@ -75,7 +75,7 @@ public:
             // route to corresponding rank
             rank = seqid2rank_.find(r->session.id);
         }
-        else {
+        else if (node_dp_ranks_.size() > 0) {
             rank = next_.fetch_add(1, std::memory_order_relaxed) % node_dp_ranks_.size();
             rank = node_dp_ranks_[rank];
         }
