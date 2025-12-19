@@ -17,6 +17,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
         self.softmax_scale = softmax_scale
         self.block_size = block_size
         self.fill = fill
+        # TODO: configable scale fmt
+        self.scale_fmt = 'ue8m0'
 
     def forward(self, q: Tensor, k: Tensor, weights: Tensor, k_cache: Tensor, k_s_cache: Tensor,
                 meta: NSAIndexMeta) -> Tensor:
@@ -32,7 +34,7 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
 
         q_shape = q.shape
         q = q.reshape(-1, q_shape[-1])
-        q, q_s = quant_fp8(q, self.block_size, dtype=k_cache.dtype, trans_scale=True)
+        q, q_s = quant_fp8(q, self.block_size, dtype=k_cache.dtype, trans_scale=True, scale_fmt=self.scale_fmt)
         q = q.reshape(*q_shape)
         q_s = q_s.reshape(weights.shape)
         q_s = q_s * self.softmax_scale * weights
@@ -47,7 +49,8 @@ class TritonNSAIndexFP8(BaseNSAIndexFP8):
                                   kv_seqlens=k_seqlens,
                                   max_q_seqlen=max_q_seqlen,
                                   block_offsets=block_offset,
-                                  group_size=self.block_size)
+                                  group_size=self.block_size,
+                                  scale_fmt=self.scale_fmt)
 
         scores = fp8_index(q,
                            q_s,
