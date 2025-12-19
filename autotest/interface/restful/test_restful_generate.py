@@ -9,20 +9,15 @@ from typing import Any, Dict, List
 import pytest
 import requests
 from transformers import AutoTokenizer
-from utils.constant import BACKEND_LIST
+from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
 from utils.toolkit import encode_text, parse_sse_stream
 
 BASE_HTTP_URL = 'http://127.0.0.1'
 DEFAULT_PORT = 23333
-MODEL_LIST = [
-    'Qwen/Qwen3-0.6B', 'Qwen/Qwen3-VL-2B-Instruct', 'Qwen/Qwen3-30B-A3B', 'internlm/Intern-S1',
-    'internlm/internlm2_5-20b-chat', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-32B',
-    'OpenGVLab/InternVL3_5-30B-A3B', 'OpenGVLab/InternVL3-38B', 'Qwen/Qwen3-VL-8B-Instruct'
-]
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
-@pytest.mark.parametrize('model_name', MODEL_LIST)
+@pytest.mark.parametrize('model_name', RESTFUL_MODEL_LIST)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
 class TestGenerateComprehensive:
 

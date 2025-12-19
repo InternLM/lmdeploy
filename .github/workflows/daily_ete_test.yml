@@ -465,25 +465,25 @@ jobs:
         if:  matrix.model != 'internlm2_5-20b-chat' && matrix.model != 'Intern-S1' && contains(matrix.case_info, 'chat_completions_v1')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k ${{matrix.backend}} -m 'not not_${{matrix.backend}} and not internlm2_5 and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not internlm2_5 and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat_completions_v1
         if: matrix.model == 'Intern-S1' && contains(matrix.case_info, 'chat_completions_v1')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k ${{matrix.backend}} -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not internlm2_5' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat_completions_v1 - internlm2_5-20b-chat
         if:  matrix.model == 'internlm2_5-20b-chat' && contains(matrix.case_info, 'chat_completions_v1')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k ${{matrix.backend}} -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not interns1' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - completions_v1
         if: contains(matrix.case_info, 'completions_v1')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k ${{matrix.backend}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_completions_v1.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test generate - base
         if:  matrix.generate_type == 'base' && contains(matrix.case_info, 'generate')
