@@ -726,9 +726,3 @@ def is_model_in_list(config, parallel_config, model):
             break
 
     return match
-
-
-if __name__ == '__main__':
-    parallel_config = 2
-    config = get_benchmark_model_list(parallel_config)
-    print(config)
