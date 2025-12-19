@@ -73,9 +73,15 @@ class Attention(nn.Module):
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
         s_aux: torch.Tensor = None,
+        nsa_indices: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
+        kwargs = dict()
+        if nsa_indices is not None:
+            kwargs['nsa_indices'] = nsa_indices
+        if s_aux is not None:
+            kwargs['learnable_sink'] = s_aux
         return self.impl.forward(
             query,
             key,
@@ -85,8 +91,8 @@ class Attention(nn.Module):
             attn_metadata=attn_metadata,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            learnable_sink=s_aux,
             inplace=inplace,
+            **kwargs,
         )
 
     @staticmethod

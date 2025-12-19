@@ -15,6 +15,8 @@ class AttentionMetadata:
     q_seqlens: torch.Tensor = None
     kv_seqlens: torch.Tensor = None
     fill_seqlens: torch.Tensor = None
+    cu_seqlens_q: torch.Tensor = None
+    cu_seqlens_k: torch.Tensor = None
     quant_policy: Literal[0, 4, 8] = 0
 
 
@@ -70,6 +72,7 @@ class AttentionImpl(ABC, Generic[T]):
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
         learnable_sink: torch.Tensor = None,
+        nsa_indices: torch.Tensor = None,
         inplace: bool = False,
     ) -> torch.Tensor:
         """forward."""

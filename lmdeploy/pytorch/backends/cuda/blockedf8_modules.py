@@ -17,6 +17,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
     """Triton linear blocked f8 implementation."""
 
     def __init__(self, in_features: int, out_features: int, block_size: int, out_dtype: torch.dtype = torch.float16):
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.out_dtype = out_dtype
@@ -34,9 +35,18 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
         """forward."""
         x_shape = x.shape
         x = x.flatten(0, -2)
-        input_quant, input_scale = quant_fp8(x, self.block_size, dtype=weight.dtype, trans_scale=True)
+        input_quant, input_scale = quant_fp8(x,
+                                             self.block_size,
+                                             dtype=weight.dtype,
+                                             trans_scale=True,
+                                             scale_fmt=self.scale_fmt)
 
-        out = blocked_gemm_fp8(input_quant, input_scale, weight.t(), scale.t(), out_dtype=x.dtype)
+        out = blocked_gemm_fp8(input_quant,
+                               input_scale,
+                               weight.t(),
+                               scale.t(),
+                               out_dtype=x.dtype,
+                               scale_fmt=self.scale_fmt)
         if bias is not None:
             out += bias
 
@@ -69,6 +79,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
     """Deep gemm blocked f8 implementation."""
 
     def __init__(self, in_features: int, out_features: int, block_size: int, out_dtype: torch.dtype = torch.float16):
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.out_dtype = out_dtype
@@ -100,7 +111,10 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         random.shuffle(ranges)
         for m in ranges:
             inputs = torch.empty(m, k, dtype=self.out_dtype, device=device)
-            input_quant, input_scale = quant_fp8_tma(inputs, self.block_size, dtype=weight.dtype)
+            input_quant, input_scale = quant_fp8_tma(inputs,
+                                                     self.block_size,
+                                                     dtype=weight.dtype,
+                                                     scale_fmt=self.scale_fmt)
             deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=inputs.dtype)
 
     def forward(self,
@@ -115,7 +129,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         """forward."""
         x_shape = x.shape
         x = x.flatten(0, -2)
-        input_quant, input_scale = quant_fp8_tma(x, self.block_size, dtype=weight.dtype)
+        input_quant, input_scale = quant_fp8_tma(x, self.block_size, dtype=weight.dtype, scale_fmt=self.scale_fmt)
 
         out = deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=x.dtype)
         out = out[:x.size(0)]

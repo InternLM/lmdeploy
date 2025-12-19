@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
 from abc import ABC, abstractmethod
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -119,6 +119,9 @@ class FusedMoEW8A8Builder(ABC):
 class FusedMoEBlockedF8Impl(ABC):
     """Fused moe blocked f8 implementation."""
 
+    def __init__(self):
+        self.scale_fmt: Optional[str] = None
+
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
         """Update weights."""
@@ -127,6 +130,10 @@ class FusedMoEBlockedF8Impl(ABC):
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         raise NotImplementedError('Not Implemented.')
+
+    def set_scale_fmt(self, scale_fmt: Optional[str]):
+        """Set scale fmt."""
+        self.scale_fmt = scale_fmt
 
     @abstractmethod
     def forward(self,
