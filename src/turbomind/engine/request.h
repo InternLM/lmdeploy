@@ -242,7 +242,7 @@ void serdes(Archive& ar, Request& r)
     ar & r.gen_cfg;
     ar & r.stream_output;
     ar & r.inputs;
-    if constexpr(Archive::is_loading::value) {
+    if constexpr(Archive::is_loading) {
         load_req_output(ar, r.outputs);
         r.output_ids      = r.outputs.at("output_ids");
         r.sequence_length = r.outputs.at("sequence_length");
