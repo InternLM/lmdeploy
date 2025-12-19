@@ -961,7 +961,6 @@ async def generate(request: GenerateReqInput, raw_request: Request = None):
         include_stop_str_in_output=request.include_stop_str_in_output,
         return_routed_experts=request.return_routed_experts,
     )
-    logger.warning(f'received request with session_id {request.session_id}')
     result_generator = VariableInterface.async_engine.generate(
         messages=prompt,
         session_id=request.session_id,
