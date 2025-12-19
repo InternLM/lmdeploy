@@ -581,10 +581,11 @@ class MoEGate(nn.Module):
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
-        self.weight = nn.Parameter(torch.empty((self.n_routed_experts, self.gating_dim), dtype=dtype, device=device))
+        self.weight = nn.Parameter(
+            torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
         if self.topk_method == 'noaux_tc':
             self.e_score_correction_bias = nn.Parameter(
-                torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
+                torch.empty((self.n_routed_experts, ), dtype=torch.float32, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
@@ -603,7 +604,7 @@ class MoEGate(nn.Module):
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
         sequence_length, hidden_dim = hidden_states.shape
-        router_logits = F.linear(hidden_states, self.weight)
+        router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.
@@ -1293,6 +1294,14 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     return True
             return False
 
+        def __skip_layers():
+            """We might change the number of layers so we can debug the model
+            with less gpus."""
+            import re
+            matches = re.findall(r'\.layers\.(\d+)\.', name)
+            layer_id = int(matches[0])
+            return layer_id >= self.config.num_hidden_layers
+
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ('.gate_up_proj', '.gate_proj', 0),
@@ -1342,6 +1351,10 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 # skip nextn
                 if __skip_nextn(name, nextn_keys):
                     continue
+
+                if __skip_layers():
+                    continue
+
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 

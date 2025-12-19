@@ -141,6 +141,8 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
 
     if isinstance(outputs, Response):
         outputs = [outputs]
+    elif outputs is None:
+        outputs = [outputs]
     try:
         term_size = os.get_terminal_size().columns
     except Exception:
@@ -183,10 +185,11 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
         print(header_formatted)
         print()
 
-        if enable_meta:
-            _print_meta(out)
+        if out is not None:
+            if enable_meta:
+                _print_meta(out)
 
-        _print_section('TEXT', out.text, border_color)
+            _print_section('TEXT', out.text, border_color)
 
         if idx < len(outputs) - 1:  # Add separator when it's not the last output
             print(colored('─' * (term_size), border_color, attrs=['dark']))

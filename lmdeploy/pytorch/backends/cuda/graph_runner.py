@@ -84,8 +84,10 @@ class CUDASingleGraphRunner:
             input_buffers=dict(),
             output_buffers=dict(),
             vocab_size=self.model_config.vocab_size,
+            use_mla_fp8_cache=getattr(self.model_config, 'use_mla_fp8_cache', False),
+            use_flash_mla=getattr(self.model_config, 'use_flash_mla', False),
+            mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
             decode_query_len=decode_query_len,
-            use_flash_mla=model_config.use_flash_mla,
             use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
         )
         self.device = device

@@ -201,12 +201,12 @@ class ApplyRotaryEmb(nn.Module):
     def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
         """forward."""
 
-        assert query.dim() == key.dim() == 3, 'Expected query key (seq_len, heads, head_dim)'
         assert cos.dim() <= 3 and sin.dim() <= 3
 
         need_reshape = False
         if cos.dim() == 3:
             # for fope
+            assert query.dim() == key.dim() == 3, 'Expected query key (seq_len, heads, head_dim)'
             need_reshape = True
             query_shape = query.shape
             key_shape = key.shape

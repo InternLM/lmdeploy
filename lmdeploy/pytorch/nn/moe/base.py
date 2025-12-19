@@ -106,7 +106,7 @@ class MoEForwardDPTP:
         self.gather_rank = self.rank // self.attn_tp
         self.gather_group = tp_group.gpu_gather_group
         self.tp_group = tp_group.gpu_group
-        self.max_tokens_per_round = max_tokens_per_round * self.attn_tp // self.tp // 2
+        self.max_tokens_per_round = max_tokens_per_round * self.attn_tp // self.tp
 
     def all_gather(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.Tensor,
                    tp_sizes: List[int]):

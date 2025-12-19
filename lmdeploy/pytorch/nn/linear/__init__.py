@@ -90,11 +90,13 @@ def build_linear(
             fp8_dtype = torch.float8_e5m2
         else:
             raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        scale_fmt = quant_config.get('scale_fmt', None)
         return BlockedF8Linear(
             in_features,
             out_features,
             bias=bias,
             fp8_dtype=fp8_dtype,
+            scale_fmt=scale_fmt,
             dtype=dtype,
             device=device,
             colwise=colwise,
@@ -246,11 +248,13 @@ def build_merged_colwise_linear(
             fp8_dtype = torch.float8_e5m2
         else:
             raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        scale_fmt = quant_config.get('scale_fmt', None)
         return MergedBlockedF8Linear(
             in_features=in_features,
             all_out_features=all_out_features,
             bias=bias,
             fp8_dtype=fp8_dtype,
+            scale_fmt=scale_fmt,
             dtype=dtype,
             device=device,
             is_tp=is_tp,
@@ -331,6 +335,7 @@ def build_qkv_proj(in_features: int,
             fp8_dtype = torch.float8_e5m2
         else:
             raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        scale_fmt = quant_config.get('scale_fmt', None)
         return QKVBlockedF8Linear(in_features=in_features,
                                   num_q_heads=num_q_heads,
                                   num_kv_heads=num_kv_heads,
@@ -338,6 +343,7 @@ def build_qkv_proj(in_features: int,
                                   head_size_v=head_size_v,
                                   bias=bias,
                                   fp8_dtype=fp8_dtype,
+                                  scale_fmt=scale_fmt,
                                   dtype=dtype,
                                   device=device,
                                   is_tp=is_tp,

@@ -25,7 +25,8 @@ class LinearWeightsBlockedF8(LinearWeights):
                  dtype: torch.dtype,
                  device: torch.device,
                  bias: bool = False,
-                 expert_list: List[int] = None):
+                 expert_list: List[int] = None,
+                 scale_fmt: Optional[str] = None):
         super().__init__(num_experts=num_experts,
                          in_features=in_features,
                          out_features=out_features,
@@ -34,6 +35,7 @@ class LinearWeightsBlockedF8(LinearWeights):
                          device=device,
                          bias=bias,
                          expert_list=expert_list)
+        self.scale_fmt = scale_fmt
         self.block_size = block_size
         weight_scale_inv = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
                                        dtype=torch.float32,
@@ -127,7 +129,10 @@ class LinearWeightsBlockedF8(LinearWeights):
         """Weight load with quant."""
         if loaded_weight.dtype != param.dtype:
             # quant loaded weight
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device),
+                                                        param.dtype,
+                                                        self.block_size,
+                                                        scale_fmt=self.scale_fmt)
             self.weight._base_weight_loader(self.weight, quanted_weight, expert_id, shard_id)
             self.weight_scale_inv.weight_loader(self.weight_scale_inv, scaling, expert_id, shard_id)
         else:
@@ -145,6 +150,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
                  bias: bool = False,
                  renormalize: bool = False,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 scale_fmt: Optional[str] = None,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
@@ -156,6 +162,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
         # init distributed tp arguments
         self.block_size = 128
         self.init_dist_args(all_reduce)
+        self.scale_fmt = scale_fmt
 
         super().__init__(
             tp=self.tp,
@@ -176,6 +183,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
                                        out_dtype=dtype,
                                        layer_idx=layer_idx,
                                        custom_gateup_act=act_func is not None)
+        self.impl.set_scale_fmt(scale_fmt)
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
@@ -194,7 +202,8 @@ class FusedMoEBlockedF8(FusedMoEBase):
                                               dtype=fp8_dtype,
                                               device=device,
                                               bias=bias,
-                                              expert_list=expert_list)
+                                              expert_list=expert_list,
+                                              scale_fmt=scale_fmt)
         self.down = LinearWeightsBlockedF8(num_experts,
                                            ffn_dim,
                                            hidden_dim,
@@ -203,7 +212,8 @@ class FusedMoEBlockedF8(FusedMoEBase):
                                            dtype=fp8_dtype,
                                            device=device,
                                            bias=bias,
-                                           expert_list=expert_list)
+                                           expert_list=expert_list,
+                                           scale_fmt=scale_fmt)
 
         self.hidden_dim = hidden_dim
         self.ffn_dim = ffn_dim
