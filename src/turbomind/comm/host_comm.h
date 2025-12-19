@@ -102,7 +102,7 @@ void ser_fn(void* data, int offset, int n, size_t& size, void* out)
         size = sa.size();
     }
     else {
-        core::BinaryOutputExArchive oa(core::ArrayWrapper((std::byte*)out, size));
+        core::BinaryOutputArchive oa(core::ArrayWrapper((std::byte*)out, size));
         for (int i = 0; i < n; ++i) {
             oa&((T*)data)[offset + i];
         }
@@ -112,7 +112,7 @@ void ser_fn(void* data, int offset, int n, size_t& size, void* out)
 template<class T>
 void des_fn(void* data, int offset, int n, void* in, size_t size)
 {
-    core::BinaryInputExArchive ia(core::ArrayWrapper((std::byte*)in, size));
+    core::BinaryInputArchive ia(core::ArrayWrapper((std::byte*)in, size));
     for (int i = 0; i < n; ++i) {
         ia&((T*)data)[offset + i];
     }

@@ -70,10 +70,7 @@ struct OutputArchive {
     template<class T>
     void operator&(T&& x)
     {
-        if constexpr (is_array_wrapper_v<T>) {
-            reinterpret_cast<Derived*>(this)->write_array((T &&) x);
-        }
-        else if constexpr (has_save_v<Derived, T>) {
+        if constexpr (has_save_v<Derived, T>) {
             save(*this, (T &&) x);
         }
         else if constexpr (has_serdes_v<Derived, T>) {
@@ -93,10 +90,7 @@ struct InputArchive {
     template<class T>
     void operator&(T&& x)
     {
-        if constexpr (is_array_wrapper_v<T>) {
-            reinterpret_cast<Derived*>(this)->read_array((T&)x);
-        }
-        else if constexpr (has_load_v<Derived, T>) {
+        if constexpr (has_load_v<Derived, T>) {
             load(*this, (T &&) x);
         }
         else if constexpr (has_serdes_v<Derived, T>) {
@@ -124,7 +118,7 @@ struct BinarySizeArchive: OutputArchive<BinarySizeArchive> {
     }
 
     template<class T>
-    void write_array(const ArrayWrapper<T>& arr)
+    void write(const ArrayWrapper<T>& arr)
     {
         static_assert(std::is_trivially_copyable_v<T>);
         size_ += sizeof(T) * arr.count();
@@ -133,65 +127,10 @@ struct BinarySizeArchive: OutputArchive<BinarySizeArchive> {
 
 struct BinaryOutputArchive: OutputArchive<BinaryOutputArchive> {
 
-    std::vector<std::byte> bytes_;
-
-    BinaryOutputArchive() = default;
-    BinaryOutputArchive(size_t expected_size)
-    {
-        bytes_.reserve(expected_size);
-    }
-
-    auto& bytes()
-    {
-        return bytes_;
-    };
-
-    template<class T>
-    void write(const T& x)
-    {
-        static_assert(std::is_trivially_copyable_v<T>);
-        auto data = (const std::byte*)&x;
-        bytes_.insert(bytes_.end(), data, data + sizeof(T));
-    }
-
-    template<class T>
-    void write_array(const ArrayWrapper<T>& arr)
-    {
-        static_assert(std::is_trivially_copyable_v<T>);
-        auto data = (const std::byte*)arr.data();
-        bytes_.insert(bytes_.end(), data, data + sizeof(T) * arr.count());
-    }
-};
-
-struct BinaryInputArchive: InputArchive<BinaryInputArchive> {
-    std::vector<std::byte> bytes_;
-    size_t                 ptr_;
-
-    BinaryInputArchive(std::vector<std::byte> bytes): bytes_{std::move(bytes)}, ptr_{} {}
-
-    template<class T>
-    void read(T& x)
-    {
-        static_assert(std::is_trivially_copyable_v<T>);
-        std::copy_n(bytes_.data() + ptr_, sizeof(T), (std::byte*)&x);
-        ptr_ += sizeof(T);
-    }
-
-    template<class T>
-    void read_array(ArrayWrapper<T>& arr)
-    {
-        static_assert(std::is_trivially_copyable_v<T>);
-        std::copy_n(bytes_.data() + ptr_, sizeof(T) * arr.count(), (std::byte*)arr.data());
-        ptr_ += sizeof(T) * arr.count();
-    }
-};
-
-struct BinaryOutputExArchive: OutputArchive<BinaryOutputExArchive> {
-
     ArrayWrapper<std::byte> external_;
     size_t                  ptr_;
 
-    BinaryOutputExArchive(ArrayWrapper<std::byte> external): external_{external}, ptr_{} {}
+    BinaryOutputArchive(ArrayWrapper<std::byte> external): external_{external}, ptr_{} {}
 
     template<class T>
     void write(const T& x)
@@ -204,7 +143,7 @@ struct BinaryOutputExArchive: OutputArchive<BinaryOutputExArchive> {
     }
 
     template<class T>
-    void write_array(const ArrayWrapper<T>& arr)
+    void write(const ArrayWrapper<T>& arr)
     {
         static_assert(std::is_trivially_copyable_v<T>);
         auto data = (const std::byte*)arr.data();
@@ -214,12 +153,12 @@ struct BinaryOutputExArchive: OutputArchive<BinaryOutputExArchive> {
     }
 };
 
-struct BinaryInputExArchive: InputArchive<BinaryInputExArchive> {
+struct BinaryInputArchive: InputArchive<BinaryInputArchive> {
 
     ArrayWrapper<std::byte> external_;
     size_t                  ptr_;
 
-    BinaryInputExArchive(ArrayWrapper<std::byte> external): external_{external}, ptr_{} {}
+    BinaryInputArchive(ArrayWrapper<std::byte> external): external_{external}, ptr_{} {}
 
     template<class T>
     void read(T& x)
@@ -231,7 +170,7 @@ struct BinaryInputExArchive: InputArchive<BinaryInputExArchive> {
     }
 
     template<class T>
-    void read_array(ArrayWrapper<T>& arr)
+    void read(ArrayWrapper<T>&& arr)
     {
         static_assert(std::is_trivially_copyable_v<T>);
         TM_CHECK_LE(ptr_ + sizeof(T) * arr.count(), external_.count());
