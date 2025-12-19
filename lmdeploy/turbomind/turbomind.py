@@ -176,19 +176,6 @@ class TurboMind:
 
         self.session_len = self.config.session_len
 
-    def _check_is_dummy(self, cfg: TurbomindEngineConfig):
-        dp_ranks = []
-        comm_size = cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size
-        tp_cp_size = cfg.attn_tp_size * cfg.attn_cp_size
-        for i in range(len(cfg.devices)):
-            rank = i + len(cfg.devices) * cfg.node_rank
-            outer_dp_rank = rank // comm_size
-            attn_tp_rank = rank % tp_cp_size // cfg.attn_cp_size
-            attn_dp_rank = rank % comm_size // tp_cp_size
-            if attn_tp_rank == 0:
-                dp_ranks.append((rank, outer_dp_rank * cfg.attn_dp_size + attn_dp_rank))
-        return len(dp_ranks) == 0
-
     def _check_unloaded_tm_params(self):
         tm_params = self._tm_model.tm_params
         if len(tm_params) > 0:
