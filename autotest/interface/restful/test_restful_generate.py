@@ -940,7 +940,7 @@ class TestGenerateComprehensive:
 
     def test_stop_token_ids(self):
         print(f'\n[Model: {self.model_name}] Running stop_token_ids test')
-        payload = {'prompt': 'Once upon a time', 'max_tokens': 50, 'stop_token_ids': [11], 'stream': False}
+        payload = {'prompt': 'Once upon a time', 'max_tokens': 50, 'stop_token_ids': [11, 281], 'stream': False}
 
         resp = self._post(payload)
         assert resp.status_code == 200, \
@@ -959,10 +959,10 @@ class TestGenerateComprehensive:
 
         assert finish_reason in ['stop', 'eos'], \
             f'Expected generation to end due to stop token, ' \
-            f'actual reason: {finish_reason}. This may mean stop_token_ids [11] ' \
+            f'actual reason: {finish_reason}. This may mean stop_token_ids [11, 281] ' \
             f"didn't take effect, or generation was truncated."
 
-        print(f'\n stop_token_ids=[11] generation result: length={actual_length}, '
+        print(f'\n stop_token_ids=[11, 281] generation result: length={actual_length}, '
               f"end reason='{finish_reason}', text='{generated_text[:20]}...'")
 
     def test_combined_parameters(self):
