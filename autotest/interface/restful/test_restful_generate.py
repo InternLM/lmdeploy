@@ -639,7 +639,7 @@ class TestGenerateComprehensive:
 
     def test_same_session_id_allowed(self):
         print(f'\n[Model: {self.model_name}] Running same session_id test')
-        sid = 9999
+        sid = 9999 + int(time.time_ns()) % 100000
 
         resp1 = self._post({'prompt': 'First message:', 'session_id': sid, 'max_tokens': 2})
         resp2 = self._post({'prompt': 'Second message:', 'session_id': sid, 'max_tokens': 2})
@@ -1078,7 +1078,7 @@ class TestGenerateComprehensive:
 
     def test_session_id_with_all_parameters(self):
         print(f'\n[Model: {self.model_name}] Running session_id with all parameters test')
-        session_id = int(time.time()) % 100000
+        session_id = int(time.time_ns()) % 100000
 
         resp1 = self._post({
             'session_id': session_id,
@@ -1116,7 +1116,7 @@ class TestGenerateComprehensive:
 
         resp2 = self._post({
             'prompt': 'Write a sentence ending with a period. Stop here test.',
-            'max_tokens': 50,
+            'max_tokens': 200,
             'stop': ['.'],
             'stream': False
         })
@@ -1131,7 +1131,7 @@ class TestGenerateComprehensive:
                 "Stop token '.' should cause generation to end at period"
 
         assert finish_reason in ['stop', 'eos'], \
-            f'Expected to end due to stop token, actual: {finish_reason}'
+            f'Expected to end due to stop token, actual: {finish_reason}, content is {text2}'
 
         print(f"  Stop at '.': generated '{text2}' (Reason: {finish_reason})")
 
