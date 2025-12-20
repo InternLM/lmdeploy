@@ -1,5 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#pragma once
+
 #include <cstdlib>
 #include <sstream>
 #include <string>
