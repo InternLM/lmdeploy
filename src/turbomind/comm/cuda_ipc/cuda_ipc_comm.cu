@@ -12,6 +12,7 @@
 
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/comm/env.h"
 #include "src/turbomind/comm/host_comm.h"
 
 #include "src/turbomind/comm/cuda_ipc/semaphore.h"
@@ -21,47 +22,10 @@
 
 namespace turbomind::comm {
 
-static int GetMaxCtas()
-{
-    static int value = [] {
-        bool is_set{};
-        int  x = 0;
-        try {
-            if (auto p = std::getenv("TM_COMM_MAX_CTAS")) {
-                is_set = true;
-                x      = std::stoi(p);
-            }
-        }
-        catch (...) {
-        }
-        if (is_set) {
-            TM_LOG_INFO("[COMM] MAX_CTAS=%d", x);
-        }
-        return x;
-    }();
-    return value;
-};
-
-static int GetNvlsEnable()
-{
-    static int value = [] {
-        bool is_set{};
-        int  x = 1;
-        try {
-            if (auto p = std::getenv("TM_COMM_NVLS_ENABLE")) {
-                is_set = true;
-                x      = std::stoi(p);
-            }
-        }
-        catch (...) {
-        }
-        if (is_set) {
-            TM_LOG_INFO("[COMM] NVLS_ENABLE=%d", x);
-        }
-        return x;
-    }();
-    return value;
-}
+TM_ENV_VAR(COMM, MAX_CTAS, 0);
+TM_ENV_VAR(COMM, NVLS_ENABLE, 1);
+// per-rank send size threshold to use copy engine instead of p2p for all-gather colls
+TM_ENV_VAR(COMM, COPY_THRESHOLD, INT64_MAX);
 
 int CudaIpcCommImpl::Split(int color, int key, int group)
 {
@@ -123,20 +87,21 @@ CudaIpcCommImpl::CudaIpcCommImpl(HostComm h_comm):
     comm::AllGather(h_comm_, ordinals_.data(), 1);
 
     max_ctas_ = {std::min(getSMCount(), kMaxChannels)};
-    if (auto v = GetMaxCtas()) {
+    if (auto v = GetEnv<COMM_MAX_CTAS>()) {
         max_ctas_.set_value(std::min(v, max_ctas_.value()));
     }
     auto minval = comm::AllReduce(h_comm_, max_ctas_.value(), RedOp::kMin);
     TM_CHECK_EQ(max_ctas_.value(), minval) << "MAX_CTAS set to different values";
 
 #if __CUDACC_VER_MAJOR__ >= 12
-    const int nvls_enable = GetNvlsEnable();
-    if (global_n_ranks_ >= 4 && nvls_enable) {  // solve 2n-2>n+1 -> n>3
+    if (global_n_ranks_ >= 4 && GetEnv<COMM_NVLS_ENABLE>()) {  // solve 2n-2>n+1 -> n>3
         CUDRVCHECK(
             cuDeviceGetAttribute(&multicast_capability_, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, ordinals_[rank]));
         multicast_capability_ = comm::AllReduce(h_comm_, multicast_capability_, RedOp::kMin);
     }
 #endif
+
+    copy_threshold_ = GetEnv<COMM_COPY_THRESHOLD>();
 
     // Prepare access descriptors
     alloc_access_descs_.resize(n_ranks);

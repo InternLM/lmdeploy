@@ -33,9 +33,10 @@ public:
 
     int apply(int _default)
     {
-        if (!is_set_) { // `value_` is max possible value in this case
+        if (!is_set_) {  // `value_` is max possible value in this case
             return std::min(_default, value_);
-        } else {
+        }
+        else {
             return value_;
         }
     }
@@ -223,6 +224,7 @@ private:
     std::vector<Group> groups_;
 
     MaxCtas max_ctas_;
+    size_t  copy_threshold_{INT64_MAX};
 };
 
 struct Rank {

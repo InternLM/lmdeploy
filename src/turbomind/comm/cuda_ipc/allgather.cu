@@ -12,38 +12,6 @@
 
 namespace turbomind::comm {
 
-static size_t get_ag_memcpy_thres()
-{
-    static size_t value = []() -> size_t {
-        const auto p = std::getenv("TM_COMM_AG_COPY_THRESHOLD");
-        try {
-            if (p) {
-                return std::stoull(p);
-            }
-        }
-        catch (...) {
-        }
-        return INT64_MAX;
-    }();
-    return value;
-}
-
-static bool get_ag_use_nvls()
-{
-    static bool value = []() -> bool {
-        const auto p = std::getenv("TM_COMM_AG_USE_NVLS");
-        try {
-            if (p) {
-                return std::stoull(p);
-            }
-        }
-        catch (...) {
-        }
-        return false;
-    }();
-    return value;
-}
-
 __global__ void Barrier_V2(SystemSemaphoreInfo* semaphores, int ranks)
 {
     SystemSemaphore sem(semaphores, ranks, blockIdx.x, threadIdx.x);
@@ -124,8 +92,8 @@ void CudaIpcCommImpl::AllGather(
         const auto   symm_ptr = get_symmetric_v2((T*)recvbuff, group);
         const size_t slice    = bytesize / sizeof(T);
         const int    threads  = 1024;
-        if (symm_ptr.mc && get_ag_use_nvls()) {
-            const int blocks = std::min<int>(1, (slice + threads - 1) / threads);
+        if (symm_ptr.mc) {
+            const int blocks = std::min<int>(4, (slice + threads - 1) / threads);
             Allgather_NVLS_V2<T><<<blocks, threads, 0, stream>>>(
                 symm_ptr.uc[rank], symm_ptr.mc, semaphore, rank, ranks, slice, std::false_type{});
         }
@@ -153,7 +121,7 @@ void CudaIpcCommImpl::AllGather(
         Barrier(group, stream);
     };
 
-    if (bytesize < get_ag_memcpy_thres()) {
+    if (bytesize < copy_threshold_) {
         if (bytesize % sizeof(uint4) == 0) {
             invoke(uint4{});
         }
@@ -308,8 +276,8 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
 
         auto symm_ptr = get_symmetric_v2((T*)recvbuff, group);
 
-        if (symm_ptr.mc && get_ag_use_nvls()) {
-            const int blocks = std::min<int>(1, (height + groups - 1) >> log2_groups);
+        if (symm_ptr.mc) {
+            const int blocks = std::min<int>(4, (height + groups - 1) >> log2_groups);
             Allgather2D_NVLS_V2<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,
                                                                    symm_ptr.mc,
                                                                    semaphore,
@@ -360,7 +328,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
         Barrier(group, stream);
     };
 
-    if (nbytes < get_ag_memcpy_thres()) {
+    if (nbytes < copy_threshold_) {
         if (byte_width % sizeof(uint4) == 0) {
             invoke(uint4{});
         }
