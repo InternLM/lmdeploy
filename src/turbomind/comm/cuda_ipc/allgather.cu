@@ -130,7 +130,7 @@ void CudaIpcCommImpl::AllGather(
                 symm_ptr.uc[rank], symm_ptr.mc, semaphore, rank, ranks, slice, std::false_type{});
         }
         else {
-            const int blocks = std::min<int>(32, (slice + threads - 1) / threads);
+            const int blocks = std::min<int>(max_ctas_.apply(32), (slice + threads - 1) / threads);
             Allgather_Simple_Pull<T>
                 <<<blocks, threads, 0, stream>>>(symm_ptr.uc, semaphore, rank, ranks, slice, std::false_type{});
         }
@@ -324,7 +324,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
                                                                    std::true_type{});
         }
         else {
-            const int blocks = std::min<int>(48, (height + groups - 1) >> log2_groups);
+            const int blocks = std::min<int>(max_ctas_.apply(48), (height + groups - 1) >> log2_groups);
             Allgather2D_Simple_Pull<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
                                                                        symm_ptr.uc,
                                                                        semaphore,

@@ -270,7 +270,8 @@ void CudaIpcCommImpl::AllReduceSum(
             const int     slice    = (count / vec_size + n_ranks - 1) / n_ranks;
             const int     first    = rank * slice;
             const int     last     = std::min<int>(count / vec_size, first + slice);
-            const int     blocks   = std::min(4, (slice + threads - 1) / threads);
+            const int     max_ctas = max_ctas_.apply(16);
+            const int     blocks   = std::min(max_ctas, (slice + threads - 1) / threads);
             Allreduce_NVLS_V2<<<blocks, threads, 0, stream>>>(symm_ptr.mc,  //
                                                               semaphore,
                                                               n_ranks,
@@ -304,7 +305,8 @@ void CudaIpcCommImpl::AllReduceSum(
             constexpr int vec_size = sizeof(uint4) / sizeof(T);
             constexpr int threads  = 1024;
             const int     slice    = (count / vec_size + n_ranks - 1) / n_ranks;
-            const int     blocks   = std::min(48, (slice + threads - 1) / threads);
+            const int     max_ctas = max_ctas_.apply(48);
+            const int     blocks   = std::min(max_ctas, (slice + threads - 1) / threads);
             Allreduce_Simple_Push_v3<<<blocks, threads, 0, stream>>>((T*)data,
                                                                      (T*)scratch_buff_,
                                                                      symm_ptr.uc,
@@ -321,7 +323,8 @@ void CudaIpcCommImpl::AllReduceSum(
             constexpr int vec_size = sizeof(uint4) / sizeof(T);
             constexpr int threads  = 1024;
             const int     slice    = (count / vec_size + n_ranks - 1) / n_ranks;
-            const int     blocks   = std::min(48, (slice + threads - 1) / threads);
+            const int     max_ctas = max_ctas_.apply(48);
+            const int     blocks   = std::min(max_ctas, (slice + threads - 1) / threads);
             Allreduce_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)data,
                                                                   symm_ptr.uc,
                                                                   semaphore,
