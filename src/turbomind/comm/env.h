@@ -12,8 +12,7 @@ namespace turbomind {
 template<class E>
 auto GetEnv()
 {
-    // using T        = typename E::type;
-    static auto value = [&] {
+    static auto value = [] {
         bool is_set{};
         auto x  = E::init();
         using T = decltype(x);
