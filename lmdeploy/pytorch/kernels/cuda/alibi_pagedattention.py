@@ -51,16 +51,9 @@ def get_slope(i, n):
 
 
 @triton.jit
-def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr, BLOCK: tl.constexpr):
-    if num_sub_blocks > 1:
-        offs_sub = tl.arange(0, num_sub_blocks)
-        offs_n = tl.arange(0, BLOCK // num_sub_blocks)
-        ret = tl.load(offset_ptr + block_id * num_sub_blocks +
-                      offs_sub)[None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
-        return tl.ravel(ret)
-    else:
-        offs_n = tl.arange(0, BLOCK)
-        return tl.load(offset_ptr + block_id) * BLOCK + offs_n
+def _load_block_offsets(offset_ptr, block_id, BLOCK: tl.constexpr):
+    offs_n = tl.arange(0, BLOCK)
+    return tl.load(offset_ptr + block_id) * BLOCK + offs_n
 
 
 @triton.jit
@@ -76,9 +69,11 @@ def _fwd_split_kernel(
     stride_qbs,
     stride_qh,
     stride_qd,
+    stride_kp,
     stride_kbs,
     stride_kh,
     stride_kd,
+    stride_vp,
     stride_vbs,
     stride_vh,
     stride_vd,
@@ -91,7 +86,6 @@ def _fwd_split_kernel(
     num_heads,
     kv_group_num,
     block_per_cta,
-    num_sub_blocks: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
@@ -115,8 +109,8 @@ def _fwd_split_kernel(
 
     q = tl.load(Q + off_q).to(tl.float32)
 
-    k_ptrs = K + off_k
-    v_ptrs = V + off_v
+    k_ptrs = K + off_k + offs_n[:, None] * stride_kbs
+    v_ptrs = V + off_v + offs_n[:, None] * stride_vbs
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
     head_slope = get_slope(cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
@@ -132,30 +126,27 @@ def _fwd_split_kernel(
 
     # load block offset
     start_block_id = loop_start // BLOCK_N
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
+    block_offset_ptrs += start_block_id
 
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
+        b_off = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         mask = (start_n + offs_n[:, None]) < cur_batch_kv_len
 
         # -- compute qk ----
         k = tl.load(
-            k_ptrs + b_offset[:, None] * stride_kbs,
+            k_ptrs + b_off * stride_kp,
             mask=mask,
             other=0.0,
         )
 
         v = tl.load(
-            v_ptrs + b_offset[:, None] * stride_vbs,
+            v_ptrs + b_off * stride_vp,
             mask=mask,
             other=0.0,
         )
-
-        # prefetch b_offset
-        if start_n + BLOCK_N < loop_end:
-            start_block_id += 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
@@ -255,9 +246,11 @@ def _fwd_kernel(
     stride_qbs,
     stride_qh,
     stride_qd,
+    stride_kp,
     stride_kbs,
     stride_kh,
     stride_kd,
+    stride_vp,
     stride_vbs,
     stride_vh,
     stride_vd,
@@ -268,7 +261,6 @@ def _fwd_kernel(
     head_offset,
     num_heads,
     kv_group_num,
-    num_sub_blocks: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -299,8 +291,8 @@ def _fwd_kernel(
 
     q = tl.load(Q + off_q, mask=offs_m[:, None] < cur_batch_seq_len, other=0.0)
 
-    k_ptrs = K + off_k
-    v_ptrs = V + off_v
+    k_ptrs = K + off_k + offs_n[None, :] * stride_kbs
+    v_ptrs = V + off_v + offs_n[:, None] * stride_vbs
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
 
@@ -311,26 +303,24 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
-    b_offset = _load_block_offsets(block_offset_ptrs, 0, num_sub_blocks, BLOCK_N)
+    # b_offset = _load_block_offsets(block_offset_ptrs, 0, BLOCK_N)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
+        b_off = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         # -- compute qk ----
         k = tl.load(
-            k_ptrs + b_offset[None, :] * stride_kbs,
+            k_ptrs + b_off * stride_kp,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
             other=0.0,
         )
 
         v = tl.load(
-            v_ptrs + b_offset[:, None] * stride_vbs,
+            v_ptrs + b_off * stride_vp,
             mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
             other=0.0,
         )
-        if start_n + BLOCK_N < cur_batch_kv_len:
-            start_block_id = start_n // BLOCK_N + 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
-
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         qk *= sm_scale
@@ -385,15 +375,19 @@ def _fwd_split_kernel_quant(
     stride_qbs,
     stride_qh,
     stride_qd,
+    stride_kp,
     stride_kbs,
     stride_kh,
     stride_kd,
+    stride_vp,
     stride_vbs,
     stride_vh,
     stride_vd,
+    stride_ksp: tl.constexpr,
     stride_kszbs: tl.constexpr,
     stride_kszh: tl.constexpr,
     stride_kszd: tl.constexpr,
+    stride_vsp: tl.constexpr,
     stride_vszbs: tl.constexpr,
     stride_vszh: tl.constexpr,
     stride_vszd: tl.constexpr,
@@ -407,7 +401,6 @@ def _fwd_split_kernel_quant(
     num_heads,
     kv_group_num,
     block_per_cta,
-    num_sub_blocks: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
@@ -445,10 +438,10 @@ def _fwd_split_kernel_quant(
 
     q = tl.load(Q + off_q).to(tl.float32)
 
-    k_ptrs = K + off_k
-    v_ptrs = V + off_v
-    ksz_ptrs = KScalesZeros + off_ksz
-    vsz_ptrs = VScalesZeros + off_vsz
+    k_ptrs = K + off_k + offs_n[:, None] * stride_kbs
+    v_ptrs = V + off_v + offs_n[:, None] * stride_vbs
+    ksz_ptrs = KScalesZeros + off_ksz + offs_n[:, None] * stride_kszbs
+    vsz_ptrs = VScalesZeros + off_vsz + offs_n[:, None] * stride_vszbs
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
     head_slope = get_slope(cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
@@ -462,58 +455,52 @@ def _fwd_split_kernel_quant(
     loop_start = kv_len_per_prog * split_k_id
     loop_end = tl.minimum(loop_start + kv_len_per_prog, cur_batch_kv_len)
 
-    # load block offset
-    start_block_id = loop_start // BLOCK_N
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
-
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
+        b_off = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         mask = (start_n + offs_n[:, None]) < cur_batch_kv_len
 
         # -- compute qk ----
         k = tl.load(
-            k_ptrs + b_offset[:, None] * stride_kbs,
+            k_ptrs + b_off * stride_kp,
             mask=mask,
             other=0.0,
         )
         if quant_policy == 4:
             k = (k >> shift_d) & 0x0F
         ks = tl.load(
-            ksz_ptrs + b_offset[:, None] * stride_kszbs,
+            ksz_ptrs + b_off * stride_ksp,
             mask=mask,
             other=0.0,
         )
         kz = tl.load(
-            ksz_ptrs + b_offset[:, None] * stride_kszbs + 1,
+            ksz_ptrs + b_off * stride_ksp + 1,
             mask=mask,
             other=0.0,
         )
 
         v = tl.load(
-            v_ptrs + b_offset[:, None] * stride_vbs,
+            v_ptrs + b_off * stride_vp,
             mask=mask,
             other=0.0,
         )
         if quant_policy == 4:
             v = (v >> shift_d) & 0x0F
         vs = tl.load(
-            vsz_ptrs + b_offset[:, None] * stride_vszbs,
+            vsz_ptrs + b_off * stride_vsp,
             mask=mask,
             other=0.0,
         )
         vz = tl.load(
-            vsz_ptrs + b_offset[:, None] * stride_vszbs + 1,
+            vsz_ptrs + b_off * stride_vsp + 1,
             mask=mask,
             other=0.0,
         )
 
         k = (k - kz) * ks
         v = (v - vz) * vs
-        # prefetch b_offset
-        if start_n + BLOCK_N < loop_end:
-            start_block_id += 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
@@ -572,15 +559,19 @@ def _fwd_kernel_quant(
     stride_qbs,
     stride_qh,
     stride_qd,
+    stride_kp,
     stride_kbs,
     stride_kh,
     stride_kd,
+    stride_vp,
     stride_vbs,
     stride_vh,
     stride_vd,
+    stride_ksp: tl.constexpr,
     stride_kszbs: tl.constexpr,
     stride_kszh: tl.constexpr,
     stride_kszd: tl.constexpr,
+    stride_vsp: tl.constexpr,
     stride_vszbs: tl.constexpr,
     stride_vszh: tl.constexpr,
     stride_vszd: tl.constexpr,
@@ -592,7 +583,6 @@ def _fwd_kernel_quant(
     head_offset,
     num_heads,
     kv_group_num,
-    num_sub_blocks: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -638,10 +628,10 @@ def _fwd_kernel_quant(
 
     q = tl.load(Q + off_q, mask=offs_m[:, None] < cur_batch_seq_len, other=0.0)
 
-    k_ptrs = K + off_k
-    v_ptrs = V + off_v
-    ksz_ptrs = KScalesZeros + off_ksz
-    vsz_ptrs = VScalesZeros + off_vsz
+    k_ptrs = K + off_k + offs_n[None, :] * stride_kbs
+    v_ptrs = V + off_v + offs_n[:, None] * stride_vbs
+    ksz_ptrs = KScalesZeros + off_ksz + offs_n[None, :] * stride_kszbs
+    vsz_ptrs = VScalesZeros + off_vsz + offs_n[:, None] * stride_vszbs
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
 
@@ -652,52 +642,50 @@ def _fwd_kernel_quant(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
-    b_offset = _load_block_offsets(block_offset_ptrs, 0, num_sub_blocks, BLOCK_N)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
+        b_off = tl.load(block_offset_ptrs)
+        block_offset_ptrs += 1
 
         # -- compute qk ----
         k = tl.load(
-            k_ptrs + b_offset[None, :] * stride_kbs,
+            k_ptrs + b_off * stride_kp,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
             other=0.0,
         )
         if quant_policy == 4:
             k = (k >> shift_kd) & 0x0F
         ks = tl.load(
-            ksz_ptrs + b_offset[None, :] * stride_kszbs,
+            ksz_ptrs + b_off * stride_ksp,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
             other=0.0,
         )
         kz = tl.load(
-            ksz_ptrs + b_offset[None, :] * stride_kszbs + 1,
+            ksz_ptrs + b_off * stride_ksp + 1,
             mask=(start_n + offs_n[None, :]) < cur_batch_kv_len,
             other=0.0,
         )
 
         v = tl.load(
-            v_ptrs + b_offset[:, None] * stride_vbs,
+            v_ptrs + b_off * stride_vp,
             mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
             other=0.0,
         )
         if quant_policy == 4:
             v = (v >> shift_vd) & 0x0F
         vs = tl.load(
-            vsz_ptrs + b_offset[:, None] * stride_vszbs,
+            vsz_ptrs + b_off * stride_vsp,
             mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
             other=0.0,
         )
         vz = tl.load(
-            vsz_ptrs + b_offset[:, None] * stride_vszbs + 1,
+            vsz_ptrs + b_off * stride_vsp + 1,
             mask=(start_n + offs_n[:, None]) < cur_batch_kv_len,
             other=0.0,
         )
 
         v = ((v - vz) * vs).to(q.dtype)
         k = ((k - kz) * ks).to(q.dtype)
-        if start_n + BLOCK_N < cur_batch_kv_len:
-            start_block_id = start_n // BLOCK_N + 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -782,6 +770,13 @@ def alibi_paged_attention_fwd(
     else:
         assert Lq == Lk and Lk == Lv
         assert Lk in {16, 32, 64, 128}
+    assert q.dim() == 3
+    assert k.dim() == 4
+    assert v.dim() == 4
+    if k_scales_zeros is not None:
+        assert k_scales_zeros.dim() == 4
+    if v_scales_zeros is not None:
+        assert v_scales_zeros.dim() == 4
 
     sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
     batch, head = b_seq_len.shape[0], q.shape[-2]
@@ -789,8 +784,7 @@ def alibi_paged_attention_fwd(
     if num_heads <= 0:
         num_heads = head
 
-    BLOCK = 64 if k.size(1) < 16 else k.size(1)
-    num_sub_blocks = BLOCK // k.size(1)
+    BLOCK = k.size(1)
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,
 
@@ -810,21 +804,11 @@ def alibi_paged_attention_fwd(
                                     b_kv_seq_len,
                                     block_offsets,
                                     o,
-                                    q.stride(-3),
-                                    q.stride(-2),
-                                    q.stride(-1),
-                                    k.stride(-3),
-                                    k.stride(-2),
-                                    k.stride(-1),
-                                    v.stride(-3),
-                                    v.stride(-2),
-                                    v.stride(-1),
-                                    k_scales_zeros.stride(-3),
-                                    k_scales_zeros.stride(-2),
-                                    k_scales_zeros.stride(-1),
-                                    v_scales_zeros.stride(-3),
-                                    v_scales_zeros.stride(-2),
-                                    v_scales_zeros.stride(-1),
+                                    *q.stride(),
+                                    *k.stride(),
+                                    *v.stride(),
+                                    *k_scales_zeros.stride(),
+                                    *v_scales_zeros.stride(),
                                     quant_policy,
                                     o.stride(-3),
                                     o.stride(-2),
@@ -833,7 +817,6 @@ def alibi_paged_attention_fwd(
                                     head_offset=head_offset,
                                     num_heads=num_heads,
                                     kv_group_num=kv_group_num,
-                                    num_sub_blocks=num_sub_blocks,
                                     BLOCK_M=BLOCK,
                                     BLOCK_DMODEL=Lq,
                                     BLOCK_N=BLOCK,
@@ -850,15 +833,9 @@ def alibi_paged_attention_fwd(
                               b_kv_seq_len,
                               block_offsets,
                               o,
-                              q.stride(-3),
-                              q.stride(-2),
-                              q.stride(-1),
-                              k.stride(-3),
-                              k.stride(-2),
-                              k.stride(-1),
-                              v.stride(-3),
-                              v.stride(-2),
-                              v.stride(-1),
+                              *q.stride(),
+                              *k.stride(),
+                              *v.stride(),
                               o.stride(-3),
                               o.stride(-2),
                               o.stride(-1),
@@ -866,7 +843,6 @@ def alibi_paged_attention_fwd(
                               head_offset=head_offset,
                               num_heads=num_heads,
                               kv_group_num=kv_group_num,
-                              num_sub_blocks=num_sub_blocks,
                               BLOCK_M=BLOCK,
                               BLOCK_DMODEL=Lq,
                               BLOCK_N=BLOCK,
@@ -888,21 +864,11 @@ def alibi_paged_attention_fwd(
                                           b_kv_seq_len,
                                           block_offsets,
                                           acc,
-                                          stride_qbs=q.stride(-3),
-                                          stride_qh=q.stride(-2),
-                                          stride_qd=q.stride(-1),
-                                          stride_kbs=k.stride(-3),
-                                          stride_kh=k.stride(-2),
-                                          stride_kd=k.stride(-1),
-                                          stride_vbs=v.stride(-3),
-                                          stride_vh=v.stride(-2),
-                                          stride_vd=v.stride(-1),
-                                          stride_kszbs=k_scales_zeros.stride(-3),
-                                          stride_kszh=k_scales_zeros.stride(-2),
-                                          stride_kszd=k_scales_zeros.stride(-1),
-                                          stride_vszbs=v_scales_zeros.stride(-3),
-                                          stride_vszh=v_scales_zeros.stride(-2),
-                                          stride_vszd=v_scales_zeros.stride(-1),
+                                          *q.stride(),
+                                          *k.stride(),
+                                          *v.stride(),
+                                          *k_scales_zeros.stride(),
+                                          *v_scales_zeros.stride(),
                                           quant_policy=quant_policy,
                                           stride_ok=acc.stride(-2),
                                           stride_obs=acc.stride(-4),
@@ -913,7 +879,6 @@ def alibi_paged_attention_fwd(
                                           num_heads=num_heads,
                                           kv_group_num=kv_group_num,
                                           block_per_cta=block_per_cta,
-                                          num_sub_blocks=num_sub_blocks,
                                           BLOCK_DMODEL=Lq,
                                           BLOCK_N=BLOCK,
                                           num_warps=4,
@@ -928,15 +893,9 @@ def alibi_paged_attention_fwd(
                                     b_kv_seq_len,
                                     block_offsets,
                                     acc,
-                                    stride_qbs=q.stride(-3),
-                                    stride_qh=q.stride(-2),
-                                    stride_qd=q.stride(-1),
-                                    stride_kbs=k.stride(-3),
-                                    stride_kh=k.stride(-2),
-                                    stride_kd=k.stride(-1),
-                                    stride_vbs=v.stride(-3),
-                                    stride_vh=v.stride(-2),
-                                    stride_vd=v.stride(-1),
+                                    *q.stride(),
+                                    *k.stride(),
+                                    *v.stride(),
                                     stride_ok=acc.stride(-2),
                                     stride_obs=acc.stride(-4),
                                     stride_oh=acc.stride(-3),
@@ -946,7 +905,6 @@ def alibi_paged_attention_fwd(
                                     num_heads=num_heads,
                                     kv_group_num=kv_group_num,
                                     block_per_cta=block_per_cta,
-                                    num_sub_blocks=num_sub_blocks,
                                     BLOCK_DMODEL=Lq,
                                     BLOCK_N=BLOCK,
                                     num_warps=4,
