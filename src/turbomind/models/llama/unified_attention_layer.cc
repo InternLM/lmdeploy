@@ -29,7 +29,6 @@
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/request.h"
 
@@ -166,9 +165,9 @@ static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
     }
 }
 
-void UnifiedAttentionLayer::Run(ExchOp op, int phase, TensorMap& env)
+void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
 {
-    if (op == ExchOp::kAdd) {
+    if (op == BatchOp::kAdd) {
         Buffer_<RequestCache*> rc = env.at("requests").buffer();
         if (rope_param_.type == RopeType::kDynamic) {
             for (int i = 0; i < rc.size(); ++i) {
@@ -176,10 +175,10 @@ void UnifiedAttentionLayer::Run(ExchOp op, int phase, TensorMap& env)
             }
         }
     }
-    else if (op == ExchOp::kSetup) {
+    else if (op == BatchOp::kSetup) {
         Setup(phase, env);
     }
-    else if (op == ExchOp::kPrepare) {
+    else if (op == BatchOp::kPrepare) {
         data_.at(phase)->finished  = env.at("finished").buffer().borrow();
         data_.at(phase)->q_offsets = env.at("q_offsets").buffer().borrow();
         data_.at(phase)->k_offsets = env.at("k_offsets").buffer().borrow();

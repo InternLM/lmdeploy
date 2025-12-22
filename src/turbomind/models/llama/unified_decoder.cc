@@ -18,11 +18,9 @@
 
 #include "src/turbomind/engine/request.h"
 
-#include "src/turbomind/engine/batch_data.h"
-
 namespace turbomind {
 
-void UnifiedDecoder::Run(ExchOp op, int phase, TensorMap& env)
+void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
 {
     attn_layer_->Run(op, phase, env);
 }
@@ -133,8 +131,8 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     constexpr auto device = kDEVICE;
 
-    Tensor             local_residual   = args.consume("input_embeds");
-    const Buffer_<int> local_token_nums = args.at("local_token_nums").buffer();
+    Tensor      local_residual   = args.consume("input_embeds");
+    const auto& local_token_nums = args.at("batch").data<BatchData*>()[0]->local_token_num;
 
     const auto local_token_num  = local_residual.shape(0);
     const auto global_token_num = std::accumulate(local_token_nums.begin(), local_token_nums.end(), ssize_t{});

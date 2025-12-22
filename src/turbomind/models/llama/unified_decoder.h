@@ -7,7 +7,6 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
-#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -23,7 +22,7 @@ public:
                    const Context&        ctx,
                    int                   phases);
 
-    void Run(ExchOp op, int phase, TensorMap& env);
+    void Run(BatchOp op, int phase, TensorMap& env);
 
     void Forward(int phase, TensorMap& env, const std::vector<WeightType*>& weights);
 

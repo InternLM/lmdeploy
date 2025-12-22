@@ -1,5 +1,6 @@
 #pragma once
 
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {

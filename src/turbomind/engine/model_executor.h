@@ -4,7 +4,7 @@
 
 #include "src/turbomind/core/core.h"
 
-#include "src/turbomind/engine/batch_data.h"
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/queue.h"
 #include "src/turbomind/models/language_model.h"
 

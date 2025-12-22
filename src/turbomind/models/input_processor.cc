@@ -118,16 +118,11 @@ public:
 
     void Setup(int phase, TensorMap& env)
     {
-        auto& d = data_.at(phase);
-
-        const Buffer_<RequestCache*> rc   = env.at("requests").buffer();
-        const Buffer_<int>           perm = env.at("permutation").buffer();
-
-        const int bs0 = *env.at("bs0").data<int>();
-        const int bsz = *env.at("bsz").data<int>();
-
+        auto& d    = data_.at(phase);
+        auto& b    = *env.at("batch").data<BatchData*>()[0];
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
-        // core::CopyT copy{};
+
+        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
 
         input_ids_offsets_buf_[0] = 0;
         for (int i = 0; i < rc.size(); ++i) {
@@ -149,13 +144,13 @@ public:
         // dbg(core::to_vector<int>(input_ids_offsets_buf_.slice(0, bsz + 1)));
         // dbg(core::to_vector<int>(decode_token_pos_buf_.slice(0, bsz)));
 
-        copy(input_ids_buf_, input_ids_offsets_buf_[bsz], d.input_ids);
-        copy(decode_token_pos_buf_, bsz, d.selected_token_pos);
-        copy(input_ids_offsets_buf_, bsz + 1, d.input_ids_offsets);
+        copy(input_ids_buf_, input_ids_offsets_buf_[b.bsz], d.input_ids);
+        copy(decode_token_pos_buf_, b.bsz, d.selected_token_pos);
+        copy(input_ids_offsets_buf_, b.bsz + 1, d.input_ids_offsets);
 
         // dbg(decode_token_pos_buf_[0]);
 
-        d.input_token_num = input_ids_offsets_buf_[bsz];
+        d.input_token_num = input_ids_offsets_buf_[b.bsz];
         // dbg(d.input_token_num);
 
         env.produce("local_token_num", Buffer{&d.input_token_num, 1, kCPU});
@@ -185,13 +180,9 @@ public:
 
     void Prepare(int phase, TensorMap& env)
     {
-        auto& d = data_.at(phase);
-
-        const Buffer_<int> perm = env.at("permutation").buffer();
-
-        const int bs0  = *env.at("bs0").data<int>();
-        const int bsz  = *env.at("bsz").data<int>();
-        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
+        auto& d    = data_.at(phase);
+        auto& b    = *env.at("batch").data<BatchData*>()[0];
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
         // last output token + draft tokens
         const Buffer_<int> autoreg_ids = env.at("autoreg_ids").buffer();
@@ -199,17 +190,17 @@ public:
         // core::CopyT copy{};
 
         if (auto g = copy.group()) {
-            for (int i = 0; i < bsz; ++i) {
+            for (int i = 0; i < b.bsz; ++i) {
                 if (auto pos = d.autoreg_ids_pos[i]; pos >= 0) {
-                    TM_CHECK_LT(perm[i], bs0);
-                    copy(autoreg_ids.data() + perm[i], 1, &d.input_ids[pos]);
+                    TM_CHECK_LT(b.perm[i], b.bs0);
+                    copy(autoreg_ids.data() + b.perm[i], 1, &d.input_ids[pos]);
                 }
             }
         }
 
         env.produce("input_ids", d.input_ids.slice(0, d.input_token_num));
-        env.produce("q_offsets", d.input_ids_offsets.slice(0, bsz + 1));
-        env.produce("selected_token_pos", d.selected_token_pos.slice(0, bsz));
+        env.produce("q_offsets", d.input_ids_offsets.slice(0, b.bsz + 1));
+        env.produce("selected_token_pos", d.selected_token_pos.slice(0, b.bsz));
     }
 
     void PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy)

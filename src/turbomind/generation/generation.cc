@@ -8,6 +8,7 @@
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/state.h"
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/generation/logits_processor.h"
@@ -115,18 +116,16 @@ struct Generation::Impl {
     {
         auto& d = *data_.at(phase);
 
-        const Buffer_<RequestCache*> rc   = env.at("requests").buffer();
-        const Buffer_<int>           perm = env.at("permutation").buffer();
+        auto& b    = *env.at("batch").data<BatchData*>()[0];
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-        const int  bs0  = *env.at("bs0").buffer().data<int>();
-        const auto bsz  = perm.size();
-        auto&      copy = *env.at("copy").data<BatchCopy*>()[0];
+        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
 
         // random states
         d.random_init_needed = false;
-        for (int i = 0; i < perm.size(); ++i) {
+        for (int i = 0; i < b.perm.size(); ++i) {
             const auto& c = *rc[i];
-            if (TM_LIKELY(perm[i] < bs0)) {  // existing
+            if (TM_LIKELY(b.perm[i] < b.bs0)) {  // existing
                 random_init_buf_[i] = false;
             }
             else if (c.random_state) {  // already initialized
@@ -139,19 +138,19 @@ struct Generation::Impl {
                 random_seed_buf_[i]  = rc[i]->gen_cfg.random_seed;
             }
         }
-        copy(random_state_buf_, bsz, d.random_state);
+        copy(random_state_buf_, b.bsz, d.random_state);
         if (d.random_init_needed) {
-            copy(random_init_buf_, bsz, d.random_init);
-            copy(random_seed_buf_, bsz, d.random_seed);
+            copy(random_init_buf_, b.bsz, d.random_init);
+            copy(random_seed_buf_, b.bsz, d.random_seed);
         }
 
-        vector<int> used(bs0);
-        for (int i = 0; i < bsz; ++i) {
-            if (perm[i] < bs0) {
-                used[perm[i]] = 1;
+        vector<int> used(b.bs0);
+        for (int i = 0; i < b.bsz; ++i) {
+            if (b.perm[i] < b.bs0) {
+                used[b.perm[i]] = 1;
             }
         }
-        for (int i = 0; i < bs0; ++i) {
+        for (int i = 0; i < b.bs0; ++i) {
             if (!used[i]) {  // free unused chunks
                 h_token_ids_free_.push_back(h_token_ids_ptrs_[i]);
             }
@@ -159,7 +158,7 @@ struct Generation::Impl {
         // swap-in token_ids
         int* token_ids_buf = token_ids_buf_.data();
         for (int i = 0; i < rc.size(); ++i) {
-            if (const auto& c = *rc[i]; TM_UNLIKELY(perm[i] >= bs0)) {
+            if (const auto& c = *rc[i]; TM_UNLIKELY(b.perm[i] >= b.bs0)) {
                 // allocation
                 TM_CHECK(!h_token_ids_free_.empty());
                 token_ids_ptrs_buf_[i] = h_token_ids_free_.back();
@@ -170,14 +169,14 @@ struct Generation::Impl {
                 token_ids_buf += c.seq_len;
             }
             else {
-                token_ids_ptrs_buf_[i] = h_token_ids_ptrs_[perm[i]];
+                token_ids_ptrs_buf_[i] = h_token_ids_ptrs_[b.perm[i]];
             }
         }
 
-        copy(token_ids_ptrs_buf_, bsz, d.token_ids_ptrs);
+        copy(token_ids_ptrs_buf_, b.bsz, d.token_ids_ptrs);
 
         // update `h_token_ids_ptrs_`
-        std::copy_n(token_ids_ptrs_buf_.data(), bsz, h_token_ids_ptrs_.data());
+        std::copy_n(token_ids_ptrs_buf_.data(), b.bsz, h_token_ids_ptrs_.data());
 
         d.generation_size = 0;
         for (int i = 0; i < rc.size(); ++i) {
@@ -195,28 +194,24 @@ struct Generation::Impl {
     {
         auto& d = *data_.at(phase);
 
-        const Buffer_<int> perm = env.at("permutation").buffer();
-
-        const int bs0  = *env.at("bs0").buffer().data<int>();
-        const int bsz  = perm.size();
-        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
+        auto& b    = *env.at("batch").data<BatchData*>()[0];
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
         if (auto g = copy.group()) {
-            Warp(random_state_.front(), d.random_state, bs0, perm, random_state_.back(), copy);
+            Warp(random_state_.front(), d.random_state, b.bs0, b.perm, random_state_.back(), copy);
             random_state_.Swap();
         }
     }
 
     void Unprep(int phase, TensorMap& env)
     {
-        const int bsz  = *env.at("bsz").buffer().data<int>();
-        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
-
-        auto& d = *data_.at(phase);
+        auto& d    = *data_.at(phase);
+        auto& b    = *env.at("batch").data<BatchData*>()[0];
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
         // state -> data
-        copy(random_state_.front().buffer(), bsz * sizeof(curandState_t), d.random_state);
-        copy(output_ids_, bsz, d.output_ids);
+        copy(random_state_.front().buffer(), b.bsz * sizeof(curandState_t), d.random_state);
+        copy(output_ids_, b.bsz, d.output_ids);
     }
 
     void Fetch(int phase, TensorMap& env)
@@ -234,11 +229,7 @@ struct Generation::Impl {
     void Forward(int phase, TensorMap& env)
     {
         auto& d = *data_.at(phase);
-
-        const Buffer_<int> perm = env.at("permutation").buffer();
-
-        const int bs0 = *env.at("bs0").buffer().data<int>();
-        const int bsz = *env.at("bsz").buffer().data<int>();
+        auto& b = *env.at("batch").data<BatchData*>()[0];
 
         const auto stream = core::Context::stream().handle();
 
@@ -246,7 +237,7 @@ struct Generation::Impl {
             InitializeRandomStates((curandState_t*)random_state_.front().raw_data(),
                                    d.random_seed.data(),
                                    d.random_init.data(),
-                                   bsz,
+                                   b.bsz,
                                    stream);
             sync_check_cuda_error();
         }
@@ -289,9 +280,9 @@ Generation::Generation(
 {
 }
 
-void Generation::Run(ExchOp op, int phase, TensorMap& env)
+void Generation::Run(BatchOp op, int phase, TensorMap& env)
 {
-    if (op == ExchOp::kSetup) {
+    if (op == BatchOp::kSetup) {
         return impl_->Setup(phase, env);
     }
     else if (op == BatchOp::kPrepare) {
@@ -300,35 +291,12 @@ void Generation::Run(ExchOp op, int phase, TensorMap& env)
     else if (op == BatchOp::kForward) {
         return impl_->Forward(phase, env);
     }
-    else if (op == ExchOp::kUnprep) {
+    else if (op == BatchOp::kUnprep) {
         return impl_->Unprep(phase, env);
     }
     else if (op == BatchOp::kFetch) {
         return impl_->Fetch(phase, env);
     }
 }
-
-// void Generation::Forward(int phase, TensorMap& env)
-// {
-//     /**
-//      * @brief
-//      * input_tensors:
-//      *   \param  logits [batch_size, beam_width, vocab_size_padded]
-//      *   \param  input_lengths [batch_size, beam_width], optional
-//      *   \param  sequence_limit_length [batch_size]
-//      *   \param  local_batch_size [1] on cpu
-//      *
-//      * output_tensors:
-//      *   \param  output_ids [max_seq_len, batch_size, 1]
-//      *   \param  curand_state [local_batch_size]
-//      *   \param  finished [batch_size * beam_width], optional
-//      *   \param  sequence_length [batch_size * beam_width], optional
-//      *   \param  sampled_indexes [batch_size, 1, kMaxLogProb], optional
-//      *   \param  sampled_logprobs [batch_size, 1, kMaxLogProb], optional
-//      *   \param  sampled_nums [batch_size, 1], optional
-//      */
-
-//     return impl_->Forward(phase, env);
-// }
 
 }  // namespace turbomind

@@ -577,21 +577,21 @@ void Engine::Impl::Setup(BatchData& d)
         });
     }
 
-    d.bs0  = st.bs0;
-    d.bsz  = st.active;
-    d.perm = st.perm;
+    d.bs0 = st.bs0;
+    d.bsz = st.active;
+
+    d.perm = {d.bsz, kCPU};
+    std::copy_n(st.perm.data(), d.bsz, d.perm.data());
 
     // dbg(d.bs0, d.bsz, d.perm);
 
     BatchCopy copy{};
 
-    TensorMap env{{"block_ptrs", block_ptrs_buf_},
-                  {"block_ptrs_offsets", block_ptrs_offsets_buf_},
-                  {"requests", rc},
-                  {"bs0", Buffer{&st.bs0, 1, kCPU}},
-                  {"bsz", Buffer{&st.active, 1, kCPU}},
+    TensorMap env{{"batch", d.buf()},
                   {"copy", copy.buf()},
-                  {"permutation", Buffer{st.perm.data(), st.active, kCPU}}};
+                  {"requests", rc},
+                  {"block_ptrs_offsets", block_ptrs_offsets_buf_},
+                  {"block_ptrs", block_ptrs_buf_}};
 
     Run(BatchOp::kSetup, d.phase, env);
 
@@ -615,7 +615,7 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
     {
         BatchCopy copy;
         TensorMap env{{"copy", copy.buf()}};
-        Run(ExchOp::kFetch, b.phase, env);
+        Run(BatchOp::kFetch, b.phase, env);
         // dbg(copy);
         copy.Run();
 

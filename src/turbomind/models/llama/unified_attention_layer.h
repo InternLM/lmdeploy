@@ -21,17 +21,15 @@
 
 #pragma once
 
-#include <array>
-
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -62,7 +60,7 @@ public:
                           const Context&        context,
                           int                   phases);
 
-    void Run(ExchOp exop, int phase, TensorMap& env);
+    void Run(BatchOp op, int phase, TensorMap& env);
 
     void Forward(ForwardParam p);
 

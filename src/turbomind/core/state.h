@@ -137,14 +137,12 @@ void Append(const Tensor&       a0,
 
     for (int i = 0; i < perm.size(); ++i) {
         if (const int j = perm[i]; TM_LIKELY(j < size0)) {
-            TM_LOG_ERROR("A vec size %d, a0 size %d", vec_size, a0_size);
             uint8_t* out = copy(a0_ptr + j * stride, vec_size * a0_size[j], d1_ptr + i * stride);
             copy(b0_ptr + j * vec_size, vec_size, out);
             d1_size[i] = a0_size[j] + 1;
         }
         else {
             const auto n = c1_offset[i + 1] - c1_offset[i];
-            TM_LOG_ERROR("C i %d, vec size %d, c1 size %d, %d, %d", i, vec_size, n, c1_offset[i + 1], c1_offset[i]);
             copy(c1_ptr + c1_offset[i] * vec_size, n * vec_size, d1_ptr + i * stride);
             d1_size[i] = n;
         }

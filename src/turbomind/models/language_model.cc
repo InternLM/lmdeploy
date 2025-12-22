@@ -10,7 +10,7 @@
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/interval.h"
 #include "src/turbomind/core/state.h"
-#include "src/turbomind/engine/batch_data.h"
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/generation/generation.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -318,14 +318,10 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
 {
     input_processor_->Run(BatchOp::kSetup, phase, env);
 
-    auto& d = data_.at(phase);
+    auto& d    = data_.at(phase);
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-    const Buffer_<RequestCache*> rc   = env.at("requests").buffer();
-    const Buffer_<int>           perm = env.at("permutation").buffer();
-
-    const int bs0  = *env.at("bs0").data<int>();
-    const int bsz  = *env.at("bsz").data<int>();
-    auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
+    const Buffer_<RequestCache*> rc = env.at("requests").buffer();
 
     d.generative = 0;
 
@@ -339,8 +335,7 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
         }
     }
 
-    // core::CopyT copy{};
-    copy(sequence_length_buf_, bsz, d.sequence_length);
+    copy(sequence_length_buf_, rc.size(), d.sequence_length);
 
     unified_decoder_->Run(BatchOp::kSetup, phase, env);
     generation_->Run(BatchOp::kSetup, phase, env);
@@ -355,16 +350,14 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
     auto& d = data_.at(phase);
 
-    const Buffer_<int> perm = env.at("permutation").buffer();
-    const int          bsz  = *env.at("bsz").data<int>();
-    const int          bs0  = *env.at("bs0").data<int>();
-    auto&              copy = *env.at("copy").data<BatchCopy*>()[0];
+    auto& b    = *env.at("batch").data<BatchData*>()[0];
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     // core::CopyT copy{};
 
     if (auto group = copy.group()) {
-        for (int i = 0; i < bsz; ++i) {
-            if (const int j = perm[i]; j < bs0) {
+        for (int i = 0; i < b.bsz; ++i) {
+            if (const int j = b.perm[i]; j < b.bs0) {
                 copy(finished_.front().data<bool>() + j, 1, finished_.back().data<bool>() + i);
             }
             else {
@@ -376,8 +369,8 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
     if (auto group = copy.group()) {
         // sequence_length = history_len + input_len
-        for (int i = 0; i < bsz; ++i) {
-            if (const int j = perm[i]; j < bs0 && d.is_decoding[i]) {
+        for (int i = 0; i < b.bsz; ++i) {
+            if (const int j = b.perm[i]; j < b.bs0 && d.is_decoding[i]) {
                 copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
             }
             else {
@@ -387,7 +380,7 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
         sequence_length_.Swap();
     }
 
-    Buffer_<int> k_offsets{bsz + 1, kDEVICE};
+    Buffer_<int> k_offsets{b.bsz + 1, kDEVICE};
     // PrefixSum(sequence_length_.front().data<int>(), bsz, k_offsets.data(), core::Context::stream().handle());
 
     // Buffer_<int> k_offsets_tmp{k_offsets.size(), kCPU};
@@ -412,13 +405,13 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
 void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 {
-    const int bsz = *env.at("bsz").data<int>();
 
     auto& d = data_.at(phase);
+    auto& b = *env.at("batch").data<BatchData*>()[0];
 
     {
         Buffer_<int> k_offsets = env.at("k_offsets").buffer();
-        PrefixSum(sequence_length_.front().data<int>(), bsz, k_offsets.data(), core::Context::stream().handle());
+        PrefixSum(sequence_length_.front().data<int>(), b.bsz, k_offsets.data(), core::Context::stream().handle());
     }
 
     {  // compute input embeddings

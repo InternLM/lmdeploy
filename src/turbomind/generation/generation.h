@@ -5,7 +5,7 @@
 #include <memory>
 
 #include "src/turbomind/core/core.h"
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/engine/batch.h"
 
 namespace turbomind {
 

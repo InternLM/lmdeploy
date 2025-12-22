@@ -3,7 +3,7 @@
 #include <memory>
 
 #include "src/turbomind/core/core.h"
-
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 

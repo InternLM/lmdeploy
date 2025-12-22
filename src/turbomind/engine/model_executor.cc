@@ -5,8 +5,7 @@
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
-#include "src/turbomind/core/exchange.h"
-#include "src/turbomind/engine/engine.h"
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/models/language_model.h"
 
 #include "src/turbomind/core/copy.h"
@@ -56,15 +55,9 @@ struct ModelExecutor::Impl {
     void Run(BatchData& d)
     {
         auto      batch = &d;
-        TensorMap env{{"bs0", Buffer{&d.bs0, 1, kCPU}},  //
-                      {"bsz", Buffer{&d.bsz, 1, kCPU}},
-                      {"permutation", Buffer{d.perm.data(), d.bsz, kCPU}},
-                      {"batch", Buffer{&batch, 1, kCPU}},
-                      {"local_token_nums", Buffer{d.local_token_num.data(), (int)d.local_token_num.size(), kCPU}},
-                      {"global_token_num", Buffer{&d.global_token_num, 1, kCPU}}};
-
         BatchCopy copy;
-        env.produce("copy", copy.buf());
+
+        TensorMap env{{"batch", d.buf()}, {"copy", copy.buf()}};
 
         model_.Run(BatchOp::kPrepare, d.phase, env);
         // dbg(copy);
