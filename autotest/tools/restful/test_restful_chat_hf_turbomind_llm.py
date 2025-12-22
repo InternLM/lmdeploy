@@ -18,7 +18,8 @@ def prepare_environment(request, config, worker_id):
         try:
             yield param
         finally:
-            terminate_restful_api(worker_id, param)
+            if pid > 0:
+                terminate_restful_api(worker_id, param)
     else:
         yield
 
