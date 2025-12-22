@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
@@ -326,44 +328,48 @@ class Qwen3VLVisionModel(nn.Module):
             for _ in range(len(config.deepstack_visual_indexes))
         ])
 
+    @staticmethod
+    @lru_cache(maxsize=1024)
+    def rot_pos_ids(h: int, w: int, spatial_merge_size: int) -> torch.Tensor:
+        h_div = h // spatial_merge_size
+        w_div = w // spatial_merge_size
+
+        hpos_ids = np.broadcast_to(np.arange(h).reshape(h, 1), (h, w))
+        hpos_ids = hpos_ids.reshape(
+            h_div,
+            spatial_merge_size,
+            w_div,
+            spatial_merge_size,
+        )
+        hpos_ids = hpos_ids.transpose(0, 2, 1, 3)
+        hpos_ids = hpos_ids.flatten()
+
+        wpos_ids = np.broadcast_to(np.arange(w).reshape(1, w), (h, w))
+        wpos_ids = wpos_ids.reshape(
+            h_div,
+            spatial_merge_size,
+            w_div,
+            spatial_merge_size,
+        )
+        wpos_ids = wpos_ids.transpose(0, 2, 1, 3)
+        wpos_ids = wpos_ids.flatten()
+
+        return torch.from_numpy(np.stack([hpos_ids, wpos_ids], axis=-1))
+
     def rot_pos_emb(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        merge_size = self.spatial_merge_size
+        """Rotary position embedding."""
+        pos_ids = []
 
-        max_hw = int(grid_thw[:, 1:].max().item())
-        freq_table = self.rotary_pos_emb(max_hw)  # (max_hw, dim // 2)
-        device = freq_table.device
+        for t, h, w in grid_thw:
+            base = self.rot_pos_ids(h, w, self.spatial_merge_size)
+            pos_ids.append(base if t == 1 else base.repeat(t, 1))
 
-        total_tokens = int(torch.prod(grid_thw, dim=1).sum().item())
-        pos_ids = torch.empty((total_tokens, 2), dtype=torch.long, device=device)
+        pos_ids = torch.cat(pos_ids, dim=0)
+        max_grid_size = grid_thw[:, 1:].max()
+        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
 
-        offset = 0
-        for num_frames, height, width in grid_thw:
-            merged_h, merged_w = height // merge_size, width // merge_size
-
-            block_rows = torch.arange(merged_h, device=device)  # block row indices
-            block_cols = torch.arange(merged_w, device=device)  # block col indices
-            intra_row = torch.arange(merge_size, device=device)  # intra-block row offsets
-            intra_col = torch.arange(merge_size, device=device)  # intra-block col offsets
-
-            # Compute full-resolution positions
-            row_idx = block_rows[:, None, None, None] * merge_size + intra_row[None, None, :, None]
-            col_idx = block_cols[None, :, None, None] * merge_size + intra_col[None, None, None, :]
-
-            row_idx = row_idx.expand(merged_h, merged_w, merge_size, merge_size).reshape(-1)
-            col_idx = col_idx.expand(merged_h, merged_w, merge_size, merge_size).reshape(-1)
-
-            coords = torch.stack((row_idx, col_idx), dim=-1)
-
-            if num_frames > 1:
-                coords = coords.repeat(num_frames, 1)
-
-            num_tokens = coords.shape[0]
-            pos_ids[offset:offset + num_tokens] = coords
-            offset += num_tokens
-
-        embeddings = freq_table[pos_ids]  # lookup rotary embeddings
-        embeddings = embeddings.flatten(1)
-        return embeddings
+        return rotary_pos_emb
 
     # copy from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/qwen3_vl.py#L474
     def fast_pos_embed_interpolate(self, grid_thw: list[list[int]]) -> torch.Tensor:
