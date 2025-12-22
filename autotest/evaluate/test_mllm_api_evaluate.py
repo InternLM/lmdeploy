@@ -2,7 +2,7 @@ import pytest
 import utils.constant as constant
 from utils.config_utils import get_evaluate_pytorch_model_list, get_evaluate_turbomind_model_list, get_workerid
 from utils.evaluate_utils import mllm_eval_test
-from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api
+from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api, terminate_restful_api
 
 
 @pytest.fixture(scope='function')
@@ -15,8 +15,10 @@ def prepare_environment(request, config, worker_id):
          model.split('/')[-1], '--cache-max-entry-count 0.6'])  # noqa
     model_path = config.get('model_path') + '/' + model
     pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
-    yield param
-    stop_restful_api(pid, startRes, param)
+    try:
+        yield param
+    finally:
+        terminate_restful_api(worker_id, param)
 
 
 @pytest.fixture(scope='function')
@@ -53,7 +55,7 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
     try:
         yield request.param
     finally:
-        stop_restful_api(judge_pid, judge_start_res, request.param)
+        terminate_restful_api(judge_pid, judge_start_res, request.param)
         stop_restful_api(proxy_pid, proxy_process, request.param)
 
 

@@ -1,7 +1,7 @@
 import pytest
 from utils.benchmark_utils import restful_test
 from utils.config_utils import get_benchmark_model_list
-from utils.run_restful_chat import start_restful_api, stop_restful_api
+from utils.run_restful_chat import start_restful_api, terminate_restful_api
 
 
 @pytest.fixture(scope='function', autouse=True)
@@ -12,8 +12,10 @@ def prepare_environment(request, config, worker_id):
     model_path = config.get('model_path') + '/' + model
 
     pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
-    yield param
-    stop_restful_api(pid, startRes, param)
+    try:
+        yield param
+    finally:
+        terminate_restful_api(worker_id, param)
 
 
 def getModelList(tp_num):

@@ -1,7 +1,7 @@
 import pytest
 from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
 from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_restful_api,
-                                    stop_restful_api, test_logprobs)
+                                    terminate_restful_api, test_logprobs)
 
 DEFAULT_PORT = 23333
 PROXY_PORT = 8000
@@ -15,8 +15,10 @@ def prepare_environment(request, config, worker_id):
         model_path = config.get('model_path') + '/' + model
 
         pid, startRes = start_restful_api(config, param, model, model_path, 'turbomind', worker_id)
-        yield
-        stop_restful_api(pid, startRes, param)
+        try:
+            yield param
+        finally:
+            terminate_restful_api(worker_id, param)
     else:
         yield
 
