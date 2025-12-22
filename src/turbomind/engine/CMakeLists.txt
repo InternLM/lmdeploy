@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.8)
 
 add_library(engine STATIC 
     gateway.cc 
+    request.cc
     request_queue.cc 
     model_request.cc 
     model_executor.cc 
