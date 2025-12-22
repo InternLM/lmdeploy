@@ -294,8 +294,10 @@ PYBIND11_MODULE(_turbomind, m)
 {
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
         .def(py::init())
-        .def_readonly("enque_time", &ft::RequestMetrics::enque_time)
-        .def_readonly("scheduled_time", &ft::RequestMetrics::scheduled_time);
+        .def_property_readonly("enqueue_time",
+                               [](ft::RequestMetrics& m) { return m.enqueue_time.load(std::memory_order_relaxed); })
+        .def_property_readonly("scheduled_time",
+                               [](ft::RequestMetrics& m) { return m.scheduled_time.load(std::memory_order_relaxed); });
 
     py::class_<ft::ScheduleMetrics, std::shared_ptr<ft::ScheduleMetrics>>(m, "ScheduleMetrics")
         .def(py::init())

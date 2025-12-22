@@ -666,7 +666,7 @@ void TurboMind::WakeUp(int device_id, const vector<string>& tags, int rank)
     return impl_->WakeUp(device_id, tags, rank);
 }
 
-ScheduleMetrics TurboMind::GetScheduleMetrics(int device_id, int rank)
+shared_ptr<ScheduleMetrics> TurboMind::GetScheduleMetrics(int device_id, int rank)
 {
     return impl_->engines_[rank].GetScheduleMetrics();
 }

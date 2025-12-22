@@ -108,8 +108,8 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     auto metrics = param.enable_metrics ? std::make_shared<RequestMetrics>() : nullptr;
     if (metrics) {
-        metrics->enque_time     = RequestMetrics::timestamp();
-        metrics->scheduled_time = 0;  // will be set later
+        metrics->enqueue_time.store(RequestMetrics::timestamp(), std::memory_order_relaxed);
+        metrics->scheduled_time.store(0, std::memory_order_relaxed);
     }
 
     if (param.session.start_flag) {
@@ -127,7 +127,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->output_ids      = outputs_->at("output_ids");
     r->sequence_length = outputs_->at("sequence_length");
 
-    // Keep a weak reference for canceling the request
+    // Keep a WEAK reference for canceling the request
     request_ = r;
 
     gateway_->push({std::move(r)});

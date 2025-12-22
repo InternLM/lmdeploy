@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <ostream>
@@ -20,8 +21,8 @@ struct ScheduleMetrics {
 };
 
 struct RequestMetrics {
-    int64_t enque_time{};      // when a request is enqued
-    int64_t scheduled_time{};  // when a request is scheduled for inference
+    std::atomic<int64_t> enqueue_time{};    // when a request is enqued
+    std::atomic<int64_t> scheduled_time{};  // when a request is scheduled for inference
 
     static int64_t timestamp()
     {
@@ -49,8 +50,8 @@ inline std::ostream& operator<<(std::ostream& os, const ScheduleMetrics& m)
 inline std::ostream& operator<<(std::ostream& os, const RequestMetrics& m)
 {
     os << "RequestMetrics { ";
-    os << "enque_time=" << m.enque_time;
-    os << ", scheduled_time=" << m.scheduled_time;
+    os << "enque_time=" << m.enqueue_time.load(std::memory_order_relaxed);
+    os << ", scheduled_time=" << m.scheduled_time.load(std::memory_order_relaxed);
     os << " }";
     return os;
 }

@@ -32,7 +32,7 @@ public:
 
     void WakeUp(int device_id, const std::vector<std::string>& tags, int rank);
 
-    ScheduleMetrics GetScheduleMetrics(int device_id, int rank);
+    std::shared_ptr<ScheduleMetrics> GetScheduleMetrics(int device_id, int rank);
 
     std::unique_ptr<ModelRequest> CreateRequest();
 

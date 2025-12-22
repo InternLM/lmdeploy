@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -88,6 +89,8 @@ struct Engine::Impl {
         executor_.Start();
     }
 
+    void UpdateScheduleMetrics();
+
     ~Impl();
 
     const DataType    dtype_;
@@ -117,8 +120,7 @@ struct Engine::Impl {
 
     int session_len_trunc_;
 
-    ScheduleMetrics metrics_;
-    std::mutex      metrics_mutex_;
+    shared_ptr<ScheduleMetrics> metrics_;
 
     struct State {
         vector<unique_ptr<RequestCache>> rc;
@@ -507,6 +509,16 @@ void Engine::Impl::Schedule()
         cache[i]->is_generate = {};
     }
 
+    if (param_.enable_metrics) {
+        for (auto i : swap_in) {
+            if (auto& m = cache[i]->request->metrics; TM_LIKELY(m)) {
+                int64_t expected = 0;
+                m->scheduled_time.compare_exchange_strong(
+                    expected, RequestMetrics::timestamp(), std::memory_order_relaxed);
+            }
+        }
+    }
+
     for (auto i : existing) {
         if (cache[i]->is_generate) {
             cache[i]->is_decoding = true;
@@ -804,14 +816,32 @@ void Engine::Start()
     return impl_->Start();
 }
 
-ScheduleMetrics Engine::GetScheduleMetrics()
+void Engine::Impl::UpdateScheduleMetrics()
 {
-    if (!impl_->param_.enable_metrics) {
-        return {};
+    if (param_.enable_metrics) {
+        const auto& [total, active, cached] = seq_mgr_->seq_stats();
+
+        auto m = std::make_shared<ScheduleMetrics>();
+
+        m->total_seqs   = total;
+        m->active_seqs  = active;
+        m->waiting_seqs = total - active;
+
+        m->total_blocks  = seq_mgr_->total_count();
+        m->active_blocks = seq_mgr_->active_count();
+        m->cached_blocks = seq_mgr_->cached_count();
+        m->free_blocks   = seq_mgr_->free_count();
+
+        std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
     }
-    std::lock_guard lock{impl_->metrics_mutex_};
-    auto            metrics = impl_->metrics_;
-    return metrics;
+}
+
+shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
+{
+    if (impl_->param_.enable_metrics) {
+        return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
+    }
+    return {};
 }
 
 }  // namespace turbomind

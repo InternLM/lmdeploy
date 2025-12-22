@@ -11,6 +11,8 @@
 
 namespace turbomind {
 
+struct ScheduleMetrics;
+
 class Engine {
 public:
     ~Engine();
@@ -37,7 +39,7 @@ public:
 
     void Start();
 
-    ScheduleMetrics GetScheduleMetrics();
+    std::shared_ptr<ScheduleMetrics> GetScheduleMetrics();
 
 private:
     struct Impl;
