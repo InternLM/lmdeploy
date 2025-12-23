@@ -277,6 +277,10 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
 class TestFillKVCacheBlockedFP8(TestFillKVCache):
 
     @pytest.fixture
+    def scale_fmt(self, request):
+        yield request.param
+
+    @pytest.fixture
     def quant_dtype(self):
         yield torch.float8_e4m3fn
 
@@ -322,7 +326,7 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         yield torch.ones_like(ks_caches)
 
     @pytest.fixture
-    def gt(self, k_states, v_states, group_size, quant_dtype):
+    def gt(self, k_states, v_states, group_size, quant_dtype, scale_fmt):
         from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
         batch_size = k_states.size(0)
         num_heads = k_states.size(1)
@@ -330,8 +334,8 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
 
         k_states = k_states.flatten(0, -2)
         v_states = v_states.flatten(0, -2)
-        quant_k, quant_ks = quant_fp8(k_states, group_size=group_size, dtype=quant_dtype)
-        quant_v, quant_vs = quant_fp8(v_states, group_size=group_size, dtype=quant_dtype)
+        quant_k, quant_ks = quant_fp8(k_states, group_size=group_size, dtype=quant_dtype, scale_fmt=scale_fmt)
+        quant_v, quant_vs = quant_fp8(v_states, group_size=group_size, dtype=quant_dtype, scale_fmt=scale_fmt)
 
         quant_k = quant_k.view(batch_size, num_heads, head_dim)
         quant_ks = quant_ks.view(batch_size, num_heads, head_dim // group_size)
@@ -366,13 +370,14 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         out_vs = torch.cat(out_vs, dim=0)
         return out_k, out_ks, out_v, out_vs
 
+    @pytest.mark.parametrize('scale_fmt', [None, 'ue8m0'], indirect=True)
     @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
         ((1, 1, 1, 1), (1, 128, 256, 200)),
         ((1, 64, 128, 50), (1, 128, 256, 200)),
     ],
                              indirect=True)
     def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, ks_caches, vs_caches, block_offsets,
-                           cu_seqlen_q, kv_seq_length, max_q_seq_length, gt, group_size):
+                           cu_seqlen_q, kv_seq_length, max_q_seq_length, gt, group_size, scale_fmt):
         from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
         fill_kv_cache_blocked_fp8(k_states,
                                   v_states,
@@ -384,7 +389,8 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
                                   kv_seq_length,
                                   max_q_seq_length,
                                   block_offsets=block_offsets,
-                                  group_size=group_size)
+                                  group_size=group_size,
+                                  scale_fmt=scale_fmt)
 
         gt_k, gt_ks, gt_v, gt_vs = gt
 
