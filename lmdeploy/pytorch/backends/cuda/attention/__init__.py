@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
 import functools
 
+import torch
+
+from lmdeploy.pytorch.backends.attention import AttentionBuilder
 from lmdeploy.utils import get_logger
 
-from .default import TritonAttentionMetadata, TritonAttentionImpl
-from lmdeploy.pytorch.backends.attention import AttentionBuilder, AttentionImpl, AttentionMetadata
+from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -29,6 +30,7 @@ def use_fa3_warning():
                    'https://github.com/Dao-AILab/flash-attention')
     return False
 
+
 @functools.lru_cache
 def _enable_fa3(alibi: bool, learnable_sink: bool, block_sparse_size: int):
     enable = not alibi and not learnable_sink and block_sparse_size == 1
@@ -49,7 +51,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         v_head_size: int = None,
         alibi: bool = False,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logical_softcapping: float = 0.0,
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
@@ -57,7 +59,15 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
+
+        # set sliding window, align with fa3
+        if sliding_window is None:
+            sliding_window = (-1, -1)
+        elif isinstance(sliding_window, int):
+            sliding_window = (sliding_window, sliding_window)
+
         enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size)
+        enable_fa3 = False
         if use_flash_mla is True:
             logger.debug('Build FlashMLAImpl Attention')
             from .mla import FlashMLAImpl

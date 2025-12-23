@@ -3,7 +3,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from .default import TritonAttentionMetadata, TritonAttentionImpl
+from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -19,8 +19,8 @@ class FA3Impl(TritonAttentionImpl):
         num_kv_heads: int = None,
         v_head_size: int = None,
         alibi: bool = False,
-        sliding_window: int = None,
-        logit_softcapping: float = None,
+        sliding_window: tuple = None,
+        logit_softcapping: float = 0.0,
         causal: bool = True,
         **kwargs,
     ):
@@ -64,8 +64,10 @@ class FA3Impl(TritonAttentionImpl):
 
         # fill kv cache
         if key is not None and value is not None:
-            self._fill_kv_cache_impl(key, value,
-                                     k_cache=k_cache, v_cache=v_cache,
+            self._fill_kv_cache_impl(key,
+                                     value,
+                                     k_cache=k_cache,
+                                     v_cache=v_cache,
                                      attn_metadata=attn_metadata,
                                      max_q_seqlen=max_q_seqlen,
                                      k_scales_zeros=k_scales_zeros,
@@ -97,14 +99,17 @@ class FA3Impl(TritonAttentionImpl):
                     query,
                     k_cache,
                     v_cache,
-                    block_offsets,
-                    cu_seqlens_k_new=attn_metadata.cu_seqlens_k,
+                    cache_seqlens=attn_metadata.kv_seqlens,
+                    page_table=block_offsets,
+                    cu_seqlens_q=attn_metadata.cu_seqlens_q,
+                    max_seqlen_q=max_q_seqlen,
+                    softmax_scale=self.scale,
+                    softcap=self.logit_softcapping,
+                    window_size=self.sliding_window,
+                    # custom args
                     k_scales_zeros=k_scales_zeros,
                     v_scales_zeros=v_scales_zeros,
                     quant_policy=quant_policy,
-                    window_size=self.sliding_window,
-                    softmax_scale=self.scale,
-                    softcap=self.logit_softcapping,
                 )
         else:
             flatten_k, flatten_v = self.flatten_kv_cache(

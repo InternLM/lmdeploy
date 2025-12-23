@@ -39,7 +39,7 @@ def _fwd_grouped_split_kernel(
     K,
     V,
     sm_scale,
-    Cu_seqlens_k,
+    Cache_seqlens,
     Block_offsets,
     Acc_out,
     stride_qbs: tl.constexpr,
@@ -91,7 +91,7 @@ def _fwd_grouped_split_kernel(
     mask_h = mask_h & (cur_head < num_heads_q)
 
     q_seqlen = 1
-    kv_seqlen = tl.load(Cu_seqlens_k + cur_batch + 1) - tl.load(Cu_seqlens_k + cur_batch)
+    kv_seqlen = tl.load(Cache_seqlens + cur_batch)
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
@@ -216,7 +216,7 @@ def _fwd_grouped_split_quant_kernel(
     KScalesZeros,
     VScalesZeros,
     sm_scale,
-    Cu_seqlens_k,
+    Cache_seqlens,
     Block_offsets,
     Acc_out,
     stride_qbs: tl.constexpr,
@@ -280,7 +280,7 @@ def _fwd_grouped_split_quant_kernel(
         cur_kv_head = (cur_kv_head * HEAD_PER_CTA) // kv_group_num
 
     q_seqlen = 1
-    kv_seqlen = tl.load(Cu_seqlens_k + cur_batch + 1) - tl.load(Cu_seqlens_k + cur_batch)
+    kv_seqlen = tl.load(Cache_seqlens + cur_batch)
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
@@ -534,8 +534,8 @@ def flash_attn_with_kvcache(
     q: Tensor,
     k_cache: Tensor,
     v_cache: Tensor,
+    cache_seqlens: Tensor,
     page_table: Tensor,
-    cu_seqlens_k_new: Tensor,
     cu_seqlens_q: Tensor = None,  # not used, for align with fa
     max_seqlen_q: int = None,
     softmax_scale: float = None,
@@ -596,7 +596,7 @@ def flash_attn_with_kvcache(
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (Lq**0.5)
-    batch, head = cu_seqlens_k_new.shape[0] - 1, q.shape[-2]
+    batch, head = cache_seqlens.shape[0], q.shape[-2]
     num_tokens = q.shape[-3]
     num_kv_heads = k_cache.shape[h_dim]
     kv_group_num = head // num_kv_heads
@@ -616,7 +616,7 @@ def flash_attn_with_kvcache(
     assert valid, 'we only support decoding paged attention.'
     seq_len = num_tokens // batch
     if max_seqlen_q is not None:
-        assert max_seqlen_q == seq_len
+        assert max_seqlen_q == seq_len, 'we only support decoding paged attention.'
 
     BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq)
     HEADS_PER_REQ = kv_group_num * seq_len
@@ -651,7 +651,7 @@ def flash_attn_with_kvcache(
                                               k_scales_zeros,
                                               v_scales_zeros,
                                               softmax_scale,
-                                              cu_seqlens_k_new,
+                                              cache_seqlens,
                                               page_table,
                                               acc,
                                               stride_qbs=q.stride(-3),
@@ -699,7 +699,7 @@ def flash_attn_with_kvcache(
                                         k_cache,
                                         v_cache,
                                         softmax_scale,
-                                        cu_seqlens_k_new,
+                                        cache_seqlens,
                                         page_table,
                                         acc,
                                         stride_qbs=q.stride(-3),

@@ -5,7 +5,8 @@ import functools
 import torch
 
 from lmdeploy.utils import get_logger
-from .default import TritonAttentionMetadata, TritonAttentionImpl
+
+from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -24,6 +25,7 @@ except Exception:
 def _cdiv(a, b):
     """Perform div up."""
     return (a + b - 1) // b
+
 
 def _try_dynamic_compile(func, *args, **kwargs):
     """Try compile."""
@@ -98,14 +100,15 @@ class FlashMLAImpl(TritonAttentionImpl):
         num_kv_heads: int = None,
         v_head_size: int = None,
         alibi: bool = False,
-        sliding_window: int = None,
+        sliding_window: tuple = None,
         logit_softcapping: float = None,
         causal: bool = True,
         **kwargs,
     ):
-        assert sliding_window is None, 'sliding window not supported for FlashMLA'
+        assert (sliding_window is None
+                or all(win == -1 for win in sliding_window)), ('sliding window not supported for FlashMLA')
         assert alibi is False, 'alibi not supported for FlashMLA'
-        assert logit_softcapping is None, 'logit_softcapping not supported for FlashMLA'
+        assert (logit_softcapping is None or logit_softcapping == 0.0), ('logit_softcapping not supported for FlashMLA')
         super().__init__(
             num_heads=num_heads,
             head_size=head_size,
@@ -223,6 +226,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             cu_seqlens_q=attn_metadata.cu_seqlens_q,
             cu_seqlens_k=attn_metadata.cu_seqlens_k,
             max_seqlen_q=max_q_seqlen,
+            max_seqlen_k=attn_metadata.max_kv_seqlen,
             window_size=self.sliding_window,
             softmax_scale=self.scale,
             softcap=self.logit_softcapping,
@@ -311,11 +315,12 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         return flatten_k, flatten_v
 
-
-    def _get_max_q_seqlen(self,
+    def _get_max_q_seqlen(
+        self,
         query: torch.Tensor,
-        attn_metadata: TritonAttentionMetadata,) -> int:
-        """get max q seqlen."""
+        attn_metadata: TritonAttentionMetadata,
+    ) -> int:
+        """Get max q seqlen."""
         q_seqlens = attn_metadata.q_seqlens
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         batch_size = q_seqlens.size(0)
@@ -324,14 +329,14 @@ class FlashMLAImpl(TritonAttentionImpl):
         return max_q_seqlen
 
     def _fill_kv_cache_impl(self,
-                          key: torch.Tensor,
-                          value: torch.Tensor,
-                          k_cache: torch.Tensor,
-                          v_cache: torch.Tensor,
-                          attn_metadata: TritonAttentionMetadata,
-                          max_q_seqlen: int,
-                          k_scales_zeros: torch.Tensor = None,
-                          v_scales_zeros: torch.Tensor = None):
+                            key: torch.Tensor,
+                            value: torch.Tensor,
+                            k_cache: torch.Tensor,
+                            v_cache: torch.Tensor,
+                            attn_metadata: TritonAttentionMetadata,
+                            max_q_seqlen: int,
+                            k_scales_zeros: torch.Tensor = None,
+                            v_scales_zeros: torch.Tensor = None):
         """Fill kv cache."""
         is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
         if not is_fp8_kvcache:

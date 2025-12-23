@@ -220,6 +220,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             quant_policy=step_context.kv_quant_policy,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
+            max_kv_seqlen=step_context.max_kv_seqlen,
         )
         if step_context.is_decoding:
             if use_flash_mla:
@@ -251,6 +252,7 @@ class CudaOpsBackend(DefaultOpsBackend):
                 kv_flatten_size=cross_kv_flatten_size,
                 fill_seqlens=fill_seqlens,
                 quant_policy=step_context.kv_quant_policy,
+                max_kv_seqlen=step_context.max_kv_seqlen,
             )
 
         step_context.attn_metadata = attn_metadata

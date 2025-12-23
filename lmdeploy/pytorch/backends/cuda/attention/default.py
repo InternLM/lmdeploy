@@ -4,10 +4,9 @@ from typing import Literal
 
 import torch
 
+from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.utils import get_logger
-
-from lmdeploy.pytorch.backends.attention import AttentionImpl, AttentionMetadata
 
 logger = get_logger('lmdeploy')
 
@@ -52,7 +51,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         v_head_size: int = None,
         alibi: bool = False,
         sliding_window: int = None,
-        logit_softcapping: float = None,
+        logit_softcapping: float = 0.0,
         causal: bool = True,
         block_sparse_size: int = 1,
         **kwargs,
@@ -86,10 +85,12 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.alibi_num_heads = self.num_heads * world_size
         self.block_sparse_size = block_sparse_size
 
-    def _get_max_q_seqlen(self,
+    def _get_max_q_seqlen(
+        self,
         query: torch.Tensor,
-        attn_metadata: TritonAttentionMetadata,) -> int:
-        """get max q seqlen."""
+        attn_metadata: TritonAttentionMetadata,
+    ) -> int:
+        """Get max q seqlen."""
         if attn_metadata.is_decoding:
             max_q_seqlen = self.block_sparse_size
         else:
@@ -98,14 +99,14 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             else:
                 max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         return max_q_seqlen
-    
+
     def _get_fill_meta(
         self,
         key: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
         max_q_seqlen: int,
     ):
-        """get fill meta."""
+        """Get fill meta."""
         fill_seqlens = attn_metadata.q_seqlens
         fill_max_q_seqlen = max_q_seqlen
         fill_q_start_loc = attn_metadata.q_start_loc
@@ -116,7 +117,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             fill_q_start_loc = fill_seqlens.cumsum(0) - fill_seqlens
         return fill_seqlens, fill_max_q_seqlen, fill_q_start_loc
 
-    def _fill_kv_cache_impl(self,
+    def _fill_kv_cache_impl(
+        self,
         key: torch.Tensor,
         value: torch.Tensor,
         k_cache: torch.Tensor,
@@ -124,8 +126,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         attn_metadata: TritonAttentionMetadata,
         max_q_seqlen: int,
         k_scales_zeros: torch.Tensor = None,
-        v_scales_zeros: torch.Tensor = None,):
-        """fill kv cache."""
+        v_scales_zeros: torch.Tensor = None,
+    ):
+        """Fill kv cache."""
         kv_seqlens = attn_metadata.kv_seqlens
         block_offsets = attn_metadata.block_offsets
         quant_policy = attn_metadata.quant_policy
@@ -179,8 +182,10 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
         # fill kv cache
         if key is not None and value is not None:
-            self._fill_kv_cache_impl(key, value,
-                                     k_cache=k_cache, v_cache=v_cache,
+            self._fill_kv_cache_impl(key,
+                                     value,
+                                     k_cache=k_cache,
+                                     v_cache=v_cache,
                                      attn_metadata=attn_metadata,
                                      max_q_seqlen=max_q_seqlen,
                                      k_scales_zeros=k_scales_zeros,
@@ -217,21 +222,25 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 query,
                 k_cache,
                 v_cache,
-                block_offsets,
-                cu_seqlens_k_new=attn_metadata.cu_seqlens_k,
-                k_scales_zeros=k_scales_zeros,
-                v_scales_zeros=v_scales_zeros,
-                quant_policy=quant_policy,
-                window_size=self.sliding_window,
+                cache_seqlens=attn_metadata.kv_seqlens,
+                page_table=block_offsets,
+                cu_seqlens_q=attn_metadata.cu_seqlens_q,
+                max_seqlen_q=max_q_seqlen,
                 softmax_scale=self.scale,
                 softcap=self.logit_softcapping,
+                window_size=self.sliding_window,
+                # custom args
                 sinks=learnable_sink,
+                quant_policy=quant_policy,
+                k_scales_zeros=k_scales_zeros,
+                v_scales_zeros=v_scales_zeros,
             )
         else:
             # prefilling
             BLOCK_BS = k_cache.size(1)
             # pad one more block to avoid invalid kv visit
             out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
+            kv_layout = 'hsd'  # custom triton kernel requires 'hsd' while fa3 requires 'shd'
             flatten_k, flatten_v = self.flatten_kv_cache(
                 k_cache,
                 v_cache,
@@ -243,7 +252,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
+                flatten_kv_layout=kv_layout,
             )
+
             attn_output = self.flash_attention_fwd(
                 query,
                 flatten_k,
@@ -251,12 +262,15 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 cu_seqlens_q=attn_metadata.cu_seqlens_q,
                 cu_seqlens_k=attn_metadata.cu_seqlens_k,
                 max_seqlen_q=max_q_seqlen,
+                max_seqlen_k=attn_metadata.max_kv_seqlen,
                 window_size=self.sliding_window,
                 softmax_scale=self.scale,
                 softcap=self.logit_softcapping,
-                sinks=learnable_sink,
                 causal=self.causal,
+                # custom args
+                sinks=learnable_sink,
                 block_sparse_size=self.block_sparse_size,
+                kv_layout=kv_layout,
             )
 
         return attn_output
