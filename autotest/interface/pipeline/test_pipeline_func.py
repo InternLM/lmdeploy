@@ -515,8 +515,8 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id
         gen_config = GenerationConfig(repetition_penalty=0.01, random_seed=1, do_sample=True)
         response = pipe('Shanghai is', gen_config=gen_config)
 
-        result = has_repeated_fragment(response.text)
-        save_pipeline_common_log(config, file_name, result, response)
+        result, msg = has_repeated_fragment(response.text)
+        save_pipeline_common_log(config, file_name, result, response, msg=msg)
         close_pipeline(pipe)
 
     file_name = f'pipeline_log_repetition_penalty_{worker_id}.txt'

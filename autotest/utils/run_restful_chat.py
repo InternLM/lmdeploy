@@ -163,15 +163,22 @@ def terminate_restful_api(worker_id, param):
         port = DEFAULT_PORT + worker_num
     http_url = BASE_HTTP_URL + ':' + str(port)
 
-    response = requests.get(f'{http_url}/terminate')
-    if 'modelscope' in param.keys():
-        modelscope = param['modelscope']
-        if modelscope:
-            del os.environ['LMDEPLOY_USE_MODELSCOPE']
-    if 'MASTER_PORT' in os.environ:
-        del os.environ['MASTER_PORT']
-
-    assert response.status_code == 200, f'terminate with {response.status_code}'
+    response = None
+    request_error = None
+    try:
+        response = requests.get(f'{http_url}/terminate')
+    except requests.exceptions.RequestException as exc:
+        request_error = exc
+    finally:
+        if 'modelscope' in param.keys():
+            modelscope = param['modelscope']
+            if modelscope:
+                del os.environ['LMDEPLOY_USE_MODELSCOPE']
+        if 'MASTER_PORT' in os.environ:
+            del os.environ['MASTER_PORT']
+    if request_error is not None:
+        assert False, f'terminate request failed: {request_error}'
+    assert response is not None and response.status_code == 200, f'terminate with {response.status_code if response is not None else 'no response'}' # noqa
 
 
 def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):

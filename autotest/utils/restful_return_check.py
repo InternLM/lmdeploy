@@ -125,4 +125,4 @@ def has_repeated_fragment(text, repeat_count=5):
             start_pos = text.find(repeated_pattern)
             return True, {'repeated_fragment': match, 'position': start_pos}
 
-    return False, None
+    return False, f'{text} does not contain repeated fragments'
