@@ -158,6 +158,8 @@ MODULE_MAP.update({
 
 # qwen3_vl_moe
 MODULE_MAP.update({
+    'InternS1_1_ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
     'Qwen3VLMoeForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
 })

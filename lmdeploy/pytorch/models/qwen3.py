@@ -235,6 +235,14 @@ class Qwen3model(nn.Module):
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config)
 
+        # fope
+        rope_scaling = getattr(config, 'rope_scaling', None)
+        if rope_scaling:
+            fope_keys = {'fope_init_factor', 'fope_sep_head', 'num_inv_freq'}
+            self.use_fope = any(rope_scaling.get(key) is not None for key in fope_keys)
+        else:
+            self.use_fope = False
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
