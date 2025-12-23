@@ -10,17 +10,6 @@ from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
 
-use_fa3 = False
-try:
-    # Now flash-attention only support FA3 for sm90a && cuda >= 12.3
-    if (torch.cuda.get_device_capability()[0] == 9) and (torch.version.cuda >= '12.3'):
-        import flash_attn_interface  # noqa: F401
-        assert torch.ops.flash_attn_3 is not None
-        use_fa3 = True
-except Exception:
-    logger.debug('For higher performance, please install FlashAttention-3 '
-                 'https://github.com/Dao-AILab/flash-attention')
-
 
 def _cdiv(a, b):
     """Perform div up."""
@@ -103,6 +92,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         sliding_window: tuple = None,
         logit_softcapping: float = None,
         causal: bool = True,
+        use_fa3: bool = False,
         **kwargs,
     ):
         assert (sliding_window is None
@@ -131,6 +121,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         self.fill_kv_cache_blocked_fp8 = fill_kv_cache_blocked_fp8
         self.flatten_kv_cache_mla_fp8 = flatten_kv_cache_mla_fp8
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
+        self.use_fa3 = use_fa3
 
         self.nsa_updater = NSAIndicesUpdater.build()
 
@@ -285,8 +276,13 @@ class FlashMLAImpl(TritonAttentionImpl):
         BLOCK_BS = k_cache.size(1)
 
         # pad one more block to avoid invalid kv visit
-        out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
-        flatten_kv_layout = 'shd' if use_fa3 or is_nsa else 'hsd'
+        if self.use_fa3:
+            out_size = kv_flatten_size
+            flatten_kv_layout = 'shd'
+        else:
+            out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
+            flatten_kv_layout = 'hsd'
+
         if is_fp8_kvcache:
             flatten_k = self.flatten_kv_cache_mla_fp8(
                 k_cache,
@@ -305,7 +301,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                 kv_seqlens,
                 block_offsets,
                 start_loc=kv_start_loc,
-                out_size=kv_flatten_size if use_fa3 else out_size,
+                out_size=out_size,
                 out_dtype=out_dtype,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
@@ -441,7 +437,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                                                              v_scales_zeros=v_scales_zeros)
             if is_nsa:
                 attn_output = self.flash_mla_prefill(query, flatten_k, nsa_indices, attn_metadata)
-            elif use_fa3:
+            elif self.use_fa3:
                 attn_output = self.flash_attn_fa3(query, flatten_k, attn_metadata)
             else:
                 attn_output = self.flash_attn_triton(query, flatten_k, flatten_v, attn_metadata)

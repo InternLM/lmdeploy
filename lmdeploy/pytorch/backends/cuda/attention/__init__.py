@@ -79,6 +79,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                 sliding_window=sliding_window,
                                 logical_softcapping=logical_softcapping,
                                 causal=causal,
+                                use_fa3=use_fa3,
                                 **kwargs)
         elif enable_fa3:
             logger.debug('Build FA3Impl Attention')
