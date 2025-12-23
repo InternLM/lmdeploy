@@ -448,6 +448,10 @@ def get_tokenizer(pretrained_model_name_or_path: str, ) -> Union[PreTrainedToken
 
 def get_processor(pretrained_model_name_or_path: str, ) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
     assert (pretrained_model_name_or_path is not None and pretrained_model_name_or_path != '')
+    if pretrained_model_name_or_path.endswith('.json') or pretrained_model_name_or_path.endswith('.model'):
+        from sglang.srt.utils.hf_transformers_utils import get_processor
+
+        return get_processor(pretrained_model_name_or_path)
 
     if pretrained_model_name_or_path is not None and not os.path.exists(pretrained_model_name_or_path):
         pretrained_model_name_or_path = get_model(pretrained_model_name_or_path)
@@ -701,7 +705,7 @@ def parse_image_resolution(image_resolution: str) -> Tuple[int, int]:
             height = int(parts[0])
             width = int(parts[1])
             if height > 0 and width > 0:
-                return (height, width)
+                return (width, height)
 
     raise ValueError(f'Unsupported image resolution: {image_resolution}. '
                      "Choose from 4k, 1080p, 720p, 360p, or provide custom 'heightxwidth' (e.g., 1080x1920).")
@@ -871,11 +875,12 @@ def sample_image_requests(
         )
 
         dataset.append(data_row)
+    avg_image_bytes = total_image_bytes // num_requests if num_requests > 0 else 0
 
     print(f'#Input tokens: {np.sum([x.prompt_len for x in dataset])}')
     print(f'#Output tokens: {np.sum([x.output_len for x in dataset])}')
     print(f'\nCreated {len(dataset)} {image_content} {image_format} images \
-            with average {total_image_bytes // num_requests} bytes per request')
+            with average {avg_image_bytes} bytes per request')
     return dataset
 
 
