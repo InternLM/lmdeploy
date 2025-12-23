@@ -83,14 +83,14 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         )
         assert not (alibi and not causal)
 
-        from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd, fill_kv_cache, flash_attention_fwd,
-                                                   flatten_kv_cache, paged_attention_fwd)
+        from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd, fill_kv_cache, flash_attn_varlen_func,
+                                                   flash_attn_with_kvcache, flatten_kv_cache)
 
         self.fill_kv_cache = fill_kv_cache
-        self.paged_attention_fwd = paged_attention_fwd
+        self.paged_attention_fwd = flash_attn_with_kvcache
         self.alibi_paged_attention_fwd = alibi_paged_attention_fwd
         self.flatten_kv_cache = flatten_kv_cache
-        self.flash_attention_fwd = flash_attention_fwd
+        self.flash_attention_fwd = flash_attn_varlen_func
 
         # for alibi attention
         world_size, rank = get_tp_world_rank('attn')
@@ -174,19 +174,18 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             return attn_output
 
         if is_decoding:
-            self.paged_attention_fwd(
+            attn_output = self.paged_attention_fwd(
                 query,
                 k_cache,
                 v_cache,
-                attn_output,
                 block_offsets,
-                kv_seqlens=kv_seqlens,
+                cu_seqlens_k_new=attn_metadata.cu_seqlens_k,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
                 window_size=self.sliding_window,
-                sm_scale=self.scale,
-                logit_softcapping=self.logit_softcapping,
+                softmax_scale=self.scale,
+                softcap=self.logit_softcapping,
                 sinks=learnable_sink,
             )
         else:
@@ -205,19 +204,16 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 v_scales_zeros=v_scales_zeros,
                 quant_policy=quant_policy,
             )
-            self.flash_attention_fwd(
+            attn_output = self.flash_attention_fwd(
                 query,
                 flatten_k,
                 flatten_v,
-                attn_output,
-                q_start_loc=q_start_loc,
-                q_seqlens=q_seqlens,
-                kv_start_loc=kv_start_loc,
-                kv_seqlens=kv_seqlens,
-                max_seqlen=max_q_seqlen,
+                cu_seqlens_q=attn_metadata.cu_seqlens_q,
+                cu_seqlens_k=attn_metadata.cu_seqlens_k,
+                max_seqlen_q=max_q_seqlen,
                 window_size=self.sliding_window,
-                sm_scale=self.scale,
-                logit_softcapping=self.logit_softcapping,
+                softmax_scale=self.scale,
+                softcap=self.logit_softcapping,
                 sinks=learnable_sink,
                 causal=self.causal,
                 block_sparse_size=self.block_sparse_size,
@@ -424,28 +420,18 @@ class FlashMLAImpl(TritonAttentionImpl):
         attn_metadata: TritonAttentionMetadata,
     ):
         """Triton flash attention, used if flash-attn is not available."""
-        q_start_loc = attn_metadata.q_start_loc
-        q_seqlens = attn_metadata.q_seqlens
-        kv_start_loc = attn_metadata.kv_start_loc
-        kv_seqlens = attn_metadata.kv_seqlens
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
 
-        q_shape = query.shape
-        o_shape = q_shape[:-1] + (self.v_head_size, )
-        attn_output = query.new_empty(o_shape)
-        self.flash_attention_fwd(
+        attn_output = self.flash_attention_fwd(
             query,
             flatten_k,
             flatten_v,
-            attn_output,
-            q_start_loc=q_start_loc,
-            q_seqlens=q_seqlens,
-            kv_start_loc=kv_start_loc,
-            kv_seqlens=kv_seqlens,
-            max_seqlen=max_q_seqlen,
+            cu_seqlens_q=attn_metadata.cu_seqlens_q,
+            cu_seqlens_k=attn_metadata.cu_seqlens_k,
+            max_seqlen_q=max_q_seqlen,
             window_size=self.sliding_window,
-            sm_scale=self.scale,
-            logit_softcapping=self.logit_softcapping,
+            softmax_scale=self.scale,
+            softcap=self.logit_softcapping,
             causal=self.causal,
         )
 
@@ -766,19 +752,18 @@ class FA3Impl(TritonAttentionImpl):
                 q_shape = query.shape
                 o_shape = q_shape[:-1] + (self.v_head_size, )
                 attn_output = query.new_empty(o_shape)
-                self.paged_attention_fwd(
+                attn_output = self.paged_attention_fwd(
                     query,
                     k_cache,
                     v_cache,
-                    attn_output,
                     block_offsets,
-                    kv_seqlens=kv_seqlens,
+                    cu_seqlens_k_new=attn_metadata.cu_seqlens_k,
                     k_scales_zeros=k_scales_zeros,
                     v_scales_zeros=v_scales_zeros,
                     quant_policy=quant_policy,
                     window_size=self.sliding_window,
-                    sm_scale=self.scale,
-                    logit_softcapping=self.logit_softcapping,
+                    softmax_scale=self.scale,
+                    softcap=self.logit_softcapping,
                 )
         else:
             flatten_k, flatten_v = self.flatten_kv_cache(

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/ModelTC/lightllm
 import math
-from typing import Literal
+from typing import Literal, Sequence
 
 import torch
 import triton
@@ -39,7 +39,7 @@ def _fwd_grouped_split_kernel(
     K,
     V,
     sm_scale,
-    KV_seqlens,
+    Cu_seqlens_k,
     Block_offsets,
     Acc_out,
     stride_qbs: tl.constexpr,
@@ -91,7 +91,7 @@ def _fwd_grouped_split_kernel(
     mask_h = mask_h & (cur_head < num_heads_q)
 
     q_seqlen = 1
-    kv_seqlen = tl.load(KV_seqlens + cur_batch)
+    kv_seqlen = tl.load(Cu_seqlens_k + cur_batch + 1) - tl.load(Cu_seqlens_k + cur_batch)
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
@@ -216,7 +216,7 @@ def _fwd_grouped_split_quant_kernel(
     KScalesZeros,
     VScalesZeros,
     sm_scale,
-    KV_seqlens,
+    Cu_seqlens_k,
     Block_offsets,
     Acc_out,
     stride_qbs: tl.constexpr,
@@ -280,7 +280,7 @@ def _fwd_grouped_split_quant_kernel(
         cur_kv_head = (cur_kv_head * HEAD_PER_CTA) // kv_group_num
 
     q_seqlen = 1
-    kv_seqlen = tl.load(KV_seqlens + cur_batch)
+    kv_seqlen = tl.load(Cu_seqlens_k + cur_batch + 1) - tl.load(Cu_seqlens_k + cur_batch)
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
@@ -530,34 +530,28 @@ def _get_split_k(device_idx: int, head_grid: int, batch_size: int, num_warps: in
     return SPLIT_K
 
 
-def paged_attention_fwd(
+def flash_attn_with_kvcache(
     q: Tensor,
-    k: Tensor,
-    v: Tensor,
-    o: Tensor,
-    block_offsets: Tensor,
-    kv_seqlens: Tensor,
+    k_cache: Tensor,
+    v_cache: Tensor,
+    page_table: Tensor,
+    cu_seqlens_k_new: Tensor,
+    cu_seqlens_q: Tensor = None,  # not used, for align with fa
+    max_seqlen_q: int = None,
+    softmax_scale: float = None,
+    causal: bool = False,  # not used, for align with fa
+    window_size: int = None,
+    softcap: float = None,
+    # args not in fa
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
     quant_policy: Literal[0, 4, 8] = 0,
-    window_size: int = None,
-    sm_scale: float = None,
-    logit_softcapping: float = None,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
     """Paged Attention forward.
 
-    Args:
-        q (Tensor): Query state.
-        k (Tensor): Key state caches.
-        v (Tensor): Value state caches.
-        o (Tensor): Output state.
-        block_offsets (Tensor): The block offset of key and value.
-        q_start_loc (Tensor): Start token location of each data in batch.
-        kv_seqlens (Tensor): Key/Value length for each data in batch.
-        max_seqlen (int): The max input length.
-        BLOCK (int): The kernel block size.
+    Note that this kernel is decoding-only
     """
 
     global _nv_cap
@@ -573,11 +567,13 @@ def paged_attention_fwd(
 
     if window_size is None:
         window_size = -1
+    elif isinstance(window_size, Sequence):
+        window_size = window_size[0]
 
-    if logit_softcapping is None:
-        logit_softcapping = -1.0
+    if softcap is None:
+        softcap = -1.0
 
-    shared_kv = k.data_ptr() == v.data_ptr()
+    shared_kv = k_cache.data_ptr() == v_cache.data_ptr()
 
     def _get_block_d(Lk):
         """Get block d."""
@@ -590,24 +586,26 @@ def paged_attention_fwd(
         return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
 
     # shape constraints
-    Lq, Lk, Lv = q.shape[-1], k.shape[d_dim], v.shape[d_dim]
+    Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
     if quant_policy == 4:
-        assert Lq == Lk * 2 and Lv * 2 == o.shape[-1]
+        assert Lq == Lk * 2
+        o = q.new_empty(q.shape[:-1] + (Lv * 2, ))
     else:
-        assert Lq == Lk and Lv == o.shape[-1]
+        assert Lq == Lk
+        o = q.new_empty(q.shape[:-1] + (Lv, ))
 
-    if sm_scale is None:
-        sm_scale = 1.0 / (Lq**0.5)
-    batch, head = kv_seqlens.shape[0], q.shape[-2]
+    if softmax_scale is None:
+        softmax_scale = 1.0 / (Lq**0.5)
+    batch, head = cu_seqlens_k_new.shape[0] - 1, q.shape[-2]
     num_tokens = q.shape[-3]
-    num_kv_heads = k.shape[h_dim]
+    num_kv_heads = k_cache.shape[h_dim]
     kv_group_num = head // num_kv_heads
 
     if sinks is not None:
         assert sinks.is_contiguous()
         assert sinks.numel() == head
 
-    BLOCK = k.size(s_dim)
+    BLOCK = k_cache.size(s_dim)
     assert BLOCK >= 16
     if Lq > 512 and BLOCK > 32:
         logger.warning(f'`head_dim={Lq}` and `block_size={BLOCK}` '
@@ -617,6 +615,8 @@ def paged_attention_fwd(
     valid = num_tokens % batch == 0
     assert valid, 'we only support decoding paged attention.'
     seq_len = num_tokens // batch
+    if max_seqlen_q is not None:
+        assert max_seqlen_q == seq_len
 
     BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq)
     HEADS_PER_REQ = kv_group_num * seq_len
@@ -646,25 +646,25 @@ def paged_attention_fwd(
 
     if quant_policy > 0:
         _fwd_grouped_split_quant_kernel[grid](q,
-                                              k,
-                                              v,
+                                              k_cache,
+                                              v_cache,
                                               k_scales_zeros,
                                               v_scales_zeros,
-                                              sm_scale,
-                                              kv_seqlens,
-                                              block_offsets,
+                                              softmax_scale,
+                                              cu_seqlens_k_new,
+                                              page_table,
                                               acc,
                                               stride_qbs=q.stride(-3),
                                               stride_qh=q.stride(-2),
                                               stride_qd=q.stride(-1),
-                                              stride_kp=k.stride(b_dim),
-                                              stride_kbs=k.stride(s_dim),
-                                              stride_kh=k.stride(h_dim),
-                                              stride_kd=k.stride(d_dim),
-                                              stride_vp=v.stride(b_dim),
-                                              stride_vbs=v.stride(s_dim),
-                                              stride_vh=v.stride(h_dim),
-                                              stride_vd=v.stride(d_dim),
+                                              stride_kp=k_cache.stride(b_dim),
+                                              stride_kbs=k_cache.stride(s_dim),
+                                              stride_kh=k_cache.stride(h_dim),
+                                              stride_kd=k_cache.stride(d_dim),
+                                              stride_vp=v_cache.stride(b_dim),
+                                              stride_vbs=v_cache.stride(s_dim),
+                                              stride_vh=v_cache.stride(h_dim),
+                                              stride_vd=v_cache.stride(d_dim),
                                               stride_kszp=k_scales_zeros.stride(b_dim),
                                               stride_kszbs=k_scales_zeros.stride(s_dim),
                                               stride_kszh=k_scales_zeros.stride(h_dim),
@@ -678,13 +678,13 @@ def paged_attention_fwd(
                                               stride_obs=acc.stride(-4),
                                               stride_oh=acc.stride(-3),
                                               stride_od=acc.stride(-1),
-                                              stride_boffb=block_offsets.stride(0),
+                                              stride_boffb=page_table.stride(0),
                                               kv_group_num=kv_group_num,
                                               window_size=window_size,
                                               head_size=Lq,
                                               head_size_v=Lv,
                                               num_heads_q=head,
-                                              logit_softcapping=logit_softcapping,
+                                              logit_softcapping=softcap,
                                               SPLIT_K=SPLIT_K,
                                               BLOCK_DMODEL=BLOCK_DMODEL,
                                               BLOCK_DV=BLOCK_DV,
@@ -696,35 +696,35 @@ def paged_attention_fwd(
 
     else:
         _fwd_grouped_split_kernel[grid](q,
-                                        k,
-                                        v,
-                                        sm_scale,
-                                        kv_seqlens,
-                                        block_offsets,
+                                        k_cache,
+                                        v_cache,
+                                        softmax_scale,
+                                        cu_seqlens_k_new,
+                                        page_table,
                                         acc,
                                         stride_qbs=q.stride(-3),
                                         stride_qh=q.stride(-2),
                                         stride_qd=q.stride(-1),
-                                        stride_kp=k.stride(b_dim),
-                                        stride_kbs=k.stride(s_dim),
-                                        stride_kh=k.stride(h_dim),
-                                        stride_kd=k.stride(d_dim),
-                                        stride_vp=v.stride(b_dim),
-                                        stride_vbs=v.stride(s_dim),
-                                        stride_vh=v.stride(h_dim),
-                                        stride_vd=v.stride(d_dim),
+                                        stride_kp=k_cache.stride(b_dim),
+                                        stride_kbs=k_cache.stride(s_dim),
+                                        stride_kh=k_cache.stride(h_dim),
+                                        stride_kd=k_cache.stride(d_dim),
+                                        stride_vp=v_cache.stride(b_dim),
+                                        stride_vbs=v_cache.stride(s_dim),
+                                        stride_vh=v_cache.stride(h_dim),
+                                        stride_vd=v_cache.stride(d_dim),
                                         stride_ok=acc.stride(-2),
                                         stride_obs=acc.stride(-4),
                                         stride_oh=acc.stride(-3),
                                         stride_od=acc.stride(-1),
-                                        stride_boffb=block_offsets.stride(0),
+                                        stride_boffb=page_table.stride(0),
                                         kv_group_num=kv_group_num,
                                         seq_len=seq_len,
                                         window_size=window_size,
                                         head_size=Lk,
                                         head_size_v=Lv,
                                         num_heads_q=head,
-                                        logit_softcapping=logit_softcapping,
+                                        logit_softcapping=softcap,
                                         shared_kv=shared_kv,
                                         SPLIT_K=SPLIT_K,
                                         BLOCK_DMODEL=BLOCK_DMODEL,
@@ -755,3 +755,4 @@ def paged_attention_fwd(
                                BLOCK_DV=BLOCK_DV,
                                num_warps=num_warps,
                                num_stages=1)
+    return o
