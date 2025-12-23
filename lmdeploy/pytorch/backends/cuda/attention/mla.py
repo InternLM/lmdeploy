@@ -376,6 +376,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             max_q_seqlen=max_q_seqlen,
             block_offsets=block_offsets,
             group_size=128,
+            scale_fmt='ue8m0',
         )
         self.fill_kv_cache(
             key[..., 512:],
