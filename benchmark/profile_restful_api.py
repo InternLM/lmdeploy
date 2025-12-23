@@ -686,8 +686,8 @@ def sample_random_requests(
 def parse_image_resolution(image_resolution: str) -> Tuple[int, int]:
     """Parse image resolution into (width, height).
 
-    Supports presets '1080p', '720p', '360p' and custom 'heightxwidth' format (e.g., '1080x1920' means height=1080,
-    width=1920).
+    Supports presets '1080p', '720p', '360p'. And custom 'heightxwidth' format (e.g., '1080x1920' means height=1080,
+    width=1920) will be parsed into (width, height).
     """
     resolution_to_size = {
         '4k': (3840, 2160),
