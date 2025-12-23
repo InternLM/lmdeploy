@@ -455,10 +455,10 @@ def serialize_state_dict(state_dict: dict) -> str:
     Returns:
         str: serialized state dict.
     """
-    import base64
     from io import BytesIO
     from multiprocessing.reduction import ForkingPickler
 
+    import pybase64
     from torch.multiprocessing.reductions import reduce_tensor
 
     # flattened_tensor
@@ -472,7 +472,7 @@ def serialize_state_dict(state_dict: dict) -> str:
     buf = BytesIO()
     ForkingPickler(buf).dump(data)
     buf.seek(0)
-    return base64.b64encode(buf.read()).decode('utf-8')
+    return pybase64.b64encode(buf.read()).decode('utf-8')
 
 
 def is_dlblas_installed():
