@@ -361,7 +361,7 @@ class Qwen3VLVisionModel(nn.Module):
         pos_ids = []
 
         for t, h, w in grid_thw:
-            base = self.rot_pos_ids(h, w, self.spatial_merge_size)
+            base = self.rot_pos_ids(int(h), int(w), self.spatial_merge_size)
             pos_ids.append(base if t == 1 else base.repeat(t, 1))
 
         pos_ids = torch.cat(pos_ids, dim=0)
@@ -372,7 +372,7 @@ class Qwen3VLVisionModel(nn.Module):
         return rotary_pos_emb
 
     # copy from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/qwen3_vl.py#L474
-    def fast_pos_embed_interpolate(self, grid_thw: list[list[int]]) -> torch.Tensor:
+    def fast_pos_embed_interpolate(self, grid_thw: List[List[int]]) -> torch.Tensor:
         num_grid_per_side = self.num_grid_per_side
         m_size = self.spatial_merge_size
         hidden_dim = self.pos_embed.embedding_dim

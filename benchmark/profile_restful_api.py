@@ -72,7 +72,6 @@ class RequestFuncOutput:
     prompt_len: int = 0
     output_len: int = 0
     error: str = ''
-    output_len: int = 0
 
 
 def remove_prefix(text: str, prefix: str) -> str:
@@ -702,7 +701,7 @@ def parse_image_resolution(image_resolution: str) -> Tuple[int, int]:
             height = int(parts[0])
             width = int(parts[1])
             if height > 0 and width > 0:
-                return (width, height)
+                return (height, width)
 
     raise ValueError(f'Unsupported image resolution: {image_resolution}. '
                      "Choose from 4k, 1080p, 720p, 360p, or provide custom 'heightxwidth' (e.g., 1080x1920).")
