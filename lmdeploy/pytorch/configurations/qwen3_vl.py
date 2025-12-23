@@ -8,7 +8,7 @@ class Qwen3VLModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type == 'qwen3_vl' or hf_config.model_type == 'qwen3_vl_moe'
+        return hf_config.model_type in ['qwen3_vl', 'qwen3_vl_moe', 'interns1_1']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):

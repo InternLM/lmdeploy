@@ -9,6 +9,7 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import get_build_model_context
 from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLForConditionalGeneration
 from .qwen3_vl import Qwen3VLTextRotaryEmbedding as Qwen3VLMoeTextRotaryEmbedding
@@ -25,7 +26,8 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
 
         # build rotary embedding
         # TODO: zhouxinyu, add triton kernel for interleaved mrope
-        self.rotary_emb = Qwen3VLMoeTextRotaryEmbedding(config, device=device)
+        if not self.use_fope:
+            self.rotary_emb = Qwen3VLMoeTextRotaryEmbedding(config, device=device)
 
     def forward(
         self,
@@ -34,6 +36,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        all_routed_experts: torch.Tensor = None,
         mrope_position_ids: torch.LongTensor = None,
         # args for deepstack
         visual_pos_masks: Optional[torch.Tensor] = None,
@@ -55,7 +58,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         hidden_states = inputs_embeds
 
         # rotary embedding
-        if mrope_position_ids is None:
+        if mrope_position_ids is None or self.use_fope:
             cos, sin = self.rotary_emb(hidden_states, position_ids)
         else:
             mrope_position_ids = mrope_position_ids.unsqueeze(1)
@@ -74,6 +77,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
+                all_routed_experts=all_routed_experts,
             )
 
             # add visual features to the hidden states of first several layers
@@ -125,6 +129,79 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
 
         self.language_model = Qwen3VLMoeTextModel(config.text_config, dtype=dtype, device=device)
 
+        # for router replay
+        bm_ctx = get_build_model_context()
+        self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
+        inputs_embeds: torch.Tensor = None,
+        mrope_position_ids: torch.Tensor = None,
+        pixel_values: torch.Tensor = None,
+        vis_cu_seqlens: torch.Tensor = None,
+        vis_pos_emb: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
+        pos_embeds: torch.Tensor = None,
+        grid_thw: torch.Tensor = None,
+        **kwargs,
+    ):
+        """Model forward, return logits."""
+
+        visual_pos_masks = None
+        deepstack_visual_embeds = None
+        if inputs_embeds is None:
+            inputs_embeds = self.get_input_embeddings()(input_ids)
+
+            if pixel_values is not None:
+                dtype = inputs_embeds.dtype
+                pixel_values = pixel_values.to(dtype)
+                vis_pos_emb = (vis_pos_emb[0].to(dtype), vis_pos_emb[1].to(dtype))
+
+                # get image embeds and deepstack visual embeds
+                image_embeds, deepstack_visual_embeds = self.visual(pixel_values,
+                                                                    cu_seqlens=vis_cu_seqlens,
+                                                                    rotary_pos_emb=vis_pos_emb,
+                                                                    pos_embeds=pos_embeds)
+
+                # split image embeds per sample
+                split_sizes = (grid_thw.prod(-1) // self.visual.spatial_merge_size**2).tolist()
+                image_embeds = torch.split(image_embeds, split_sizes)
+                image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, dtype)
+
+                # mask and scatter to create final input embeddings
+                expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
+
+                visual_pos_masks = expanded_image_mask
+
+        # router replay
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            all_routed_experts = input_ids.new_empty((input_ids.size(1), self.config.text_config.num_hidden_layers,
+                                                      self.config.text_config.num_experts_per_tok),
+                                                     dtype=torch.uint16)
+
+        hidden_states = self.language_model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            all_routed_experts=all_routed_experts,
+            mrope_position_ids=mrope_position_ids,
+            # args for deepstack
+            visual_pos_masks=visual_pos_masks,
+            deepstack_visual_embeds=deepstack_visual_embeds,
+        )
+
+        if all_routed_experts is None:
+            return hidden_states
+        return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
         """Load weight experts."""
@@ -135,6 +212,7 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
             name = name.replace(weight_name, param_name)
             param = params_dict[name]
             load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
+            break
         else:
             param = params_dict[name]
             load_weight(param, loaded_weight)

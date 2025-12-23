@@ -22,11 +22,13 @@ def check_transformers():
 class Qwen3VLModel(VisionModel):
     """Qwen3VL model."""
 
-    _arch = ['Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration']
+    _arch = [
+        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'InternS1_1_ForConditionalGeneration'
+    ]
 
     def build_preprocessor(self):
         check_transformers()
-        self.processor = AutoProcessor.from_pretrained(self.model_path)
+        self.processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
         tokenizer = self.processor.tokenizer
         self.image_token = self.processor.image_token
         self.image_token_id = tokenizer.encode(self.image_token)[-1]

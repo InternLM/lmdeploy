@@ -92,7 +92,8 @@ class Qwen3VLTextModel(Qwen3model):
 
         # build rotary embedding
         # TODO: zhouxinyu, add triton kernel for interleaved mrope
-        self.rotary_emb = Qwen3VLTextRotaryEmbedding(config, device=device)
+        if not self.use_fope:
+            self.rotary_emb = Qwen3VLTextRotaryEmbedding(config, device=device)
 
     def forward(
         self,
@@ -122,7 +123,7 @@ class Qwen3VLTextModel(Qwen3model):
         hidden_states = inputs_embeds
 
         # rotary embedding
-        if mrope_position_ids is None:
+        if mrope_position_ids is None or self.use_fope:
             cos, sin = self.rotary_emb(hidden_states, position_ids)
         else:
             mrope_position_ids = mrope_position_ids.unsqueeze(1)
@@ -320,11 +321,12 @@ class Qwen3VLVisionModel(nn.Module):
             [Qwen3VLVisionBlock(config, layer_idx, dtype=dtype, device=device) for layer_idx in range(config.depth)])
         self.merger = Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=False, dtype=dtype, device=device)
 
-        self.deepstack_visual_indexes = config.deepstack_visual_indexes
-        self.deepstack_merger_list = nn.ModuleList([
-            Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=True, dtype=dtype, device=device)
-            for _ in range(len(config.deepstack_visual_indexes))
-        ])
+        if hasattr(config, 'deepstack_visual_indexes'):
+            self.deepstack_visual_indexes = config.deepstack_visual_indexes
+            self.deepstack_merger_list = nn.ModuleList([
+                Qwen3VLVisionPatchMerger(config=config, use_postshuffle_norm=True, dtype=dtype, device=device)
+                for _ in range(len(config.deepstack_visual_indexes))
+            ])
 
     def rot_pos_emb(self, grid_thw: torch.Tensor) -> torch.Tensor:
         merge_size = self.spatial_merge_size
@@ -433,7 +435,7 @@ class Qwen3VLVisionModel(nn.Module):
         deepstack_feature_lists = []
         for layer_num, blk in enumerate(self.blocks):
             hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
-            if layer_num in self.deepstack_visual_indexes:
+            if hasattr(self, 'deepstack_visual_indexes') and layer_num in self.deepstack_visual_indexes:
                 deepstack_merge_idx = self.deepstack_visual_indexes.index(layer_num)
                 deepstack_feature = self.deepstack_merger_list[deepstack_merge_idx](hidden_states)
                 deepstack_feature_lists.append(deepstack_feature)
