@@ -134,7 +134,8 @@ def run_pipeline_vl_chat_test(config,
                                       encoding='utf-8',
                                       errors='replace',
                                       env=env,
-                                      timeout=900, start_new_session=True)
+                                      timeout=900,
+                                      start_new_session=True)
         except subprocess.TimeoutExpired as e:
             assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
