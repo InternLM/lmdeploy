@@ -67,7 +67,6 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
             sliding_window = (sliding_window, sliding_window)
 
         enable_fa3 = _enable_fa3(alibi, learnable_sink, block_sparse_size)
-        enable_fa3 = False
         if use_flash_mla is True:
             logger.debug('Build FlashMLAImpl Attention')
             from .mla import FlashMLAImpl
