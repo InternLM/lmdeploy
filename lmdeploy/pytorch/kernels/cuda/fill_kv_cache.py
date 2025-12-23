@@ -149,6 +149,7 @@ def _fill_page_quant_int8(
     """Fill page int8."""
     d_off = tl.arange(0, BLOCK_D)
     mask_kc = kv_mask[:, None] & (d_off[None, :] < head_dim)
+    d_off = d_off % head_dim
     state_ptr = state_ptr + head_id * stride_sh
     state_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
     cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
