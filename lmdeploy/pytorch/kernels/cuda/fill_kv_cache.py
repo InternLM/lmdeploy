@@ -700,9 +700,40 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
                               block_offsets: Tensor,
                               group_size: int = 128,
                               kv_layout: str = 'bshd',
-                              scale_fmt: str = None):
-    """Fill key/value state to cache for paged attention with fp8
-    quantization."""
+                              scale_fmt: Optional[str] = None):
+    """Fill key/value state to cache for paged attention with fp8 quantization.
+
+    Args:
+        k_states (Tensor): Key states of shape
+            (seq_length, num_heads, head_dim).
+        v_states (Optional[Tensor]): Value states of shape
+            (seq_length, num_heads, head_dim_v). If None, no value states
+            are processed.
+        k_caches (Tensor): 4D k cache, shape depends on ``kv_layout``.
+        v_caches (Optional[Tensor]): 4D v cache, shape depends on
+            ``kv_layout``. If None, no value caches are processed.
+        ks_caches (Tensor): 4D k scale cache, shape depends on
+            ``kv_layout``.
+        vs_caches (Optional[Tensor]): 4D v scale cache, shape depends on
+            ``kv_layout``. If None, no value scale caches are processed.
+        cu_seqlen_q (Tensor): Cumulative sequence lengths of queries,
+            shape (batch_size + 1, ).
+        kv_seqlens (Tensor): Sequence lengths of key/values, shape
+            (batch_size, ).
+        max_q_seqlen (int): Maximum sequence length of queries.
+        block_offsets (Tensor): Block offsets for each batch, shape
+            (batch_size, ).
+        group_size (int, optional): Group size for fp8 quantization. Default
+            is 128.
+        kv_layout (str, optional): Layout of key/value caches. Valid values
+            are ``'bshd'`` and ``'bhsd'``. Default is ``'bshd'``.
+        scale_fmt (str, optional): Format of the fp8 scaling factors. Valid
+            values are ``None`` and ``'ue8m0'``. When set to ``'ue8m0'``,
+            scaling factors are stored/interpreted using the UE8M0 fp8 scale
+            format; when ``None``, the default scale layout for this kernel
+            is used.
+    """
+    assert scale_fmt in (None, 'ue8m0'), f'Unsupported scale format: {scale_fmt}.'
 
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
