@@ -598,8 +598,8 @@ def sample_sharegpt_requests(dataset_path: str,
             output_len=output_len,
         ))
 
-    print(f'#Input tokens: {np.sum([x[1] for x in filtered_dataset])}')
-    print(f'#Output tokens: {np.sum([x[2] for x in filtered_dataset])}')
+    print(f'#Input tokens: {sum(x.prompt_len for x in filtered_dataset)}')
+    print(f'#Output tokens: {sum(x.output_len for x in filtered_dataset)}')
     return filtered_dataset
 
 
@@ -675,8 +675,8 @@ def sample_random_requests(
             output_len=int(output_lens[i]),
         ))
 
-    print(f'#Input tokens: {np.sum([x[1] for x in input_requests])}')
-    print(f'#Output tokens: {np.sum([x[2] for x in input_requests])}')
+    print(f'#Input tokens: {sum(x.prompt_len for x in input_requests)}')
+    print(f'#Output tokens: {sum(x.output_len for x in input_requests)}')
     return input_requests
 
 
