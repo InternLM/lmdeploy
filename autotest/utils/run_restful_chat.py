@@ -178,7 +178,7 @@ def terminate_restful_api(worker_id, param):
             del os.environ['MASTER_PORT']
     if request_error is not None:
         assert False, f'terminate request failed: {request_error}'
-    assert response is not None and response.status_code == 200, f'terminate with {response.status_code if response is not None else 'no response'}' # noqa
+    assert response is not None and response.status_code == 200, f'terminate with {response}'
 
 
 def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
