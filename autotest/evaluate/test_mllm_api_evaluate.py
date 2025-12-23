@@ -56,7 +56,7 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
     try:
         yield request.param
     finally:
-        terminate_restful_api(judge_pid, judge_start_res, request.param)
+        terminate_restful_api(worker_id, request.param)
         stop_restful_api(proxy_pid, proxy_process, request.param)
 
 

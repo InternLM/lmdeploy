@@ -370,6 +370,9 @@ pytorch_quantization:
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
         - Qwen/Qwen3-30B-A3B-Base
+        - Qwen/Qwen3-VL-8B-Instruct
+        - Qwen/Qwen3-VL-32B-Instruct
+        - Qwen/Qwen3-VL-30B-A3B-Instruct
         - Qwen/Qwen2.5-0.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - Qwen/Qwen2.5-32B-Instruct
@@ -386,6 +389,8 @@ pytorch_quantization:
         - microsoft/Phi-3.5-vision-instruct
         - microsoft/Phi-3.5-mini-instruct
         - openbmb/MiniCPM-V-2_6
+        - unsloth/gpt-oss-20b-BF16
+        - unsloth/gpt-oss-120b-BF16
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 

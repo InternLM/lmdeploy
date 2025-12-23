@@ -108,7 +108,7 @@ def longtext_throughput_test(config,
                                                                     (1, 65536, 10, '64k', 10),
                                                                     (65536, 1024, 15, '64k-1k', 15),
                                                                     (198000, 1024, 3, '198k-1k', 1)]:
-        session_len = input_len + out_len
+        session_len = input_len + out_len + 1
         csv_path = f'{benchmark_path}/longtext_{case_name}_1th.csv'
         benchmark_log = os.path.join(
             log_path, f'benchmark_longtext_throughput_{case_name}' + model.split('/')[1] + worker_id + '.log')

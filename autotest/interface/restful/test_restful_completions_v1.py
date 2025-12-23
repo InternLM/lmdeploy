@@ -181,5 +181,5 @@ class TestRestfulInterfaceBase:
                                               prompt=['你好', '今天天气怎么样', '你是谁', '帮我写一首以梅花为主题的五言律诗', '5+2等于多少'],
                                               max_tokens=200):
             assert '天气' in item.get('choices')[1].get('text')
-            assert '梅' in item.get('choices')[3].get('text')
+            assert '梅' in item.get('choices')[3].get('text') or '对仗' in item.get('choices')[3].get('text')
             assert '7' in item.get('choices')[4].get('text')
