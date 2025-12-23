@@ -97,13 +97,12 @@ class EngineInstance(EngineInstanceBase):
         routed_experts = resp.data.get('routed_experts', None) if resp.data else None
         if routed_experts is not None and resp.type in [ResponseType.FINISH, ResponseType.CANCEL]:
             if self._enable_transfer_obj_ref:
-                import base64
-
+                import pybase64
                 import ray
 
                 ref = ray.put(routed_experts)
                 data = ray.cloudpickle.dumps(ref)
-                outputs['routed_experts'] = base64.b64encode(data).decode('utf-8')
+                outputs['routed_experts'] = pybase64.b64encode(data).decode('utf-8')
             else:
                 outputs['routed_experts'] = routed_experts
         return outputs

@@ -149,6 +149,7 @@ def _fill_page_quant_int8(
     """Fill page int8."""
     d_off = tl.arange(0, BLOCK_D)
     mask_kc = kv_mask[:, None] & (d_off[None, :] < head_dim)
+    d_off = d_off % head_dim
     state_ptr = state_ptr + head_id * stride_sh
     state_ptrs = state_ptr + q_offs[:, None] * stride_ss + d_off[None, :] * stride_sd
     cache_ptr = cache_ptr + block_off * stride_cn + head_id * stride_ch
@@ -524,17 +525,42 @@ def fill_kv_cache(k_states: Tensor,
 
 
 @triton.jit
+def fast_log2_ceil(x):
+    bits_x = tl.cast(x, tl.uint32, bitcast=True)
+    exp_x = (bits_x >> 23) & 0xFF
+    man_bits = bits_x & ((1 << 23) - 1)
+    tmp = exp_x - 127 + tl.where(man_bits != 0, 1, 0)
+    return tl.cast(tmp, tl.int32)
+
+
+@triton.jit
+def fast_pow2(x):
+    bits_x = (x + 127) << 23
+    return tl.cast(bits_x, tl.float32, bitcast=True)
+
+
+@triton.jit
+def fast_round_scale(amax, fp8_max_inv):
+    return fast_pow2(fast_log2_ceil(amax * fp8_max_inv))
+
+
+@triton.jit
 def _quant_blocked_fp8(x,
                        fp8_min: tl.constexpr,
                        fp8_max: tl.constexpr,
                        dtype: tl.constexpr,
-                       GROUP_SIZE: tl.constexpr = 128):
+                       GROUP_SIZE: tl.constexpr = 128,
+                       ROUND_SCALE: tl.constexpr = 0):
     x = x.to(tl.float32)
     M: tl.constexpr = x.shape[0]
     N: tl.constexpr = x.shape[1]
     rfp8_max: tl.constexpr = 1 / fp8_max
     x = x.reshape(M, N // GROUP_SIZE, GROUP_SIZE)
-    scale = tl.maximum(tl.max(tl.abs(x), axis=2, keep_dims=True), 1e-6) * rfp8_max
+    amax = tl.maximum(tl.max(tl.abs(x), axis=2, keep_dims=True), 1e-6)
+    if ROUND_SCALE == 1:
+        scale = fast_round_scale(amax, rfp8_max)
+    else:
+        scale = amax * rfp8_max
     out = x / scale
 
     out = tl.clamp(out, fp8_min, fp8_max)
@@ -583,6 +609,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
     stride_vsch: tl.constexpr,
     stride_vscd: tl.constexpr,
     stride_boff,
+    ROUND_SCALE: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
@@ -653,11 +680,11 @@ def _fill_kv_cache_blocked_fp8_kernel(
     k = tl.load(ks_ptrs, mask=mask_ks)
     if BLOCK_DV > 0:
         v = tl.load(vs_ptrs, mask=mask_vs)
-    kc, kcs = _quant_blocked_fp8(k, fp8_min, fp8_max, KCaches.dtype.element_ty, GROUP_SIZE)
+    kc, kcs = _quant_blocked_fp8(k, fp8_min, fp8_max, KCaches.dtype.element_ty, GROUP_SIZE, ROUND_SCALE)
     tl.store(kc_ptrs, kc, mask=mask_kc)
     tl.store(ksc_ptrs, kcs, mask=kv_mask[:, None] & (ds_off[None, :] < tl.cdiv(head_dim, GROUP_SIZE)))
     if BLOCK_DV > 0:
-        vc, vcs = _quant_blocked_fp8(v, fp8_min, fp8_max, VCaches.dtype.element_ty, GROUP_SIZE)
+        vc, vcs = _quant_blocked_fp8(v, fp8_min, fp8_max, VCaches.dtype.element_ty, GROUP_SIZE, ROUND_SCALE)
         tl.store(vc_ptrs, vc, mask=mask_vc)
         tl.store(vsc_ptrs, vcs, mask=kv_mask[:, None] & (ds_off[None, :] < tl.cdiv(head_dim_v, GROUP_SIZE)))
 
@@ -673,9 +700,41 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
                               max_q_seqlen: int,
                               block_offsets: Tensor,
                               group_size: int = 128,
-                              kv_layout: str = 'bshd'):
-    """Fill key/value state to cache for paged attention with fp8
-    quantization."""
+                              kv_layout: str = 'bshd',
+                              scale_fmt: Optional[str] = None):
+    """Fill key/value state to cache for paged attention with fp8 quantization.
+
+    Args:
+        k_states (Tensor): Key states of shape
+            (seq_length, num_heads, head_dim).
+        v_states (Optional[Tensor]): Value states of shape
+            (seq_length, num_heads, head_dim_v). If None, no value states
+            are processed.
+        k_caches (Tensor): 4D k cache, shape depends on ``kv_layout``.
+        v_caches (Optional[Tensor]): 4D v cache, shape depends on
+            ``kv_layout``. If None, no value caches are processed.
+        ks_caches (Tensor): 4D k scale cache, shape depends on
+            ``kv_layout``.
+        vs_caches (Optional[Tensor]): 4D v scale cache, shape depends on
+            ``kv_layout``. If None, no value scale caches are processed.
+        cu_seqlen_q (Tensor): Cumulative sequence lengths of queries,
+            shape (batch_size + 1, ).
+        kv_seqlens (Tensor): Sequence lengths of key/values, shape
+            (batch_size, ).
+        max_q_seqlen (int): Maximum sequence length of queries.
+        block_offsets (Tensor): Block offsets for each batch, shape
+            (batch_size, ).
+        group_size (int, optional): Group size for fp8 quantization. Default
+            is 128.
+        kv_layout (str, optional): Layout of key/value caches. Valid values
+            are ``'bshd'`` and ``'bhsd'``. Default is ``'bshd'``.
+        scale_fmt (str, optional): Format of the fp8 scaling factors. Valid
+            values are ``None`` and ``'ue8m0'``. When set to ``'ue8m0'``,
+            scaling factors are stored/interpreted using the UE8M0 fp8 scale
+            format; when ``None``, the default scale layout for this kernel
+            is used.
+    """
+    assert scale_fmt in (None, 'ue8m0'), f'Unsupported scale format: {scale_fmt}.'
 
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
@@ -714,6 +773,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
     fmax = finfo.max
 
     grid = (num_heads, max_num_blocks, batch_size)
+    ROUND_SCALE = 1 if scale_fmt == 'ue8m0' else 0
     is_decoding = max_q_seqlen == 1
     _fill_kv_cache_blocked_fp8_kernel[grid](
         k_states,
@@ -753,6 +813,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         stride_vsch=vs_caches.stride(h_dim),
         stride_vscd=vs_caches.stride(d_dim),
         stride_boff=block_offsets.stride(0),
+        ROUND_SCALE=ROUND_SCALE,
         GROUP_SIZE=group_size,
         BLOCK=BLOCK,
         BLOCK_D=BLOCK_D,
