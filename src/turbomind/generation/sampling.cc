@@ -16,13 +16,14 @@
 
 #include "src/turbomind/generation/sampling.h"
 
-#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
 
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 
+#include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
@@ -35,18 +36,28 @@ struct SamplingData {
         top_p_buf = {max_batch_size, device};
         min_p_buf = {max_batch_size, device};
         kept_buf  = {max_batch_size, device};
+
+        sampled_logprobs = {max_batch_size * (ssize_t)kMaxLogProb, device};
+        sampled_indices  = {max_batch_size * (ssize_t)kMaxLogProb, device};
+        sampled_nums     = {max_batch_size, device};
     }
 
-    int   max_topk;
-    int   min_topk;
-    float min_topp;
-    float max_minp;
+    int   max_topk = 0;
+    int   min_topk = 0;
+    float min_topp = 0;
+    float max_minp = 0;
 
     Buffer_<int>   top_k_buf;
     Buffer_<float> top_p_buf;
     Buffer_<float> min_p_buf;
 
     Buffer_<int> kept_buf;  // kept sample
+
+    bool output_logprobs = 0;
+
+    Buffer_<float>    sampled_logprobs;
+    Buffer_<uint32_t> sampled_indices;
+    Buffer_<uint32_t> sampled_nums;
 };
 
 Sampling::Sampling(const BaseGenerationParam& base, int phases): BaseGenerationParam{base}
@@ -55,6 +66,10 @@ Sampling::Sampling(const BaseGenerationParam& base, int phases): BaseGenerationP
     top_p_ = {max_batch_size_, kCPUpinned};
     min_p_ = {max_batch_size_, kCPUpinned};
     kept_  = {max_batch_size_, kCPUpinned};
+
+    sampled_logprobs_buf_ = {max_batch_size_ * (ssize_t)kMaxLogProb, kCPUpinned};
+    sampled_indices_buf_  = {max_batch_size_ * (ssize_t)kMaxLogProb, kCPUpinned};
+    sampled_nums_buf_     = {max_batch_size_, kCPUpinned};
 
     // constant array
     std::fill_n(kept_.data(), max_batch_size_, vocab_size_);
@@ -143,10 +158,10 @@ void Sampling::Forward(int phase, TensorMap& args)
         params.output_ids      = args.at("output_ids").data<int>();  // (B, 1)
         params.sequence_length = args.at("sequence_length").data<int>();
 
-        if (auto sampled_logprobs = args.try_("sampled_logprobs")) {
-            params.sampled_logprobs = sampled_logprobs->data<float>();
-            params.sampled_indexes  = args.at("sampled_indexes").data<uint32_t>();
-            params.sampled_nums     = args.at("sampled_nums").data<uint32_t>();
+        if (d.output_logprobs) {
+            params.sampled_logprobs = d.sampled_logprobs.data();
+            params.sampled_indexes  = d.sampled_indices.data();
+            params.sampled_nums     = d.sampled_nums.data();
         }
 
         invokeSampling<float>(params, stream);
@@ -158,9 +173,9 @@ void Sampling::Forward(int phase, TensorMap& args)
 
 void Sampling::Setup(int phase, TensorMap& env)
 {
-    Buffer_<const RequestCache*> rc = env.at("requests").buffer();
 
-    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
+    const auto& rc   = env.at("batch").data<BatchData*>()[0]->rc;
+    auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
 
     const auto bsz = rc.size();
 
@@ -182,6 +197,46 @@ void Sampling::Setup(int phase, TensorMap& env)
 
     copy(min_p_.data(), bsz, d.min_p_buf.data());
     copy(kept_.data(), bsz, d.kept_buf.data());
+
+    d.output_logprobs = std::any_of(rc.begin(), rc.end(), [](auto& x) { return x->gen_cfg.output_logprobs; });
+}
+
+void Sampling::Fetch(int phase, TensorMap& env)
+{
+    auto& d    = *data_.at(phase);
+    auto& b    = *env.at("batch").data<BatchData*>()[0];
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
+
+    if (d.output_logprobs) {
+        copy(d.sampled_logprobs, b.bsz * kMaxLogProb, sampled_logprobs_buf_);
+        copy(d.sampled_indices, b.bsz * kMaxLogProb, sampled_indices_buf_);
+        copy(d.sampled_nums, b.bsz, sampled_nums_buf_);
+    }
+}
+
+void Sampling::Update(int phase, TensorMap& env)
+{
+    auto& d = *data_.at(phase);
+    auto& b = *env.at("batch").data<BatchData*>()[0];
+
+    if (d.output_logprobs) {
+        float* logprob_buf = sampled_logprobs_buf_.data();
+        int*   indices_buf = sampled_indices_buf_.data();
+        int*   n_buf       = sampled_nums_buf_.data();
+        for (int i = 0; i < b.rc.size(); ++i) {
+            if (auto& x = *b.rc[i]; x.gen_cfg.output_logprobs) {
+                // output buffers
+                auto logprob_out = x.req->outputs.at("logprob_vals").data<float>();
+                auto indices_out = x.req->outputs.at("logprob_indexes").data<int>();
+                auto n_out       = x.req->outputs.at("logprob_nums").data<int>();
+                // offset into output buffers
+                const int offset = x.seq_len - x.prompt_len;
+                std::copy_n(logprob_buf + i * kMaxLogProb, n_buf[i], logprob_out + offset * kMaxLogProb);
+                std::copy_n(indices_buf + i * kMaxLogProb, n_buf[i], indices_out + offset * kMaxLogProb);
+                n_out[offset] = n_buf[i];
+            }
+        }
+    }
 }
 
 }  // namespace turbomind

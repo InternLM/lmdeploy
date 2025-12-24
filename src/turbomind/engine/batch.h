@@ -4,6 +4,7 @@
 #include <future>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/engine/request.h"
 
 namespace turbomind {
 
@@ -53,8 +54,9 @@ struct BatchData {
     int bs0 = 0;
     int bsz = 0;
 
-    // std::vector<int> perm;
     Buffer_<int> perm;
+
+    std::vector<std::shared_ptr<RequestCache>> rc;
 
     std::vector<int> local_token_num;
     int              global_token_num = 0;

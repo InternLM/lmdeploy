@@ -41,9 +41,6 @@ struct OutputProcessor::Impl {
         Interval full_states;  // requested range for full hidden states
         Interval full_logits;  // requested range for full logits
 
-        // prevent requests being freed before states/logits are written
-        vector<shared_ptr<Request>> requests;
-
         vector<std::tuple<int, int, Interval, Interval>> output_states;
         vector<std::tuple<int, int, Interval, Interval>> output_logits;
     };
@@ -75,7 +72,7 @@ struct OutputProcessor::Impl {
 
         for (int i = 0; i < rc.size(); ++i) {
             auto& c = *rc[i];
-            auto& r = *c.request;
+            auto& r = *c.req;
             auto& g = r.gen_cfg;
             if (g.output_logits) {
                 c.output_logits = g.output_logits == kAll ? Interval{c.step0} : Interval{c.prompt_len - 1};
@@ -94,7 +91,7 @@ struct OutputProcessor::Impl {
     {
         auto& d = data_.at(phase);
 
-        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        const auto& rc = env.at("batch").data<BatchData*>()[0]->rc;
 
         vector<Interval> all_tokens;
         vector<Interval> sel_tokens;
@@ -120,16 +117,11 @@ struct OutputProcessor::Impl {
         d.output_logits = {};
         d.output_states = {};
 
-        d.requests.clear();
-        for (auto& x : rc) {
-            d.requests.push_back(x->request);
-        }
-
         int offset = 0;
 
         for (int i = 0; i < rc.size(); ++i) {
             auto& c = *rc[i];
-            auto& g = c.request->gen_cfg;
+            auto& g = c.req->gen_cfg;
             if (c.output_hidden_states) {
                 Matching m{c.output_hidden_states, c.hidden_states_offset};
                 int      type = 0;
@@ -168,16 +160,16 @@ struct OutputProcessor::Impl {
     {
         auto& d = data_.at(phase);
         if (d.full_states) {
-            env.emplace("output_hidden_states", Tensor{});
+            env.produce("output_hidden_states", Tensor{});
         }
     }
 
     template<class Ranges>
-    void OutputHiddenStates(const Ranges& ranges, const Tensor& h, int type, const vector<shared_ptr<Request>>& rs)
+    void OutputHiddenStates(const Ranges& ranges, const Tensor& h, int type, const vector<shared_ptr<RequestCache>>& rs)
     {
         for (const auto& [i, t, src, dst] : ranges) {
             if (t == type) {
-                auto& out = rs[i]->outputs.at("last_hidden_state");
+                auto& out = rs[i]->req->outputs.at("last_hidden_state");
                 if (tp_rank_ == 0) {
                     // dbg(&src, &dst);
                     Copy(h.slice(src.begin(), (int)src.size()), out.slice(dst.begin(), (int)dst.size()));
@@ -186,7 +178,7 @@ struct OutputProcessor::Impl {
         }
     }
 
-    void ComputeAndOutputLogits(const Data& data, const Tensor& h, const vector<shared_ptr<Request>>& rs)
+    void ComputeAndOutputLogits(const Data& data, const Tensor& h, const vector<shared_ptr<RequestCache>>& rs)
     {
         const int step_size = max_logits_len_;
 
@@ -213,7 +205,7 @@ struct OutputProcessor::Impl {
     }
 
     template<class Ranges>
-    void OutputLogits(Ranges& ranges_, const Tensor& l, int type, const vector<shared_ptr<Request>>& rs)
+    void OutputLogits(Ranges& ranges_, const Tensor& l, int type, const vector<shared_ptr<RequestCache>>& rs)
     {
         // Coroutine frame
         int  p      = 0;
@@ -223,13 +215,13 @@ struct OutputProcessor::Impl {
     }
 
     template<class Ranges>
-    bool
-    OutputLogitsImpl(Ranges& ranges, int& p, const Tensor& l, int base, int type, const vector<shared_ptr<Request>>& rs)
+    bool OutputLogitsImpl(
+        Ranges& ranges, int& p, const Tensor& l, int base, int type, const vector<shared_ptr<RequestCache>>& rs)
     {
         const auto stream = core::Context::stream().handle();
         for (; p < ranges.size(); ++p) {
             if (auto& [i, t, src, dst] = ranges[p]; t == type) {
-                Tensor&        out   = rs[i]->outputs.at("logits");
+                Tensor&        out   = rs[i]->req->outputs.at("logits");
                 const DataType dtype = out.dtype();
                 TM_CHECK_LE(base, src.begin());  // logical error
                 if (Interval msrc = src & Interval{base, Interval::Size{(int)l.shape(0)}}) {
@@ -263,18 +255,19 @@ struct OutputProcessor::Impl {
     void OutputHiddenStatesAndLogits(int phase, TensorMap& env, int type)
     {
         auto& d = data_.at(phase);
+        auto& b = *env.at("batch").data<BatchData*>()[0];
 
         if (type == 2 && d.full_states) {
             auto hidden_states = env.consume("full_hidden_states");
-            OutputHiddenStates(d.output_states, hidden_states, 2, d.requests);
+            OutputHiddenStates(d.output_states, hidden_states, 2, b.rc);
             if (d.full_logits) {
-                ComputeAndOutputLogits(d, hidden_states, d.requests);
+                ComputeAndOutputLogits(d, hidden_states, b.rc);
             }
         }
 
         if (type == 1) {
-            OutputHiddenStates(d.output_states, env.at("hidden_states"), 1, d.requests);
-            OutputLogits(d.output_logits, env.at("logits"), 1, d.requests);
+            OutputHiddenStates(d.output_states, env.at("hidden_states"), 1, b.rc);
+            OutputLogits(d.output_logits, env.at("logits"), 1, b.rc);
         }
     }
 };

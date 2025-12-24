@@ -37,7 +37,7 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
                                  kMaxStopBadWordsLen)
                 - offsets.begin();
             TM_LOG_WARNING("[InitializeSampling] [%ld] %s length (%d) exceeds %d, truncated to %d",
-                           rs[i]->request->id,
+                           rs[i]->req->id,
                            key,
                            offsets.back(),
                            kMaxStopBadWordsLen,

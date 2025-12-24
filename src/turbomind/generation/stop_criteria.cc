@@ -5,6 +5,7 @@
 
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
 
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 
 namespace turbomind {
@@ -33,9 +34,8 @@ void StopCriteria::Setup(int phase, TensorMap& env)
 {
     auto& d = *data_.at(phase);
 
-    const Buffer_<const RequestCache*> rs = env.at("requests").buffer();
-
-    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
+    const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
+    auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
 
     for (int i = 0; i < rs.size(); ++i) {
         max_seq_len_buf_[i] = rs[i]->max_seq_len;

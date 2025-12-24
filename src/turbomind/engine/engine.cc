@@ -67,7 +67,7 @@ struct Engine::Impl {
 
     void Accept(const Requests& rs, vector<Signal>& signals);
 
-    Signal Interrupt(unique_ptr<RequestCache> c, int status);
+    Signal Interrupt(shared_ptr<RequestCache> c, int status);
 
     // Allocation of memory / compute resources
     void Schedule();
@@ -76,7 +76,7 @@ struct Engine::Impl {
     void Setup(BatchData& d);
 
     // Sync vars from batch output to RC
-    void Update(const BatchData& d, std::vector<Signal>& signals);
+    void Update(BatchData& d, std::vector<Signal>& signals);
 
     void Run(BatchOp op, int phase, Ref<TensorMap> env)
     {
@@ -123,7 +123,7 @@ struct Engine::Impl {
     shared_ptr<ScheduleMetrics> metrics_;
 
     struct State {
-        vector<unique_ptr<RequestCache>> rc;
+        vector<shared_ptr<RequestCache>> rc;
         vector<int>                      perm;
 
         int bs0     = 0;
@@ -136,6 +136,7 @@ struct Engine::Impl {
             return rc.size();
         }
     };
+
     vector<State> states_;
 
     struct Data {};
@@ -273,7 +274,7 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     for (const auto& s : states_) {
         for (int i = 0; i < s.size(); ++i) {
             if (s.rc[i]) {
-                ++occur[s.rc[i]->request->id];
+                ++occur[s.rc[i]->req->id];
             }
         }
     }
@@ -299,7 +300,7 @@ vector<int> Engine::Impl::GetCanceled()
     vector<int> idxs;
     for (int i = 0; i < s.size(); ++i) {  // current batch
         const auto& r = s.rc[i];
-        if (r && r->request->cancel_flag.load(std::memory_order_acquire) == -1) {
+        if (r && r->req->cancel_flag.load(std::memory_order_acquire) == -1) {
             idxs.push_back(i);
         }
     }
@@ -321,23 +322,25 @@ void Engine::Impl::Kill(const Requests& kills, vector<Signal>& signals)
     }
 }
 
-Signal Engine::Impl::Interrupt(unique_ptr<RequestCache> c, int status)
+Signal Engine::Impl::Interrupt(shared_ptr<RequestCache> c, int status)
 {
-    auto& s = TM_CHECK_NOTNULL(c)->sequence;
-    if (c->request->session.end_flag) {
+    auto& s = *TM_CHECK_NOTNULL(c->seq);
+    if (c->req->session.end_flag) {
         seq_mgr_->CacheGeneration(s);
-        TM_CHECK(seq_mgr_->Erase(c->request->id));
+        TM_CHECK(seq_mgr_->Erase(c->req->id));
     }
     else {
         seq_mgr_->UpdateAndSetUnlock(s);
     }
-    return [r = c->request, len = c->seq_len, status] { UpdateState(*r, status, len); };
+    c->seq = nullptr;
+    return [r = c->req, len = c->seq_len, status] { UpdateState(*r, status, len); };
 }
 
 void Engine::Impl::Cancel(vector<int>& indices, vector<Signal>& signals)
 {
     auto& s = states_.at(0);
     for (const auto& i : indices) {
+        s.rc[i]->is_done = true;
         signals.push_back(Interrupt(std::move(s.rc[i]), Request::kCancel));
         s.finish += 1;
     }
@@ -462,12 +465,12 @@ void Engine::Impl::Schedule()
         // skip invalid positions
         if (const auto& c = s.rc[i]) {
             cache.push_back(c.get());
-            sequences.push_back(&c->sequence);
-            status.push_back(c->sequence.status);
-            priorities.push_back(c->request->unique_id);
+            sequences.push_back(c->seq);
+            status.push_back(c->seq->status);
+            priorities.push_back(c->req->unique_id);
             context_length.push_back(c->seq_len + c->beta /* plus draft tokens */);
             alpha.push_back(c->alpha);
-            TM_CHECK(c->sequence.status == Sequence::kActive || c->alpha == 0) << c->sequence.status << " " << c->alpha;
+            TM_CHECK(c->seq->status == Sequence::kActive || c->alpha == 0) << c->seq->status << " " << c->alpha;
             inv.push_back(i);
             c->input_len = c->history_len = 0;
             // dbg(c->request->id, c->seq_len, c->sequence.cache_len, c->alpha, c->beta, c->is_decoding,
@@ -511,7 +514,7 @@ void Engine::Impl::Schedule()
 
     if (param_.enable_metrics) {
         for (auto i : swap_in) {
-            if (auto& m = cache[i]->request->metrics; TM_LIKELY(m)) {
+            if (auto& m = cache[i]->req->metrics; TM_LIKELY(m)) {
                 int64_t expected = 0;
                 m->scheduled_time.compare_exchange_strong(
                     expected, RequestMetrics::timestamp(), std::memory_order_relaxed);
@@ -540,7 +543,7 @@ void Engine::Impl::Schedule()
 
     // dbg(inv);
 
-    vector<unique_ptr<RequestCache>> rc(idxs.size());
+    vector<shared_ptr<RequestCache>> rc(idxs.size());
     vector<int>                      perm(idxs.size());
     for (int i = 0; i < idxs.size(); ++i) {
         perm[i] = inv[idxs[i]];              // inverse map to original indices
@@ -551,8 +554,8 @@ void Engine::Impl::Schedule()
 
     for (auto& c : s.rc) {
         /// ! input_length not updated for inactive seqs
-        c->input_len   = c->sequence.input_length;
-        c->history_len = c->sequence.cache_len;
+        c->input_len   = c->seq->input_length;
+        c->history_len = c->seq->cache_len;
         // dbg(c->request->id,
         //     c->seq_len,
         //     c->history_len,
@@ -572,17 +575,13 @@ void Engine::Impl::Setup(BatchData& d)
 {
     auto& st = states_.at(0);
 
-    // dbg(d.phase);
-
-    Buffer_<RequestCache*> rc{st.active, kCPU};
-    for (int i = 0; i < st.active; ++i) {
-        rc[i] = st.rc[i].get();
-    }
+    d.rc.resize(st.active);
+    std::copy_n(st.rc.begin(), st.active, d.rc.begin());
 
     block_ptrs_offsets_buf_[0] = 0;
     auto block_ptrs            = block_ptrs_buf_.data();
     for (int i = 0; i < st.active; ++i) {
-        const auto& s                  = st.rc[i]->sequence;
+        const auto& s                  = *st.rc[i]->seq;
         block_ptrs_offsets_buf_[i + 1] = block_ptrs_offsets_buf_[i] + s.blocks.size();
         block_ptrs = std::transform(s.blocks.cbegin(), s.blocks.cend(), block_ptrs, [&](int block_id) {
             return seq_mgr_->GetBlockPtr(block_id);
@@ -601,7 +600,6 @@ void Engine::Impl::Setup(BatchData& d)
 
     TensorMap env{{"batch", d.buf()},
                   {"copy", copy.buf()},
-                  {"requests", rc},
                   {"block_ptrs_offsets", block_ptrs_offsets_buf_},
                   {"block_ptrs", block_ptrs_buf_}};
 
@@ -615,74 +613,58 @@ void Engine::Impl::Setup(BatchData& d)
     d.global_token_num = d.local_token_num[0];
 }
 
-void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
+void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 {
     auto& s = states_.at(0);
 
-    Buffer_<bool> finished;
-    Buffer_<bool> is_generate;
-    Buffer_<int>  output_ids;
-    Buffer_<int>  sequence_length;
+    BatchCopy copy;
 
-    {
-        BatchCopy copy;
-        TensorMap env{{"copy", copy.buf()}};
-        Run(BatchOp::kFetch, b.phase, env);
-        // dbg(copy);
-        copy.Run();
+    TensorMap env{{"batch", b.buf()}, {"copy", copy.buf()}};
 
-        finished        = env.at("finished").buffer();
-        is_generate     = env.at("is_generate").buffer();
-        output_ids      = env.at("output_ids").buffer();
-        sequence_length = env.at("sequence_length").buffer();
-    }
+    // Copy outputs to host buffers
+    Run(BatchOp::kFetch, b.phase, env);
+
+    copy.Run();
 
     core::Context::stream().Sync();
 
-    Run(BatchOp::kUpdate, -1, TensorMap{});
+    //
+    Run(BatchOp::kUpdate, b.phase, env);
 
-    // dbg(b.bs0, b.bsz);
-    // dbg(core::to_vector<bool>(finished.slice(0, b.bsz)));
+    Buffer_<bool> finished        = env.at("finished").buffer();
+    Buffer_<bool> is_generate     = env.at("is_generate").buffer();
+    Buffer_<int>  output_ids      = env.at("output_ids").buffer();
+    Buffer_<int>  sequence_length = env.at("sequence_length").buffer();
 
-    vector<int> perm;
-    if (data_.size() > 1) {
-        perm = s.perm;
-    }
-    else {
-        perm.resize(b.bsz);
-        std::iota(perm.begin(), perm.end(), 0);
-    }
+    env = {};
 
-    // dbg("Update");
-
-    const int size = s.active + (async_ ? s.swapout : 0);
-
-    for (int i = 0; i < size; ++i) {
-        auto& c = *s.rc[i];
-
-        if (const int j = perm[i]; j < b.bsz) {
-            if (auto& seq = c.sequence; is_generate[j]) {
-                c.token_ids[c.seq_len] = output_ids[j];
-                c.seq_len              = sequence_length[j];
-                seq.cache_len          = sequence_length[j] - 1;
-                if (const int new_tokens = c.seq_len - seq.tokens.size()) {
-                    seq.tokens.insert(seq.tokens.end(), c.token_ids + c.seq_len - new_tokens, c.token_ids + c.seq_len);
+    for (int i = 0; i < b.rc.size(); ++i) {
+        if (auto& c = *b.rc[i]; c.seq) {
+            if (auto& s = *c.seq; is_generate[i]) {
+                c.token_ids[c.seq_len] = output_ids[i];
+                c.seq_len              = sequence_length[i];
+                s.cache_len            = sequence_length[i] - 1;
+                if (const int new_tokens = c.seq_len - s.tokens.size()) {
+                    s.tokens.insert(s.tokens.end(), c.token_ids + c.seq_len - new_tokens, c.token_ids + c.seq_len);
                 }
-                if (c.request->stream_output) {
-                    signals.push_back([this, r = c.request, l = sequence_length[j]] {  //
+                if (c.req->stream_output) {
+                    signals.push_back([this, r = c.req, l = sequence_length[i]] {  //
                         UpdateState(*r, Request::kOk, l);
                     });
                 }
             }
             else {
-                seq.cache_len = sequence_length[j];
+                s.cache_len = sequence_length[i];
             }
+            c.is_done |= finished[i];
+            // dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
         }
-
-        // dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
     }
 
+    b.rc.clear();
+
     if (async_) {
+        const int size = s.active + s.swapout;
         for (int i = 0; i < size; ++i) {
             auto& c = *s.rc[i];
             if (i < s.active) {
@@ -695,9 +677,9 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
         }
     }
 
-    for (int i = 0; i < size; ++i) {
-        if (const int j = perm[i]; j < b.bsz && finished[j]) {
-            signals.push_back(Interrupt(std::move(s.rc[i]), Request::kFinish));
+    for (auto& x : s.rc) {
+        if (x->is_done) {
+            signals.push_back(Interrupt(std::move(x), Request::kFinish));
             s.finish += 1;
         }
     }

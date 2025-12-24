@@ -119,7 +119,7 @@ struct Generation::Impl {
         auto& b    = *env.at("batch").data<BatchData*>()[0];
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        const auto& rc = b.rc;
 
         // random states
         d.random_init_needed = false;

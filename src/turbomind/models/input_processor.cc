@@ -37,8 +37,7 @@ public:
 
     int Add(RequestCache& c)
     {
-        auto& r = c.request;
-        auto& s = c.sequence;
+        const auto& [r, s] = std::tie(*c.req, *c.seq);
 
         // trim input embeds
         if (!s.input_embeds_offsets.empty()) {
@@ -60,8 +59,8 @@ public:
             offsets.resize(i + 1);
         }
 
-        if (auto ranges_ptr = r->inputs.try_("input_embedding_ranges")) {  // [1, n, 2]
-            auto embeds = r->inputs.at("input_embeddings");                // [1, k, d]
+        if (auto ranges_ptr = r.inputs.try_("input_embedding_ranges")) {  // [1, n, 2]
+            auto embeds = r.inputs.at("input_embeddings");                // [1, k, d]
 
             if (ranges_ptr->ndim() != 3 || embeds.ndim() != 3 || ranges_ptr->shape(2) != 2) {
                 /// TODO: reject for invalid shapes
@@ -69,7 +68,7 @@ public:
             }
 
             // clone the embeds if the request persists
-            if (!r->session.end_flag) {
+            if (!r.session.end_flag) {
                 auto tmp = std::exchange(embeds, empty_like(embeds));
                 std::copy_n((const uint8_t*)tmp.raw_data(), tmp.byte_size(), (uint8_t*)embeds.raw_data());
             }
@@ -122,7 +121,7 @@ public:
         auto& b    = *env.at("batch").data<BatchData*>()[0];
         auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        const auto& rc = b.rc;
 
         input_ids_offsets_buf_[0] = 0;
         for (int i = 0; i < rc.size(); ++i) {
@@ -161,8 +160,8 @@ public:
         auto embed_ptr = (uint8_t*)d.input_embeds_buf.raw_data();
         for (int k = 0; k < rc.size(); ++k) {
             if (auto& c = *rc[k]; !c.is_decoding) {
-                const auto& embeds  = c.sequence.input_embeds;
-                const auto& offsets = c.sequence.input_embeds_offsets;
+                const auto& embeds  = c.seq->input_embeds;
+                const auto& offsets = c.seq->input_embeds_offsets;
                 Interval    p{input_ids_offsets_buf_[k], input_ids_offsets_buf_[k + 1]};
                 Interval    s{c.history_len + c.alpha, p.size()};
                 for (int i = (int)offsets.size() - 1; i >= 0; --i) {

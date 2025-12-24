@@ -159,7 +159,7 @@ static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
             cache.rope_base *= powf(scaling_factor, rope.dim / (rope.dim - 2.f));
             // clang-format off
             TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
-                        (long)cache.request->id, scaling_factor, cache.rope_base);
+                        (long)cache.req->id, scaling_factor, cache.rope_base);
             // clang-format on
         }
     }
@@ -187,8 +187,8 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
 
 void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
 {
-    Buffer_<RequestCache*> rc  = env.at("requests").buffer();
-    const int              bsz = rc.size();
+    const auto& rc  = env.at("batch").data<BatchData*>()[0]->rc;
+    const int   bsz = rc.size();
 
     auto& d    = *data_.at(phase);
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];

@@ -17,6 +17,7 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/kernels/ban_bad_words.h"
@@ -123,9 +124,8 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
 
     auto& d = *data_.at(phase);
 
-    Buffer_<const RequestCache*> rs = env.at("requests").buffer();
-
-    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
+    const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
+    auto&       copy = *env.at("copy").data<BatchCopy*>()[0];
 
     const int bsz = rs.size();
 
@@ -200,7 +200,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
                 }
                 if (TM_UNLIKELY(eos_ids.size() > kMaxEndIdsSize)) {
                     TM_LOG_WARNING("[InitializeSampling] [%ld] eos length (%d) exceeds %d, truncated to %d",
-                                   (long)rs[i]->request->id,
+                                   (long)rs[i]->req->id,
                                    (int)eos_ids.size(),
                                    kMaxEndIdsSize,
                                    kMaxEndIdsSize);

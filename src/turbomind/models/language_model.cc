@@ -321,7 +321,7 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
     auto& d    = data_.at(phase);
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-    const Buffer_<RequestCache*> rc = env.at("requests").buffer();
+    const auto& rc = env.at("batch").data<BatchData*>()[0]->rc;
 
     d.generative = 0;
 
