@@ -18,13 +18,13 @@ def fast_log2_ceil_torch(x: torch.Tensor) -> torch.Tensor:
     return result.to(torch.int32)
 
 
-def fast_pow2_torch(x: torch.Tensor) -> torch.Tensor:
+def fast_pow2_torch(x: torch.Tensor, weight_dtype: torch.dtype) -> torch.Tensor:
     bits_x = (x + 127) << 23
-    return bits_x.view(torch.float32)
+    return bits_x.view(weight_dtype)
 
 
-def fast_round_scale_torch(amax: torch.Tensor, fp8_max: torch.Tensor) -> torch.Tensor:
-    return fast_pow2_torch(fast_log2_ceil_torch(amax / fp8_max))
+def fast_round_scale_torch(amax: torch.Tensor, fp8_max: torch.Tensor, weight_dtype: torch.dtype) -> torch.Tensor:
+    return fast_pow2_torch(fast_log2_ceil_torch(amax / fp8_max), weight_dtype)         
 
 
 def _get_quant_scaling(weight: torch.Tensor,
@@ -34,13 +34,21 @@ def _get_quant_scaling(weight: torch.Tensor,
     """Get the scaling factor for FP8 quantization."""
     finfo = torch.finfo(fp8_dtype)
     fmax = finfo.max
-    amax = weight.abs().amax(dim, keepdim=True).clamp_min(1e-6).float()
+    eps = torch.finfo(weight.dtype).eps
+
+    amax = weight.abs().amax(dim, keepdim=True)
 
     if scale_fmt == 'ue8m0':
-        return fast_round_scale_torch(amax, fmax)
+        scaling = fast_round_scale_torch(amax, fmax, weight.dtype)
     else:
         # default
         scaling = amax / fmax
+    
+    scaling = torch.where(scaling == 0, 
+        torch.tensor(eps, dtype=scaling.dtype, device=scaling.device),
+        scaling,
+    )
+
     return scaling
 
 
@@ -65,7 +73,6 @@ def quant_blocked_fp8(weight: torch.Tensor,
 
     # reverse pixel shuffle
     weight = weight.unflatten(-2, (-1, block_size)).unflatten(-1, (-1, block_size))
-    weight = weight.to(torch.float32)
 
     # get scaling
     scaling = _get_quant_scaling(weight, fp8_dtype, dim=(-3, -1), scale_fmt=scale_fmt)
