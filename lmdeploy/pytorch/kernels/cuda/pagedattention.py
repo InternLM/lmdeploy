@@ -542,6 +542,7 @@ def flash_attn_with_kvcache(
     causal: bool = False,  # not used, for align with fa
     window_size: int = None,
     softcap: float = None,
+    scheduler_metadata: Tensor = None,  # not used, for align with fa
     # args not in fa
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,

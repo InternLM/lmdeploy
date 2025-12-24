@@ -104,6 +104,7 @@ class FA3Impl(TritonAttentionImpl):
                     cu_seqlens_q=attn_metadata.cu_seqlens_q,
                     max_seqlen_q=max_q_seqlen,
                     softmax_scale=self.scale,
+                    causal=self.causal,
                     softcap=self.logit_softcapping,
                     window_size=self.sliding_window,
                     # custom args
