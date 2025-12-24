@@ -24,7 +24,7 @@ def fast_pow2_torch(x: torch.Tensor, weight_dtype: torch.dtype) -> torch.Tensor:
 
 
 def fast_round_scale_torch(amax: torch.Tensor, fp8_max: torch.Tensor, weight_dtype: torch.dtype) -> torch.Tensor:
-    return fast_pow2_torch(fast_log2_ceil_torch(amax / fp8_max), weight_dtype)         
+    return fast_pow2_torch(fast_log2_ceil_torch(amax / fp8_max), weight_dtype)
 
 
 def _get_quant_scaling(weight: torch.Tensor,
@@ -43,8 +43,9 @@ def _get_quant_scaling(weight: torch.Tensor,
     else:
         # default
         scaling = amax / fmax
-    
-    scaling = torch.where(scaling == 0, 
+
+    scaling = torch.where(
+        scaling == 0,
         torch.tensor(eps, dtype=scaling.dtype, device=scaling.device),
         scaling,
     )
