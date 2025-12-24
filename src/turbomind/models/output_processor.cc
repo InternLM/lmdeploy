@@ -186,11 +186,13 @@ struct OutputProcessor::Impl {
         int  p      = 0;
         auto ranges = data.output_logits;
 
+        using Size = Interval::Size;
+
         bool success = false;
         // Erode the range iteratively until empty
         for (auto r = data.full_logits; r; r = -step_size | r) {
             // dbg(&r);
-            if (auto chunk = r & Interval{r.begin(), step_size}) {
+            if (auto chunk = r & Interval{r.begin(), Size{step_size}}) {
                 // dbg(&chunk);
                 // Compute & output full logits by chunks
                 auto logits = lm_head_(h.slice(chunk.begin(), (int)chunk.size()));
@@ -218,6 +220,7 @@ struct OutputProcessor::Impl {
     bool OutputLogitsImpl(
         Ranges& ranges, int& p, const Tensor& l, int base, int type, const vector<shared_ptr<RequestCache>>& rs)
     {
+        // dbg("OutputLogitsImpl");
         const auto stream = core::Context::stream().handle();
         for (; p < ranges.size(); ++p) {
             if (auto& [i, t, src, dst] = ranges[p]; t == type) {
@@ -229,9 +232,10 @@ struct OutputProcessor::Impl {
                     Interval  mdst{dst.begin(), msrc.size()};
                     // TODO: support strides in `DLTensor`, so that batched 1D copy can be used
                     if (tp_rank_ == 0) {
+                        // dbg(&mdst, &msrc, tokens, out, base, l);
                         TM_CHECK_EQ(cudaMemcpy2DAsync(out.slice(mdst.begin(), tokens).raw_data(),
                                                       byte_size(dtype, out.stride(0)),
-                                                      l.slice(msrc.begin(), tokens).raw_data(),
+                                                      l.slice(msrc.begin() - base, tokens).raw_data(),
                                                       byte_size(dtype, l.stride(0)),
                                                       byte_size(dtype, vocab_size_),
                                                       tokens,
@@ -243,6 +247,7 @@ struct OutputProcessor::Impl {
                     src = -(int)msrc.size() | src;
                     dst = -(int)mdst.size() | dst;
                 }
+                // dbg(&src, (int)src.size(), &dst, (int)dst.size());
                 if (src) {
                     // request not compeleted, suspend and wait for next chunk
                     return false;
