@@ -92,7 +92,7 @@ jobs:
             sleep 5
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -m 'not not_turbomind and not internlm2_5 and not interns1' --alluredir=allure-results
+              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind and not internlm2_5 and not interns1' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind and not experts' --alluredir=allure-results
               kill -15 $restful_pid 2>/dev/null || true
               exit 0
@@ -111,7 +111,7 @@ jobs:
             sleep 5
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -m 'not not_turbomind and not internlm2_5 and not interns1' --alluredir=allure-results
+              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind and not internlm2_5 and not interns1' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind and not experts' --alluredir=allure-results
               kill -15 $restful_pid 2>/dev/null || true
               exit 0
@@ -130,7 +130,7 @@ jobs:
             sleep 5
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -m 'not not_pytorch and not internlm2_5 and not interns1' --alluredir=allure-results
+              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-32B and pytorch' -m 'not not_pytorch and not internlm2_5 and not interns1' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-32B and pytorch' -m 'not not_pytorch' --alluredir=allure-results
               kill -15 $restful_pid 2>/dev/null || true
               exit 0
@@ -149,7 +149,7 @@ jobs:
             sleep 5
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -m 'not not_pytorch and not internlm2_5 and not interns1' --alluredir=allure-results
+              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'OpenGVLab/InternVL3_5-30B-A3B and pytorch' -m 'not not_pytorch and not internlm2_5 and not interns1' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3_5-30B-A3B and pytorch' -m 'not not_pytorch' --alluredir=allure-results
               kill -15 $restful_pid 2>/dev/null || true
               exit 0
