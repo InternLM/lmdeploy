@@ -55,9 +55,9 @@ struct SamplingData {
 
     bool output_logprobs = 0;
 
-    Buffer_<float>    sampled_logprobs;
-    Buffer_<uint32_t> sampled_indices;
-    Buffer_<uint32_t> sampled_nums;
+    Buffer_<float> sampled_logprobs;
+    Buffer_<int>   sampled_indices;
+    Buffer_<int>   sampled_nums;
 };
 
 Sampling::Sampling(const BaseGenerationParam& base, int phases): BaseGenerationParam{base}

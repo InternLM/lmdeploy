@@ -20,8 +20,8 @@ __global__ void sampling(const T*       logits,
                          int*           output_ids,
                          int*           sequence_length,
                          T*             sampled_logprobs,
-                         uint32_t*      sampled_indexes,
-                         uint32_t*      sampled_nums)
+                         int*           sampled_indexes,
+                         int*           sampled_nums)
 {
     int tid      = threadIdx.x;
     int batch_id = blockIdx.x;

@@ -42,9 +42,9 @@ struct GenerationData {
 struct Generation::Impl {
 
     // child modules
-    unique_ptr<LogitsProcessor> logits_processor;
-    unique_ptr<Sampling>        sampling;
-    shared_ptr<StopCriteria>    stop_criteria;
+    unique_ptr<LogitsProcessor> logits_processor_;
+    unique_ptr<Sampling>        sampling_;
+    shared_ptr<StopCriteria>    stop_criteria_;
 
     // persistent
     Tensor_<int> token_ids_;
@@ -77,9 +77,9 @@ struct Generation::Impl {
     {
         TM_CHECK_EQ(dtype, kFloat32);
         BaseGenerationParam base{max_batch_size, vocab_size, vocab_size_padded};
-        logits_processor = std::make_unique<LogitsProcessor>(base, phases);
-        sampling         = std::make_unique<Sampling>(base, phases);
-        stop_criteria    = std::make_unique<StopCriteria>(base, phases);
+        logits_processor_ = std::make_unique<LogitsProcessor>(base, phases);
+        sampling_         = std::make_unique<Sampling>(base, phases);
+        stop_criteria_    = std::make_unique<StopCriteria>(base, phases);
 
         static_assert(sizeof(curandState_t) % alignof(curandState_t) == 0);
         random_state_ = {{max_batch_size_, (int)sizeof(curandState_t)}, kUint8, kDEVICE};
@@ -185,9 +185,9 @@ struct Generation::Impl {
         }
         // dbg(d.generation_size);
 
-        logits_processor->Setup(phase, env);
-        sampling->Setup(phase, env);
-        stop_criteria->Setup(phase, env);
+        logits_processor_->Setup(phase, env);
+        sampling_->Setup(phase, env);
+        stop_criteria_->Setup(phase, env);
     }
 
     void Prepare(int phase, TensorMap& env)
@@ -224,6 +224,13 @@ struct Generation::Impl {
 
         copy(d.output_ids, d.output_ids.size(), output_ids_buf_);
         env.produce("output_ids", output_ids_buf_);
+
+        sampling_->Fetch(phase, env);
+    }
+
+    void Update(int phase, TensorMap& env)
+    {
+        sampling_->Update(phase, env);
     }
 
     void Forward(int phase, TensorMap& env)
@@ -262,12 +269,12 @@ struct Generation::Impl {
             Buffer_<int> output_pos{max_batch_size_, kDEVICE};
             Copy(env.at("sequence_length").buffer(), gs, output_pos);
 
-            logits_processor->Forward(phase, env);
-            sampling->Forward(phase, env);
+            logits_processor_->Forward(phase, env);
+            sampling_->Forward(phase, env);
 
             AppendTokenIds(d.token_ids_ptrs.data(), output_ids_.data(), output_pos.data(), gs, stream);
 
-            stop_criteria->Forward(phase, env);
+            stop_criteria_->Forward(phase, env);
         }
     }
 };
@@ -296,6 +303,9 @@ void Generation::Run(BatchOp op, int phase, TensorMap& env)
     }
     else if (op == BatchOp::kFetch) {
         return impl_->Fetch(phase, env);
+    }
+    else if (op == BatchOp::kUpdate) {
+        return impl_->Update(phase, env);
     }
 }
 
