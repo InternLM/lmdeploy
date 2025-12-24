@@ -18,6 +18,7 @@ from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.ray import RayContext, get_device_str
+from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -384,7 +385,21 @@ class RayExecutor(ExecutorBase):
         event_loop = asyncio.get_event_loop()
         logger.info('Starting async task RayPrefetchOutput loop.')
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs(), name='RayExecutorPrefetchOutput')
-        self._prefetch_task.add_done_callback(self._prefetch_task_callback)
+
+    async def wait_tasks(self):
+        """Wait tasks."""
+        tasks = [worker.wait_tasks.remote() for worker in self.workers]
+        if self._prefetch_task is not None:
+            tasks.append(self._prefetch_task)
+        try:
+            await wait_for_async_tasks(tasks)
+        except asyncio.CancelledError:
+            logger.debug('wait tasks cancelled.')
+            raise
+        except BaseException:
+            logger.exception('RayExecutor wait tasks failed, kill all workers.')
+            [ray.kill(worker) for worker in self.workers]
+            raise
 
     def stop(self):
         """Stop engine loop."""
@@ -426,16 +441,20 @@ class RayExecutor(ExecutorBase):
         # we don't need return of forward async
         if self.dag is None:
             self.dag = self._compile_dag()
-        inputs = ray.put(inputs)
-        # make sure in order
-        outs = self.dag.execute(inputs)
-        ray.get(outs)
 
-        # free ray.put inputs
         try:
-            ray._private.internal_api.free(inputs)
-        except Exception as e:
-            logger.warning(f'Free input ref failed: {e}')
+            inputs = ray.put(inputs)
+            # make sure in order
+            outs = self.dag.execute(inputs)
+            ray.get(outs)
+        except SystemExit:
+            logger.error('Ray worker exited.')
+        finally:
+            # free ray.put inputs
+            try:
+                ray._private.internal_api.free(inputs)
+            except Exception as e:
+                logger.warning(f'Free input ref failed: {e}')
 
     async def get_output_async(self):
         """Get output async."""

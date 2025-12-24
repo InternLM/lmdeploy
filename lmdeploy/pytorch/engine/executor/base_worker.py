@@ -155,6 +155,13 @@ class WorkerWrapperBase:
         self.out_que = asyncio.Queue()
         self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
 
+    async def wait_tasks(self):
+        """Wait tasks."""
+        tasks = [self.model_agent.wait_tasks()]
+        if self._output_loop is not None:
+            tasks.append(self._output_loop)
+        await asyncio.gather(*tasks)
+
     def stop(self):
         """Stop engine loop."""
         self.model_agent.stop()

@@ -138,6 +138,7 @@ class RequestSender:
                 if self.is_loop_alive():
                     continue
                 logger.debug('Engine main loop failed.')
+                resp.type = ResponseType.ENGINE_STOP_ERROR
                 break
         event.clear()
         return resp

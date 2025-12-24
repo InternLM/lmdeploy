@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+import asyncio
 import inspect
 from contextlib import contextmanager
 from inspect import Parameter, Signature
@@ -179,3 +180,29 @@ def monkey_patch_hf_modules_cache():
     transformers.utils.HF_MODULES_CACHE = modules_cache
 
     logger.info(f'Set HF_MODULES_CACHE to {modules_cache} for current process {os.getpid()}')
+
+
+async def wait_for_async_tasks(tasks: Sequence[asyncio.Task],
+                               cancel_pending: bool = True,
+                               ignore_cancellederror: bool = True):
+    """Wait for async tasks."""
+    if len(tasks) == 0:
+        return [], []
+
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+
+    if cancel_pending:
+        # cancel all pending tasks
+        for task in pending:
+            task.cancel()
+
+    # raise exception if any
+    for task in done:
+        if task.exception():
+            exc = task.exception()
+            if isinstance(exc, asyncio.CancelledError) and ignore_cancellederror:
+                logger.debug(f'Task <{task.get_name()}> cancelled.')
+                continue
+            raise exc from None
+
+    return done, pending

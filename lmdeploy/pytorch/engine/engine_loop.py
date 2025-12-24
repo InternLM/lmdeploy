@@ -13,6 +13,7 @@ from lmdeploy.messages import RequestMetrics
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
+from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger
 
 from .engine import InferOutput, ResponseType, response_reqs
@@ -455,6 +456,10 @@ class EngineLoop:
 
     def create_tasks(self, event_loop: asyncio.AbstractEventLoop):
         """Create async tasks."""
+        # start executor
+        logger.info('Starting executor.')
+        self.executor.start(self.forward_event)
+        self.tasks.add(event_loop.create_task(self.executor.wait_tasks(), name='MainLoopWaitExecutor'))
         logger.info('Starting async task MainLoopPreprocessMessage.')
         self.tasks.add(event_loop.create_task(self.preprocess_loop(), name='MainLoopPreprocessMessage'))
         logger.info('Starting async task MainLoopResponse.')
@@ -473,22 +478,13 @@ class EngineLoop:
             return
 
         try:
-            done, pending = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_EXCEPTION)
-
-            # cancel all pending tasks
-            for task in pending:
-                task.cancel()
-
-            for task in done:
-                try:
-                    task.result()
-                except asyncio.CancelledError:
-                    logger.debug('Task cancelled.')
+            await wait_for_async_tasks(self.tasks)
         except asyncio.CancelledError:
-            logger.info('Engine loop wait tasks cancelled.')
+            logger.debug('wait tasks cancelled.')
             raise
         except BaseException:
             logger.exception('Engine loop wait tasks failed.')
+            raise
         finally:
             self.stop()
             self.cancel()

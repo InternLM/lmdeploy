@@ -454,11 +454,6 @@ class Engine(EngineBase):
             # create engine loop
             engine_loop = build_engine_loop(self)
             self.migration_event = engine_loop.migration_event
-            forward_event = engine_loop.forward_event
-
-            # start executor
-            logger.info('Starting executor.')
-            self.executor.start(forward_event)
 
             # start engine loop
             engine_loop.create_tasks(event_loop)
@@ -468,6 +463,7 @@ class Engine(EngineBase):
             raise
         except BaseException:
             logger.exception('Engine main loop failed.')
+            raise
         finally:
             self._loop_finally()
 
