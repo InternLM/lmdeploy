@@ -340,7 +340,7 @@ void Engine::Impl::Cancel(vector<int>& indices, vector<Signal>& signals)
 {
     auto& s = states_.at(0);
     for (const auto& i : indices) {
-        s.rc[i]->is_done = true;
+        s.rc[i]->done = true;
         signals.push_back(Interrupt(std::move(s.rc[i]), Request::kCancel));
         s.finish += 1;
     }
@@ -508,8 +508,8 @@ void Engine::Impl::Schedule()
     // |<----------- active ----------->|<------- inactive ----->|
 
     for (auto i : swap_in) {
-        cache[i]->is_decoding = {};
-        cache[i]->is_generate = {};
+        cache[i]->autoregres = {};
+        cache[i]->generating = {};
     }
 
     if (param_.enable_metrics) {
@@ -523,8 +523,8 @@ void Engine::Impl::Schedule()
     }
 
     for (auto i : existing) {
-        if (cache[i]->is_generate) {
-            cache[i]->is_decoding = true;
+        if (cache[i]->generating) {
+            cache[i]->autoregres = true;
         }
     }
 
@@ -532,12 +532,12 @@ void Engine::Impl::Schedule()
         auto& s = *sequences[i];
         auto& c = *cache[i];
         if (s.cache_len + c.alpha + s.input_length == c.seq_len + c.beta) {
-            c.is_generate = true;
+            c.generating = true;
         }
     }
 
     // move partially prefilled sequences to the back
-    subrange partial{std::stable_partition(active.begin(), active.end(), [&](int i) { return cache[i]->is_generate; }),
+    subrange partial{std::stable_partition(active.begin(), active.end(), [&](int i) { return cache[i]->generating; }),
                      active.end()};
     TM_CHECK_LE(partial.size(), 1);
 
@@ -632,7 +632,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
     Run(BatchOp::kUpdate, b.phase, env);
 
     Buffer_<bool> finished        = env.at("finished").buffer();
-    Buffer_<bool> is_generate     = env.at("is_generate").buffer();
+    Buffer_<bool> generating      = env.at("generating").buffer();
     Buffer_<int>  output_ids      = env.at("output_ids").buffer();
     Buffer_<int>  sequence_length = env.at("sequence_length").buffer();
 
@@ -640,7 +640,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 
     for (int i = 0; i < b.rc.size(); ++i) {
         if (auto& c = *b.rc[i]; c.seq) {
-            if (auto& s = *c.seq; is_generate[i]) {
+            if (auto& s = *c.seq; generating[i]) {
                 c.token_ids[c.seq_len] = output_ids[i];
                 c.seq_len              = sequence_length[i];
                 s.cache_len            = sequence_length[i] - 1;
@@ -656,7 +656,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
             else {
                 s.cache_len = sequence_length[i];
             }
-            c.is_done |= finished[i];
+            c.done |= finished[i];
             // dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
         }
     }
@@ -669,7 +669,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
             auto& c = *s.rc[i];
             if (i < s.active) {
                 c.alpha = c.input_len;
-                c.beta  = c.is_generate;
+                c.beta  = c.generating;
             }
             else {
                 c.alpha = c.beta = 0;
@@ -678,7 +678,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
     }
 
     for (auto& x : s.rc) {
-        if (x->is_done) {
+        if (x->done) {
             signals.push_back(Interrupt(std::move(x), Request::kFinish));
             s.finish += 1;
         }

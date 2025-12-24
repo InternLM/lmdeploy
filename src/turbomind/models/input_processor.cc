@@ -126,7 +126,7 @@ public:
         input_ids_offsets_buf_[0] = 0;
         for (int i = 0; i < rc.size(); ++i) {
             input_ids_offsets_buf_[i + 1] = input_ids_offsets_buf_[i];
-            if (const auto& c = *rc[i]; TM_UNLIKELY(!c.is_decoding)) {
+            if (const auto& c = *rc[i]; TM_UNLIKELY(!c.autoregres)) {
                 const auto src = c.token_ids + c.history_len + c.alpha;
                 std::copy_n(src, c.input_len, input_ids_buf_.data() + input_ids_offsets_buf_[i]);
                 // dbg(std::vector<int>(src, src + c.input_len));
@@ -159,7 +159,7 @@ public:
         d.input_embeds_coords.clear();
         auto embed_ptr = (uint8_t*)d.input_embeds_buf.raw_data();
         for (int k = 0; k < rc.size(); ++k) {
-            if (auto& c = *rc[k]; !c.is_decoding) {
+            if (auto& c = *rc[k]; !c.autoregres) {
                 const auto& embeds  = c.seq->input_embeds;
                 const auto& offsets = c.seq->input_embeds_offsets;
                 Interval    p{input_ids_offsets_buf_[k], input_ids_offsets_buf_[k + 1]};

@@ -68,10 +68,10 @@ struct LanguageModel::Impl {
         Buffer_<int>  sequence_length;
         Buffer_<bool> finished;
 
-        Buffer_<bool> is_decoding;
-        Buffer_<bool> is_generate;
+        Buffer_<bool> autoregres;
+        Buffer_<bool> generating;
 
-        int generative;
+        int n_generating;
     };
 
     vector<Data> data_;
@@ -157,8 +157,8 @@ LanguageModel::Impl::Impl(DataType              dtype,
         auto& d           = data_.emplace_back();
         d.sequence_length = empty_like(sequence_length_buf_, kDEVICE);
         d.finished        = empty_like(finished_buf_, kDEVICE);
-        d.is_decoding     = {engine.max_batch_size, kCPU};
-        d.is_generate     = {engine.max_batch_size, kCPU};
+        d.autoregres      = {engine.max_batch_size, kCPU};
+        d.generating      = {engine.max_batch_size, kCPU};
     }
 
     input_processor_.emplace(engine, param_, phases);
@@ -323,14 +323,14 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
 
     const auto& rc = env.at("batch").data<BatchData*>()[0]->rc;
 
-    d.generative = 0;
+    d.n_generating = 0;
 
     for (int i = 0; i < rc.size(); ++i) {
-        auto& c          = *rc[i];
-        d.is_decoding[i] = c.is_decoding;
-        d.is_generate[i] = c.is_generate;
-        d.generative += c.is_generate;
-        if (TM_UNLIKELY(!c.is_decoding)) {
+        auto& c         = *rc[i];
+        d.autoregres[i] = c.autoregres;
+        d.generating[i] = c.generating;
+        d.n_generating += c.generating;
+        if (TM_UNLIKELY(!c.autoregres)) {
             sequence_length_buf_[i] = c.history_len + c.alpha + c.input_len;
         }
     }
@@ -370,7 +370,7 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
     if (auto group = copy.group()) {
         // sequence_length = history_len + input_len
         for (int i = 0; i < b.bsz; ++i) {
-            if (const int j = b.perm[i]; j < b.bs0 && d.is_decoding[i]) {
+            if (const int j = b.perm[i]; j < b.bs0 && d.autoregres[i]) {
                 copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
             }
             else {
@@ -445,7 +445,7 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 
     output_processor_->OutputHiddenStatesAndLogits(phase, env, 1);
 
-    if (d.generative) {
+    if (d.n_generating) {
         generation_->Run(BatchOp::kForward, phase, env);
         Copy(env.at("output_ids").buffer(), autoreg_ids_);
     }
@@ -474,8 +474,7 @@ void LanguageModel::Impl::Fetch(int phase, TensorMap& env)
     copy(d.finished, d.finished.size(), finished_buf_);
     env.produce("finished", finished_buf_);
 
-    env.produce("is_generate", d.is_generate);
-    env.produce("is_decoding", d.is_decoding);
+    env.produce("generating", d.generating);
 
     generation_->Run(BatchOp::kFetch, phase, env);
 }

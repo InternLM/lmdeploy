@@ -100,7 +100,7 @@ struct OutputProcessor::Impl {
             auto& c    = *rc[i];
             all_tokens.emplace_back(c.history_len + c.alpha, Size{c.input_len});
             sel_tokens.emplace_back(c.history_len + c.alpha + c.input_len - 1, Size{1});
-            if (!c.is_generate) {
+            if (!c.generating) {
                 sel_tokens.back() = {};
             }
             // dbg(&all_tokens.back(), &sel_tokens.back());

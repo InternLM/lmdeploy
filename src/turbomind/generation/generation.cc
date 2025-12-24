@@ -181,7 +181,7 @@ struct Generation::Impl {
         d.generation_size = 0;
         for (int i = 0; i < rc.size(); ++i) {
             const auto& c = *rc[i];
-            d.generation_size += c.is_generate;
+            d.generation_size += c.generating;
         }
         // dbg(d.generation_size);
 

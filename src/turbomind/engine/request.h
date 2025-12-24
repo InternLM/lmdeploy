@@ -127,7 +127,7 @@ class Sequence;
 // Unlike `Request` which is shared by all local TP ranks, each rank has its own `RequestCache`.
 struct RequestCache {
     std::shared_ptr<Request> req;
-    const Sequence*          seq;
+    const Sequence*          seq;  // May be NULL in `Update` (seq get erased when req is done)
     const GenerationConfig&  gen_cfg;
 
     RequestCache(std::shared_ptr<Request> r, const Sequence& s): req{std::move(r)}, seq{&s}, gen_cfg{req->gen_cfg} {}
@@ -152,9 +152,10 @@ struct RequestCache {
     int input_len   = 0;  // set at schedule (set to `seq.input_len`)
     int history_len = 0;  // set at schedule (set to `seq.cache_len`)
 
-    bool is_decoding = false;  // `seq_len` and `input_ids` taken from the engine
-    bool is_generate = false;  //
-    bool is_done     = false;  // is the request finished / canceled
+    bool autoregres = false;  // set at schedule, `seq_len` and `input_ids` taken from the engine
+    bool generating = false;  // set at schedule
+
+    bool done = false;  // set at cancel / update, is the request finished / canceled
 
     int alpha = 0;  // pending growth of cache_len (draft_len + input_len)
     int beta  = 0;  // pending growth of seq_len (draft_len + {0,1})
