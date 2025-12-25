@@ -13,6 +13,9 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch.profiler import ProfilerActivity, profile, record_function
+import torch_npu
+from torch_npu.profiler import profile as npu_profile
+from tqdm import tqdm
 
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
@@ -141,13 +144,15 @@ class AgentProfiler:
         from lmdeploy.pytorch import envs
         activities = []
         if envs.torch_profile_cpu:
-            activities.append(ProfilerActivity.CPU)
+            activities.append(torch_npu.profiler.ProfilerActivity.CPU)
         if envs.torch_profile_cuda:
-            activities.append(ProfilerActivity.CUDA)
+            # activities.append(ProfilerActivity.CUDA)
+            activities.append(torch_npu.profiler.ProfilerActivity.NPU)
         if len(activities) > 0:
             logger.warning(f'Profiler start on {self.name}. '
                            'Please Note that profiling might harm performance.')
-            profiler = profile(activities=activities)
+            # profiler = profile(activities=activities)
+            profiler = npu_profile(activities=activities, with_stack=False)
             return profiler
         else:
             return None
@@ -360,6 +365,9 @@ class BaseModelAgent:
         self.cache_engine = None
         self.state_cache_engine = None
         self.profiler: AgentProfiler = None
+        # from .npu_memory_profiler import NPUMemoryProfiler
+        # from pathlib import Path
+        # self.npu_memory_profiler: NPUMemoryProfiler = NPUMemoryProfiler(profile_dir=Path('/data/tangzhiyi/intern-s1/test_models/mem_profile'))
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
         except ValueError as e:
@@ -442,7 +450,7 @@ class BaseModelAgent:
             if self.cache_config.role == EngineRole.Prefill:
                 # do not warmup decoding for prefill engine
                 capture_batch_sizes = []
-            for num_tokens in capture_batch_sizes:
+            for num_tokens in tqdm(capture_batch_sizes, desc='Warmup decoding', unit='batch'):
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
                                                          device='cuda',
@@ -453,6 +461,7 @@ class BaseModelAgent:
                 self._forward_impl(inputs)
                 torch.cuda.synchronize()
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} done.')
+                print(f'###### Warmup decoding num_tokens={num_tokens} done.')
 
             # warmup draft model
             self.spec_agent.warmup(max_batches, self.model_config)
@@ -1161,6 +1170,7 @@ class BaseModelAgent:
         self.patched_model.get_model().to(device=device, non_blocking=True)
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
+        # self.npu_memory_profiler.step()
 
     @torch.inference_mode()
     def wakeup(self, tags: Optional[List[str]] = None):

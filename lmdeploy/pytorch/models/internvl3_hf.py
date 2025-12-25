@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
+import os
+import threading
 import torch
 import torch.nn.functional as F
 from packaging import version
@@ -16,11 +18,185 @@ from lmdeploy.pytorch.models.utils.micro_batch import enable_micro_batch, split_
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import LayerNorm, RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_o_proj, build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.tools.stage_timing import NPUTimer, bump_forward_and_maybe_report, record_stage, stage_timing_enabled
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin, vlm_model
+
+
+def _get_env_int(name: str, default: int) -> int:
+    """Read int from env with fallback."""
+    val = os.getenv(name, None)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except Exception:
+        return default
+
+
+def _get_env_bool(name: str, default: bool = False) -> bool:
+    """Read bool from env with fallback."""
+    val = os.getenv(name, None)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _infer_npu_device_index(device: Optional[torch.device]) -> Optional[int]:
+    """Infer NPU device index from torch.device; return None if not NPU."""
+    if device is None:
+        return None
+    try:
+        if device.type != 'npu':
+            return None
+    except Exception:
+        return None
+    # torch.device('npu') has index=None; torch_npu will map it to current_device.
+    return device.index
+
+
+def _format_mib(num_bytes: int) -> float:
+    return float(num_bytes) / 1024.0 / 1024.0
+
+
+def _format_gib(num_bytes: int) -> float:
+    """Format bytes to GiB (binary, 1GiB = 1024^3 bytes)."""
+    return float(num_bytes) / 1024.0 / 1024.0 / 1024.0
+
+
+_GLOBAL_NPU_PEAK_LOCK = threading.Lock()
+_GLOBAL_NPU_PEAK_STATS_BY_TAG: Dict[str, Dict[str, int]] = {}
+
+
+_ASCEND_GRAPH_RUNNER_CLS = None
+
+
+def _is_ascend_cudagraph_capturing() -> bool:
+    """Return True if Ascend cudagraph is capturing; best-effort/no hard dependency."""
+    global _ASCEND_GRAPH_RUNNER_CLS
+    if _ASCEND_GRAPH_RUNNER_CLS is None:
+        try:
+            # Keep consistent with torch_npu_ops.py imports
+            from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import AscendGraphRunner  # type: ignore
+            _ASCEND_GRAPH_RUNNER_CLS = AscendGraphRunner
+        except Exception:
+            _ASCEND_GRAPH_RUNNER_CLS = False  # sentinel: unavailable
+
+    if _ASCEND_GRAPH_RUNNER_CLS is False:
+        return False
+    try:
+        return bool(getattr(_ASCEND_GRAPH_RUNNER_CLS, 'capturing', False))
+    except Exception:
+        return False
+
+
+def _update_and_maybe_print_global_npu_peak(*,
+                                           tag: str,
+                                           device_index: int,
+                                           peak_alloc_bytes: int,
+                                           peak_rsv_bytes: int,
+                                           delta_peak_alloc_bytes: int,
+                                           delta_peak_rsv_bytes: int,
+                                           before_alloc_bytes: int,
+                                           before_rsv_bytes: int,
+                                           after_alloc_bytes: int,
+                                           after_rsv_bytes: int) -> None:
+    """Update process-global max peak stats (bucketed by tag) and print only when it increases."""
+    with _GLOBAL_NPU_PEAK_LOCK:
+        prev = _GLOBAL_NPU_PEAK_STATS_BY_TAG.get(tag, None)
+        if prev is None:
+            prev = {
+                'peak_alloc': 0,
+                'peak_rsv': 0,
+                'delta_peak_alloc': 0,
+                'delta_peak_rsv': 0,
+            }
+            _GLOBAL_NPU_PEAK_STATS_BY_TAG[tag] = prev
+
+        if (peak_alloc_bytes <= prev['peak_alloc'] and peak_rsv_bytes <= prev['peak_rsv']
+                and delta_peak_alloc_bytes <= prev['delta_peak_alloc'] and delta_peak_rsv_bytes <= prev['delta_peak_rsv']):
+            return
+
+        prev['peak_alloc'] = max(prev['peak_alloc'], peak_alloc_bytes)
+        prev['peak_rsv'] = max(prev['peak_rsv'], peak_rsv_bytes)
+        prev['delta_peak_alloc'] = max(prev['delta_peak_alloc'], delta_peak_alloc_bytes)
+        prev['delta_peak_rsv'] = max(prev['delta_peak_rsv'], delta_peak_rsv_bytes)
+
+    try:
+        import torch.distributed as dist  # type: ignore
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+    except Exception:
+        rank = 0
+
+    print(
+        f"[LMDEPLOY_NPU_PEAK] rank={rank} device={device_index} tag={tag} "
+        f"before_alloc={_format_gib(before_alloc_bytes):.3f}GiB "
+        f"before_rsv={_format_gib(before_rsv_bytes):.3f}GiB "
+        f"after_alloc={_format_gib(after_alloc_bytes):.3f}GiB "
+        f"after_rsv={_format_gib(after_rsv_bytes):.3f}GiB "
+        f"peak_alloc={_format_gib(peak_alloc_bytes):.3f}GiB "
+        f"peak_rsv={_format_gib(peak_rsv_bytes):.3f}GiB "
+        f"delta_peak_alloc={_format_gib(delta_peak_alloc_bytes):.3f}GiB "
+        f"delta_peak_rsv={_format_gib(delta_peak_rsv_bytes):.3f}GiB "
+        f"global_max_alloc={_format_gib(prev['peak_alloc']):.3f}GiB "
+        f"global_max_rsv={_format_gib(prev['peak_rsv']):.3f}GiB "
+        f"global_max_delta_alloc={_format_gib(prev['delta_peak_alloc']):.3f}GiB "
+        f"global_max_delta_rsv={_format_gib(prev['delta_peak_rsv']):.3f}GiB"
+    )
+
+
+def _maybe_measure_npu_memory(tag: str, fn, device: Optional[torch.device] = None):
+    """Measure NPU memory delta (allocated/reserved/peak) for a code segment.
+
+    Enable with env: LMDEPLOY_NPU_MEM_DELTA=1
+    """
+    if not _get_env_bool('LMDEPLOY_NPU_MEM_DELTA', default=False):
+        return fn()
+
+    try:
+        import torch_npu  # type: ignore
+    except Exception:
+        return fn()
+
+    # If caller explicitly set a non-NPU device, skip.
+    dev_index = _infer_npu_device_index(device)
+    if dev_index is None:
+        dev_index = torch_npu.npu.current_device()
+
+    # Synchronize + reset peak stats so 'peak_*' is local to this segment.
+    torch_npu.npu.synchronize(dev_index)
+    torch_npu.npu.reset_peak_memory_stats(dev_index)
+    before_alloc = torch_npu.npu.memory_allocated(dev_index)
+    before_rsv = torch_npu.npu.memory_reserved(dev_index)
+
+    out = fn()
+
+    torch_npu.npu.synchronize(dev_index)
+    after_alloc = torch_npu.npu.memory_allocated(dev_index)
+    after_rsv = torch_npu.npu.memory_reserved(dev_index)
+    peak_alloc = torch_npu.npu.max_memory_allocated(dev_index)
+    peak_rsv = torch_npu.npu.max_memory_reserved(dev_index)
+    free_b, total_b = torch_npu.npu.mem_get_info(dev_index)
+
+    try:
+        import torch.distributed as dist  # type: ignore
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+    except Exception:
+        rank = 0
+
+    print(
+        f"######### [LMDEPLOY_NPU_MEM] rank={rank} {tag} "
+        f"+alloc={_format_gib(after_alloc - before_alloc):.3f}GiB "
+        f"+rsv={_format_gib(after_rsv - before_rsv):.3f}GiB "
+        f"peak_alloc={_format_gib(peak_alloc):.3f}GiB "
+        f"peak_rsv={_format_gib(peak_rsv):.3f}GiB "
+        f"free={_format_gib(free_b):.3f}GiB/"
+        f"{_format_gib(total_b):.3f}GiB"
+    )
+    return out
 
 
 @torch.compile(dynamic=True)
@@ -388,6 +564,7 @@ class InternVLVisionModel(nn.Module):
     def forward(
         self,
         pixel_values: Optional[torch.FloatTensor] = None,
+        return_all: bool = True,
     ):
         """forward."""
         assert pixel_values.dim() == 4
@@ -397,7 +574,9 @@ class InternVLVisionModel(nn.Module):
         if self.layernorm is not None:
             last_hidden_state = self.layernorm(hidden_states)
 
-        return hidden_states, last_hidden_state
+        if return_all:
+            return hidden_states, last_hidden_state
+        return last_hidden_state
 
 
 class InternVLMultiModalProjector(nn.Module):
@@ -450,9 +629,31 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         self.config = config
         self.ctx_mgr = ctx_mgr
 
-        self.vision_tower = InternVLVisionModel(config.vision_config, dtype=dtype, device=device)
-        self.multi_modal_projector = InternVLMultiModalProjector(config, dtype=dtype, device=device)
-        self.language_model = build_model_from_hf_config(config.text_config, dtype=dtype, device=device)
+
+        # from .npu_memory_profiler import NPUMemoryProfiler
+        # from pathlib import Path
+        # self.npu_memory_profiler: NPUMemoryProfiler = NPUMemoryProfiler(profile_dir=Path('/data/tangzhiyi/intern-s1/test_models/mem_profile'))
+
+
+        self.vision_tower = _maybe_measure_npu_memory(
+            'vision_tower',
+            lambda: InternVLVisionModel(config.vision_config, dtype=dtype, device=device),
+            device=device,
+        )
+
+        # self.npu_memory_profiler.step(tag='vision_tower')
+        self.multi_modal_projector = _maybe_measure_npu_memory(
+            'multi_modal_projector',
+            lambda: InternVLMultiModalProjector(config, dtype=dtype, device=device),
+            device=device,
+        )
+        # self.npu_memory_profiler.step(tag='multi_modal_projector')
+        self.language_model = _maybe_measure_npu_memory(
+            'language_model',
+            lambda: build_model_from_hf_config(config.text_config, dtype=dtype, device=device),
+            device=device,
+        )
+        # self.npu_memory_profiler.step(tag='language_model')
         self.vision_feature_layer = config.vision_feature_layer
         self.vision_feature_select_strategy = config.vision_feature_select_strategy
 
@@ -469,9 +670,15 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         if torch_version >= version.parse('2.6.0') and tp > 1:
             torch._inductor.config.reorder_for_compute_comm_overlap = True
             if isinstance(self.vision_tower, InternVLVisionModel):
+                # Split ViT encoder forward into micro-batches to reduce peak activation memory.
+                # Env override: LMDEPLOY_VIT_SPLIT_BATCH (default: 2). Set <=1 to disable.
+                num_splits = _get_env_int('LMDEPLOY_VIT_SPLIT_BATCH', 2)
+                if num_splits is None or num_splits <= 1:
+                    num_splits = 1
                 self.vision_tower.encoder.forward = split_batch(self.vision_tower.encoder.forward,
                                                                 'inputs_embeds',
-                                                                index=0)
+                                                                index=0,
+                                                                num_splits=num_splits)
 
         self.get_image_features = torch.compile(self.get_image_features, mode='max-autotune-no-cudagraphs')
         self.compile_vit = True
@@ -512,11 +719,14 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
             vision_features (`torch.Tensor`): Image feature tensor of shape `(num_images, image_length, embed_dim)`.
         """
         downsample_ratio = self.config.downsample_ratio
-        hidden_states, last_hidden_state = self.vision_tower(pixel_values=pixel_values)
         if vision_feature_layer == -1:
-            vision_features = last_hidden_state
+            # Only need the final features; avoid returning an extra large tensor tuple.
+            vision_features = self.vision_tower(pixel_values=pixel_values, return_all=False)
         else:
+            hidden_states, last_hidden_state = self.vision_tower(pixel_values=pixel_values, return_all=True)
             vision_features = hidden_states[vision_feature_layer]
+            # drop reference early (peak memory outside this function is dominated by vision_features)
+            del last_hidden_state, hidden_states
         if vision_feature_select_strategy == 'default':
             vision_features = vision_features[:, 1:, :]
 
@@ -555,23 +765,30 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         """
         batch_size, width, height, channels = vision_features.size()
 
-        if height % scale_factor != 0 or width % scale_factor != 0:
-            raise ValueError('Height and width must be divisible by scale_factor for proper downsampling.')
+        inv = int(round(1.0 / scale_factor))
+        if abs(inv * scale_factor - 1.0) > 1e-6:
+            raise ValueError(f'scale_factor={scale_factor} must be a reciprocal of an integer.')
 
-        # Reshape to allow downsampling
-        vision_features = vision_features.view(batch_size, width, int(height * scale_factor),
-                                               int(channels / scale_factor))
-        # Permute dimensions to align downsampled axis correctly
-        vision_features = vision_features.permute(0, 2, 1, 3).contiguous()
+        if (height % inv) != 0 or (width % inv) != 0:
+            raise ValueError(f'Height/width must be divisible by {inv} for proper downsampling.')
 
-        # Reshape to achieve final downsampled dimensions
-        vision_features = vision_features.view(batch_size, int(height * scale_factor), int(width * scale_factor),
-                                               int(channels / (scale_factor**2)))
+        h_out = height // inv
+        w_out = width // inv
+        c1 = channels * inv
+        c2 = channels * inv * inv
 
-        # Swap height and width back for proper orientation
-        vision_features = vision_features.permute(0, 2, 1, 3).contiguous()
+        # TODO(tangzhiyi)
+        # x = vision_features.view(batch_size, width, h_out, c1)   # (B, W, H/iv, C*iv)
+        # x = x.transpose(1, 2)                                   # (B, H/iv, W, C*iv)
+        # x = x.reshape(batch_size, h_out, w_out, c2)              # (B, H/iv, W/iv, C*iv^2)
+        # x = x.transpose(1, 2)                                   # (B, W/iv, H/iv, C*iv^2)
+        # 使用permute代替多次transpose+reshape（更高效）
+        x = vision_features.reshape(batch_size, width, h_out, inv, channels)
+        x = x.permute(0, 2, 3, 1, 4)  # (B, H_out, inv, W, C)
+        x = x.reshape(batch_size, h_out, w_out, c2)
 
-        return vision_features
+
+        return x.contiguous()
 
     def forward(
         self,
@@ -579,24 +796,170 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         position_ids: torch.Tensor,
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
-        pixel_values: torch.Tensor = None,
+        pixel_values: Any = None,
         image_mask: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
+        # Track peak memory of the multimodal fusion block (global max across forwards).
+        # Enable with env: LMDEPLOY_NPU_FWD_PEAK=1
+        _track_fwd_peak = _get_env_bool('LMDEPLOY_NPU_FWD_PEAK', default=False)
+        _peak_dev_index = None
+        _baseline_alloc = None
+        _baseline_rsv = None
+        if _track_fwd_peak:
+            try:
+                import torch_npu  # type: ignore
+            except Exception:
+                _track_fwd_peak = False
+
         if inputs_embeds is None and pixel_values is not None:
             # extract feature
-            self._mark_dynamic_once(pixel_values, [0])
-            vit_embeds = self.get_image_features(
-                pixel_values,
-                self.vision_feature_layer,
-                self.vision_feature_select_strategy,
-            )
             lang_embeds = self.get_input_embeddings()(input_ids)
-            lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
+            if _track_fwd_peak:
+                try:
+                    import torch_npu  # type: ignore
+                    _peak_dev_index = _infer_npu_device_index(lang_embeds.device)
+                    if _peak_dev_index is None:
+                        _peak_dev_index = torch_npu.npu.current_device()
+                    torch_npu.npu.synchronize(_peak_dev_index)
+                    _baseline_alloc = int(torch_npu.npu.memory_allocated(_peak_dev_index))
+                    _baseline_rsv = int(torch_npu.npu.memory_reserved(_peak_dev_index))
+                    torch_npu.npu.reset_peak_memory_stats(_peak_dev_index)
+                except Exception:
+                    _track_fwd_peak = False
+                    _peak_dev_index = None
+                    _baseline_alloc = None
+                    _baseline_rsv = None
+            # Replace masked_scatter_ with index_copy_ to reduce peak memory and avoid
+            # the masked_scatter slow-path (mask expansion / temporaries) on some backends.
+            if image_mask is None:
+                raise ValueError('image_mask must be provided when pixel_values is not None.')
+
+            hidden = lang_embeds.size(-1)
+
+            # Ensure we write into the original storage (view requires contiguous).
+            # TODO(tangzhiyi)
+            # if not lang_embeds.is_contiguous():
+            #     lang_embeds = lang_embeds.contiguous()
+            # lang_flat = lang_embeds.view(-1, hidden)  # [B*S, H]
+            lang_flat = lang_embeds.reshape(-1, hidden)
+
+            # Row-major order indices of image tokens (matches masked_scatter_ fill order).
+            idx = image_mask.reshape(-1).nonzero(as_tuple=False).flatten()  # [M]
+
+            # Pipeline fusion to reduce peak memory:
+            # compute vision embeddings in chunks and write-back immediately, instead of
+            # materializing full vit_embeds for all images.
+            # Env override: LMDEPLOY_MM_CHUNK_SIZE (default: 4). Set <=0 to disable.
+            mm_chunk_size = kwargs.get('mm_chunk_size', None)
+            if mm_chunk_size is None:
+                mm_chunk_size = _get_env_int('LMDEPLOY_MM_CHUNK_SIZE', 4)
+            try:
+                mm_chunk_size = int(mm_chunk_size)
+            except Exception:
+                mm_chunk_size = _get_env_int('LMDEPLOY_MM_CHUNK_SIZE', 4)
+            # pixel_values can be a Tensor [N,3,H,W] or a list of per-image tensors [1,3,H,W]
+            if isinstance(pixel_values, list):
+                num_images = len(pixel_values)
+            else:
+                num_images = int(pixel_values.shape[0])
+            if idx.numel() == 0 or num_images == 0:
+                # nothing to fuse
+                pass
+            elif mm_chunk_size <= 0 or mm_chunk_size >= num_images:
+                # original (non-pipelined) behavior: compute all at once
+                _do_stage_timing = stage_timing_enabled() and (not _is_ascend_cudagraph_capturing())
+                with NPUTimer(device=lang_embeds.device, sync=True, enabled=_do_stage_timing) as _tm:
+                    if isinstance(pixel_values, list):
+                        pv_all = torch.cat(pixel_values, dim=0)
+                    else:
+                        pv_all = pixel_values
+                    self._mark_dynamic_once(pv_all, [0])
+                    vit_embeds = self.get_image_features(
+                        pv_all,
+                        self.vision_feature_layer,
+                        self.vision_feature_select_strategy,
+                    )
+                    vit_flat = vit_embeds.reshape(-1, hidden)  # [M, H]
+                    if vit_flat.shape[0] != idx.numel():
+                        raise ValueError(f'Image token count mismatch: mask has {idx.numel()} positions, '
+                                         f'but vit_embeds has {vit_flat.shape[0]} tokens.')
+                    # TODO(tangzhiyi)
+                    # if vit_flat.dtype != lang_flat.dtype or vit_flat.device != lang_flat.device:
+                    #     vit_flat = vit_flat.to(dtype=lang_flat.dtype, device=lang_flat.device)
+                    lang_flat.index_copy_(0, idx, vit_flat)
+                    del vit_embeds, vit_flat
+                    if isinstance(pixel_values, list):
+                        del pv_all
+                if _do_stage_timing:
+                    record_stage('vit', _tm.elapsed_s)
+            else:
+                # pipelined: process images in chunks, and consume idx in row-major order
+                _do_stage_timing = stage_timing_enabled() and (not _is_ascend_cudagraph_capturing())
+                with NPUTimer(device=lang_embeds.device, sync=True, enabled=_do_stage_timing) as _tm:
+                    offset = 0
+                    for start in range(0, num_images, mm_chunk_size):
+                        end = min(num_images, start + mm_chunk_size)
+                        if isinstance(pixel_values, list):
+                            pv = torch.cat(pixel_values[start:end], dim=0)
+                        else:
+                            pv = pixel_values[start:end]
+                        if start == 0:
+                            self._mark_dynamic_once(pv, [0])
+                        vit_chunk = self.get_image_features(
+                            pv,
+                            self.vision_feature_layer,
+                            self.vision_feature_select_strategy,
+                        )
+                        vit_flat = vit_chunk.reshape(-1, hidden)
+                        n = vit_flat.shape[0]
+                        idx_chunk = idx[offset:offset + n]
+                        if idx_chunk.numel() != n:
+                            raise ValueError(f'Image token count mismatch: need {n} mask positions for chunk '
+                                             f'[{start}:{end}], but got {idx_chunk.numel()} remaining.')
+                        if vit_flat.dtype != lang_flat.dtype or vit_flat.device != lang_flat.device:
+                            vit_flat = vit_flat.to(dtype=lang_flat.dtype, device=lang_flat.device)
+                        lang_flat.index_copy_(0, idx_chunk, vit_flat)
+                        offset += n
+                        del pv, vit_chunk, vit_flat, idx_chunk
+                    if offset != idx.numel():
+                        raise ValueError(f'Image token count mismatch: mask has {idx.numel()} positions, '
+                                         f'but consumed {offset} vision tokens.')
+                if _do_stage_timing:
+                    record_stage('vit', _tm.elapsed_s)
+
+            # release vision-side temporaries ASAP to reduce peak
+            pixel_values = None
+            del idx, lang_flat
 
             inputs_embeds = lang_embeds
             input_ids = None
+
+            if _track_fwd_peak and _peak_dev_index is not None and _baseline_alloc is not None and _baseline_rsv is not None:
+                try:
+                    import torch_npu  # type: ignore
+                    torch_npu.npu.synchronize(_peak_dev_index)
+                    after_alloc = torch_npu.npu.memory_allocated(_peak_dev_index)
+                    after_rsv = torch_npu.npu.memory_reserved(_peak_dev_index)
+                    peak_alloc = torch_npu.npu.max_memory_allocated(_peak_dev_index)
+                    peak_rsv = torch_npu.npu.max_memory_reserved(_peak_dev_index)
+                    delta_peak_alloc = max(0, int(peak_alloc) - int(_baseline_alloc))
+                    delta_peak_rsv = max(0, int(peak_rsv) - int(_baseline_rsv))
+                    _update_and_maybe_print_global_npu_peak(
+                        tag='mm_fuse_711_812',
+                        device_index=_peak_dev_index,
+                        peak_alloc_bytes=int(peak_alloc),
+                        peak_rsv_bytes=int(peak_rsv),
+                        delta_peak_alloc_bytes=int(delta_peak_alloc),
+                        delta_peak_rsv_bytes=int(delta_peak_rsv),
+                        before_alloc_bytes=int(_baseline_alloc),
+                        before_rsv_bytes=int(_baseline_rsv),
+                        after_alloc_bytes=int(after_alloc),
+                        after_rsv_bytes=int(after_rsv),
+                    )
+                except Exception:
+                    pass
 
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError('You must specify exactly one of input_ids or inputs_embeds')
@@ -604,11 +967,72 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
-        outputs = self.language_model.forward(input_ids=input_ids,
-                                              inputs_embeds=inputs_embeds,
-                                              past_key_values=past_key_values,
-                                              position_ids=position_ids,
-                                              attn_metadata=attn_metadata)
+        # Track peak memory of LM forward (prefill vs decode).
+        # Enable with env: LMDEPLOY_NPU_FWD_PEAK=1
+        _lm_track = _get_env_bool('LMDEPLOY_NPU_FWD_PEAK', default=False)
+        _lm_dev_index = None
+        _lm_before_alloc = None
+        _lm_before_rsv = None
+        _lm_tag = None
+        if _lm_track:
+            try:
+                import torch_npu  # type: ignore
+                _lm_dev_index = _infer_npu_device_index(inputs_embeds.device)
+                if _lm_dev_index is None:
+                    _lm_dev_index = torch_npu.npu.current_device()
+                torch_npu.npu.synchronize(_lm_dev_index)
+                _lm_before_alloc = int(torch_npu.npu.memory_allocated(_lm_dev_index))
+                _lm_before_rsv = int(torch_npu.npu.memory_reserved(_lm_dev_index))
+                torch_npu.npu.reset_peak_memory_stats(_lm_dev_index)
+                _is_decoding = bool(getattr(attn_metadata, 'is_decoding', False))
+                _lm_tag = 'lm_forward_decode' if _is_decoding else 'lm_forward_prefill'
+            except Exception:
+                _lm_track = False
+                _lm_dev_index = None
+
+        _do_stage_timing = stage_timing_enabled() and (not _is_ascend_cudagraph_capturing())
+        with NPUTimer(device=inputs_embeds.device if inputs_embeds is not None else None,
+                      sync=True,
+                      enabled=_do_stage_timing) as _lm_timer:
+            outputs = self.language_model.forward(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                past_key_values=past_key_values,
+                position_ids=position_ids,
+                attn_metadata=attn_metadata,
+            )
+        # Stage timing stats (prefill vs decode)
+        if _do_stage_timing:
+            _is_decoding2 = bool(getattr(attn_metadata, 'is_decoding', False))
+            record_stage('lm_decode' if _is_decoding2 else 'lm_prefill', _lm_timer.elapsed_s)
+
+        if _lm_track and _lm_dev_index is not None and _lm_before_alloc is not None and _lm_before_rsv is not None and _lm_tag is not None:
+            try:
+                import torch_npu  # type: ignore
+                torch_npu.npu.synchronize(_lm_dev_index)
+                _lm_after_alloc = int(torch_npu.npu.memory_allocated(_lm_dev_index))
+                _lm_after_rsv = int(torch_npu.npu.memory_reserved(_lm_dev_index))
+                _lm_peak_alloc = int(torch_npu.npu.max_memory_allocated(_lm_dev_index))
+                _lm_peak_rsv = int(torch_npu.npu.max_memory_reserved(_lm_dev_index))
+                _lm_delta_peak_alloc = max(0, _lm_peak_alloc - int(_lm_before_alloc))
+                _lm_delta_peak_rsv = max(0, _lm_peak_rsv - int(_lm_before_rsv))
+                _update_and_maybe_print_global_npu_peak(
+                    tag=_lm_tag,
+                    device_index=_lm_dev_index,
+                    peak_alloc_bytes=_lm_peak_alloc,
+                    peak_rsv_bytes=_lm_peak_rsv,
+                    delta_peak_alloc_bytes=_lm_delta_peak_alloc,
+                    delta_peak_rsv_bytes=_lm_delta_peak_rsv,
+                    before_alloc_bytes=int(_lm_before_alloc),
+                    before_rsv_bytes=int(_lm_before_rsv),
+                    after_alloc_bytes=_lm_after_alloc,
+                    after_rsv_bytes=_lm_after_rsv,
+                )
+            except Exception:
+                pass
+
+        # One counter increment per forward (not per-stage).
+        bump_forward_and_maybe_report(enabled=_do_stage_timing)
         return outputs
 
     def prepare_inputs_for_generation(
@@ -634,7 +1058,8 @@ class InternVLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMix
             if len(pixel_values) > 0:
                 image_token_id = pixel_values[0].meta['image_token_id']
                 image_mask = input_ids == image_token_id
-                pixel_values = torch.cat([data.data for data in pixel_values])
+                # Keep as a list to avoid a large torch.cat peak; forward() will cat per chunk.
+                pixel_values = [data.data for data in pixel_values]
             else:
                 pixel_values = None
                 image_mask = None
