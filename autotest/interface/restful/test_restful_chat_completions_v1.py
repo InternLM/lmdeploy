@@ -544,6 +544,7 @@ class TestRestfulInterfaceChatCompletions:
 @pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
 class TestRestfulOpenAI:
 
+    @pytest.mark.pr_test
     def test_return_info(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
@@ -559,6 +560,7 @@ class TestRestfulOpenAI:
         output = outputs.model_dump()
         assert_chat_completions_batch_return(output, model_name)
 
+    @pytest.mark.pr_test
     def test_return_info_streaming(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
@@ -598,6 +600,7 @@ class TestRestfulOpenAI:
         assert ' is' not in output.get('choices')[0].get('message').get('content')
         assert output.get('choices')[0].get('finish_reason') == 'stop'
 
+    @pytest.mark.pr_test
     def test_single_stopword_streaming(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
@@ -670,6 +673,7 @@ class TestRestfulOpenAI:
             assert ' to' not in outputList[index].get('choices')[0].get('delta').get('content')
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'stop'
 
+    @pytest.mark.pr_test
     def test_minimum_topp(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
@@ -720,6 +724,7 @@ class TestRestfulOpenAI:
             responseList.append(response)
         assert responseList[0] == responseList[1] or responseList[1] == responseList[2]
 
+    @pytest.mark.pr_test
     def test_mistake_modelname_return(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         with pytest.raises(Exception, match='The model \'error\' does not exist.'):
@@ -750,6 +755,7 @@ class TestRestfulOpenAI:
                                            temperature=0.01,
                                            stream=True)
 
+    @pytest.mark.pr_test
     def test_mutilple_times_response_should_not_same(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
@@ -813,6 +819,7 @@ class TestRestfulOpenAI:
         assert output.get('choices')[0].get('message').get(
             'content') == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
 
+    @pytest.mark.pr_test
     def test_longtext_input_streaming(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
@@ -837,6 +844,7 @@ class TestRestfulOpenAI:
             'content') == 'internal error happened, status code ResponseType.INPUT_LENGTH_ERROR'
         assert len(outputList) == 1
 
+    @pytest.mark.pr_test
     def test_max_tokens(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
@@ -884,6 +892,7 @@ class TestRestfulOpenAI:
         assert length == 5 or length == 6
 
     @pytest.mark.not_pytorch
+    @pytest.mark.pr_test
     def test_logprobs(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
@@ -904,6 +913,7 @@ class TestRestfulOpenAI:
         assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
 
     @pytest.mark.not_pytorch
+    @pytest.mark.pr_test
     def test_logprobs_streaming(self, backend, model_case):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
         model_name = client.models.list().data[0].id
