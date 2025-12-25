@@ -11,6 +11,7 @@ partial_json_parser
 peft<=0.14.0
 pillow
 protobuf
+pybase64
 pydantic>2.0.0
 pyzmq
 ray

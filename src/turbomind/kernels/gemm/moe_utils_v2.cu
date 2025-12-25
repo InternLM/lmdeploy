@@ -653,6 +653,11 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                 return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
             }
         }
+        else if (experts <= 512) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<512>, _Int<8>, _Int<16>, _Int<4>);
+            }
+        }
         return false;
     };
 

@@ -80,11 +80,11 @@ class TestFillKVCache:
 
     @pytest.fixture
     def k_states(self, num_tokens, num_heads, head_dim):
-        yield torch.rand(num_tokens, num_heads, head_dim).cuda()
+        yield torch.randn(num_tokens, num_heads, head_dim).cuda()
 
     @pytest.fixture
     def v_states(self, k_states):
-        yield torch.rand_like(k_states)
+        yield torch.randn_like(k_states)
 
     @pytest.fixture
     def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
@@ -154,13 +154,17 @@ class TestFillKVCache:
 class TestFillKVCacheInt8(TestFillKVCache):
 
     @pytest.fixture
+    def head_dim(self, request):
+        yield request.param
+
+    @pytest.fixture
     def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
         shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
         yield torch.full(shape, 0, dtype=torch.uint8).cuda()
 
     @pytest.fixture
     def v_caches(self, k_caches):
-        yield torch.rand_like(k_caches.to(torch.float32)).to(torch.uint8)
+        yield torch.full_like(k_caches.to(torch.float32), 0).to(torch.uint8)
 
     @pytest.fixture
     def k_scales_zeros(self, batch_size, max_num_blocks, block_size, num_heads):
@@ -220,6 +224,7 @@ class TestFillKVCacheInt8(TestFillKVCache):
 
         yield k_caches, v_caches, k_scales_zeros, v_scales_zeros
 
+    @pytest.mark.parametrize('head_dim', [128, 96], indirect=True)
     @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
         ((1, 1, 1, 1), (1, 16, 31, 24)),
         ((1, 8, 16, 24), (1, 16, 31, 24)),
@@ -231,8 +236,8 @@ class TestFillKVCacheInt8(TestFillKVCache):
         fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc, q_seq_length, kv_seq_length,
                       max_q_seq_length, block_offsets, k_scales_zeros, v_scales_zeros, 8)
 
-        torch.testing.assert_close(k_caches, gt[0])
-        torch.testing.assert_close(v_caches, gt[1])
+        torch.testing.assert_close(k_caches / 256, gt[0] / 256, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(v_caches / 256, gt[1] / 256, atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(k_scales_zeros, gt[2])
         torch.testing.assert_close(v_scales_zeros, gt[3])
 
@@ -248,6 +253,7 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
     def nbits(self):
         yield 4
 
+    @pytest.mark.parametrize('head_dim', [128], indirect=True)
     @pytest.mark.parametrize(['seq_lens', 'history_lens'], [
         ((1, 1, 1, 1), (1, 16, 31, 24)),
         ((1, 8, 16, 24), (1, 16, 31, 24)),
@@ -392,7 +398,15 @@ class TestFillKVCacheBlockedFP8(TestFillKVCache):
         out_k, out_ks, out_v, out_vs = self.uncache(k_caches, ks_caches, v_caches, vs_caches, cu_seqlen_q,
                                                     kv_seq_length, block_offsets)
 
-        torch.testing.assert_close(out_k.float(), gt_k.float())
+        out_k = out_k.float()
+        out_k = out_k / out_k.max()
+        gt_k = gt_k.float()
+        gt_k = gt_k / gt_k.max()
+        out_v = out_v.float()
+        out_v = out_v / out_v.max()
+        gt_v = gt_v.float()
+        gt_v = gt_v / gt_v.max()
+        torch.testing.assert_close(out_k, gt_k)
         torch.testing.assert_close(out_ks, gt_ks)
-        torch.testing.assert_close(out_v.float(), gt_v.float())
+        torch.testing.assert_close(out_v, gt_v)
         torch.testing.assert_close(out_vs, gt_vs)

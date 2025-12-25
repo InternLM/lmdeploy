@@ -249,7 +249,7 @@ class EngineLoop:
             # logprobs
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
-            if logprobs is not None:
+            if logprobs is not None and num_logprobs > 0:
                 cur_logprobs = (logprobs.vals[idx][:num_logprobs + 1], logprobs.indices[idx][:num_logprobs + 1])
             # get spec stats info
             spec_info = None

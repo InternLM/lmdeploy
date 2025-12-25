@@ -469,7 +469,7 @@ def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc
 
     BLOCK_K = triton.next_power_of_2(K)
     num_warps = 1
-    BLOCK_N = num_warps * 512 // hidden_states.element_size()
+    BLOCK_N = triton.cdiv(num_warps * 512, hidden_states.element_size())
     grid = (M * triton.cdiv(N, BLOCK_N), )
 
     _moe_reduce_kernel[grid](
