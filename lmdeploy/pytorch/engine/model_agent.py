@@ -779,8 +779,6 @@ class BaseModelAgent:
                 sync_long_context=sync_long_context,
                 return_routed_experts=return_routed_experts and self.need_output,
             )
-            if idx > 10:
-                raise RuntimeError('Debug stop here.')
             logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
             seq_length = output.get('seq_length', inputs.seq_length)
             last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
