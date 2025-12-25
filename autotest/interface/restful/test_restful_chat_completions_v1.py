@@ -72,8 +72,6 @@ class TestRestfulInterfaceBase:
 
 
 @pytest.mark.order(8)
-@pytest.mark.turbomind
-@pytest.mark.pytorch
 @pytest.mark.flaky(reruns=2)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
 @pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
@@ -542,8 +540,6 @@ class TestRestfulInterfaceChatCompletions:
 
 @pytest.mark.order(8)
 @pytest.mark.flaky(reruns=2)
-@pytest.mark.turbomind
-@pytest.mark.pytorch
 @pytest.mark.parametrize('backend', BACKEND_LIST)
 @pytest.mark.parametrize('model_case', RESTFUL_MODEL_LIST)
 class TestRestfulOpenAI:
