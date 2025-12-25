@@ -270,7 +270,7 @@ void CudaIpcCommImpl::AllReduceSum(
             const int     slice    = (count / vec_size + n_ranks - 1) / n_ranks;
             const int     first    = rank * slice;
             const int     last     = std::min<int>(count / vec_size, first + slice);
-            const int     max_ctas = max_ctas_.apply(16);
+            const int     max_ctas = max_ctas_.apply(8);
             const int     blocks   = std::min(max_ctas, (slice + threads - 1) / threads);
             Allreduce_NVLS_V2<<<blocks, threads, 0, stream>>>(symm_ptr.mc,  //
                                                               semaphore,

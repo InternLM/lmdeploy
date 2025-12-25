@@ -428,7 +428,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
 
         if (symm_ptr.mc) {
             constexpr int block_dim = 1024;
-            const int     max_ctas  = max_ctas_.apply(16);
+            const int     max_ctas  = max_ctas_.apply(8);
             const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
             AllreduceResidualBiasRMSnorm_NVLS<<<blocks, block_dim, 0, stream>>>(symm_ptr.mc,
                                                                                 (T*)hidden,
