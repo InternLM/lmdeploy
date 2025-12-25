@@ -17,8 +17,8 @@ DEFAULT_PORT = 23333
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
-@pytest.mark.parametrize('model_name', RESTFUL_MODEL_LIST)
 @pytest.mark.parametrize('backend', BACKEND_LIST)
+@pytest.mark.parametrize('model_name', RESTFUL_MODEL_LIST)
 class TestGenerateComprehensive:
 
     @pytest.fixture(autouse=True)
