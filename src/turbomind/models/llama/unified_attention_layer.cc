@@ -52,6 +52,33 @@
 
 namespace turbomind {
 
+struct AttentionData {
+    struct Stat {
+        int n;
+        int q_sum;
+        int q_max;
+        int k_sum;
+        int k_max;
+    } decode, prefill;
+
+    Buffer_<void*> block_ptrs;
+    Buffer_<int>   block_ptrs_offsets;
+
+    Buffer_<float> rope_base;
+
+    Tensor_<int> mrope_position_ids;
+    Buffer_<int> mrope_position_delta;
+    Buffer_<int> mrope_length;
+
+    // borrowed from env
+    Buffer_<bool> finished;
+    Buffer_<int>  q_offsets;
+    Buffer_<int>  k_offsets;
+
+    int dbg_offset;
+    int dbg_size;
+};
+
 UnifiedAttentionLayer::~UnifiedAttentionLayer()
 {
 
@@ -101,52 +128,33 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     Clear(split_cnt_.buffer());
     Clear(barriers_.buffer());
 
-    rope_base_buf_        = {engine.max_batch_size + 1, kCPUpinned};
-    decode_token_pos_buf_ = {engine.max_batch_size, kCPUpinned};
+    const int bsz = engine.max_batch_size;
 
-    const int max_blocks = engine.max_batch_size * cdiv(engine.session_len, param_.cache_block_seq_len);
-    for (int i = 0; i < phases; ++i) {
-        data_.push_back(std::make_shared<AttentionData>(engine.max_batch_size, max_blocks, rope_param_));
+    if (rope_param_.type == RopeType::kDynamic) {
+        rope_base_buf_ = {bsz + 1, kCPUpinned};
     }
-}
-
-struct AttentionData {
-
-    struct Stat {
-        int n;
-        int q_sum;
-        int q_max;
-        int k_sum;
-        int k_max;
-    } decode, prefill;
-
-    Buffer_<void*> block_ptrs;
-    Buffer_<int>   block_ptrs_offsets;
-
-    Buffer_<float> rope_base;
-
-    Tensor_<int> mrope_position_ids;
-    Buffer_<int> mrope_position_delta;
-    Buffer_<int> mrope_length;
-
-    // borrowed from env
-    Buffer_<bool> finished;
-    Buffer_<int>  q_offsets;
-    Buffer_<int>  k_offsets;
-
-    int dbg_offset;
-    int dbg_size;
-
-    AttentionData(int bsz, int max_blocks, RopeKernelParam& rope)
-    {
-        block_ptrs         = {max_blocks + 16, kDEVICE};
-        block_ptrs_offsets = {bsz + 1, kDEVICE};
-
-        if (rope.type == RopeType::kDynamic) {
-            rope_base = {bsz, kDEVICE};
+    else if (rope_param_.type == RopeType::kMrope) {
+        // `mrope_position_ids` is not buffered
+        mrope_position_delta_buf_ = {bsz, kCPUpinned};
+        mrope_length_buf_         = {bsz, kCPUpinned};
+    }
+    const int max_blocks = bsz * cdiv(engine.session_len, param_.cache_block_seq_len);
+    for (int i = 0; i < phases; ++i) {
+        auto& d               = data_.emplace_back(std::make_shared<AttentionData>());
+        d->block_ptrs         = {max_blocks + 16, kDEVICE};
+        d->block_ptrs_offsets = {bsz + 1, kDEVICE};
+        if (rope_param_.type == RopeType::kDynamic) {
+            d->rope_base = empty_like(rope_base_buf_, kDEVICE);
+        }
+        else if (rope_param_.type == RopeType::kMrope) {
+            /// TODO: total space for `mrope_position_ids` can be reduced to (max_fwd_tokens, 3)
+            d->mrope_position_ids    = {{bsz, engine.session_len, 3}, kDEVICE};
+            d->mrope_position_delta  = empty_like(mrope_position_delta_buf_, kDEVICE);
+            d->mrope_length          = empty_like(mrope_length_buf_, kDEVICE);
+            rope_param_.mrope.stride = d->mrope_position_ids.stride(0);
         }
     }
-};
+}
 
 static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
 {
@@ -240,7 +248,26 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         Copy_(rope_base_buf_, bsz, d.rope_base);
     }
     else if (rope_param_.type == RopeType::kMrope) {
-        TM_CHECK(0) << "not implemented.";
+        const auto stride = d.mrope_position_ids.stride(0);
+        for (int i = 0; i < rc.size(); ++i) {
+            auto& c = *rc[i];
+            auto& r = *c.req;
+            if (auto pos_ids = r.inputs.try_("mrope_position_ids")) {
+                int length                   = pos_ids->shape(0);
+                mrope_length_buf_[i]         = length;
+                mrope_position_delta_buf_[i] = *r.inputs.at("mrope_position_delta").data<int>();
+                if (auto o = Interval{0, length} & Interval{c.history_len + c.alpha, Interval::Size{c.input_len}}) {
+                    copy(pos_ids->data<int>() + o.begin() * 3,
+                         (int)o.size() * 3,
+                         d.mrope_position_ids.data() + i * stride + o.begin() * 3);
+                }
+            }
+            else {
+                mrope_length_buf_[i] = mrope_position_delta_buf_[i] = 0;
+            }
+        }
+        copy(mrope_length_buf_, rc.size(), d.mrope_length);
+        copy(mrope_position_delta_buf_, rc.size(), d.mrope_position_delta);
     }
 }
 
@@ -401,15 +428,14 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.window_size = 256 << 20;  // 256 M
         }
 
-        // add offset to rope
         params.rope_param = rope_param_;
         if (rope_param_.type == RopeType::kDynamic) {
-            params.rope_param.base += offset;
+            params.rope_param.base = d.rope_base.data() + offset;
         }
         else if (rope_param_.type == RopeType::kMrope) {
-            params.rope_param.mrope.position_ids += offset * rope_param_.mrope.stride;
-            params.rope_param.mrope.position_delta += offset;
-            params.rope_param.mrope.length += offset;
+            params.rope_param.mrope.position_ids   = d.mrope_position_ids.data() + offset * rope_param_.mrope.stride;
+            params.rope_param.mrope.position_delta = d.mrope_position_delta.data() + offset;
+            params.rope_param.mrope.length         = d.mrope_length.data() + offset;
         }
 
         // logn attn

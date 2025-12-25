@@ -102,7 +102,9 @@ private:
     std::vector<std::shared_ptr<AttentionData>> data_;
 
     Buffer_<float> rope_base_buf_;
-    Buffer_<int>   decode_token_pos_buf_;
+
+    Buffer_<int> mrope_position_delta_buf_;
+    Buffer_<int> mrope_length_buf_;
 
     ///////////////////////////////////////////////////////
     /// temp runtime buffers
