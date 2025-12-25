@@ -517,7 +517,14 @@ def flash_attn_varlen_func(
     if softmax_scale is None:
         softmax_scale = 1.0 / (head_dim_q**0.5)
 
-    batch, num_heads = cu_seqlens_q.size(0) - 1, q.size(-2)
+    if cu_seqlens_k is None:
+        assert kv_start_loc is not None and kv_seqlens is not None
+    if cu_seqlens_q is None:
+        assert q_start_loc is not None and q_seqlens is not None
+        batch = q_seqlens.size(0)
+    else:
+        batch = cu_seqlens_q.size(0) - 1
+    num_heads = q.size(-2)
     num_kv_heads = k.size(h_dim)
     kv_group_num = num_heads // num_kv_heads
 
