@@ -6,6 +6,7 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 
+from ....lite.quantization.weight.quant_utils import quant_blocked_fp8
 from ..config import RopeParam
 from ..loader import create_loader
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
@@ -23,7 +24,17 @@ class LlamaReader(BaseReader):
     attn_pattern = r'self_attn'
     ffn_pattern = r'mlp'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy):
+    proj_pattern = r'proj'
+    scale_inv_prefix = r'scale_inv'
+    quant_dtype_map = {'e4m3': torch.float8_e4m3fn, 'e5m2': torch.float8_e5m2}
+
+    def __init__(self,
+                 new_params: dict,
+                 unused_params: dict,
+                 last_bin: bool,
+                 model_cfg: dict,
+                 policy,
+                 use_quant: bool = False):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
@@ -33,6 +44,35 @@ class LlamaReader(BaseReader):
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
         self.processor = policy
+        if use_quant:
+            quant_params = self.quant_weight()
+            self.params.update(quant_params)
+
+    def quant_weight(self):
+        quant_cfg = self.model_cfg.get('quantization_config')
+        if not quant_cfg or quant_cfg.get('quant_method') != 'fp8':
+            return {}
+
+        fmt = quant_cfg.get('fmt')
+        if fmt not in self.quant_dtype_map:
+            raise ValueError(f'Unsupported FP8 format: {fmt}')
+
+        fp8_dtype = self.quant_dtype_map[fmt]
+        group_size = quant_cfg['weight_block_size'][0]
+
+        scale_fmt = quant_cfg.get('scale_fmt')
+
+        pattern_str = f'({self.attn_pattern}|{self.ffn_pattern}).*{self.proj_pattern}'
+        target_pattern = re.compile(pattern_str)
+
+        quant_params = {}
+        for name, weight in self.params.items():
+            if target_pattern.search(name):
+                q_weight, scale = quant_blocked_fp8(weight, fp8_dtype, group_size, scale_fmt)
+                quant_params[name] = q_weight
+                quant_params[f'{name}_{self.scale_inv_prefix}'] = scale.to(weight.dtype)
+
+        return quant_params
 
     def filter(self, pattern: str):
         params = []
@@ -104,14 +144,17 @@ class LlamaModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
         self.policy = kwargs.get('input_policy')
+        self.quant_config = kwargs.get('quant_config', None)
+        self.use_quant = kwargs.get('use_quant', False)
         _, self.model_config = get_model_arch(model_path)
         self.model_config = self.model_config.to_dict()
+        self.model_config and self.model_config.update(quantization_config=self.quant_config)
 
     def readers(self):
         mappings = getattr(self.Reader, 'mappings', [])
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten, mappings)
         for i, param in loader.items():
-            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
+            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy, use_quant=self.use_quant)
             yield i, reader
         torch.cuda.empty_cache()
 

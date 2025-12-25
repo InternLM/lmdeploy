@@ -232,6 +232,25 @@ class TurbomindEngineConfig:
         hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
             It can be used to override the default config of the model
         enable_metrics (bool): enable metrics system
+        use_quant (bool): whether to quantize weights from bf16 to low precision,
+            default to False. FP8 quant is only supported currently.
+        quant_config (Optional[Dict[str, Any]]): Configuration parameters for
+            quantization. Required if use_quant is True.
+            Keys in quant_config:
+                quant_method (Required): Specifies the quantization algorithm
+                    to use.Must be set to "fp8" currently.
+                activation_scheme (Optional): Determines how activation tensors
+                    (inputs) are quantized during inference. Default to "dynamic",
+                    meaning scales are calculated in real time.
+                fmt (Optional): Defines the specific binary format for the FP8 weights.
+                    "e4m3" provides higher precision, while "e5m2"provides a wider
+                    dynamic range. Default to "e4m3".
+                weight_block_size (Optional): Controls the granularity of quantization.
+                    It defines the size of the weight matrix block (e.g., 128x128) that
+                    shares a single scaling factor. Value: int or list/tuple (default: [128, 128]).
+                scale_fmt (Optional): The quantization strategy used in DeepSeekV3.1 is based on "ue8m0".
+                    The principle is to discard the mantissa of the original quantization scale and only
+                    keep the exponent. It must set to "ue8m0" if used.
     """
 
     dtype: str = 'auto'
@@ -265,6 +284,8 @@ class TurbomindEngineConfig:
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
     enable_metrics: bool = True
+    use_quant: bool = False
+    quant_config: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -276,6 +297,20 @@ class TurbomindEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
+
+        method = self.quant_config and self.quant_config.get('quant_method')
+        if method is not None:
+            assert method == 'fp8', (f'Unsupported quant method: "{method}". '
+                                     f'Expected fp8')
+
+        weight_bs = self.quant_config and self.quant_config.get('weight_block_size')
+        assert weight_bs is None or isinstance(
+            weight_bs, (int, list, tuple)), (f'Unsupported weight_block_size type: {type(weight_bs).__name__}. '
+                                             f'Expected int, list, or tuple')
+
+        scale_fmt = self.quant_config and self.quant_config.get('scale_fmt')
+        assert scale_fmt is None or scale_fmt == 'ue8m0', (f'Unsupported scale_fmt: {scale_fmt}. '
+                                                           f'Expected ue8m0')
 
 
 @dataclass
