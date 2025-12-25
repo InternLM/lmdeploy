@@ -47,6 +47,8 @@ class AsyncRPCServer:
         self._stream_idx = 0
         self._engine_output_gather = EngineOutputGather()
 
+        self.tasks = set()
+
     def get_port(self):
         return self.port
 
@@ -67,7 +69,10 @@ class AsyncRPCServer:
 
     def send_multipart(self, client_id: bytes, data: bytes):
         """Send multipart message to client."""
-        self.socket.send_multipart([client_id, pickle.dumps(data)])
+        try:
+            self.socket.send_multipart([client_id, pickle.dumps(data)])
+        except zmq.ZMQError as e:
+            logger.error(f'Failed to send message to client[{client_id}]: {e}')
 
     def call_method_default(self, client_id, method: Callable, request: Dict):
         request_id = request.get('request_id')
@@ -137,11 +142,16 @@ class AsyncRPCServer:
         if request.get('streaming', False):
             # if method is a streaming method, use a different task
             stream_id = self._get_next_stream_id()
-            event_loop.create_task(self._method_async_streaming_task(stream_id, method, args, kwargs), name=name)
+            task = event_loop.create_task(self._method_async_streaming_task(stream_id, method, args, kwargs), name=name)
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
             response = dict(success=True, request_id=request_id, result=stream_id)
             self.send_multipart(client_id, response)
         else:
-            event_loop.create_task(self._method_async_task(client_id, request_id, method, args, kwargs), name=name)
+            task = event_loop.create_task(self._method_async_task(client_id, request_id, method, args, kwargs),
+                                          name=name)
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
 
     async def call_and_response(self):
         """Call method."""
@@ -188,6 +198,8 @@ class AsyncRPCServer:
 
     def stop(self):
         self.running = False
+        for task in self.tasks:
+            task.cancel()
 
 
 class AsyncRPCClient:

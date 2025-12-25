@@ -123,7 +123,6 @@ class ZMQMPEngine(MPEngine):
         finally:
             server.stop()
             engine.close()
-            cancel_async_tasks(loop)
 
     @staticmethod
     async def _mp_proc_async(server, engine: 'Engine'):
