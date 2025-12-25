@@ -275,6 +275,7 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestFillKVCacheBlockedFP8(TestFillKVCache):
+
     @pytest.fixture(autouse=True, scope='class')
     def initialize(self):
         seed = 42

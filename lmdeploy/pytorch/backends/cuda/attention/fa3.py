@@ -103,14 +103,15 @@ class FA3Impl(TritonAttentionImpl):
                     page_table=block_offsets,
                     cu_seqlens_q=attn_metadata.cu_seqlens_q,
                     max_seqlen_q=max_q_seqlen,
+                    scheduler_metadata=attn_metadata.scheduler_metadata,
                     softmax_scale=self.scale,
                     causal=self.causal,
                     softcap=self.logit_softcapping,
                     window_size=self.sliding_window,
-                    # custom args
-                    k_scales_zeros=k_scales_zeros,
-                    v_scales_zeros=v_scales_zeros,
-                    quant_policy=quant_policy,
+                    # # custom args
+                    # k_scales_zeros=k_scales_zeros,
+                    # v_scales_zeros=v_scales_zeros,
+                    # quant_policy=quant_policy,
                 )
         else:
             flatten_k, flatten_v = self.flatten_kv_cache(
