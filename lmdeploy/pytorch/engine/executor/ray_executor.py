@@ -388,23 +388,36 @@ class RayExecutor(ExecutorBase):
 
     async def wait_tasks(self):
         """Wait tasks."""
-        tasks = [worker.wait_tasks.remote() for worker in self.workers]
+        dp_rank = self.dist_config.dp_rank
+
+        async def _wait_single_worker(worker):
+            try:
+                await worker.wait_tasks.remote()
+            except ray.exceptions.ActorDiedError:
+                logger.info('RayExecutor worker has been killed before finish wait_tasks.')
+
+        tasks = [_wait_single_worker(worker) for worker in self.workers]
         if self._prefetch_task is not None:
             tasks.append(self._prefetch_task)
         try:
             await wait_for_async_tasks(tasks)
         except asyncio.CancelledError:
-            logger.debug('wait tasks cancelled.')
+            logger.debug(f'RayExecutor DP[{dp_rank}] wait_tasks cancelled.')
             raise
         except BaseException:
-            logger.exception('RayExecutor wait tasks failed, kill all workers.')
+            logger.error(f'RayExecutor DP[{dp_rank}] wait_tasks failed.')
             [ray.kill(worker) for worker in self.workers]
             raise
+        finally:
+            logger.debug(f'RayExecutor DP[{dp_rank}] wait_tasks cleanup.')
 
     def stop(self):
         """Stop engine loop."""
         if self.dp == 1:
-            self.collective_rpc('stop_async')
+            try:
+                self.collective_rpc('stop_async')
+            except ray.exceptions.ActorDiedError:
+                logger.info('RayExecutor worker has been killed before finish stop_async.')
             logger.debug('RayExecutor workers stopped.')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
@@ -418,6 +431,9 @@ class RayExecutor(ExecutorBase):
             try:
                 self.collective_rpc('release', timeout=5.0)
                 logger.debug('RayExecutor workers released.')
+            except ray.exceptions.ActorDiedError:
+                logger.info('RayExecutor worker has been killed before finish release.')
+                [ray.kill(worker) for worker in self.workers]
             except ray.exceptions.GetTimeoutError:
                 logger.info('Ray release timeout, killing workers')
                 [ray.kill(worker) for worker in self.workers]

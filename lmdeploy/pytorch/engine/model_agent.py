@@ -332,7 +332,7 @@ class BaseModelAgent:
         self._out_que = None
         self._background_task = None
         self._preprocess_task = None
-        self._async_tasks = []
+        self.tasks = set()
 
         # cuda stream
         self.stream = torch.cuda.Stream()
@@ -779,6 +779,8 @@ class BaseModelAgent:
                 sync_long_context=sync_long_context,
                 return_routed_experts=return_routed_experts and self.need_output,
             )
+            if idx > 10:
+                raise RuntimeError('Debug stop here.')
             logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
             seq_length = output.get('seq_length', inputs.seq_length)
             last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
@@ -900,13 +902,15 @@ class BaseModelAgent:
         logger.debug('Create task ModelAgentLoop.')
         self._background_task = event_loop.create_task(self._async_loop_background(forward_event),
                                                        name='ModelAgentLoop')
-        self._async_tasks.append(self._background_task)
+        self.tasks.add(self._background_task)
+        self._background_task.add_done_callback(self.tasks.discard)
 
         # preprocess inputs task
         logger.debug('Create task ModelAgentPreprocess.')
         self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(forward_event),
                                                        name='ModelAgentPreprocess')
-        self._async_tasks.append(self._preprocess_task)
+        self.tasks.add(self._preprocess_task)
+        self._preprocess_task.add_done_callback(self.tasks.discard)
 
         # profiler
         self.profiler = AgentProfiler(self.dist_ctx, self.stream)
@@ -914,10 +918,10 @@ class BaseModelAgent:
 
     async def wait_tasks(self):
         """Wait tasks."""
-        if len(self._async_tasks) == 0:
+        if len(self.tasks) == 0:
             return
         try:
-            await wait_for_async_tasks(self._async_tasks)
+            await wait_for_async_tasks(self.tasks)
         except asyncio.CancelledError:
             logger.debug('wait tasks cancelled.')
             raise
@@ -925,9 +929,8 @@ class BaseModelAgent:
             # we want to keep logs in both ray logs and engine logs
             msg = f'ModelAgent rank[{self.rank}] task failed'
             logger.exception(msg)
-            raise RuntimeError(msg) from e
+            raise e from None
         finally:
-            self._async_tasks.clear()
             logger.debug('All ModelAgent tasks done.')
 
     def stop(self):

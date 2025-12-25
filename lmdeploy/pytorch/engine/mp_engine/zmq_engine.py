@@ -120,9 +120,6 @@ class ZMQMPEngine(MPEngine):
             loop.run_until_complete(ZMQMPEngine._mp_proc_async(server, engine))
         except KeyboardInterrupt:
             logger.info('Received KeyboardInterrupt, stopping mp process.')
-        finally:
-            server.stop()
-            engine.close()
 
     @staticmethod
     async def _mp_proc_async(server, engine: 'Engine'):
@@ -157,6 +154,15 @@ class ZMQMPEngine(MPEngine):
             logger.info('RPC Server stopping due to cancellation.')
         except Exception as e:
             logger.error(f'RPC Server stopped with exception: {e}')
+        finally:
+            server.stop()
+            engine.close()
+            try:
+                await engine.wait_tasks()
+            except asyncio.CancelledError:
+                logger.info('Engine wait_tasks cancelled during shutdown.')
+            except BaseException as e:
+                logger.debug(f'Engine wait_tasks failed during shutdown: {e}')
 
     def _collective_rpc(self, func, *args, **kwargs):
         """Collective rpc call."""

@@ -429,7 +429,6 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
-        self.executor.stop()
         self.executor.release()
 
     def update_params(self, request: Any):
@@ -456,12 +455,14 @@ class Engine(EngineBase):
             self.migration_event = engine_loop.migration_event
 
             # start engine loop
-            engine_loop.create_tasks(event_loop)
+            engine_loop.start(event_loop)
             await engine_loop.wait_tasks()
         except asyncio.CancelledError:
             logger.info('Engine main loop cancelled.')
             raise
         except BaseException:
+            # since AsyncEngine will not wait for engine loop
+            # we have to log it here.
             logger.exception('Engine main loop failed.')
             raise
         finally:
@@ -477,6 +478,11 @@ class Engine(EngineBase):
             self._loop_main.cancel()
         else:
             self._loop_finally()
+
+    def stop(self):
+        """Alias of close."""
+        if self._loop_main is not None:
+            self._loop_main.cancel()
 
     async def wait_tasks(self):
         """Wait async tasks to finish."""

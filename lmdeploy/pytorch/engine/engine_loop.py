@@ -437,28 +437,15 @@ class EngineLoop:
 
     def _add_loop_tasks_done_callback(self):
         """Add loop tasks done callback."""
-
-        def __task_callback(task: asyncio.Task) -> None:
-            """Raise exception on finish."""
-            task_name = task.get_name()
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                logger.info(f'Task <{task_name}> cancelled.')
-            except BaseException:
-                logger.exception(f'Task <{task_name}> failed')
-            finally:
-                self.stop()
-                self.cancel()
-
         for task in self.tasks:
-            task.add_done_callback(__task_callback)
+            task.add_done_callback(self.tasks.discard)
 
-    def create_tasks(self, event_loop: asyncio.AbstractEventLoop):
+    def start(self, event_loop: asyncio.AbstractEventLoop):
         """Create async tasks."""
         # start executor
         logger.info('Starting executor.')
         self.executor.start(self.forward_event)
+        # start owned loops
         self.tasks.add(event_loop.create_task(self.executor.wait_tasks(), name='MainLoopWaitExecutor'))
         logger.info('Starting async task MainLoopPreprocessMessage.')
         self.tasks.add(event_loop.create_task(self.preprocess_loop(), name='MainLoopPreprocessMessage'))
@@ -480,18 +467,20 @@ class EngineLoop:
         try:
             await wait_for_async_tasks(self.tasks)
         except asyncio.CancelledError:
-            logger.debug('wait tasks cancelled.')
+            logger.debug('EngineLoop wait_tasks cancelled.')
             raise
         except BaseException:
-            logger.exception('Engine loop wait tasks failed.')
+            logger.error('EngineLoop wait_tasks failed.')
             raise
         finally:
-            self.stop()
-            self.cancel()
+            logger.debug('EngineLoop wait_tasks cleanup.')
+            # engine loop started executor, so it should stop it
 
     def stop(self):
         """Stop all loops."""
+        self.executor.stop()
         self.stop_event.set()
+        self.cancel()
 
     def cancel(self):
         """Cancel all loops."""
