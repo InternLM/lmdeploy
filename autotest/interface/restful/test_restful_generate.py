@@ -1155,7 +1155,7 @@ class TestGenerateComprehensive:
                 assert False, f'Expected space after special token {generated_text[i]} but found none.'
 
     @pytest.mark.experts
-    @pytest.mark.pytorch
+    @pytest.mark.not_turbomind
     def test_request_returns_experts(self):
         print(f'\n[Model: {self.model_name}] Running request with experts test')
         resp1 = self._post({
