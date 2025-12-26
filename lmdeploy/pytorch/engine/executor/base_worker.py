@@ -165,9 +165,10 @@ class WorkerWrapperBase:
         try:
             await wait_for_async_tasks(tasks)
         except asyncio.CancelledError:
-            logger.debug('wait tasks cancelled.')
+            logger.debug('WorkerWrapper wait_tasks cancelled.')
+            raise
         except BaseException:
-            logger.error('WorkerWrapper wait tasks failed.')
+            logger.error('WorkerWrapper wait_tasks failed.')
             raise
 
     def stop(self):

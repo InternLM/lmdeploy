@@ -494,6 +494,14 @@ class Engine(EngineBase):
             await self._loop_main
         except asyncio.CancelledError:
             logger.info('Engine main loop cancelled in wait_tasks.')
+        finally:
+            # manually cancel main loop
+            if not self._loop_main.done():
+                self._loop_main.cancel()
+                try:
+                    await self._loop_main
+                except asyncio.CancelledError:
+                    pass
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.

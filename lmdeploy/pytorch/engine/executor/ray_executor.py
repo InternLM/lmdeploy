@@ -389,14 +389,18 @@ class RayExecutor(ExecutorBase):
     async def wait_tasks(self):
         """Wait tasks."""
         dp_rank = self.dist_config.dp_rank
+        tasks_to_cancel = set()
+        event_loop = asyncio.get_event_loop()
 
         async def _wait_single_worker(worker):
             try:
-                await worker.wait_tasks.remote()
+                task = worker.wait_tasks.remote()
+                tasks_to_cancel.add(task)
+                await task
             except ray.exceptions.ActorDiedError:
                 logger.info('RayExecutor worker has been killed before finish wait_tasks.')
 
-        tasks = [_wait_single_worker(worker) for worker in self.workers]
+        tasks = [event_loop.create_task(_wait_single_worker(worker)) for worker in self.workers]
         if self._prefetch_task is not None:
             tasks.append(self._prefetch_task)
         try:
@@ -406,13 +410,20 @@ class RayExecutor(ExecutorBase):
             raise
         except BaseException:
             logger.error(f'RayExecutor DP[{dp_rank}] wait_tasks failed.')
-            [ray.kill(worker) for worker in self.workers]
             raise
         finally:
             logger.debug(f'RayExecutor DP[{dp_rank}] wait_tasks cleanup.')
+            try:
+                ray.cancel(tasks_to_cancel)
+            except ray.exceptions.ActorDiedError:
+                logger.debug('RayExecutor worker has been killed before finish cancel task.')
+            except Exception as e:
+                logger.debug(f'Cancel task failed: {e}')
 
     def stop(self):
         """Stop engine loop."""
+        # stop worker loops when dp>1 is complex especially when one of the dp rank failed
+        # should we just kill all workers when stop?
         if self.dp == 1:
             try:
                 self.collective_rpc('stop_async')

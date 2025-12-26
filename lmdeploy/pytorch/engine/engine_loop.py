@@ -474,7 +474,6 @@ class EngineLoop:
             raise
         finally:
             logger.debug('EngineLoop wait_tasks cleanup.')
-            # engine loop started executor, so it should stop it
 
     def stop(self):
         """Stop all loops."""

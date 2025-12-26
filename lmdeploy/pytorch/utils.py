@@ -189,20 +189,30 @@ async def wait_for_async_tasks(tasks: Sequence[asyncio.Task],
     if len(tasks) == 0:
         return [], []
 
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    for task in tasks:
+        if not isinstance(task, asyncio.Task):
+            raise ValueError('All inputs must be asyncio.Task instances.')
 
-    if cancel_pending:
-        # cancel all pending tasks
-        for task in pending:
-            task.cancel()
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
 
-    # raise exception if any
-    for task in done:
-        if task.exception():
-            exc = task.exception()
-            if isinstance(exc, asyncio.CancelledError) and ignore_cancellederror:
-                logger.debug(f'Task <{task.get_name()}> cancelled.')
-                continue
-            raise exc from None
+        if cancel_pending:
+            # cancel all pending tasks
+            for task in pending:
+                task.cancel()
+
+        # raise exception if any
+        for task in done:
+            if task.exception():
+                exc = task.exception()
+                if isinstance(exc, asyncio.CancelledError) and ignore_cancellederror:
+                    logger.debug(f'Task <{task.get_name()}> cancelled.')
+                    continue
+                raise exc from None
+    except asyncio.CancelledError:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        raise
 
     return done, pending

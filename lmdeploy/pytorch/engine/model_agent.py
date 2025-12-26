@@ -921,15 +921,15 @@ class BaseModelAgent:
         try:
             await wait_for_async_tasks(self.tasks)
         except asyncio.CancelledError:
-            logger.debug('wait tasks cancelled.')
+            logger.debug(f'ModelAgent rank[{self.rank}] wait_tasks cancelled.')
             raise
         except BaseException as e:
             # we want to keep logs in both ray logs and engine logs
-            msg = f'ModelAgent rank[{self.rank}] task failed'
+            msg = f'ModelAgent rank[{self.rank}] wait_tasks failed'
             logger.exception(msg)
             raise e from None
         finally:
-            logger.debug('All ModelAgent tasks done.')
+            logger.debug(f'ModelAgent rank[{self.rank}] wait_tasks cleanup.')
 
     def stop(self):
         """Stop task."""
