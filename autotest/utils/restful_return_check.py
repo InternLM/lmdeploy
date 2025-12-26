@@ -116,13 +116,9 @@ def assert_completions_stream_return(output,
 
 def has_repeated_fragment(text, repeat_count=5):
     pattern = r'(.+?)\1{' + str(repeat_count - 1) + ',}'
-
-    matches = re.findall(pattern, text)
-
-    for match in matches:
-        repeated_pattern = match * repeat_count
-        if repeated_pattern in text:
-            start_pos = text.find(repeated_pattern)
-            return True, {'repeated_fragment': match, 'position': start_pos}
-
+    match = re.search(pattern, text)
+    if match:
+        repeated_fragment = match.group(1)
+        start_pos = match.start()
+        return True, {'repeated_fragment': repeated_fragment, 'position': start_pos}
     return False, f'{text} does not contain repeated fragments'
