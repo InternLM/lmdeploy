@@ -10,6 +10,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServ
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
+from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger
 
 from .dist_utils import init_process_group, setup_master_addr
@@ -154,6 +155,21 @@ class WorkerWrapperBase:
         event_loop = asyncio.get_event_loop()
         self.out_que = asyncio.Queue()
         self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
+
+    async def wait_tasks(self):
+        """Wait tasks."""
+        event_loop = asyncio.get_event_loop()
+        tasks = [event_loop.create_task(self.model_agent.wait_tasks())]
+        if self._output_loop is not None:
+            tasks.append(self._output_loop)
+        try:
+            await wait_for_async_tasks(tasks)
+        except asyncio.CancelledError:
+            logger.debug('WorkerWrapper wait_tasks cancelled.')
+            raise
+        except BaseException:
+            logger.error('WorkerWrapper wait_tasks failed.')
+            raise
 
     def stop(self):
         """Stop engine loop."""

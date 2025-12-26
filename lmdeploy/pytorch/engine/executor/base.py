@@ -94,6 +94,10 @@ class ExecutorBase:
         """Start engine loop."""
         raise NotImplementedError('Not Implemented.')
 
+    async def wait_tasks(self):
+        """Wait tasks."""
+        raise NotImplementedError('Not Implemented.')
+
     def stop(self):
         """Stop engine loop."""
         raise NotImplementedError('Not Implemented.')

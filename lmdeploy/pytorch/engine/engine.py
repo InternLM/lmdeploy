@@ -429,7 +429,6 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
-        self.executor.stop()
         self.executor.release()
 
     def update_params(self, request: Any):
@@ -454,20 +453,18 @@ class Engine(EngineBase):
             # create engine loop
             engine_loop = build_engine_loop(self)
             self.migration_event = engine_loop.migration_event
-            forward_event = engine_loop.forward_event
-
-            # start executor
-            logger.info('Starting executor.')
-            self.executor.start(forward_event)
 
             # start engine loop
-            engine_loop.create_tasks(event_loop)
+            engine_loop.start(event_loop)
             await engine_loop.wait_tasks()
         except asyncio.CancelledError:
             logger.info('Engine main loop cancelled.')
             raise
         except BaseException:
+            # since AsyncEngine will not wait for engine loop
+            # we have to log it here.
             logger.exception('Engine main loop failed.')
+            raise
         finally:
             self._loop_finally()
 
@@ -481,6 +478,30 @@ class Engine(EngineBase):
             self._loop_main.cancel()
         else:
             self._loop_finally()
+
+    def stop(self):
+        """Alias of close."""
+        if self._loop_main is not None:
+            self._loop_main.cancel()
+
+    async def wait_tasks(self):
+        """Wait async tasks to finish."""
+        if self._loop_main is None:
+            logger.warning('No engine main loop to wait for.')
+            return
+
+        try:
+            await self._loop_main
+        except asyncio.CancelledError:
+            logger.info('Engine main loop cancelled in wait_tasks.')
+        finally:
+            # manually cancel main loop
+            if not self._loop_main.done():
+                self._loop_main.cancel()
+                try:
+                    await self._loop_main
+                except asyncio.CancelledError:
+                    pass
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.

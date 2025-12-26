@@ -387,6 +387,12 @@ class MPExecutor(ExecutorBase):
         event_loop = asyncio.get_event_loop()
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
 
+    async def wait_tasks(self):
+        tasks = self.collective_rpc_async('wait_tasks')
+        if self._prefetch_task is not None:
+            tasks.append(self._prefetch_task)
+        await asyncio.gather(*tasks)
+
     async def forward_async(self, inputs):
         """Start forward."""
         await self.collective_rpc_async('forward_async', args=(inputs, ), return_mask=0)
