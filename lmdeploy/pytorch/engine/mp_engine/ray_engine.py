@@ -37,25 +37,32 @@ class RayEngineWorker(EngineWorkerBase):
         self._stream_task = dict()
         self._engine_output_gather = EngineOutputGather()
 
-    async def _stream_task_wrapper(self, stream_id: int, func: str, *args, **kwargs):
+    async def _stream_task_wrapper(self, stream_id: int, init_event: asyncio.Event, func: str, *args, **kwargs):
         """Create a stream task."""
         method = getattr(self, func)
         event = self._stream_aiter[stream_id][0]
-        async for result in method(*args, **kwargs):
-            self._engine_output_gather.add(stream_id, result)
-            self._stream_aiter[stream_id][1] = (result, False)
+        try:
+            generator = method(*args, **kwargs)
+            init_event.set()
+            async for result in generator:
+                self._engine_output_gather.add(stream_id, result)
+                self._stream_aiter[stream_id][1] = (result, False)
+                event.set()
+        finally:
+            self._stream_aiter[stream_id][1] = (result, True)
             event.set()
-        self._stream_aiter[stream_id][1] = (result, True)
-        event.set()
+            init_event.set()
 
-    def create_stream_task(self, func, *args, **kwargs):
+    async def create_stream_task(self, func, *args, **kwargs):
         """Create a stream task."""
         stream_id = self._stream_id
         self._stream_id += 1
         event_loop = asyncio.get_event_loop()
         self._stream_aiter[stream_id] = [asyncio.Event(), None]
-        task = event_loop.create_task(self._stream_task_wrapper(stream_id, func, *args, **kwargs))
+        init_event = asyncio.Event()
+        task = event_loop.create_task(self._stream_task_wrapper(stream_id, init_event, func, *args, **kwargs))
         self._stream_task[stream_id] = task
+        await init_event.wait()
 
         return stream_id
 

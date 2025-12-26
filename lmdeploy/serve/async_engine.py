@@ -366,6 +366,7 @@ class AsyncEngine(LogitsMixin):
 
         # build stat loggers
         self._build_stat_loggers()
+        self.epoch = 0
 
     def close(self):
         self.internal_thread.close()
@@ -465,12 +466,14 @@ class AsyncEngine(LogitsMixin):
     async def stop_all_session(self):
         """Stop all running sessions."""
         logger.info('stop all sessions')
+        self.epoch += 1
         tasks = []
         session_ids = []
         for session_id in list(self.id2inst.keys()):
             generator = self.id2inst.get(session_id)
             if generator:
                 session_ids.append(session_id)
+                logger.debug(f'stop session {session_id}')
                 tasks.append(generator.async_cancel(session_id))
         await asyncio.gather(*tasks)
         logger.info(f'all {len(session_ids)} sessions stopped')
@@ -724,20 +727,23 @@ class AsyncEngine(LogitsMixin):
     @asynccontextmanager
     async def model_inst(self, session_id: int):
         """A context manager to make sure server's safe running."""
+        logger.debug(f'[model_inst] session {session_id} applying for a model instance')
         assert session_id not in self.id2inst
         free_insts = self._get_free_insts()
         inst = await free_insts.get()
         inst._active = asyncio.Event()
         self.id2inst[session_id] = inst
+        logger.debug(f'[model_inst] session {session_id} acquired an instance')
         try:
             yield inst
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-            logger.error(f'[model_inst] exception caught: {e}')
+            logger.error(f'[model_inst] session {session_id} exception caught: {e}')
             if self.backend == 'pytorch':
                 # manually end pytorch session
                 await inst.async_end(session_id)
         finally:
-            self.id2inst.pop(session_id)
+            logger.debug(f'[model_inst] session {session_id} releasing the instance')
+            self.id2inst.pop(session_id, None)
             inst._active.set()
             free_insts.put_nowait(inst)
 
@@ -747,7 +753,7 @@ class AsyncEngine(LogitsMixin):
         try:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
+            logger.error(f'[safe_run] session {session_id} exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
             await inst.async_cancel(session_id)
             raise e
@@ -787,6 +793,7 @@ class AsyncEngine(LogitsMixin):
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
+        epoch = self.epoch
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
         if session_id not in self.id2step:
@@ -885,6 +892,17 @@ class AsyncEngine(LogitsMixin):
 
         metrics_processor.increment_total_requests()
         async with self.model_inst(session_id) as inst:
+            if epoch != self.epoch:
+                logger.debug(f'[generate] session {session_id} got aborted before starting inference')
+                # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
+                metrics_processor.increment_finished_requests()
+                yield GenOut(response='',
+                             history_token_len=0,
+                             input_token_len=len(input_ids),
+                             generate_token_len=0,
+                             finish_reason='abort',
+                             token_ids=[])
+                return
             token_ids = input_ids.copy()
             history_len = self.id2step[session_id]
             input_len = len(input_ids)
@@ -901,6 +919,7 @@ class AsyncEngine(LogitsMixin):
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
+                logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
                 async for outputs in gen:
