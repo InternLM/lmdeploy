@@ -461,7 +461,7 @@ jobs:
       - name: Start restful api
         run: |
           lmdeploy serve api_server /nvme/qa_test_models/${{matrix.model_path}} --tp ${{matrix.tp}} --backend ${{matrix.backend}} ${{matrix.extra}} > ${{env.REPORT_DIR}}/${{matrix.backend}}_${{matrix.model}}_${{matrix.generate_type}}_start_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
@@ -473,7 +473,7 @@ jobs:
           done
 
           echo "health check fail"
-          kill -15 $restful_pid 2>/dev/null || true
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           exit 1
       - name: Test lmdeploy - chat_completions_v1
         if:  matrix.model != 'internlm2_5-20b-chat' && matrix.model != 'Intern-S1' && contains(matrix.case_info, 'chat_completions_v1')
@@ -526,7 +526,7 @@ jobs:
       - name: Kill api server
         if: always()
         run: |
-          kill -15 "$restful_pid"
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
       - name: Clear workfile
         if: always()
         run: |

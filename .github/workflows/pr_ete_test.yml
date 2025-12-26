@@ -86,7 +86,7 @@ jobs:
       - name: Test restful server - turbomind Qwen3-32B
         run: |
           CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs > turbomind_Qwen3-32B_start_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
@@ -94,18 +94,18 @@ jobs:
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind and not internlm2_5 and not interns1 and pr_test' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind and not experts' --alluredir=allure-results
-              kill -15 $restful_pid 2>/dev/null || true
+              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
           done
 
           echo "health check fail"
-          kill -15 $restful_pid 2>/dev/null || true
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           exit 1
       - name: Test restful server - turbomind InternVL3-38B
         run: |
           CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --tp 2 --backend turbomind --logprobs-mode raw_logprobs > turbomind_InternVL3-38B_start_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
@@ -113,18 +113,18 @@ jobs:
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind and not internlm2_5 and not interns1 and pr_test' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind and not experts' --alluredir=allure-results
-              kill -15 $restful_pid 2>/dev/null || true
+              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
           done
 
           echo "health check fail"
-          kill -15 $restful_pid 2>/dev/null || true
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           exit 1
       - name: Test restful server - turbomind Qwen3-30B-A3B
         run: |
           CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend turbomind --logprobs-mode raw_logprobs > turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
@@ -132,18 +132,18 @@ jobs:
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-30B-A3B and turbomind' -m 'not not_turbomind and not internlm2_5 and not interns1 and pr_test' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-30B-A3B and turbomind' -m 'not not_turbomind and not experts' --alluredir=allure-results
-              kill -15 $restful_pid 2>/dev/null || true
+              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
           done
 
           echo "health check fail"
-          kill -15 $restful_pid 2>/dev/null || true
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           exit 1
       - name: Test restful server - pytorch Qwen3-30B-A3B
         run: |
           CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts > pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
@@ -151,18 +151,18 @@ jobs:
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-30B-A3B and pytorch' -m 'not not_pytorch and not internlm2_5 and not interns1 and pr_test' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-30B-A3B and pytorch' -m 'not not_pytorch' --alluredir=allure-results
-              kill -15 $restful_pid 2>/dev/null || true
+              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
           done
 
           echo "health check fail"
-          kill -15 $restful_pid 2>/dev/null || true
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           exit 1
       - name: Test restful server - pytorch Qwen3-VL-30B-A3B-Instruct
         run: |
           CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts > pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
@@ -170,18 +170,18 @@ jobs:
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-VL-30B-A3B-Instruct and pytorch' -m 'not not_pytorch and not internlm2_5 and not interns1 and pr_test' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-VL-30B-A3B-Instruct and pytorch' -m 'not not_pytorch' --alluredir=allure-results
-              kill -15 $restful_pid 2>/dev/null || true
+              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
           done
 
           echo "health check fail"
-          kill -15 $restful_pid 2>/dev/null || true
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           exit 1
       - name: Test restful server - pytorch InternVL3_5-30B-A3B
         run: |
           CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3_5-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs > pytorch_InternVL3_5-30B-A3B_start_restful.log 2>&1 &
-          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
@@ -189,13 +189,13 @@ jobs:
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'OpenGVLab/InternVL3_5-30B-A3B and pytorch' -m 'not not_pytorch and not internlm2_5 and not interns1 and pr_test' --alluredir=allure-results
               pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3_5-30B-A3B and pytorch' -m 'not not_pytorch' --alluredir=allure-results
-              kill -15 $restful_pid 2>/dev/null || true
+              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
           done
 
           echo "health check fail"
-          kill -15 $restful_pid 2>/dev/null || true
+          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           exit 1
       - name: Generate reports
         if: always()
