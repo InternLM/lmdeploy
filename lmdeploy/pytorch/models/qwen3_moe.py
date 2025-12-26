@@ -343,14 +343,6 @@ class Qwen3MoeModel(nn.Module):
         # build rotary embedding
         self.rotary_emb = self._build_rotary_embedding(config)
 
-        # fope
-        rope_scaling = getattr(config, 'rope_scaling', None)
-        if rope_scaling:
-            fope_keys = {'fope_init_factor', 'fope_sep_head', 'num_inv_freq'}
-            self.use_fope = any(rope_scaling.get(key) is not None for key in fope_keys)
-        else:
-            self.use_fope = False
-
     def _build_rotary_embedding(self, config: PretrainedConfig):
         """Build rotary embedding."""
         return build_rotary_embedding_from_config(config)

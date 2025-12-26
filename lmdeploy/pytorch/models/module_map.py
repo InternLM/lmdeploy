@@ -158,8 +158,6 @@ MODULE_MAP.update({
 
 # qwen3_vl_moe
 MODULE_MAP.update({
-    'InternS1_1_ForConditionalGeneration':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
     'Qwen3VLMoeForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
 })
@@ -192,6 +190,12 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'InternS1ForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl3_hf.InternVLForConditionalGeneration'
+})
+
+# interns1_1
+MODULE_MAP.update({
+    'InternS1_1_ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns1_1.InternS1_1_ForConditionalGeneration',
 })
 
 # mono-internvl
