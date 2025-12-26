@@ -148,7 +148,8 @@ def build_rotary_embedding(dim: int,
                            llama3_params: Llama3Parameters = None,
                            fope_params: FopeParameters = None,
                            emb_type: RopeType = RopeType.Default,
-                           partial_rotary_factor: float = None) -> nn.Module:
+                           partial_rotary_factor: float = None,
+                           device: torch.device = None) -> nn.Module:
     """Build rotary embedding op."""
     backend = get_backend()
 
@@ -169,7 +170,7 @@ def build_rotary_embedding(dim: int,
     if fope_params is not None:
         inv_freq = impl.inv_freq
         fope_params.inv_freq = inv_freq
-        fope = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params)
+        fope = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params, device=device)
         return fope
 
     return impl
