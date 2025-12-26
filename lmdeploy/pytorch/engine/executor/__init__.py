@@ -110,7 +110,7 @@ def build_executor(
         )
     elif distributed_executor_backend == 'mp':
         from .mp_executor import MPExecutor
-        logger.warning('MPExecutor would be deprecated in future releases, please use RayExecutor instead.')
+        logger.warning('MPExecutor will be deprecated in future releases, please use RayExecutor instead.')
         return MPExecutor(
             model_path=model_path,
             model_config=model_config,

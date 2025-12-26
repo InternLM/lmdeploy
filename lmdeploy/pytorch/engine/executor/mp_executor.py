@@ -388,10 +388,9 @@ class MPExecutor(ExecutorBase):
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
 
     async def wait_tasks(self):
-        tasks = self.collective_rpc_async('wait_tasks')
-        if self._prefetch_task is not None:
-            tasks.append(self._prefetch_task)
-        await asyncio.gather(*tasks)
+        """Wait tasks."""
+        # we don't need a complex wait tasks since MPExecutor will be deprecated soon.
+        await self._prefetch_task
 
     async def forward_async(self, inputs):
         """Start forward."""

@@ -161,7 +161,7 @@ class ZMQMPEngine(MPEngine):
                 await engine.wait_tasks()
             except asyncio.CancelledError:
                 logger.info('Engine wait_tasks cancelled during shutdown.')
-            except BaseException as e:
+            except Exception as e:
                 logger.debug(f'Engine wait_tasks failed during shutdown: {e}')
 
     def _collective_rpc(self, func, *args, **kwargs):
@@ -185,6 +185,11 @@ class ZMQMPEngine(MPEngine):
         self.rpc_client.stop()
         self.proc.terminate()
         self.proc.join(10)
+        if not self.proc.is_alive():
+            self.proc.close()
+        else:
+            logger.warning('MP process did not terminate in time, force killing.')
+            self.proc.kill()
         self.proc = None
 
     def start_loop(self) -> None:

@@ -398,6 +398,7 @@ class RayExecutor(ExecutorBase):
                 tasks_to_cancel.add(task)
                 await task
             except ray.exceptions.ActorDiedError:
+                # It is safe to ignore wait tasks on died actor
                 logger.info('RayExecutor worker has been killed before finish wait_tasks.')
 
         tasks = [event_loop.create_task(_wait_single_worker(worker)) for worker in self.workers]
@@ -422,8 +423,11 @@ class RayExecutor(ExecutorBase):
 
     def stop(self):
         """Stop engine loop."""
-        # stop worker loops when dp>1 is complex especially when one of the dp rank failed
-        # should we just kill all workers when stop?
+        # TODO: For dp > 1 we currently rely on external teardown (e.g. Ray actor
+        # destruction) instead of explicitly stopping worker loops here. Implementing
+        # coordinated shutdown across multiple dp ranks is non-trivial, especially
+        # when some ranks may have already failed. The explicit stop_async RPC is
+        # therefore only issued when dp == 1.
         if self.dp == 1:
             try:
                 self.collective_rpc('stop_async')
@@ -476,6 +480,7 @@ class RayExecutor(ExecutorBase):
             ray.get(outs)
         except SystemExit:
             logger.error('Ray worker exited.')
+            raise
         finally:
             # free ray.put inputs
             try:

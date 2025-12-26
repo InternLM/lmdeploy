@@ -958,7 +958,7 @@ class BaseModelAgent:
                 await asyncio.sleep(1)
             self.profiler.dump()
 
-        for task in self._async_tasks:
+        for task in self.tasks:
             if not task.done():
                 task.cancel()
                 try:

@@ -214,6 +214,8 @@ class AsyncRPCClient:
         self.sync_ctx = zmq.Context()
         self.sync_socket = self.sync_ctx.socket(socket_type)
         self.sync_socket.connect(address)
+        self.sync_poller = zmq.Poller()
+        self.sync_poller.register(self.sync_socket, zmq.POLLIN)
 
         # async socket
         self.async_ctx = Context.instance()
@@ -240,6 +242,14 @@ class AsyncRPCClient:
         request_id = reply['request_id']
         self._set_reply_default(request_id, reply)
 
+    def _poll_recv(self, timeout: float = 3):
+        """Poll and receive message."""
+        # socket.recv would block the process, use poll to avoid hanging
+        while True:
+            sockets = dict(self.sync_poller.poll(timeout=timeout * 1000))
+            if self.sync_socket in sockets:
+                return self.sync_socket.recv()
+
     def _try_start_listen(self):
         """Try to start listening on async socket."""
         if self._listen_task is None or self._listen_task.done():
@@ -253,11 +263,11 @@ class AsyncRPCClient:
         data = pickle.dumps(dict(request_id=request_id, method=method, args=args, kwargs=kwargs))
         self.sync_socket.send(data)
 
-        reply = self.sync_socket.recv()
+        reply = self._poll_recv()
         reply = pickle.loads(reply)
         while reply['request_id'] != request_id:
             self._set_reply(reply)
-            reply = self.sync_socket.recv()
+            reply = self._poll_recv()
             reply = pickle.loads(reply)
 
         logger.debug(f'recv reply request_id: {request_id}')

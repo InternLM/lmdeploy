@@ -203,8 +203,9 @@ async def wait_for_async_tasks(tasks: Sequence[asyncio.Task],
 
         # raise exception if any
         for task in done:
-            if task.exception():
-                exc = task.exception()
+            if task.cancelled():
+                continue
+            if exc := task.exception():
                 if isinstance(exc, asyncio.CancelledError) and ignore_cancellederror:
                     logger.debug(f'Task <{task.get_name()}> cancelled.')
                     continue
