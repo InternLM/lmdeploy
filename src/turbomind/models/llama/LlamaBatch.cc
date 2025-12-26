@@ -26,6 +26,7 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/context.h"
+#include "src/turbomind/core/serdes.h"
 #include "src/turbomind/core/tensor.h"
 
 #include "src/turbomind/macro.h"
@@ -1082,6 +1083,10 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
 void LlamaBatch::OutputLastHiddenState(const Tensor& hidden_states, int first, int last)
 {
+    if (tp_rank_ != 0) {
+        return;
+    }
+
     const auto& src_buf   = hidden_states.buffer();
     const auto  data_type = src_buf.dtype();
     int         base      = 0;
@@ -1343,6 +1348,17 @@ struct RequestData {
     bool             abort;
 };
 
+template<class Archive>
+void serdes(Archive& ar, RequestData& r)
+{
+    // clang-format off
+    ar & r.infer;
+    ar & r.kill;
+    ar & r.cancel;
+    ar & r.abort;
+    // clang-format on
+}
+
 }  // namespace
 
 void LlamaBatch::InternalThreadEntry()
@@ -1367,8 +1383,17 @@ void LlamaBatch::InternalThreadEntry()
                 NvtxScope  _("pop");
                 const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
                 const bool is_empty        = (free_slot_count == max_batch_size_);
-                // Block if batch is empty AND no silbings are ready
-                gateway_->pop(req->infer, req->kill, free_slot_count, is_empty, req->abort, dp_rank_);
+                // Block if batch is empty AND no silbings are ready AND comm in same node
+                const bool blocking = is_empty && comm_.h_comm->is_same_process();
+                int        wait     = 0;
+                do {
+                    gateway_->pop(req->infer, req->kill, free_slot_count, blocking, req->abort, dp_rank_);
+                    if (!comm_.h_comm->is_same_process()) {
+                        bool empty_pop = req->infer.size() == 0 && req->kill.size() == 0 && req->abort == false;
+                        wait           = is_empty && empty_pop;
+                        wait = AllReduce(comm_.h_dp_group, wait, comm::RedOp::kSum) == comm_.h_dp_group->n_ranks();
+                    }
+                } while (wait);
             }
             // Mark reqs to the same session_id as invalid and also interactive-mode reqs when
             // prefix caching is enabled(which are dangerous to the engine)
@@ -1385,7 +1410,13 @@ void LlamaBatch::InternalThreadEntry()
 
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
-        Broadcast(comm_.h_tp_group, req, 0);
+        if (comm_.h_tp_group->n_ranks() > 1) {
+            Broadcast(comm_.h_tp_group, req, 0);
+        }
+
+        if (!comm_.h_comm->is_same_process()) {
+            req->abort = AllReduce(comm_.h_comm, (int)req->abort, comm::RedOp::kSum) > 0;
+        }
 
         if (req->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");

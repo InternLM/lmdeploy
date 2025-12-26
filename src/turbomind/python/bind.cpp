@@ -573,6 +573,7 @@ PYBIND11_MODULE(_turbomind, m)
             "device_id"_a,
             "tags"_a,
             "rank"_a)
+        .def("is_dummy_node", [](LlamaTritonModel* model) { return model->isDummyNode(); })
         .def("__str__", &LlamaTritonModel::toString)
         .def("__repr__", &LlamaTritonModel::toString)
         .def("get_tensor_para_size", &LlamaTritonModel::getTensorParaSize)
