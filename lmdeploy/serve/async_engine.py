@@ -368,14 +368,12 @@ class AsyncEngine(LogitsMixin):
 
         # build stat loggers
         self._build_stat_loggers()
-        # self.session_abort_events = {}  # session_id -> abort flag, used to abort or stop a session
         self.epoch = 0
 
     def close(self):
         self.internal_thread.close()
         self.free_insts = None
         self.instances.clear()
-        # self.session_abort_events = {}
         self.engine.close()
 
     def __enter__(self):
@@ -467,21 +465,18 @@ class AsyncEngine(LogitsMixin):
 
     async def stop_all_session(self):
         """Stop all running sessions."""
-        logger.warning('stop all sessions')
+        logger.info('stop all sessions')
         self.epoch += 1
-        # for session_id, abort_event in self.session_abort_events.items():
-        #     abort_event.set()
-
         tasks = []
         session_ids = []
         for session_id in list(self.id2inst.keys()):
             generator = self.id2inst.get(session_id)
             if generator:
                 session_ids.append(session_id)
-                logger.warning(f'stop session {session_id}')
+                logger.debug(f'stop session {session_id}')
                 tasks.append(generator.async_cancel(session_id))
         await asyncio.gather(*tasks)
-        logger.warning(f'all {len(session_ids)} sessions stopped')
+        logger.info(f'all {len(session_ids)} sessions stopped')
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -732,13 +727,13 @@ class AsyncEngine(LogitsMixin):
     @asynccontextmanager
     async def model_inst(self, session_id: int):
         """A context manager to make sure server's safe running."""
-        logger.warning(f'[model_inst] session {session_id} applying for a model instance')
+        logger.debug(f'[model_inst] session {session_id} applying for a model instance')
         assert session_id not in self.id2inst
         free_insts = self._get_free_insts()
         inst = await free_insts.get()
         inst._active = asyncio.Event()
         self.id2inst[session_id] = inst
-        logger.warning(f'[model_inst] session {session_id} acquired an instance')
+        logger.debug(f'[model_inst] session {session_id} acquired an instance')
         try:
             yield inst
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:
@@ -747,7 +742,7 @@ class AsyncEngine(LogitsMixin):
                 # manually end pytorch session
                 await inst.async_end(session_id)
         finally:
-            logger.warning(f'[model_inst] session {session_id} releasing the instance')
+            logger.debug(f'[model_inst] session {session_id} releasing the instance')
             self.id2inst.pop(session_id, None)
             inst._active.set()
             free_insts.put_nowait(inst)
@@ -897,9 +892,8 @@ class AsyncEngine(LogitsMixin):
 
         metrics_processor.increment_total_requests()
         async with self.model_inst(session_id) as inst:
-            # if inst is None:
             if epoch != self.epoch:
-                logger.warning(f'[generate] session {session_id} got aborted before starting inference')
+                logger.debug(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
                 metrics_processor.increment_finished_requests()
                 yield GenOut(response='',
@@ -925,14 +919,10 @@ class AsyncEngine(LogitsMixin):
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
-                logger.warning(f'[generate] session {session_id} started')
+                logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
-                is_first = True
                 async for outputs in gen:
-                    if is_first:
-                        is_first = False
-                        logger.warning(f'[generate] session {session_id} finished the first iteration')
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
@@ -1005,9 +995,9 @@ class AsyncEngine(LogitsMixin):
                             not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
                         routed_experts = routed_experts[:-1]
 
-                    logger.warning(f'session {session_id} finished, reason '
-                                   f'"{finish_reason}", input_tokens '
-                                   f'{len(input_ids)}, output_tokens {gen_len}')
+                    logger.info(f'session {session_id} finished, reason '
+                                f'"{finish_reason}", input_tokens '
+                                f'{len(input_ids)}, output_tokens {gen_len}')
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),
