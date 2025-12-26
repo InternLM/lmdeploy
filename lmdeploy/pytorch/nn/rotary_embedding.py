@@ -170,7 +170,7 @@ def build_rotary_embedding(dim: int,
     if fope_params is not None:
         inv_freq = impl.inv_freq
         fope_params.inv_freq = inv_freq
-        fope = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params, device=device)
+        fope = FopeRotaryEmbedding(dim, max_position_embeddings, scaling_factor, fope_params, device)
         return fope
 
     return impl
