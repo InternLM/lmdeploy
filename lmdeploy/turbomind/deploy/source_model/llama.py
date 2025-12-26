@@ -5,8 +5,8 @@ import re
 import torch
 
 from lmdeploy.archs import get_model_arch
+from lmdeploy.lite.quantization.weight.quant_utils import quant_blocked_fp8
 
-from ....lite.quantization.weight.quant_utils import quant_blocked_fp8
 from ..config import RopeParam
 from ..loader import create_loader
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
@@ -44,24 +44,17 @@ class LlamaReader(BaseReader):
             self.output_weight_key = self.tok_embeddings_key
         self.processor = policy
         if use_quant_online:
-            quant_params = self.quant_weight()
+            quant_params = self.quant_weight_fp8()
             self.params.update(quant_params)
 
-    def quant_weight(self):
-        weight_cfg = self.model_cfg.get('weight_config')
-        assert weight_cfg['weight_type'] == 'fp8', (f"Unsupported weight_type: {weight_cfg['weight_type']}. "
-                                                    f'Expected fp8. ')
-
-        fp8_dtype = torch.float8_e4m3fn
-        group_size = weight_cfg['group_size']
-
+    def quant_weight_fp8(self):
         pattern_str = f'({self.attn_pattern}|{self.ffn_pattern}).*{self.proj_pattern}'
         target_pattern = re.compile(pattern_str)
 
         quant_params = {}
         for name, weight in self.params.items():
             if target_pattern.search(name):
-                q_weight, scale = quant_blocked_fp8(weight, fp8_dtype, group_size)
+                q_weight, scale = quant_blocked_fp8(weight, torch.float8_e4m3fn, block_size=128)
                 quant_params[name] = q_weight
                 quant_params[f'{name}_{self.scale_inv_prefix}'] = scale.to(weight.dtype)
 
@@ -138,11 +131,8 @@ class LlamaModel(BaseInputModel):
         super().__init__(model_path, tokenizer_path)
         self.policy = kwargs.get('input_policy')
         self.use_quant_online = kwargs.get('use_quant_online', False)
-        self.weight_config = kwargs.get('weight_config', None)
         _, self.model_config = get_model_arch(model_path)
         self.model_config = self.model_config.to_dict()
-        if self.model_config:
-            self.model_config.update(weight_config=self.weight_config)
 
     def readers(self):
         mappings = getattr(self.Reader, 'mappings', [])

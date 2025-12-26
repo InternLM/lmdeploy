@@ -34,8 +34,7 @@ def _get_quant_scaling(weight: torch.Tensor,
     """Get the scaling factor for FP8 quantization."""
     finfo = torch.finfo(fp8_dtype)
     fmax = finfo.max
-    # amax = weight.abs().amax(dim, keepdim=True).clamp_min(1e-6).float()
-    amax = weight.abs().amax(dim, keepdim=True).clamp_min(1e-6)
+    amax = weight.abs().amax(dim, keepdim=True).clamp_min(1e-6).float()
 
     if scale_fmt == 'ue8m0':
         return fast_round_scale_torch(amax, fmax)
@@ -66,7 +65,7 @@ def quant_blocked_fp8(weight: torch.Tensor,
 
     # reverse pixel shuffle
     weight = weight.unflatten(-2, (-1, block_size)).unflatten(-1, (-1, block_size))
-    # weight = weight.to(torch.float32)
+    weight = weight.to(torch.float32)
 
     # get scaling
     scaling = _get_quant_scaling(weight, fp8_dtype, dim=(-3, -1), scale_fmt=scale_fmt)
