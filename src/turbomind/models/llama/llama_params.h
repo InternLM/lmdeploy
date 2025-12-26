@@ -27,6 +27,7 @@ struct ModelParam {
     size_t   hidden_units;
     size_t   layer_num;
     size_t   vocab_size;
+    size_t   vocab_size_padded;
     size_t   embedding_size;
     float    norm_eps;
     int      quant_policy;
@@ -49,8 +50,7 @@ struct ModelParam {
 
 /// TODO: rename all `gate` in the context of MoE router to `router`
 struct MoeParam {
-    enum Method
-    {
+    enum Method {
         kNaive,
         kFused
     } method;
@@ -117,8 +117,7 @@ struct EngineParam {
     std::vector<int> devices;
 };
 
-enum class LoraPolicy : int
-{
+enum class LoraPolicy : int {
     kNull,
     kPlora,
 };

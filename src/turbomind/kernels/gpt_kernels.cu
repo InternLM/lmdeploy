@@ -59,6 +59,9 @@ void invokeEmbeddingLookup(Ref<Tensor>         out_,
         TM_CHECK(dim % vec_size == 0) << dim << " " << vec_size;
         const int threads = std::min(dim / vec_size, 1024);
         const int blocks  = num;
+        TM_CHECK(out_.get());
+        TM_CHECK(token_ids);
+        TM_CHECK(embedding_table);
         embeddingLookupKernel<T, vec_size><<<blocks, threads, 0, st>>>((T*)out.raw_data(),
                                                                        out.stride(0),
                                                                        (const T*)embedding_table.raw_data(),
