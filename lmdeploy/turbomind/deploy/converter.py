@@ -33,33 +33,31 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     return register_name
 
 
-def get_output_model_registered_name_and_config(model_path: str,
-                                                model_format: str,
-                                                dtype: str,
-                                                group_size: int,
-                                                quant_config: Dict[str, Any] = {}):
-    """Get the registered name of the turbomind model and its configuration
-    according to the input model path, format and user-input config. The name
-    will be used to access the OUTPUT_MODELS registry.
+def get_weight_config(model_path: str, model_format: str, dtype: str, group_size: int) -> Dict[str, Any]:
+    """Generate weight configuration dictionary based on model properties and
+    quantization settings. This function automatically determines the optimal
+    data types and quantization parameters for model weights, considering
+    device capabilities, model architecture, and specified quantization format.
 
     Args:
-        model_path (str): the path of the input model
-        model_format (str): the format of the model, which can be one of
-            ['hf', 'awq', 'gptq']
-        dtype (str): the data type of the model's weights and activations
-        group_size (int): the size of group used by awq model
-        quant_config (dict): quant config if use quant, default to {}
+        model_path (str): the path of the input model.
+        model_format (str): Quantization format to use. Options include ['fp8]
+        dtype (str): Data type for model weights. Options include ['auto', 'float16', 'bfloat16']
+        group_size (int): Number of weights sharing a single quantization scale factor.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the following keys:
+            - 'model_format' (str): The quantization format used.
+            - 'dtype' (str): The resolved data type for activations.
+            - 'weight_type' (str): The data type for non-expert weights.
+            - 'expert_weight_type' (str): The data type for expert weights (MoE models).
+            - 'group_size' (int): The final group size for block-wise quantization.
     """
-    register_name = 'tm'
 
     has_bf16 = is_bf16_supported()
 
     model_arch, model_config = get_model_arch(model_path)
 
-    if quant_config:
-        model_config.quantization_config = quant_config
-
-    # infer dtype from device and model config
     if dtype == 'auto':
         # pick dtype by device as default
         dtype = 'bfloat16' if has_bf16 else 'float16'
@@ -78,10 +76,6 @@ def get_output_model_registered_name_and_config(model_path: str,
 
     weight_type = dtype
 
-    config = TurbomindModelConfig.from_dict()
-
-    session_len = _get_and_verify_max_len(model_config, None)
-
     if model_format in ['awq', 'gptq']:
         weight_type = 'int4'
         dtype = 'float16'  # force float16 for GPTQ/AWQ weights
@@ -99,48 +93,42 @@ def get_output_model_registered_name_and_config(model_path: str,
     if model_arch == 'GptOssForCausalLM':
         weight_type = dtype
 
+    # build weight config dict
+    keys = ['model_format', 'dtype', 'weight_type', 'expert_weight_type', 'group_size']
+    local_vars = locals()  # achieve all local vals
+    weight_dict = {key: local_vars[key] for key in keys}
+
+    return weight_dict
+
+
+def get_output_model_registered_name_and_config(model_path: str, weight_config: Dict[str, Any]):
+    """Get the registered name of the turbomind model and its configuration
+    according to the input model path, and weight_config gennerated by
+    get_weight_configfunction. The name will be used to access the
+    OUTPUT_MODELS registry.
+
+    Args:
+        model_path (str): the path of the input model
+        weight_config: weight config include ['model_format', 'dtype',
+            'weight_type', 'expert_weight_type', 'group_size']
+    """
+    register_name = 'tm'
+
+    model_arch, model_config = get_model_arch(model_path)
+
+    config = TurbomindModelConfig.from_dict()
+
+    session_len = _get_and_verify_max_len(model_config, None)
+
     config.model_config.model_arch = model_arch
-    config.model_config.data_type = dtype
-    config.model_config.weight_type = weight_type
-    config.model_config.expert_weight_type = expert_weight_type
-    config.model_config.model_format = model_format
-    config.model_config.group_size = group_size
+    config.model_config.data_type = weight_config['dtype']
+    config.model_config.weight_type = weight_config['weight_type']
+    config.model_config.expert_weight_type = weight_config['expert_weight_type']
+    config.model_config.model_format = weight_config['model_format']
+    config.model_config.group_size = weight_config['group_size']
     config.model_config.session_len = session_len
 
     return register_name, config
-
-
-def build_quant_config(src_cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Build quant config from config in Engine Config.
-
-    Args:
-        src_cfg (dict): The source quantization configuration dict,
-            typically derived from TurbomindEngineConfig or
-            PytorchEngineConfig
-
-    Return:
-        The processed and validated quantization configuration.
-    """
-    keys = ['quant_method', 'activation_scheme', 'fmt', 'weight_block_size', 'scale_fmt']
-    config = {k: src_cfg.get(k) for k in keys}
-
-    config['activation_scheme'] = config['activation_scheme'] or 'dynamic'
-
-    # special process for fp8 quant
-    if config['quant_method'] == 'fp8':
-        config['fmt'] = config['fmt'] or 'e4m3'
-
-        match config['weight_block_size']:
-            case None:
-                config['weight_block_size'] = [128, 128]
-            case int(val):
-                config['weight_block_size'] = [val, val]
-            case [x, y] | (x, y):
-                config['weight_block_size'] = [x, y]
-            case _:
-                raise ValueError('invalid quant_config["weight_block_size"] datatype')
-
-    return config
 
 
 def get_tm_model(model_path,
@@ -166,8 +154,6 @@ def get_tm_model(model_path,
     """
     _, cfg = get_model_arch(model_path)
     quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
-    if engine_config.use_quant and not quant_config:
-        quant_config = build_quant_config(engine_config.quant_config)
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
@@ -209,19 +195,27 @@ def get_tm_model(model_path,
 
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
     input_policy = get_input_policy(engine_config.model_format)
+
+    weight_config = get_weight_config(model_path=model_path,
+                                      model_format=engine_config.model_format,
+                                      dtype=engine_config.dtype,
+                                      group_size=group_size)
+
+    if weight_config['model_format'] == 'fp8' and not quant_config:
+        use_quant_online = True
+    else:
+        use_quant_online = False
+
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path,
                                                      input_policy=input_policy,
-                                                     quant_config=quant_config,
-                                                     use_quant=engine_config.use_quant)
+                                                     use_quant_online=use_quant_online,
+                                                     weight_config=weight_config)
 
     output_model_name, tm_cfg = \
         get_output_model_registered_name_and_config(
             model_path=model_path,
-            model_format=engine_config.model_format,
-            dtype=engine_config.dtype,
-            group_size=group_size,
-            quant_config=quant_config)
+            weight_config=weight_config)
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
