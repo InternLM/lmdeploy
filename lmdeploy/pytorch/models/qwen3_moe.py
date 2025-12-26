@@ -341,11 +341,7 @@ class Qwen3MoeModel(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
-        self.rotary_emb = self._build_rotary_embedding(config)
-
-    def _build_rotary_embedding(self, config: PretrainedConfig):
-        """Build rotary embedding."""
-        return build_rotary_embedding_from_config(config)
+        self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
 
     def forward(
         self,
