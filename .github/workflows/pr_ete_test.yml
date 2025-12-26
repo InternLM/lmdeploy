@@ -140,6 +140,25 @@ jobs:
           echo "health check fail"
           kill -15 $restful_pid 2>/dev/null || true
           exit 1
+      - name: Test restful server - pytorch Qwen3-30B-A3B
+        run: |
+          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts > pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
+          echo "restful_pid=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 180)
+          do
+            sleep 5
+            echo "health check try $i"
+            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
+              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-30B-A3B and pytorch' -m 'not not_pytorch and not internlm2_5 and not interns1 and pr_test' --alluredir=allure-results
+              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-30B-A3B and pytorch' -m 'not not_pytorch' --alluredir=allure-results
+              kill -15 $restful_pid 2>/dev/null || true
+              exit 0
+            fi
+          done
+
+          echo "health check fail"
+          kill -15 $restful_pid 2>/dev/null || true
+          exit 1
       - name: Test restful server - pytorch Qwen3-VL-30B-A3B-Instruct
         run: |
           CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts > pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
