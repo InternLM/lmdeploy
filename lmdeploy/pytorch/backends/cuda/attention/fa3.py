@@ -103,7 +103,7 @@ class FA3Impl(TritonAttentionImpl):
                     page_table=block_offsets,
                     cu_seqlens_q=attn_metadata.cu_seqlens_q,
                     max_seqlen_q=max_q_seqlen,
-                    scheduler_metadata=attn_metadata.scheduler_metadata,
+                    scheduler_metadata=attn_metadata.scheduler_metadata,  # not used in custom kernel
                     softmax_scale=self.scale,
                     causal=self.causal,
                     softcap=self.logit_softcapping,
