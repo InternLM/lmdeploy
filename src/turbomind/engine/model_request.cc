@@ -6,6 +6,9 @@
 #include <type_traits>
 #include <utility>
 
+#include "xgrammar/matcher.h"
+#include "xgrammar/compiler.h"
+
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/utils/constant.h"
@@ -127,12 +130,22 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->output_ids      = outputs_->at("output_ids");
     r->sequence_length = outputs_->at("sequence_length");
 
+    if (grammar_) {
+        r->grammer = std::move(grammar_);
+        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*r->grammer);
+    }
+
     // Keep a WEAK reference for canceling the request
     request_ = r;
 
     gateway_->push({std::move(r)});
 
     return OutputParam{outputs_, state, metrics};
+}
+
+void ModelRequest::setGrammar(const xgrammar::CompiledGrammar& grammar)
+{
+    grammar_ = std::make_shared<xgrammar::CompiledGrammar>(grammar);
 }
 
 }  // namespace turbomind

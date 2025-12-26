@@ -4,17 +4,21 @@ from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_
                                     stop_restful_api, test_logprobs)
 
 DEFAULT_PORT = 23333
+PROXY_PORT = 8000
 
 
 @pytest.fixture(scope='function', autouse=True)
 def prepare_environment(request, config, worker_id):
-    param = request.param
-    model = param['model']
-    model_path = config.get('model_path') + '/' + model
+    if hasattr(request, 'param'):
+        param = request.param
+        model = param['model']
+        model_path = config.get('model_path') + '/' + model
 
-    pid, startRes = start_restful_api(config, param, model, model_path, 'turbomind', worker_id)
-    yield
-    stop_restful_api(pid, startRes, param)
+        pid, startRes = start_restful_api(config, param, model, model_path, 'turbomind', worker_id)
+        yield
+        stop_restful_api(pid, startRes, param)
+    else:
+        yield
 
 
 def getModelList(tp_num):
@@ -27,6 +31,30 @@ def getModelList(tp_num):
             'extra': f'--communicator {communicator}'
         } for item in get_turbomind_model_list(tp_num)]
     return model_list
+
+
+def getPrefixCacheModelList(tp_num):
+    model_list = []
+    for communicator in get_communicator_list():
+        model_list += [{
+            'model': item,
+            'cuda_prefix': None,
+            'tp_num': tp_num,
+            'extra': f'--communicator {communicator} --enable-prefix-caching '
+        } for item in get_turbomind_model_list(tp_num)]
+    return model_list
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.prefix_cache_test
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('prepare_environment', getPrefixCacheModelList(tp_num=1), indirect=True)
+def test_restful_chat_turbomind_prefix_cache_tp1(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 @pytest.mark.order(7)
@@ -245,25 +273,25 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
         'model': 'google/gemma-2-27b-it',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
     {
         'model': 'deepseek-ai/deepseek-moe-16b-chat',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
     {
         'model': 'google/gemma-2-27b-it',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8 --communicator cuda-ipc'
     },
     {
         'model': 'deepseek-ai/deepseek-moe-16b-chat',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --quant-policy 8 --communicator native'
+        'extra': ' --quant-policy 8 --communicator cuda-ipc'
     },
 ],
                          indirect=True)
@@ -301,19 +329,19 @@ def test_restful_chat_fallback_backend_tp2(config, common_case_config, worker_id
         'model': 'internlm/internlm2_5-20b-chat',
         'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
     {
         'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
         'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
     {
         'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
         'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
         'tp_num': 2,
-        'extra': ' --communicator native'
+        'extra': ' --communicator cuda-ipc'
     },
 ],
                          indirect=True)

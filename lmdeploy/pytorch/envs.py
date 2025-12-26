@@ -56,6 +56,21 @@ def env_to_list_int(
     return value
 
 
+def env_to_float(
+    env_var: str,
+    default: float = 0,
+):
+    """Env to float."""
+    value = os.getenv(env_var)
+    if value is None:
+        return default
+    try:
+        value = float(value)
+    except Exception:
+        value = default
+    return value
+
+
 _ENVS = dict()
 
 
@@ -93,6 +108,8 @@ with set_envs():
     # dp
     dp_master_addr = os.getenv('LMDEPLOY_DP_MASTER_ADDR', None)
     dp_master_port = os.getenv('LMDEPLOY_DP_MASTER_PORT', None)
+    # timeout to wait for dp inputs
+    dp_input_timeout = env_to_float('LMDEPLOY_DPINPUT_TIMEOUT', 0.04)
 
     # executor
     executor_backend = os.getenv('LMDEPLOY_EXECUTOR_BACKEND', None)
@@ -125,11 +142,22 @@ with set_envs():
     # dlblas
     # we don't need to read this, it would be passed to ray workers
     # If Ray is launched from outside, it may fail to access the environment variables.
-    os.getenv('DEEPEP_MAX_BATCH_SIZE', None)
+    os.getenv('DEEPEP_MAX_TOKENS_PER_RANK', None)
+    os.getenv('DEEPEP_ENABLE_MNNVL', None)
+    os.getenv('DEEPEP_MODE', 'auto')
+
+    # deepep
+    deep_ep_buffer_num_sms = env_to_int('DEEPEP_BUFFER_NUM_SMS', 20)
 
     # deepgemm
     os.getenv('DG_JIT_DEBUG', '0')
     os.getenv('DG_JIT_PRINT_COMPILER_COMMAND', '0')
+
+    # model agent
+    skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
+
+    # model format
+    scale_fmt = os.getenv('LMDEPLOY_SCALE_FMT', None)
 
 
 def get_all_envs():

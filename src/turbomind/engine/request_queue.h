@@ -47,7 +47,7 @@ public:
         auto it = queue_.begin();
         int  count{};
         while ((int)rs.size() < max_rs_size && count < max_count && it != queue_.end()) {
-            if (!(*it)->session.start_flag) {
+            if ((*it)->session.start_flag) {
                 rs.push_back(std::move(*it));
                 ++count;
                 auto tmp = it;
@@ -78,10 +78,10 @@ public:
                        || flag_->load(std::memory_order_relaxed) == expected_  //
                        || closed_;
             });
-            if (closed_) {
-                abort = true;
-                return false;
-            }
+        }
+        if (closed_) {
+            abort = true;
+            return false;
         }
 
         bool is_first = false;

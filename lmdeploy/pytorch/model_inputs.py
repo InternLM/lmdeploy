@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, Dict, List, Literal
 
@@ -9,8 +8,9 @@ from torch.profiler import record_function
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
+from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
@@ -19,22 +19,45 @@ if TYPE_CHECKING:
 @dataclass
 class DPMeta:
     tp_sizes: List[int] = None
-    ep_sizes: List[int] = None
+    moe_tp_sizes: List[int] = None
+
+    @staticmethod
+    def _gather_tp_sizes(tp: int, seqlen: int, dist_ctx: dist.DistContext, layer_type: str):
+        """Gather tp size."""
+        attn_tp = dist_ctx.dist_config.attn_tp
+        if tp > 1 and tp != attn_tp:
+            dist_group = dist.get_dist_group(layer_type=layer_type)
+            gather_group = dist_group.gpu_gather_group
+            rank = gather_group.rank()
+            tp_size_tensor = torch.zeros(gather_group.size(), dtype=torch.int32, device='cuda')
+            tp_size_tensor[rank].fill_(seqlen)
+            dist.all_gather_into_tensor(tp_size_tensor, tp_size_tensor[rank], group=gather_group)
+            tp_sizes = tp_size_tensor.tolist()
+            assert all(size >= 0 for size in tp_sizes), (f'seqlen: {seqlen}, Invalid tp sizes: {tp_sizes}')
+        else:
+            tp_sizes = [seqlen]
+        return tp_sizes
 
     @classmethod
     def build(cls, seqlen: int):
         """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
+        dist_config = dist_ctx.dist_config
 
-        tp = dist_ctx.tp
-        if tp > 1:
-            tp_sizes = [None for _ in range(tp)]
-            tp_group = dist.get_tp_group('gpu')
-            dist.all_gather_object(tp_sizes, seqlen, group=tp_group)
+        mlp_tp = dist_config.mlp_tp
+        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, dist_ctx, layer_type='mlp')
+
+        moe_tp = dist_config.moe_tp
+        if moe_tp == mlp_tp:
+            moe_tp_sizes = tp_sizes
         else:
-            tp_sizes = [seqlen]
+            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, dist_ctx, layer_type='moe')
 
-        return DPMeta(tp_sizes=tp_sizes, )
+        return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
+
+    def sync_tp_size(self, tp_size: int):
+        self.tp_sizes = [tp_size] * len(self.tp_sizes)
+        self.moe_tp_sizes = [tp_size] * len(self.moe_tp_sizes)
 
 
 @dataclass
@@ -144,6 +167,10 @@ class ModelInputs:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
+    is_dummy: bool = False
+    state_offsets: torch.LongTensor = None
+    target_hidden_states: torch.Tensor = None
+    target_position_ids: torch.Tensor = None
 
     def step(self, input_ids: torch.LongTensor, step_seqlens: torch.Tensor = None):
         """Update input ids."""
@@ -152,7 +179,7 @@ class ModelInputs:
             step_seqlens = self.seq_length
         self.history_lengths += step_seqlens
         self.max_kv_seqlen += self.max_q_seqlen
-        self.sum_kv_seqlen += self.max_kv_seqlen * self.seq_length.numel()
+        self.sum_kv_seqlen += self.max_q_seqlen * self.seq_length.numel()
         if input_ids.dim() == 1:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
@@ -224,7 +251,7 @@ class ModelInputs:
         max_seq_len = self.seq_length[0].item()
         ret = []
         start = 0
-        max_kv_seqlen = self.max_kv_seqlen
+        max_kv_seqlen = self.max_kv_seqlen - self.max_q_seqlen
 
         # for mllama
         history_cross_length = self.history_cross_length
@@ -241,6 +268,11 @@ class ModelInputs:
             max_q_seqlen = end - start
             if isinstance(max_q_seqlen, torch.Tensor):
                 max_q_seqlen = max_q_seqlen.item()
+            max_kv_seqlen += max_q_seqlen
+            target_hidden_states = self.target_hidden_states[:, start:
+                                                             end] if self.target_hidden_states is not None else None
+            target_position_ids = self.target_position_ids[:,
+                                                           start:end] if self.target_position_ids is not None else None
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
@@ -256,10 +288,12 @@ class ModelInputs:
                 model_metas=self.model_metas,
                 cross_length=cross_length,
                 history_cross_length=history_cross_length,
+                state_offsets=self.state_offsets,
+                target_hidden_states=target_hidden_states,
+                target_position_ids=target_position_ids,
             )
             ret.append(inp)
             history_cross_length = cross_length
-            max_kv_seqlen += max_q_seqlen
 
             start = end
 
@@ -299,6 +333,7 @@ class StepContext:
     """
     input_ids: torch.LongTensor
     model_config: ModelConfig
+    cache_config: CacheConfig
     block_offsets: torch.IntTensor
     position_ids: torch.LongTensor
     attention_mask: torch.LongTensor
@@ -308,6 +343,7 @@ class StepContext:
     kv_caches: List
     is_decoding: bool
     sum_kv_seqlen: int
+    max_kv_seqlen: int = None
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
@@ -321,6 +357,12 @@ class StepContext:
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
     enable_microbatch: bool = False
+    # for draft model
+    target_hidden_states: torch.Tensor = None
+
+    # states for ssm
+    state_caches: List = None
+    state_offsets: torch.LongTensor = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -329,7 +371,9 @@ class StepContext:
         cls,
         inputs: ModelInputs,
         model_config: ModelConfig,
+        cache_config: CacheConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build step context.
@@ -353,7 +397,6 @@ class StepContext:
 
         # position ids
         attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
-        position_ids = position_ids[None]  # [num_tokens] -> [1, num_tokens]
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
         # cross
@@ -369,6 +412,7 @@ class StepContext:
         ret = StepContext(
             input_ids=inputs.input_ids,
             model_config=model_config,
+            cache_config=cache_config,
             block_offsets=inputs.block_offsets,
             position_ids=position_ids,
             input_embeddings=input_embeddings,
@@ -381,6 +425,7 @@ class StepContext:
             kv_caches=kv_caches,
             is_decoding=inputs.is_decoding,
             sum_kv_seqlen=inputs.sum_kv_seqlen,
+            max_kv_seqlen=inputs.max_kv_seqlen,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
@@ -389,6 +434,9 @@ class StepContext:
             cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
+            state_caches=state_caches,
+            state_offsets=inputs.state_offsets,
+            target_hidden_states=inputs.target_hidden_states,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -400,12 +448,14 @@ class StepContext:
         q_seqlens = inputs.seq_length
         history_seqlens = inputs.history_lengths
         max_q_seqlen = inputs.max_q_seqlen
-
+        target_position_ids = inputs.target_position_ids
         # decoding
         if max_q_seqlen == 1:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
-            position_ids = history_seqlens.unsqueeze(-1).clone()
-            position_ids = position_ids.flatten()
+            if target_position_ids is not None:
+                position_ids = target_position_ids
+            else:
+                position_ids = history_seqlens.unsqueeze(0).clone()
             return attention_mask, position_ids
 
         num_tokens = inputs.input_ids.numel()
@@ -418,11 +468,13 @@ class StepContext:
             ranges = torch.arange(0, max_q_seqlen, device=device)
             position_ids = history_seqlens[:, None] + ranges[None, :]
             position_ids = position_ids.flatten()
-            return attention_mask, position_ids
+            return attention_mask, position_ids[None]
 
         # get mask
         mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
         attention_mask = (mask_range < q_seqlens[:, None]).long()
+        if target_position_ids is not None:
+            return attention_mask, target_position_ids
 
         # position_ids
         indices = attention_mask.long().cumsum(-1) - 1
@@ -430,7 +482,8 @@ class StepContext:
         indices[1:] += q_seqlens.cumsum(0)[:-1, None]
         position_ids_1d = position_ids.new_empty(num_tokens)
         position_ids_1d[indices.flatten()] = position_ids.flatten()
-        return attention_mask, position_ids_1d
+        position_ids = position_ids_1d[None]
+        return attention_mask, position_ids
 
 
 @dataclass
@@ -439,12 +492,13 @@ class BuildModelContext:
     disable_vision_encoder: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
+    enable_return_routed_experts: bool = False
 
 
-class StepContextManager:
+class StepContextManager(CtxMgrBase[StepContext]):
 
     def __init__(self, build_ctx: BuildModelContext = None):
-        self._current_ctx = None
+        super().__init__(None)
         build_ctx = build_ctx or BuildModelContext()
         self.build_ctx = build_ctx
 
@@ -453,51 +507,30 @@ class StepContextManager:
         self,
         inputs: ModelInputs,
         model_config: ModelConfig,
+        cache_config: CacheConfig,
         kv_caches: List = None,
+        state_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
         """Build context."""
         return StepContext.new(
             inputs,
             model_config,
+            cache_config,
             kv_caches,
+            state_caches,
             kv_quant_policy,
         )
 
-    def set_context(self, ctx: StepContext):
-        """Set context."""
-        self._current_ctx = ctx
 
-    @contextmanager
-    def context(self, ctx: StepContext):
-        """Context context."""
-        old_ctx = self.current_context()
-        self.set_context(ctx)
-        yield ctx
-        self.set_context(old_ctx)
+@singleton
+class StepCtxMgrApi(CtxMgrBase[StepContextManager]):
+    """Context manager for StepContextManager."""
 
-    def current_context(self):
-        """Get current_context."""
-        return self._current_ctx
+    def __init__(self):
+        super().__init__(None)
 
 
-_CTX_MANAGER: StepContextManager = None
-
-
-def set_step_ctx_manager(mgr: StepContextManager):
-    global _CTX_MANAGER
-    _CTX_MANAGER = mgr
-    return mgr
-
-
-def get_step_ctx_manager():
-    """Get device manager."""
-    return _CTX_MANAGER
-
-
-@contextmanager
-def step_ctx_manager(mgr: StepContextManager):
-    old_mgr = _CTX_MANAGER
-    set_step_ctx_manager(mgr)
-    yield mgr
-    set_step_ctx_manager(old_mgr)
+set_step_ctx_manager = StepCtxMgrApi().set_context
+get_step_ctx_manager = StepCtxMgrApi().current_context
+step_ctx_manager = StepCtxMgrApi().context

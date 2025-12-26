@@ -60,7 +60,10 @@ private:
 
 class Gateway {
 public:
-    Gateway(int groups, int group_size, std::function<std::shared_ptr<void>()> ctx_factory);
+    Gateway(int                                    groups,
+            int                                    group_size,
+            std::vector<int>                       node_dp_ranks,
+            std::function<std::shared_ptr<void>()> ctx_factory);
 
     void shutdown();
 
@@ -72,8 +75,9 @@ public:
             // route to corresponding rank
             rank = seqid2rank_.find(r->session.id);
         }
-        else {
-            rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
+        else if (node_dp_ranks_.size() > 0) {
+            rank = next_.fetch_add(1, std::memory_order_relaxed) % node_dp_ranks_.size();
+            rank = node_dp_ranks_[rank];
         }
 
         if (rank >= 0) {
@@ -190,6 +194,7 @@ private:
 
     std::vector<std::unique_ptr<RequestQueue>>          queues_;
     std::vector<std::unique_ptr<std::atomic<uint64_t>>> flags_;
+    std::vector<int>                                    node_dp_ranks_;
 
     std::function<std::shared_ptr<void>()> ctx_factory_;
 

@@ -39,12 +39,20 @@ def get_turbomind_deps():
     CUDA_COMPILER = os.getenv('CUDACXX', os.getenv('CMAKE_CUDA_COMPILER', 'nvcc'))
     nvcc_output = subprocess.check_output([CUDA_COMPILER, '--version'], stderr=subprocess.DEVNULL).decode()
     CUDAVER, = re.search(r'release\s+(\d+).', nvcc_output).groups()
-    return [
-        f'nvidia-nccl-cu{CUDAVER}',
-        f'nvidia-cuda-runtime-cu{CUDAVER}',
-        f'nvidia-cublas-cu{CUDAVER}',
-        f'nvidia-curand-cu{CUDAVER}',
-    ]
+    if int(CUDAVER) >= 13:
+        return [
+            f'nvidia-nccl-cu{CUDAVER}',
+            'nvidia-cuda-runtime',
+            'nvidia-cublas',
+            'nvidia-curand',
+        ]
+    else:
+        return [
+            f'nvidia-nccl-cu{CUDAVER}',
+            f'nvidia-cuda-runtime-cu{CUDAVER}',
+            f'nvidia-cublas-cu{CUDAVER}',
+            f'nvidia-curand-cu{CUDAVER}',
+        ]
 
 
 def parse_requirements(fname='requirements.txt', with_version=True):

@@ -366,4 +366,50 @@ private:
     std::string get_out_of_range_msg(const std::string& key) const;
 };
 
+// clang-format off
+template<class Archive, class T, std::enable_if_t<std::is_same_v<Tensor, T>, int> = 0>
+void save(Archive& ar, const T& tensor)
+{
+    TM_CHECK(tensor.size() == 0 || tensor.is_contiguous());
+    ar & tensor.buffer(); // implicit convert to tensor
+    ar & tensor.layout();
+}
+
+template<class Archive>
+void load(Archive& ar, Tensor& tensor)
+{
+    Buffer buffer;
+    Layout layout;
+    ar & buffer;
+    ar & layout;
+    tensor = Tensor{std::move(buffer), std::move(layout)};
+}
+
+
+template<class Archive>
+void save(Archive& ar, const TensorMap& map)
+{
+    ar & map.size();
+    for (const auto& [k, t]: map) {
+        ar & k;
+        ar & t;
+    }
+}
+
+template<class Archive>
+void load(Archive& ar, TensorMap& map)
+{
+    map.clear();
+    decltype(map.size()) size;
+    ar & size;
+    for (int i = 0; i < size; ++i) {
+        std::string k;
+        Tensor   t;
+        ar & k;
+        ar & t;
+        map.emplace(std::move(k), std::move(t));
+    }
+}
+// clang-format on
+
 }  // namespace turbomind::core

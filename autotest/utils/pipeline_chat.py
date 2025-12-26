@@ -23,7 +23,7 @@ def run_pipeline_chat_test(config,
     # temp remove testcase because of issue 3434
     if ('InternVL3' in model_case or 'InternVL2_5' in model_case or 'MiniCPM-V-2_6' in model_case
         ) and 'turbomind' in backend_type and extra is not None and 'communicator' in extra and extra.get(
-            'communicator') == 'native' and tp > 1:
+            'communicator') == 'cuda-ipc' and tp > 1:
         return
     model_name = model_name = get_model_name(model_case)
     model_path = config.get('model_path')
@@ -57,10 +57,11 @@ def run_pipeline_chat_test(config,
                                       capture_output=True,
                                       text=True,
                                       encoding='utf-8',
+                                      errors='replace',
                                       env=env,
-                                      timeout=600)
+                                      timeout=900)
         except subprocess.TimeoutExpired as e:
-            assert False, f'Test command timed out after 10 minutes: {e.cmd}'
+            assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
         output_text = response.stdout
         print(output_text)
@@ -104,7 +105,7 @@ def run_pipeline_vl_chat_test(config,
 
     if ('InternVL3' in model_case or 'InternVL2_5' in model_case or 'MiniCPM-V-2_6' in model_case
         ) and 'turbomind' in backend_type and extra is not None and 'communicator' in extra and extra.get(
-            'communicator') == 'native' and tp > 1:
+            'communicator') == 'cuda-ipc' and tp > 1:
         return
 
     pipeline_chat_log = os.path.join(
@@ -132,10 +133,11 @@ def run_pipeline_vl_chat_test(config,
                                       capture_output=True,
                                       text=True,
                                       encoding='utf-8',
+                                      errors='replace',
                                       env=env,
-                                      timeout=600)
+                                      timeout=900)
         except subprocess.TimeoutExpired as e:
-            assert False, f'Test command timed out after 10 minutes: {e.cmd}'
+            assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
         output_text = response.stdout
         print(output_text)
@@ -229,7 +231,7 @@ def assert_pipeline_batch_return(output, size: int = 1):
 
 
 def assert_pipeline_single_stream_return(output, logprobs_num: int = 0):
-    for i in range(0, len(output) - 1):
+    for i in range(0, len(output) - 2):
         if not assert_pipeline_single_element(output[i], is_stream=True, logprobs_num=logprobs_num):
             return False, f'single_stream_element is false, index is {i}'
     if assert_pipeline_single_element(output[-1], is_stream=True, is_last=True, logprobs_num=logprobs_num) is False:

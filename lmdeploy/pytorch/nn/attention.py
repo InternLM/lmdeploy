@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
@@ -11,11 +11,7 @@ from .utils import get_distribute_size
 
 def _update_num_heads(num_heads: int, num_kv_heads: int):
     """Update heads."""
-    dist_ctx = get_dist_manager().current_context()
-    if dist_ctx.dp == 1:
-        world_size, rank = get_tp_world_rank()
-    else:
-        world_size, rank = 1, 0
+    world_size, rank = get_tp_world_rank('attn')
     num_heads = get_distribute_size(num_heads, world_size, rank)
     num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
     return num_heads, num_kv_heads
@@ -77,9 +73,15 @@ class Attention(nn.Module):
         k_scales_zeros: torch.Tensor = None,
         v_scales_zeros: torch.Tensor = None,
         s_aux: torch.Tensor = None,
+        nsa_indices: torch.Tensor = None,
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
+        kwargs = dict()
+        if nsa_indices is not None:
+            kwargs['nsa_indices'] = nsa_indices
+        if s_aux is not None:
+            kwargs['learnable_sink'] = s_aux
         return self.impl.forward(
             query,
             key,
@@ -89,8 +91,8 @@ class Attention(nn.Module):
             attn_metadata=attn_metadata,
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
-            learnable_sink=s_aux,
             inplace=inplace,
+            **kwargs,
         )
 
     @staticmethod

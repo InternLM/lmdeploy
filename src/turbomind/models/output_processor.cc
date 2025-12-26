@@ -264,15 +264,21 @@ struct OutputProcessor::Impl {
 
         if (type == 2 && d.full_states) {
             auto hidden_states = env.consume("full_hidden_states");
-            OutputHiddenStates(d.output_states, hidden_states, 2, b.rc);
-            if (d.full_logits) {
+            if (!d.output_states.empty()) {
+                OutputHiddenStates(d.output_states, hidden_states, 2, b.rc);
+            }
+            if (!d.output_logits.empty() && d.full_logits) {
                 ComputeAndOutputLogits(d, hidden_states, b.rc);
             }
         }
 
         if (type == 1) {
-            OutputHiddenStates(d.output_states, env.at("hidden_states"), 1, b.rc);
-            OutputLogits(d.output_logits, env.at("logits"), 1, b.rc);
+            if (!d.output_states.empty()) {
+                OutputHiddenStates(d.output_states, env.at("hidden_states"), 1, b.rc);
+            }
+            if (!d.output_logits.empty()) {
+                OutputLogits(d.output_logits, env.at("logits"), 1, b.rc);
+            }
         }
     }
 };

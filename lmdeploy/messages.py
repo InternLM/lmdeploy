@@ -63,7 +63,7 @@ class GenerationConfig:
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
         logprobs (int): Number of log probabilities to return per output token.
-        response_format (Dict): Only pytorch backend support formatting
+        response_format (Dict): Generate responses according to given formatting.
         response. Examples:
             {
                 "type": "json_schema",
@@ -116,6 +116,9 @@ class GenerationConfig:
     with_cache: bool = False
     preserve_cache: bool = False
     migration_request: Optional[MigrationRequest] = None
+
+    # router replay
+    return_routed_experts: bool = False
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
@@ -235,12 +238,18 @@ class TurbomindEngineConfig:
     model_format: Optional[str] = None
     tp: int = 1
     dp: int = 1
+    cp: int = 1
     device_num: int = None
     attn_tp_size: int = None
+    attn_cp_size: int = None
     attn_dp_size: int = None
     mlp_tp_size: int = None
     mlp_dp_size: int = None
     outer_dp_size: int = None
+    nnodes: int = 1
+    node_rank: int = 0
+    dist_init_addr: Optional[str] = None
+    devices: List[int] = None
     session_len: Optional[int] = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
@@ -259,7 +268,7 @@ class TurbomindEngineConfig:
     empty_init: bool = False
     communicator: str = 'nccl'
     hf_overrides: Optional[Dict[str, Any]] = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
 
     def __post_init__(self):
         """Check input validation."""
@@ -289,6 +298,9 @@ class PytorchEngineConfig:
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
+        attn_tp_size (int): tp size for attention, only works for dp>1
+        mlp_tp_size (int): tp size for mlp, only works for dp>1
+        moe_tp_size (int): tp size for moe, only works for dp>1
         cache_max_entry_count (float): the percentage of gpu memory occupied
             by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
             it defaults to 0.8, signifying the percentage of FREE GPU memory
@@ -350,6 +362,9 @@ class PytorchEngineConfig:
     ep: int = 1
     session_len: int = None
     max_batch_size: int = None
+    attn_tp_size: int = None
+    mlp_tp_size: int = None
+    moe_tp_size: int = None
     cache_max_entry_count: float = 0.8
     prefill_interval: int = 16
     block_size: int = 64
@@ -372,10 +387,13 @@ class PytorchEngineConfig:
     enable_mp_engine: bool = False
     mp_engine_backend: str = 'mp'
     model_format: str = None
-    enable_metrics: bool = False
+    enable_metrics: bool = True
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
+    # router replay
+    enable_return_routed_experts: bool = False
+    enable_transfer_obj_ref: bool = False
 
     # dllm
     dllm_block_length: int = None
@@ -457,15 +475,37 @@ class Response:
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
+    routed_experts: Any = None
+
+    def __str__(self):
+        return f'text={self.text}\n{self._format_none_text_fields()}'
 
     def __repr__(self):
-        logits = 'logits=None' if self.logits is None else f'logits.shape={self.logits.shape}\nlogits={self.logits}'
-        hidden_state = (
-            'last_hidden_state=None' if self.last_hidden_state is None else
-            f'last_hidden_state.shape={self.last_hidden_state.shape}\nlast_hidden_state={self.last_hidden_state}')
-        s = (f'text={self.text}\ngenerate_token_len={self.generate_token_len}\nfinish_reason="{self.finish_reason}"\n'
-             f'token_ids={self.token_ids}\nlog_probs={self.logprobs}\n{logits}\n{hidden_state}')
-        return s
+        return f'text={self.text!r}\n{self._format_none_text_fields()}'
+
+    def _format_none_text_fields(self):
+        fields = []
+        fields.append(f'input_token_len={self.input_token_len}')
+        fields.append(f'generate_token_len={self.generate_token_len}')
+        fields.append(f'finish_reason="{self.finish_reason}"')
+        fields.append(f'token_ids={self.token_ids}')
+        fields.append(f'logprobs={self.logprobs}')
+
+        # Helper function to format tensor information
+        def _format_tensor(name: str, tensor: Optional[torch.Tensor]) -> List[str]:
+            if tensor is None:
+                return [f'{name}=None']
+            try:
+                return [f'{name}.shape={tensor.shape}', f'{name}={tensor}']
+            except:  # noqa
+                # in case tensor is not torch.Tensor or has no shape
+                return [f'{name}={tensor}']
+
+        # Format tensor fields
+        fields.extend(_format_tensor('logits', self.logits))
+        fields.extend(_format_tensor('last_hidden_state', self.last_hidden_state))
+        fields.extend(_format_tensor('routed_experts', self.routed_experts))
+        return '\n'.join(fields)
 
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
@@ -510,6 +550,7 @@ class ScheduleMetrics:
     active_blocks: int = 0
     cached_blocks: int = 0
     free_blocks: int = 0
+    prefix_cache_hit_rate: float = 0
 
 
 @dataclass
@@ -522,16 +563,16 @@ class RequestMetrics:
     """
     token_timestamp: float = 0.0
     engine_events: List[EngineEvent] = field(default_factory=list)
+    spec_info: Optional[Dict[str, Any]] = None
 
 
 @dataclass
 class EngineOutput:
-    """Engine output for turbomind/pytorch engine.
+    """Engine output from turbomind/pytorch engine.
 
     Args:
         status (ResponseType): the response type.
-        token_ids (List[int]): the output token ids.
-        num_token (int): the number of output tokens, which is equal to `len(token_ids)`
+        token_ids (List[int]): the newly generated token ids in each iteration.
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in
@@ -540,17 +581,17 @@ class EngineOutput:
     """
     status: ResponseType
     token_ids: List[int]
-    num_token: int
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     cache_block_ids: Optional[List[int]] = None
     req_metrics: Optional[RequestMetrics] = None
+    routed_experts: torch.Tensor = None
 
 
 @dataclass
 class VisionConfig:
-    """Vison model configs.
+    """Vision model configs.
 
     Args:
         max_batch_size (int): the max image size passed to the model, since
@@ -562,3 +603,17 @@ class VisionConfig:
     """
     max_batch_size: int = 1
     thread_safe: bool = False
+
+
+@dataclass
+class SpeculativeConfig:
+    """Speculative decoding config.
+
+    Args:
+        method (str): the speculative decoding method.
+        model (str): the path of speculative model.
+        num_speculative_tokens (int): number of generated token of draft model per step
+    """
+    method: str
+    model: str = ''
+    num_speculative_tokens: int = 1

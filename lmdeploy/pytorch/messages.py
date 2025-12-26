@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -14,6 +15,9 @@ from lmdeploy.utils import get_logger
 from .block import LogicalTokenBlocks
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.paging.scheduler import Scheduler
+    from lmdeploy.pytorch.paging.seq_states.states import StateBase
+    from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
 logger = get_logger('lmdeploy')
@@ -56,6 +60,7 @@ class SamplingParam:
     out_logits: bool = False
     out_last_hidden_states: bool = False
     num_logprobs: int = -1
+    return_routed_experts: bool = False
 
     @classmethod
     def from_gen_config(cls, gen_config: GenerationConfig):
@@ -121,42 +126,43 @@ class SamplingParam:
         if random_seed is None:
             import random
             random_seed = random.getrandbits(64)
-        return SamplingParam(top_p=top_p,
-                             top_k=top_k,
-                             min_p=min_p,
-                             temperature=temperature,
-                             repetition_penalty=repetition_penalty,
-                             ignore_eos=gen_config.ignore_eos,
-                             random_seed=random_seed,
-                             stop_words=stop_words,
-                             bad_words=bad_words,
-                             response_format=response_format,
-                             max_new_tokens=max_new_tokens,
-                             min_new_tokens=min_new_tokens,
-                             logits_processors=gen_config.logits_processors,
-                             out_logits=(output_logits is not None),
-                             num_logprobs=logprobs)
+        return SamplingParam(
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            ignore_eos=gen_config.ignore_eos,
+            random_seed=random_seed,
+            stop_words=stop_words,
+            bad_words=bad_words,
+            response_format=response_format,
+            max_new_tokens=max_new_tokens,
+            min_new_tokens=min_new_tokens,
+            logits_processors=gen_config.logits_processors,
+            out_logits=(output_logits is not None),
+            num_logprobs=logprobs,
+            return_routed_experts=gen_config.return_routed_experts,
+        )
 
 
 class MessageStatus(enum.Enum):
     """Status of a sequence."""
 
     WAITING = enum.auto()
-    RUNNING = enum.auto()
+    READY = enum.auto()
     STOPPED = enum.auto()
-    ENDED = enum.auto()
-    ABORTED = enum.auto()
-    LOCKED = enum.auto()
+    RUNNING = enum.auto()
 
     # PD Disaggregation
-    # WAITING_MIGRATION: state of Unmigrated Requests
+    # MIGRATION_WAITING: state of Unmigrated Requests
     # in both prefill and decode engines are tagged by
-    # RUNNING_MIGRATION: state of Migrating Requests
+    # MIGRATION_READY: state of Migrating Requests
     # in decode engine
     TO_BE_MIGRATED = enum.auto()
-    WAITING_MIGRATION = enum.auto()
-    RUNNING_MIGRATION = enum.auto()
-    MIGRATION_LOCKED = enum.auto()
+    MIGRATION_WAITING = enum.auto()
+    MIGRATION_READY = enum.auto()
+    MIGRATION_RUNNING = enum.auto()
     MIGRATION_DONE = enum.auto()
 
 
@@ -168,6 +174,7 @@ class SequenceMeta:
     """Meta data shared by all sequence."""
     block_size: int
     strategy: 'SequenceStrategy' = None
+    sampling_strategy: 'SamplingStrategy' = None
 
 
 class SequenceManager:
@@ -175,9 +182,7 @@ class SequenceManager:
 
     def __init__(self, seq_meta: SequenceMeta) -> None:
         self._seq_map: SeqMap = dict()
-        self._status_seq_map: Dict[MessageStatus, SeqMap] = dict()
-        for status in MessageStatus:
-            self._status_seq_map[status] = dict()
+        self._status_seq_map: Dict[MessageStatus, SeqMap] = defaultdict(dict)
 
         self.seq_meta = seq_meta
         self._seq_count = 0
@@ -243,12 +248,12 @@ def _to_ndarray(token_ids) -> np.ndarray:
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, seq_manager: SequenceManager) -> None:
+    def __init__(self, session_id: int, seq_manager: SequenceManager, scheduler: 'Scheduler') -> None:
         self.session_id = session_id
         self.seq_meta = seq_manager.seq_meta
-        self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: SeqMap = dict()
         self.seq_manager = seq_manager
+        self.scheduler = scheduler
 
     def add_sequence(self,
                      token_ids: Tensor,
@@ -260,6 +265,8 @@ class SchedulerSession:
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
+        from lmdeploy.pytorch.paging.seq_states.states import build_seq_state
+
         if sampling_param is None:
             sampling_param = SamplingParam()
 
@@ -278,12 +285,22 @@ class SchedulerSession:
             mode=UpdateTokenMode.INPUTS,
         )
         self.sequences[seq.seq_id] = seq
+
+        # set status
+        # update seq manager
+        status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
+        seq.set_state(build_seq_state(self.scheduler, seq, status))
         self.seq_manager.add_sequence(seq)
+
+        # metrics
+        seq.record_event(EventType.QUEUED)
+
         return seq
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
         assert seq.seq_id in self.sequences
+        seq.state.free()
         self.sequences.pop(seq.seq_id)
         self.seq_manager.remove_sequence(seq)
 
@@ -407,6 +424,71 @@ class HistoryTokenIds:
         return self.clone()
 
 
+class HistoryRouterExperts:
+    """History router experts."""
+    ALLOC_SIZE = 64
+
+    def __init__(self, expert_ids: np.ndarray = None, dtype: np.dtype = np.uint16):
+        self.dtype = dtype
+        if expert_ids is None:
+            self._expert_ids = None
+            self._num_real = 0
+        else:
+            self._expert_ids = expert_ids.astype(dtype)
+            self._num_real = len(expert_ids)
+
+    def reserve(self, size: int):
+        """Reserve cache."""
+        if self._expert_ids is None:
+            return
+        num_tokens = len(self._expert_ids)
+        if num_tokens >= size:
+            return
+        reserve_size = _round_up(size - num_tokens, self.ALLOC_SIZE)
+        new_expert_ids = np.pad(self._expert_ids, ((0, reserve_size), (0, 0), (0, 0)))
+        self._expert_ids = new_expert_ids
+
+    def get_real(self):
+        """Get real data."""
+        if self._expert_ids is None:
+            return None
+        return self._expert_ids[:self._num_real]
+
+    def resize(self, size: int):
+        """Set size."""
+        assert size <= self._num_real
+        self._num_real = size
+        if self._expert_ids is not None:
+            self._expert_ids = self._expert_ids[:size].copy()
+
+    def append(self, expert_ids: np.ndarray):
+        """Append token ids."""
+        if self._expert_ids is None:
+            self._expert_ids = expert_ids.astype(self.dtype)
+            self._num_real = len(expert_ids)
+            return
+        num_tokens = len(expert_ids)
+        self.reserve(num_tokens + self._num_real)
+        slice_start = self._num_real
+        slice_end = slice_start + num_tokens
+        self._num_real += num_tokens
+        self._expert_ids[slice_start:slice_end] = expert_ids
+
+    def __len__(self):
+        """Get length."""
+        return self._num_real
+
+    def clone(self):
+        """clone."""
+        expert_ids = None if self._expert_ids is None else self.get_real().copy()
+        ret = HistoryRouterExperts(expert_ids=expert_ids, dtype=self.dtype)
+        return ret
+
+    def copy(self):
+        """copy."""
+        return self.clone()
+
+
 class HistoryMultiModals:
 
     def __init__(self, multimodals: MultiModalInputs = None):
@@ -483,11 +565,11 @@ class SchedulerSequence:
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
+    logical_state: int = -1
     adapter_name: str = None
     arrive_time: float = 0.0
     output_start_pos: int = 0
     meta: Any = None
-    _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
 
@@ -498,6 +580,9 @@ class SchedulerSequence:
 
     # For logging
     engine_events: List[EngineEvent] = field(default_factory=list)
+
+    # for router replay
+    all_routed_experts: HistoryRouterExperts = field(default_factory=HistoryRouterExperts)
 
     def __post_init__(self):
         """Post init."""
@@ -510,6 +595,7 @@ class SchedulerSequence:
         self._num_images: int = len(self.history_embeddings)
         self._num_history_cross: int = 0
         self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
+        self._state = None
 
     @property
     def block_size(self) -> int:
@@ -567,6 +653,21 @@ class SchedulerSequence:
         return self.history_cache._token_ids[start:end]
 
     @property
+    def return_routed_experts(self) -> bool:
+        return self.sampling_param.return_routed_experts
+
+    @property
+    def routed_experts(self) -> np.ndarray:
+        if (not self.return_routed_experts) or self.all_routed_experts is None:
+            return None
+
+        end = max(0, self.num_all_ids - 1)
+        if 0 < end <= len(self.all_routed_experts):
+            return self.all_routed_experts.get_real()[:end]
+        else:
+            return None
+
+    @property
     def num_history_ids(self):
         """Num history ids."""
         return self._num_history_ids
@@ -604,22 +705,20 @@ class SchedulerSequence:
         return len(self.logical_blocks)
 
     @property
-    def seq_manager(self) -> SequenceManager:
-        """Sequence manager."""
-        return self.session.seq_manager
+    def state(self) -> 'StateBase':
+        return self._state
+
+    def set_state(self, state: 'StateBase'):
+        """Set state."""
+        self._state = state
 
     @property
     def status(self):
-        return self._status
+        return self.state.status
 
     @property
     def return_logits(self):
         return self.sampling_param.out_logits
-
-    @status.setter
-    def status(self, value: MessageStatus):
-        self.seq_manager.update_sequence_status(self, value)
-        self._status = value
 
     def num_all_cross_tokens(self):
         """Num of all cross tokens."""

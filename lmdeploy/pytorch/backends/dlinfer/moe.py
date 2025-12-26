@@ -12,9 +12,11 @@ from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopK
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
     """Dlinfer softmax topk implementation."""
 
-    def __init__(self, top_k: int, dim: int = -1):
+    def __init__(self, top_k: int, dim: int = -1, n_groups: int = -1):
         self.top_k = top_k
         self.dim = dim
+        if n_groups != -1:
+            raise NotImplementedError('Group router not supported')
 
     def forward(self, x: torch.Tensor):
         routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k)
@@ -25,9 +27,9 @@ class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
     """Dlinfer softmax topk implementation builder."""
 
     @staticmethod
-    def build(top_k: int, dim: int = -1):
+    def build(top_k: int, dim: int = -1, n_groups: int = -1):
         """build."""
-        return DlinferSoftmaxTopKImpl(top_k, dim)
+        return DlinferSoftmaxTopKImpl(top_k, dim, n_groups)
 
 
 class DlinferFusedMoEImpl(FusedMoEImpl):
@@ -65,6 +67,13 @@ class DlinferFusedMoEBuilder(FusedMoEBuilder):
     """Dlinfer fused moe builder."""
 
     @staticmethod
-    def build(top_k: int, num_experts: int, renormalize: bool = False):
+    def build(top_k: int,
+              num_experts: int,
+              renormalize: bool = False,
+              hidden_dim: int = 1,
+              ep_size: int = 1,
+              ep_group: torch.distributed.ProcessGroup = None,
+              layer_idx: int = 0,
+              out_dtype: torch.dtype = torch.bfloat16):
         """Build from mlp."""
         return DlinferFusedMoEImpl(top_k=top_k, renormalize=renormalize)

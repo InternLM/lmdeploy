@@ -13,7 +13,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -150,20 +150,17 @@ class RayWorkerWrapper(WorkerWrapperBase):
         model_path: str,
         cache_config: CacheConfig,
         backend_config: BackendConfig,
+        model_config: ModelConfig,
         dist_config: DistConfig,
         misc_config: MiscConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         dtype: str = 'auto',
         log_level: int = 30,
+        specdecode_config: SpecDecodeConfig = None,
     ):
         init_backend(device_type)
         try_import_deeplink(device_type)
-
-        model_config = ModelConfig.from_pretrained(model_path,
-                                                   dtype=dtype,
-                                                   hf_overrides=misc_config.hf_overrides,
-                                                   dist_config=dist_config)
 
         super().__init__(
             model_path=model_path,
@@ -175,6 +172,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             adapters=adapters,
             device_type=device_type,
             log_level=log_level,
+            specdecode_config=specdecode_config,
         )
         self.node_ip = ray.util.get_node_ip_address()
         self._remote_logger = RemoteLogger()
@@ -199,8 +197,9 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
         from lmdeploy.pytorch.distributed import all_reduce, get_dist_manager
         with get_dist_manager().context(self.dist_ctx):
+            group = self.dist_ctx.tp_group.gpu_group
             tmp = torch.empty((1, ), device='cuda')
-            all_reduce(tmp)
+            all_reduce(tmp, group=group)
 
     def pack_output(self, output: Dict):
         """Pack output."""
@@ -222,34 +221,37 @@ class RayWorkerWrapper(WorkerWrapperBase):
 class RayExecutor(ExecutorBase):
     """Ray executor."""
 
-    def __init__(self,
-                 model_path: str,
-                 model_config: ModelConfig,
-                 cache_config: CacheConfig,
-                 backend_config: BackendConfig,
-                 dist_config: DistConfig,
-                 misc_config: MiscConfig,
-                 adapters: Dict[str, str] = None,
-                 device_type: str = 'cuda',
-                 dtype: str = 'auto'):
+    def __init__(
+        self,
+        model_path: str,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        backend_config: BackendConfig,
+        dist_config: DistConfig,
+        misc_config: MiscConfig,
+        adapters: Dict[str, str] = None,
+        device_type: str = 'cuda',
+        dtype: str = 'auto',
+        specdecode_config: SpecDecodeConfig = None,
+    ):
         """Initialize Executor."""
-        super().__init__(model_path=model_path,
-                         model_config=model_config,
-                         cache_config=cache_config,
-                         backend_config=backend_config,
-                         dist_config=dist_config,
-                         misc_config=misc_config,
-                         adapters=adapters,
-                         device_type=device_type)
+        super().__init__(
+            model_path=model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            dist_config=dist_config,
+            misc_config=misc_config,
+            adapters=adapters,
+            device_type=device_type,
+            specdecode_config=specdecode_config,
+        )
 
-        self.dp_rank = dist_config.dp_rank
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
             logger.info('Init ray cluster.')
-            ray_world_size = self.world_size
-            if self.dp > 1:
-                ray_world_size = 1
-            self.ray_ctx = RayContext(ray_world_size, dp=dist_config.dp, device_type=device_type)
+            attn_tp = dist_config.attn_tp
+            self.ray_ctx = RayContext(attn_tp, dp=dist_config.dp, device_type=device_type)
             placement_group = self.ray_ctx.get_placement_group()
             self.placement_group = placement_group
 
@@ -266,6 +268,7 @@ class RayExecutor(ExecutorBase):
             worker_kwargs = dict(
                 model_path=model_path,
                 cache_config=cache_config,
+                model_config=model_config,
                 backend_config=backend_config,
                 dist_config=dist_config,
                 misc_config=misc_config,
@@ -273,6 +276,7 @@ class RayExecutor(ExecutorBase):
                 device_type=device_type,
                 dtype=dtype,
                 log_level=logger.level,
+                specdecode_config=specdecode_config,
             )
 
             logger.info('Init ray workers.')
@@ -282,16 +286,14 @@ class RayExecutor(ExecutorBase):
             self.remote_outs: asyncio.Queue = None
 
             logger.info('Init distributed environment by device.')
+            self.rank_offset = dist_config.dp_rank * attn_tp
             self._init_distributed_environment_by_device(device_type)
 
             logger.info('Init distributed process group.')
-            if self.dp == 1:
-                ray.get([
-                    worker.init_process_group.remote(rank, self.master_addr, self.master_port)
-                    for rank, worker in enumerate(self.workers)
-                ])
-            else:
-                ray.get(self.workers[0].init_process_group.remote(self.dp_rank, self.master_addr, self.master_port))
+            ray.get([
+                worker.init_process_group.remote(rank + self.rank_offset, self.master_addr, self.master_port)
+                for rank, worker in enumerate(self.workers)
+            ])
 
             if self.dist_config.world_size > 1:
                 logger.info('Warming up distribute environment, this might take long time, please waiting...')
@@ -317,13 +319,13 @@ class RayExecutor(ExecutorBase):
         """Gather available memory."""
         return self.collective_rpc('get_free_mem')
 
-    def set_cache_config(self, cache_config: CacheConfig):
+    def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
         """Set all cache config."""
-        self.collective_rpc('set_cache_config', (cache_config, ))
+        self.collective_rpc('set_cache_config', (cache_config, spec_cache_config))
 
-    def set_model_config(self, model_config: ModelConfig):
+    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
         """Set all model config."""
-        self.collective_rpc('set_model_config', (model_config, ))
+        self.collective_rpc('set_model_config', (model_config, spec_model_config))
 
     def build_graph_runner(self):
         """Build graph runner."""
@@ -429,6 +431,12 @@ class RayExecutor(ExecutorBase):
         outs = self.dag.execute(inputs)
         ray.get(outs)
 
+        # free ray.put inputs
+        try:
+            ray._private.internal_api.free(inputs)
+        except Exception as e:
+            logger.warning(f'Free input ref failed: {e}')
+
     async def get_output_async(self):
         """Get output async."""
         return await self.remote_outs.get()
@@ -510,7 +518,8 @@ class RayExecutor(ExecutorBase):
         for bundle_id, bundle in enumerate(placement_group.bundle_specs):
             if bundle.get(device_str, 0) and self._valid_bundle_id(bundle_id):
                 bundle_indices.append(bundle_id)
-        bundle_indices = bundle_indices[:self.world_size]
+        attn_tp = self.dist_config.attn_tp
+        bundle_indices = bundle_indices[:attn_tp]
 
         workers = list()
         for _, bundle_id in enumerate(bundle_indices):
@@ -544,13 +553,14 @@ class RayExecutor(ExecutorBase):
     def _init_distributed_environment_by_device(self, device_str: str):
         """Init distributed environment."""
         driver_ip = _get_master_addr()
-        if device_str in ['cuda', 'maca']:
+        if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
 
         elif device_str == 'ascend':
             self._init_ascend_distributed_environment(driver_ip)
-        elif device_str == 'camb':
-            self._init_camb_distributed_environment(driver_ip)
+        elif device_str in ['camb', 'maca']:
+            self.workers = self._sort_workers(driver_ip, self.workers)
+            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
         else:
             raise ValueError(f'Unsupported device type: {device_str}')
 
@@ -569,13 +579,9 @@ class RayExecutor(ExecutorBase):
             # if rank table file is not set, treat as single node
             # simply set device by index, this is for single node, multiple devices
             self.workers = self._sort_workers(driver_ip, self.workers)
-            ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
+            ray.get([worker.set_device.remote(idx + self.rank_offset) for idx, worker in enumerate(self.workers)])
         else:
             self.workers = self._sort_workers(driver_ip, self.workers)
-
-    def _init_camb_distributed_environment(self, driver_ip):
-        self.workers = self._sort_workers(driver_ip, self.workers)
-        ray.get([worker.set_device.remote(idx) for idx, worker in enumerate(self.workers)])
 
     """ PD Disaggregation API Begin """
 

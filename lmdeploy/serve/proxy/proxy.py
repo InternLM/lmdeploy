@@ -312,7 +312,7 @@ class NodeManager:
         """Check if a request is valid."""
         if model_name in self.model_list:
             return
-        ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
+        ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model {model_name!r} does not exist.')
         return ret
 
     def handle_unavailable_model(self, model_name):
@@ -388,8 +388,9 @@ class NodeManager:
             node_url (str): the node url.
             start (int): the start time point. time.time()
         """
-        self.nodes[node_url].unfinished -= 1
-        self.nodes[node_url].latency.append(time.time() - start)
+        if node_url in self.nodes:
+            self.nodes[node_url].unfinished -= 1
+            self.nodes[node_url].latency.append(time.time() - start)
 
     def create_background_tasks(self, url: str, start: int):
         """To create a background task.
@@ -538,8 +539,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
-    - response_format (Dict | None): Only pytorch backend support formatting
-        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+    - response_format (Dict | None): To generate response according to given
+        schema. Examples: `{"type": "json_schema", "json_schema": {"name":
         "test","schema": {"properties": {"name": {"type": "string"}},
         "required": ["name"], "type": "object"}}}`
         or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
@@ -586,7 +587,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task)
+            return StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
             node_manager.post_call(node_url, start)
@@ -597,6 +598,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         # Prefill
         prefill_request_dict = copy.deepcopy(request_dict)
         prefill_request_dict['max_tokens'] = 1
+        prefill_request_dict['max_completion_tokens'] = 1
         prefill_request_dict['stream'] = False
         prefill_request_dict['with_cache'] = True
         prefill_request_dict['preserve_cache'] = True
@@ -647,7 +649,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
-            resp = StreamingResponse(response, background=background_task)
+            resp = StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/chat/completions')
             node_manager.post_call(d_url, start)
@@ -715,7 +717,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(node_url, start)
-            return StreamingResponse(response, background=background_task)
+            return StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, node_url, '/v1/completions')
             node_manager.post_call(node_url, start)
@@ -791,7 +793,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
-            resp = StreamingResponse(response, background=background_task)
+            resp = StreamingResponse(response, background=background_task, media_type='text/event-stream')
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/completions')
             node_manager.post_call(d_url, start)

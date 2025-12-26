@@ -22,7 +22,7 @@ public:
         }
     };
 
-    Interval() = default;
+    Interval(): first_{0}, last_{0} {}
 
     explicit Interval(int first): first_{first}, last_{INT_MAX} {};
 

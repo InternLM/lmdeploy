@@ -27,6 +27,7 @@ target_link_libraries(models PUBLIC
         rms_norm
         CUDA::cublas
         CUDA::cudart
+        nvidia::cutlass::cutlass
         activation_kernels
         activation
         attention

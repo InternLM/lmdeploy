@@ -147,7 +147,6 @@ jobs:
     env:
       TAG_PREFIX: "openmmlab/lmdeploy"
       TAG: "openmmlab/lmdeploy:ascend"
-      PYTHON_VERSION: '3.10'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -188,5 +187,5 @@ jobs:
       - name: Build and push Docker image
         run: |
           echo $TAG
-          docker build . -t ${TAG} -f docker/Dockerfile.ascend --platform linux/arm64 --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+          docker build . -t ${TAG} -f docker/Dockerfile_ascend_a3 --platform linux/arm64
           docker push $TAG

@@ -20,8 +20,6 @@ It may have been caused by the following reasons.
 pip install lmdeploy[all]
 ```
 
-If you want to install the nightly build of LMDeploy's whl package, you can download and install it from the latest release at https://github.com/zhyncs/lmdeploy-build according to your CUDA and Python versions. Currently the update frequency of whl is once a day.
-
 2. If you have installed it and still encounter this issue, it is probably because you are executing turbomind-related command in the root directory of lmdeploy source code. Switching to another directory will fix it.
 
 But if you are a developer, you often need to develop and compile locally. The efficiency of installing whl every time is too low. You can specify the path of lib after compilation through symbolic links.

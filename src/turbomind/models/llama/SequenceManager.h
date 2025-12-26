@@ -81,6 +81,7 @@ public:
                              int                chunk_size,
                              bool               enable_prefix_caching,
                              int                rank,
+                             int                attn_cp_size,
                              core::Allocator    allocator,
                              GetFreeMemSize     get_free_size);
 
@@ -190,6 +191,7 @@ private:
 private:
     int block_seq_len_;
     int rank_;
+    int attn_cp_size_;
 
     // Use `std::map` to avoid reference invalidation
     std::map<uint64_t, Sequence> sequences_;

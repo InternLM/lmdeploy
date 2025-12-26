@@ -321,7 +321,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             continue
         assert output.get('code') == 404
-        assert output.get('message') == 'The model `error` does not exist.'
+        assert output.get('message') == 'The model \'error\' does not exist.'
         assert output.get('object') == 'error'
 
     def test_mistake_modelname_return_streaming(self):
@@ -334,7 +334,7 @@ class TestRestfulInterfaceChatCompletions:
                                                      temperature=0.01):
             outputList.append(output)
         assert output.get('code') == 404
-        assert output.get('message') == 'The model `error` does not exist.'
+        assert output.get('message') == 'The model \'error\' does not exist.'
         assert output.get('object') == 'error'
         assert len(outputList) == 1
 
@@ -373,7 +373,7 @@ class TestRestfulInterfaceChatCompletions:
         api_client = APIClient(BASE_URL)
         model_name = api_client.available_models[0]
         for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages='Hi, pls intro yourself' * 10000,
+                                                     messages='Hi, pls intro yourself' * 100000,
                                                      temperature=0.01):
             continue
         assert output.get('choices')[0].get('finish_reason') == 'length'
@@ -384,7 +384,7 @@ class TestRestfulInterfaceChatCompletions:
         model_name = api_client.available_models[0]
         outputList = []
         for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages='Hi, pls intro yourself' * 10000,
+                                                     messages='Hi, pls intro yourself' * 100000,
                                                      stream=True,
                                                      temperature=0.01):
             outputList.append(output)
@@ -721,7 +721,7 @@ class TestRestfulOpenAI:
 
     def test_mistake_modelname_return(self):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
-        with pytest.raises(Exception, match='The model `error` does not exist.'):
+        with pytest.raises(Exception, match='The model \'error\' does not exist.'):
             client.chat.completions.create(
                 model='error',
                 messages=[
@@ -737,7 +737,7 @@ class TestRestfulOpenAI:
     def test_mistake_modelname_return_streaming(self):
         client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{BASE_URL}/v1')
 
-        with pytest.raises(Exception, match='The model `error` does not exist.'):
+        with pytest.raises(Exception, match='The model \'error\' does not exist.'):
             client.chat.completions.create(model='error',
                                            messages=[
                                                {

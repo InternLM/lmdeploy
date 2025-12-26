@@ -12,18 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.11)
+
+add_library(guided_decoding STATIC guided_decoding.cc)
+target_link_libraries(guided_decoding PRIVATE 
+    apply_token_bitmask_inplace_cuda 
+    xgrammar 
+    core)
+set_property(TARGET guided_decoding PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_library(generation STATIC 
     generation.cc
     logits_processor.cc 
     sampling.cc 
     stop_criteria.cc)
-
 set_property(TARGET generation PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET generation PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(generation PUBLIC 
-    ban_bad_words sampling_penalty_kernels                         # logits processor
-    sampling_topk_kernels sampling_topp_kernels sampling_kernels   # sampler
-    stop_criteria                                                  # stop criteria
-    memory_utils CUDA::cudart)
+    ban_bad_words
+    sampling_penalty_kernels
+    sampling_topk_kernels
+    sampling_topp_kernels
+    sampling_kernels
+    stop_criteria
+    guided_decoding
+    memory_utils 
+    CUDA::cudart)
+
+

@@ -341,16 +341,9 @@ class DeepseekV2BMM(nn.Module):
         self.dtype = dtype
         self.device = device
 
-    def _get_tp_world_rank(self):
-        """Get tp world rank."""
-        dist_ctx = get_dist_manager().current_context()
-        if dist_ctx.dp == 1:
-            return get_tp_world_rank()
-        return 1, 0
-
     def _update_batch(self, batch: int):
         """Update out features."""
-        world_size, _ = self._get_tp_world_rank()
+        world_size, _ = get_tp_world_rank('attn')
         batch = batch // world_size
         return batch
 
@@ -360,7 +353,7 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = self._get_tp_world_rank()
+        world_size, rank = get_tp_world_rank('attn')
         weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
@@ -521,11 +514,11 @@ class DeepseekV2Attention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        dist_ctx = get_dist_manager().current_context()
-        if dist_ctx.dp > 1:
+        dist_config = get_dist_manager().current_config()
+        if dist_config.dp > 1:
             num_heads = self.num_heads
         else:
-            world_size = dist_ctx.world_size
+            world_size = dist_config.world_size
             num_heads = self.num_heads // world_size
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
@@ -583,15 +576,17 @@ class MoEGate(nn.Module):
         self.topk_group = config.topk_group
         self.norm_topk_prob = config.norm_topk_prob
         self.renormalize = self.top_k > 1 and self.norm_topk_prob
-
+        self.router_n_groups = getattr(config, 'router_n_groups', -1)
+        assert self.top_k % self.router_n_groups == 0, f'{self.top_k} cannot be divided by {self.router_n_groups}'
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
-        self.weight = nn.Parameter(torch.empty((self.n_routed_experts, self.gating_dim), dtype=dtype, device=device))
+        self.weight = nn.Parameter(
+            torch.empty((self.n_routed_experts, self.gating_dim), dtype=torch.float32, device=device))
         if self.topk_method == 'noaux_tc':
             self.e_score_correction_bias = nn.Parameter(
-                torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+                torch.empty((self.n_routed_experts, ), dtype=torch.float32, device=device))
+        self.softmax_topk = SoftmaxTopK(self.top_k, n_groups=self.router_n_groups)
         self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
         self.eplb_dispatch_info = info
 
@@ -609,7 +604,7 @@ class MoEGate(nn.Module):
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
         sequence_length, hidden_dim = hidden_states.shape
-        router_logits = F.linear(hidden_states, self.weight)
+        router_logits = F.linear(hidden_states.to(self.weight.dtype), self.weight)
         if self.fake_eplb:
             # Forcefully manipulate router_logits to simulate expert load balancing (EPLB).
             # This is a benchmark-only hack to achieve optimal performance metrics.
@@ -631,17 +626,30 @@ class MoEGate(nn.Module):
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
-            group_scores = (scores_for_choice.view(sequence_length, self.n_group,
-                                                   -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
-            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
-            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
-            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
-            score_mask = (group_mask.unsqueeze(-1).expand(sequence_length, self.n_group,
-                                                          self.n_routed_experts // self.n_group).reshape(
-                                                              sequence_length, -1))  # [n, e]
-            tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
-            _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
-            topk_weight = scores.gather(1, topk_idx)
+            if self.router_n_groups > 0:
+                assert scores_for_choice.shape[-1] % self.router_n_groups == 0, \
+                    f'{scores_for_choice.shape[-1]} cannot be divided by {self.router_n_groups}'
+                per_group_top_k = self.top_k // self.router_n_groups
+                group_size = scores_for_choice.shape[-1] // self.router_n_groups
+                group_offsets = self.softmax_topk.impl.get_group_offsets(self.router_n_groups,
+                                                                         group_size,
+                                                                         device=scores_for_choice.device)
+                scores_for_choice = scores_for_choice.unflatten(-1, (self.router_n_groups, group_size))
+                topk_weight, topk_idx = torch.topk(scores_for_choice, per_group_top_k, dim=-1)
+                topk_idx = (topk_idx + group_offsets).flatten(-2, -1)
+                topk_weight = topk_weight.flatten(-2, -1)
+            else:
+                group_scores = (scores_for_choice.view(sequence_length, self.n_group,
+                                                       -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
+                group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
+                group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+                group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+                score_mask = (group_mask.unsqueeze(-1).expand(sequence_length, self.n_group,
+                                                              self.n_routed_experts // self.n_group).reshape(
+                                                                  sequence_length, -1))  # [n, e]
+                tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
+                _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
+                topk_weight = scores.gather(1, topk_idx)
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
@@ -678,9 +686,10 @@ class DeepseekV2MoE(nn.Module):
         self.topk_group = config.topk_group
 
         dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dp
-        world_size = dist_ctx.world_size
-        moe_all_reduce = dp > 1 and dist_ctx.tp > 1
+        dist_config = dist_ctx.dist_config
+        dp = dist_config.dp
+        world_size = dist_config.world_size
+        moe_all_reduce = dp > 1 and dist_config.tp > 1
         if get_dist_manager().current_context().dist_config.enable_eplb:
             eplb_dispatch_info = EPLBManager.get_dispatch_info(
                 ep_rank=dist_ctx.ep_rank,
@@ -753,8 +762,8 @@ class DeepseekV2MLP(nn.Module):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if is_shared_expert:
-            dist_ctx = get_dist_manager().current_context()
-            dp = dist_ctx.dp
+            dist_config = get_dist_manager().current_config()
+            dp = dist_config.dp
             if dp == 1:
                 # split weight, do all reduce in moe
                 is_tp = True
@@ -1285,6 +1294,14 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     return True
             return False
 
+        def __skip_layers():
+            """We might change the number of layers so we can debug the model
+            with less gpus."""
+            import re
+            matches = re.findall(r'\.layers\.(\d+)\.', name)
+            layer_id = int(matches[0])
+            return layer_id >= self.config.num_hidden_layers
+
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ('.gate_up_proj', '.gate_proj', 0),
@@ -1334,6 +1351,10 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 # skip nextn
                 if __skip_nextn(name, nextn_keys):
                     continue
+
+                if __skip_layers():
+                    continue
+
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
 

@@ -6,11 +6,11 @@ mmengine-lite
 numpy
 openai
 openai_harmony
-outlines<0.1.0
 partial_json_parser
 peft<=0.11.1
 pillow
 protobuf
+pybase64
 pydantic>2.0.0
 pyzmq
 safetensors
@@ -22,3 +22,4 @@ torchvision<=0.21.0,>=0.15.0
 transformers
 triton>=2.1.0; sys_platform == "linux"
 uvicorn
+xgrammar

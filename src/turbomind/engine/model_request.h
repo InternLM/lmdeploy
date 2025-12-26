@@ -7,6 +7,10 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/gateway.h"
 
+namespace xgrammar {
+class CompiledGrammar;
+}
+
 namespace turbomind {
 
 class ModelRequest {
@@ -39,6 +43,8 @@ public:
 
     OutputParam Forward(InputParam param, std::function<void()> cb);
 
+    void setGrammar(const xgrammar::CompiledGrammar& grammar);
+
 protected:
     Gateway* const gateway_;
 
@@ -54,6 +60,8 @@ protected:
 
     std::shared_ptr<TensorMap> inputs_;
     std::shared_ptr<TensorMap> outputs_;
+
+    std::shared_ptr<xgrammar::CompiledGrammar> grammar_;
 };
 
 }  // namespace turbomind

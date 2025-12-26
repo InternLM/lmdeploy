@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash -e
 
 builder="-G Ninja"
 
@@ -15,4 +15,5 @@ cmake ${builder} .. \
     -DCMAKE_CUDA_FLAGS="-lineinfo" \
     -DUSE_NVTX=ON \
     -DPYTHON_EXECUTABLE=$(which python3) \
+    -DFETCHCONTENT_QUIET=OFF \
     -DBUILD_TEST=ON

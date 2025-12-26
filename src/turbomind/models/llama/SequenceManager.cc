@@ -34,9 +34,10 @@ SequenceManager::SequenceManager(size_t             layer_num,
                                  int                chunk_size,
                                  bool               enable_prefix_caching,
                                  int                rank,
+                                 int                attn_cp_size,
                                  core::Allocator    allocator,
                                  GetFreeMemSize     get_free_size):
-    block_seq_len_(block_config.block_len_), rank_(rank)
+    block_seq_len_(block_config.block_len_), rank_(rank), attn_cp_size_(attn_cp_size)
 {
     block::Layout layout{block_config};
     // dump(layout);
@@ -391,7 +392,7 @@ std::vector<int> SequenceManager::CountRequiredBlocks(const Sequences&        se
 {
     std::vector<int> required(sequences.size());
     for (int i = 0; i < sequences.size(); ++i) {
-        int length  = context_length[i];
+        int length  = (context_length[i] + attn_cp_size_ - 1) / attn_cp_size_;
         int count   = (length + block_seq_len_ - 1) / block_seq_len_ - static_cast<int>(sequences[i]->blocks.size());
         required[i] = std::max(0, count);
     }
@@ -492,7 +493,8 @@ auto SequenceManager::Materialize(Sequences             sequences,
         auto&     s         = *sequences[i];
         const int input_len = context_length[i] - alpha[i] - s.cache_len;
         // sanity check
-        TM_CHECK_GT(input_len, 0) << "Logical error: " << context_length[i] << " " << alpha[i] << " " << s.cache_len << " " << s.status;
+        TM_CHECK_GT(input_len, 0) << "Logical error: " << context_length[i] << " " << alpha[i] << " " << s.cache_len
+                                  << " " << s.status;
         // temp buffer for flatten KV cache
         const int temp_len = (input_len > 1 || s.status != Sequence::kActive) ? context_length[i] : 0;
         Transaction{sequences, i, required[i], input_len, temp_len, schedule}.Process();

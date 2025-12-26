@@ -177,7 +177,11 @@ struct TurboMind::Impl {
     vector<unique_ptr<comm::HostGroupId>> group_ids_;
 
     shared_ptr<Gateway> gateway_;
-    FFICtxFactory       ffi_ctx_factory_;
+
+    FFICtxFactory ffi_ctx_factory_;
+
+    vector<int> node_dp_ranks_;
+    bool        is_dummy_node_ = false;
 
     // Weights & engine instances for the ranks
     vector<shared_ptr<LlamaWeight>> weights_;
@@ -203,16 +207,16 @@ struct TurboMind::Impl {
     void CreateWeights(int device_id, int rank)
     {
         CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
-        weights_[rank] = std::make_shared<LlamaWeight>(data_type_,  //
-                                                       model_param_,
-                                                       engine_params_.at(rank),
-                                                       lora_param_,
-                                                       moe_param_);
+        weights_[device_id] = std::make_shared<LlamaWeight>(data_type_,  //
+                                                            model_param_,
+                                                            engine_params_.at(device_id),
+                                                            lora_param_,
+                                                            moe_param_);
     }
 
     TensorMap GetWeights(int device_id, int rank)
     {
-        const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[rank])->get_parameters();
+        const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[device_id])->get_parameters();
         TensorMap   params;
         for (const auto& [name, tensor_ptr] : tensor_ptr_map) {
             params[name] = *tensor_ptr;
@@ -234,9 +238,58 @@ struct TurboMind::Impl {
 
     void CreateEngine(int device_id, int rank);
 
-    void Sleep(int device_id, int level) {}
+    void Sleep(int device_id, int level)
+    {
+        CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
 
-    void WakeUp(int device_id, const std::vector<std::string>& tags, int rank) {}
+        if (level == 2) {
+            // free weights
+            weights_[device_id]->release();
+        }
+        else {
+            // offload weights to CPU
+            TM_CHECK(moe_param_.experts_per_token == 0) << "level 1 sleep not supported for MoE model";
+            weights_[device_id]->to_device(kCPU);
+        }
+
+        // free model (kv cache and buffer)
+        if (device_id == 0) {
+            gateway_->shutdown();
+            gateway_.reset();
+        }
+
+        engines_[device_id] = {};
+        contexts_[device_id]->allocator->trim(0);
+
+        trim_default_mempool(engine_param_.devices[device_id]);
+    }
+
+    void WakeUp(int device_id, const std::vector<std::string>& tags, int rank)
+    {
+        CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+
+        std::set<std::string> keys(tags.begin(), tags.end());
+
+        if (keys.find("weights") != keys.end()) {
+            TM_CHECK(weights_[device_id] != nullptr);
+            if (weights_[device_id]->is_initialized()) {
+                weights_[device_id]->to_device(kDEVICE);
+            }
+            else {
+                weights_[device_id]->initialize();
+            }
+        }
+
+        if (keys.find("kv_cache") != keys.end()) {
+            if (device_id == 0) {
+                gateway_ = std::make_shared<Gateway>(
+                    engine_param_.outer_dp_size, engine_param_.attn_dp_size, node_dp_ranks_, ffi_ctx_factory_);
+            }
+            TM_CHECK(contexts_[device_id] != nullptr);
+            contexts_[device_id]->comm.h_comm->Sync();
+            CreateEngine(device_id, rank);
+        }
+    }
 
     Communicators CreateCommunicators(int rank)
     {
@@ -245,17 +298,26 @@ struct TurboMind::Impl {
         const int outer_rank = rank / comm_size_;
         const int inner_rank = rank % comm_size_;
 
-        comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
+        const int tp_cp_size = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
+        const int color_tp   = inner_rank / tp_cp_size;
+        const int color_cp   = inner_rank / engine_param_.attn_cp_size;
+        const int color_dp   = inner_rank % tp_cp_size;
 
-        comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
-        comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
+        comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank, engine_param_.node_rank);
+
+        comm.h_tp_group = comm.h_comm->Split(color_tp, 0);
+        comm.h_dp_group = comm.h_comm->Split(color_dp, 0);
 
         if (comm_size_ > 1) {
             comm.d_comm = CreateDeviceCommunicator(communicator_type_, comm_size_, inner_rank, comm.h_comm);
             //
             comm.d_tp_group = 0;
-            if (engine_param_.attn_tp_size != comm_size_) {
-                comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+            comm.d_cp_group = 0;
+            if (engine_param_.attn_dp_size > 1) {  // has attn_dp
+                comm.d_tp_group = comm.d_comm->Split(color_tp, 0, 0);
+            }
+            if (engine_param_.attn_cp_size > 1) {  // has attn_cp
+                comm.d_cp_group = comm.d_comm->Split(color_cp, 0, 0);
             }
         }
 
@@ -326,7 +388,6 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     model_param_.layer_num          = model["num_layer"].as<int>();
     model_param_.vocab_size         = model["vocab_size"].as<int>();
     model_param_.embedding_size     = model["embedding_size"].as<int>();
-    model_param_.tokenizer_size     = model["tokenizer_size"].as<int>(0);
     model_param_.norm_eps           = model["norm_eps"].as<float>();
     model_param_.tune_layer_num     = model["tune_layer_num"].as<int>(1);
     model_param_.mla.q_lora_rank    = model["q_lora_rank"].as<int>();
@@ -383,17 +444,23 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.attn_dp_rank  = 0;
     engine_param_.attn_tp_size  = engine["attn_tp_size"].as<int>();
     engine_param_.attn_tp_rank  = 0;
+    engine_param_.attn_cp_size  = engine["attn_cp_size"].as<int>();
+    engine_param_.attn_cp_rank  = 0;
     engine_param_.mlp_tp_size   = engine["mlp_tp_size"].as<int>();
     engine_param_.mlp_tp_rank   = 0;
 
     engine_param_.devices = engine["devices"].as<std::vector<int>>();
+
+    // multi-node information
+    engine_param_.nnodes    = engine["nnodes"].as<int>();
+    engine_param_.node_rank = engine["node_rank"].as<int>();
 
     {
         auto tp                             = engine_param_.attn_tp_size;
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + tp - 1) / tp * tp;
     }
 
-    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size;
+    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
     FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
 
     communicator_type_ = engine["communicator"].as<std::string>();
@@ -414,9 +481,6 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
 
     HandleMissingParams();
 
-    gateway_ = std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory);
-    ffi_ctx_factory_ = ffi_ctx_factory;
-
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
     contexts_.resize(engine_param_.devices.size());
@@ -434,20 +498,38 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     // NOTE: This runs on Python main thread
     group_ids_.resize(engine_param_.outer_dp_size);
     for (size_t i = 0; i < group_ids_.size(); ++i) {
-        group_ids_[i] = comm::CreateHostGroupId("");
+        const std::string group_backend = (engine_param_.nnodes == 1) ? "" : "hybrid";
+
+        group_ids_[i] = comm::CreateHostGroupId(group_backend);
         group_ids_[i]->Initialize();
     }
 
-    const int device_num = engine_param_.outer_dp_size * comm_size_;
+    const int device_per_node = engine_param_.devices.size();
+    const int device_offset   = device_per_node * engine_param_.node_rank;
+    const int tp_cp_size      = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
 
-    engine_params_.resize(device_num, engine_param_);
-    for (int i = 0; i < device_num; ++i) {
+    // comm layout: outer_dp x inner(dp, tp, cp)
+    engine_params_.resize(device_per_node, engine_param_);
+    for (int i = 0; i < device_per_node; ++i) {
         auto& e         = engine_params_[i];
-        e.outer_dp_rank = i / comm_size_;
-        e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
-        e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
-        e.mlp_tp_rank   = i % comm_size_;
+        e.outer_dp_rank = (i + device_offset) / comm_size_;
+        e.attn_cp_rank  = (i + device_offset) % comm_size_ % e.attn_cp_size;
+        e.attn_tp_rank  = (i + device_offset) % tp_cp_size / e.attn_cp_size;
+        e.attn_dp_rank  = (i + device_offset) % comm_size_ / tp_cp_size;
+        e.mlp_tp_rank   = (i + device_offset) % comm_size_;
     }
+
+    for (int local_rank = 0; local_rank < device_per_node; ++local_rank) {
+        auto& e = engine_params_[local_rank];
+        if (e.attn_tp_rank == 0 && e.attn_cp_rank == 0) {
+            node_dp_ranks_.push_back(e.outer_dp_rank * e.attn_dp_size + e.attn_dp_rank);
+        }
+    }
+    is_dummy_node_ = node_dp_ranks_.size() == 0;
+
+    gateway_ = std::make_shared<Gateway>(
+        engine_param_.outer_dp_size, engine_param_.attn_dp_size, node_dp_ranks_, ffi_ctx_factory);
+    ffi_ctx_factory_ = ffi_ctx_factory;
 }
 
 void TurboMind::Impl::CreateEngine(int device_id, int rank)
@@ -674,6 +756,11 @@ shared_ptr<ScheduleMetrics> TurboMind::GetScheduleMetrics(int device_id, int ran
 unique_ptr<ModelRequest> TurboMind::CreateRequest()
 {
     return impl_->CreateRequest();
+}
+
+bool TurboMind::is_dummy_node() const noexcept
+{
+    return impl_->is_dummy_node_;
 }
 
 }  // namespace turbomind

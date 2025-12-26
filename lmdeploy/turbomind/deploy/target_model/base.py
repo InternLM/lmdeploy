@@ -51,6 +51,7 @@ class BaseOutputModel(ABC):
         self.attention_config = cfg.attention_config
         self.lora_config = cfg.lora_config
         self.attn_tp_size = self.model_config.attn_tp_size
+        self.attn_cp_size = self.model_config.attn_cp_size
         self.mlp_tp_size = self.model_config.mlp_tp_size
         self.out_dir = out_dir
         self.to_file = True if out_dir else False
@@ -101,10 +102,6 @@ class BaseOutputModel(ABC):
         final_cfg.update(self.input_model_info)
         if 'embedding_size' not in self.input_model_info.keys():
             final_cfg.update(embedding_size=self.input_model_info['vocab_size'])
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.input_model.tokenizer_path, trust_remote_code=True)
-        tokenizer_size = min(len(tokenizer), final_cfg['vocab_size'])
-        final_cfg.update(tokenizer_size=tokenizer_size)
 
         self.model_config = config_from_dict(ModelConfig, final_cfg)
 
@@ -165,9 +162,10 @@ class BaseOutputModel(ABC):
                     torch_tensor = torch_tensor.bfloat16()
                 else:
                     torch_tensor = torch_tensor.half()
-            for tm_tensor in tm_params[name]:
-                tm_tensor.copy_from(torch_tensor)
-            tm_params.pop(name)
+            if name in tm_params:
+                for tm_tensor in tm_params[name]:
+                    tm_tensor.copy_from(torch_tensor)
+                tm_params.pop(name)
         else:
             tprint('skip export', name, param.shape)
 

@@ -1,188 +1,326 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import threading
-from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import List
+from datetime import timedelta
+from typing import List, Optional
 
+import torch
 from torch import distributed as dist
-from torch.distributed import ReduceOp
+from torch.distributed import ProcessGroup, ReduceOp, Work  # noqa: F401
 
-from .config import DistConfig
+from lmdeploy.pytorch.utils import CtxMgrBase, singleton
+
+from .config import DistConfig, TPMode
+
+
+@dataclass
+class DistGroup:
+    """Distributed group."""
+    rank: int = 0
+    cpu_group: dist.ProcessGroup = None
+    gpu_group: dist.ProcessGroup = None
+    cpu_groups: List[dist.ProcessGroup] = None
+    gpu_groups: List[dist.ProcessGroup] = None
+    gpu_gather_group: dist.ProcessGroup = None
+
+    def close(self):
+        """Close groups."""
+        if not dist.is_initialized():
+            return
+        if self.cpu_groups is not None:
+            for group in self.cpu_groups:
+                dist.destroy_process_group(group)
+            self.cpu_groups = None
+        if self.gpu_groups is not None:
+            for group in self.gpu_groups:
+                dist.destroy_process_group(group)
+            self.gpu_groups = None
+
+
+def _build_tp_group_impl(tp: int,
+                         rank: int,
+                         world_size: int,
+                         timeout: timedelta,
+                         cpu_backend: str = 'gloo',
+                         ccl_backend: str = 'nccl',
+                         attn_tp: int = 1,
+                         tp_mode: TPMode = TPMode.DEFAULT):
+    """Build tp group."""
+    assert tp > 1
+    tp_rank = rank % tp
+    tp_group_id = rank // tp
+    gather_group_id = (rank - tp_group_id * tp) % attn_tp
+    ranks = range(world_size)
+    tp_gpu_groups = []
+    tp_cpu_groups = []
+    gather_groups = []
+    for start in range(0, world_size, tp):
+        tp_ranks = ranks[start:start + tp]
+        group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=ccl_backend)
+        tp_gpu_groups.append(group)
+        cpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=cpu_backend)
+        tp_cpu_groups.append(cpu_group)
+
+        # create gather group
+        if tp_mode == TPMode.DP_TP and attn_tp != tp:
+            for g_start in range(start, start + attn_tp):
+                g_ranks = ranks[g_start:(g_start + tp):attn_tp]
+                gather_group = dist.new_group(ranks=g_ranks, timeout=timeout, backend=ccl_backend)
+                gather_groups.append(gather_group)
+    tp_gpu_group = tp_gpu_groups[tp_group_id]
+    tp_cpu_group = tp_cpu_groups[tp_group_id]
+
+    if tp_mode == TPMode.DP_TP:
+        if attn_tp == tp:
+            gather_group = tp_gpu_group
+        else:
+            gather_group = gather_groups[gather_group_id]
+    else:
+        gather_group = None
+    return DistGroup(
+        rank=tp_rank,
+        cpu_group=tp_cpu_group,
+        gpu_group=tp_gpu_group,
+        cpu_groups=tp_cpu_groups,
+        gpu_groups=tp_gpu_groups,
+        gpu_gather_group=gather_group,
+    )
+
+
+def _build_attn_tp_group(context: 'DistContext',
+                         timeout: timedelta,
+                         cpu_backend: str = 'gloo',
+                         ccl_backend: str = 'nccl'):
+    """Build attention tp group."""
+    dist_config = context.dist_config
+    tp = dist_config.attn_tp
+    # skip if tp == 1
+    if tp == 1:
+        context.attn_tp_group = DistGroup(rank=0)
+        return
+
+    dist_group = _build_tp_group_impl(
+        tp,
+        context.rank,
+        dist_config.world_size,
+        timeout=timeout,
+        cpu_backend=cpu_backend,
+        ccl_backend=ccl_backend,
+        attn_tp=tp,
+        tp_mode=TPMode.DEFAULT,
+    )
+    context.attn_tp_group = dist_group
+
+
+def _build_mlp_tp_group(context: 'DistContext',
+                        timeout: timedelta,
+                        cpu_backend: str = 'gloo',
+                        ccl_backend: str = 'nccl'):
+    """Build mlp tp group."""
+    dist_config = context.dist_config
+    tp = dist_config.mlp_tp
+    # skip if tp == 1
+    if tp == 1:
+        context.mlp_tp_group = DistGroup(rank=0)
+        return
+
+    # reuse attn tp group
+    if tp == dist_config.attn_tp:
+        context.mlp_tp_group = context.attn_tp_group
+        return
+
+    dist_group = _build_tp_group_impl(
+        tp,
+        context.rank,
+        dist_config.world_size,
+        timeout=timeout,
+        cpu_backend=cpu_backend,
+        ccl_backend=ccl_backend,
+        attn_tp=dist_config.attn_tp,
+        tp_mode=dist_config.mlp_tp_mode,
+    )
+    context.mlp_tp_group = dist_group
+
+
+def _build_moe_tp_group(context: 'DistContext',
+                        timeout: timedelta,
+                        cpu_backend: str = 'gloo',
+                        ccl_backend: str = 'nccl'):
+    """Build moe tp group."""
+    dist_config = context.dist_config
+    tp = dist_config.moe_tp
+    # skip if tp == 1
+    if tp == 1:
+        context.moe_tp_group = DistGroup(rank=0)
+        return
+
+    # reuse attn tp group
+    if tp == dist_config.attn_tp:
+        context.moe_tp_group = context.attn_tp_group
+        return
+
+    # reuse mlp tp group
+    if tp == dist_config.mlp_tp:
+        context.moe_tp_group = context.mlp_tp_group
+        return
+
+    dist_group = _build_tp_group_impl(
+        tp,
+        context.rank,
+        dist_config.world_size,
+        timeout=timeout,
+        cpu_backend=cpu_backend,
+        ccl_backend=ccl_backend,
+        attn_tp=dist_config.attn_tp,
+        tp_mode=dist_config.moe_tp_mode,
+    )
+    context.moe_tp_group = dist_group
+
+
+def _build_tp_group(context: 'DistContext', timeout: timedelta, cpu_backend: str = 'gloo', ccl_backend: str = 'nccl'):
+    """Build tp group."""
+    _build_attn_tp_group(context, timeout, cpu_backend, ccl_backend)
+    _build_mlp_tp_group(context, timeout, cpu_backend, ccl_backend)
+    _build_moe_tp_group(context, timeout, cpu_backend, ccl_backend)
+    context.tp_group = context.attn_tp_group
 
 
 @dataclass
 class DistContext:
     rank: int = 0
-    world_size: int = 1
-    tp: int = 1
-    dp: int = 1
-    ep: int = 1
-    tp_rank: int = 0
     dp_rank: int = 0
     ep_rank: int = 0
-    world_cpu_group: dist.ProcessGroup = None
-    tp_cpu_group: dist.ProcessGroup = None
-    tp_gpu_group: dist.ProcessGroup = None
-    tp_gpu_groups: List[dist.ProcessGroup] = None
-    dp_cpu_group: dist.ProcessGroup = None
-    dp_gpu_group: dist.ProcessGroup = None
+
+    tp_group: DistGroup = None
+    attn_tp_group: DistGroup = None
+    mlp_tp_group: DistGroup = None
+    moe_tp_group: DistGroup = None
+
     ep_gpu_group: dist.ProcessGroup = None
     ep_gpu_groups: List[dist.ProcessGroup] = None
     dist_config: DistConfig = None
 
     @classmethod
+    def _build_ep_group(cls, context: 'DistContext', timeout: timedelta, ccl_backend: str = 'nccl'):
+        """Build ep group."""
+        dist_config = context.dist_config
+        ep = dist_config.ep
+        if ep <= 1:
+            return
+
+        dp_rank = context.dp_rank
+        world_size = dist_config.world_size
+        ep_rank = context.rank % ep
+        ep_group_id = dp_rank // ep
+        ranks = range(world_size)
+        ep_gpu_groups = []
+        for start in range(0, world_size, ep):
+            ep_ranks = ranks[start:start + ep]
+            group = dist.new_group(ranks=ep_ranks, timeout=timeout, backend=ccl_backend)
+            ep_gpu_groups.append(group)
+        ep_gpu_group = ep_gpu_groups[ep_group_id]
+
+        context.ep_rank = ep_rank
+        context.ep_gpu_group = ep_gpu_group
+        context.ep_gpu_groups = ep_gpu_groups
+
+    @classmethod
     def build(cls, rank: int = 0, dist_config: DistConfig = None, ccl_backend: str = 'nccl'):
         """Build dist context."""
-        from datetime import timedelta
         timeout = timedelta(days=35600)
         cpu_backend = 'gloo'
 
         if dist_config is None:
             dist_config = DistConfig()
-        tp = dist_config.tp
-        dp = dist_config.dp
-        ep = dist_config.ep
-        world_size = dist_config.world_size
-        dp_rank = dist_config.dp_rank
 
+        dp_rank = dist_config.dp_rank
+        world_size = dist_config.world_size
+        context = DistContext(rank=rank,
+                              dp_rank=dp_rank,
+                              dist_config=dist_config,
+                              attn_tp_group=DistGroup(rank=0),
+                              mlp_tp_group=DistGroup(rank=0),
+                              moe_tp_group=DistGroup(rank=0),
+                              tp_group=DistGroup(rank=0))
         if world_size == 1:
-            return DistContext(dist_config=dist_config)
+            return context
 
         assert dist.is_initialized()
-        # world(assume world group is gloo)
-        world_cpu_group = dist.GroupMember.WORLD
-
-        tp_rank = rank % tp
 
         # tp
-        tp_gpu_group = None
-        tp_gpu_groups = None
-        tp_cpu_group = None
-        tp_group_id = dp_rank // tp
-        if tp > 1:
-            # all tp groups should be created in all procs
-            ranks = range(world_size)
-            tp_gpu_groups = []
-            tp_cpu_groups = []
-            for start in range(0, world_size, tp):
-                tp_ranks = ranks[start:start + tp]
-                group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=ccl_backend)
-                tp_gpu_groups.append(group)
-                cpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=cpu_backend)
-                tp_cpu_groups.append(cpu_group)
-            tp_gpu_group = tp_gpu_groups[tp_group_id]
-            tp_cpu_group = tp_cpu_groups[tp_group_id]
+        _build_tp_group(context, timeout, cpu_backend=cpu_backend, ccl_backend=ccl_backend)
 
-        ep_rank = rank % ep
-        ep_gpu_group = None
-        ep_gpu_groups = None
-        ep_group_id = dp_rank // ep
-        if ep > 1:
-            ranks = range(world_size)
-            ep_gpu_groups = []
-            for start in range(0, world_size, ep):
-                ep_ranks = ranks[start:start + ep]
-                group = dist.new_group(ranks=ep_ranks, timeout=timeout, backend=ccl_backend)
-                ep_gpu_groups.append(group)
-            ep_gpu_group = ep_gpu_groups[ep_group_id]
+        # ep
+        cls._build_ep_group(context, timeout, ccl_backend=ccl_backend)
 
-        dp_cpu_group = None
-        if dp > 1:
-            dp_cpu_group = dist.new_group(ranks=range(dp), timeout=timeout, backend=cpu_backend)
-
-        context = DistContext(
-            rank=rank,
-            world_size=world_size,
-            tp=tp,
-            dp=dp,
-            ep=ep,
-            tp_rank=tp_rank,
-            dp_rank=dp_rank,
-            ep_rank=ep_rank,
-            world_cpu_group=world_cpu_group,
-            tp_cpu_group=tp_cpu_group,
-            tp_gpu_group=tp_gpu_group,
-            tp_gpu_groups=tp_gpu_groups,
-            dp_cpu_group=dp_cpu_group,
-            dp_gpu_group=None,
-            ep_gpu_group=ep_gpu_group,
-            ep_gpu_groups=ep_gpu_groups,
-            dist_config=dist_config,
-        )
         return context
 
     def close(self):
         """Close groups."""
         if not dist.is_initialized():
             return
-        if self.tp_gpu_groups is not None:
-            for group in self.tp_gpu_groups:
-                dist.destroy_process_group(group)
+        if self.attn_tp_group is not None:
+            self.attn_tp_group.close()
+        if self.mlp_tp_group is not None:
+            self.mlp_tp_group.close()
+        if self.moe_tp_group is not None:
+            self.moe_tp_group.close()
         if self.ep_gpu_groups is not None:
             for group in self.ep_gpu_groups:
                 dist.destroy_process_group(group)
+            self.ep_gpu_groups = None
 
 
 DefaultContext = DistContext.build()
 
 
-class DistManager:
+@singleton
+class DistManager(CtxMgrBase[DistContext]):
     """Distributed context manager."""
 
     def __init__(self):
-        self.t_local = threading.local()
-        self.t_local.device_context = DefaultContext
+        super().__init__(DefaultContext)
 
-    def current_context(self) -> DistContext:
-        """Get current context."""
-        return getattr(self.t_local, 'device_context', DefaultContext)
-
-    def set_context(self, context: DistContext):
-        """Set current context."""
-        self.t_local.device_context = context
-
-    @contextmanager
-    def context(self, context: DistContext):
-        """Context manager."""
-        origin_context = self.current_context()
-        self.set_context(context)
-        yield self
-        self.set_context(origin_context)
-
-
-_DIST_MANAGER: DistManager = None
+    def current_config(self) -> DistConfig:
+        """Get current dist config."""
+        return self.current_context().dist_config
 
 
 def get_dist_manager():
     """Get device manager."""
-    global _DIST_MANAGER
-    if _DIST_MANAGER is None:
-        _DIST_MANAGER = DistManager()
-    return _DIST_MANAGER
+    return DistManager()
 
 
 def get_world_rank():
     """Get distributed world size and rank."""
     ctx = get_dist_manager().current_context()
-    world_size = ctx.world_size
+    world_size = ctx.dist_config.world_size
     rank = ctx.rank
 
     return world_size, rank
 
 
-def get_tp_world_rank():
+def get_tp_world_rank(layer_type: Optional[str] = None):
     ctx = get_dist_manager().current_context()
-    return ctx.tp, ctx.tp_rank
+    if layer_type is None:
+        return ctx.dist_config.tp, ctx.tp_group.rank
+    elif layer_type == 'attn':
+        return ctx.dist_config.attn_tp, ctx.attn_tp_group.rank
+    elif layer_type == 'mlp':
+        return ctx.dist_config.mlp_tp, ctx.mlp_tp_group.rank
+    elif layer_type == 'moe':
+        return ctx.dist_config.moe_tp, ctx.moe_tp_group.rank
+    else:
+        raise RuntimeError(f'Unknown layer type: {layer_type}')
 
 
 def get_dp_world_rank():
     ctx = get_dist_manager().current_context()
-    return ctx.dp, ctx.dp_rank
+    return ctx.dist_config.dp, ctx.dp_rank
 
 
 def get_ep_world_rank():
     ctx = get_dist_manager().current_context()
-    return ctx.ep, ctx.ep_rank
+    return ctx.dist_config.ep, ctx.ep_rank
 
 
 def _check_group_device(device: str):
@@ -193,48 +331,41 @@ def _check_group_device(device: str):
 
 def get_process_group(device: str = None):
     """Get process group."""
+    return dist.GroupMember.WORLD
+
+
+def get_dist_group(layer_type: str = 'attn'):
+    """Get dist group."""
     ctx = get_dist_manager().current_context()
-    if device is None:
-        return dist.GroupMember.WORLD
-
-    _check_group_device(device)
-
-    if device == 'cpu':
-        return ctx.world_cpu_group
+    if layer_type == 'attn':
+        tp_group = ctx.attn_tp_group
+    elif layer_type == 'mlp':
+        tp_group = ctx.mlp_tp_group
+    elif layer_type == 'moe':
+        tp_group = ctx.moe_tp_group
     else:
-        raise RuntimeError('gpu world group is not supported.')
+        raise RuntimeError(f'Unknown layer type: {layer_type}')
+    return tp_group
 
 
-def get_tp_group(device: str = 'gpu'):
+def get_tp_group(device: str = 'gpu', layer_type: str = 'attn'):
     """Get tp group."""
-    ctx = get_dist_manager().current_context()
-
     _check_group_device(device)
+    tp_group = get_dist_group(layer_type)
+
+    if tp_group is None:
+        return None
 
     if device == 'cpu':
-        return ctx.tp_cpu_group
+        return tp_group.cpu_group
     else:
-        return ctx.tp_gpu_group
-
-
-def get_dp_group(device: str = 'gpu'):
-    """Get dp group."""
-    ctx = get_dist_manager().current_context()
-
-    _check_group_device(device)
-
-    if device == 'cpu':
-        return ctx.dp_cpu_group
-    else:
-        return ctx.dp_gpu_group
+        return tp_group.gpu_group
 
 
 def get_group(group_type: str, device: str):
     """Get group."""
     if group_type == 'tp':
         return get_tp_group(device)
-    elif group_type == 'dp':
-        return get_dp_group(device)
     elif group_type in ['world', 'all']:
         return get_process_group(device)
     else:
@@ -278,3 +409,28 @@ def reduce_scatter(output, input_list, op=ReduceOp.SUM, group='tp', async_op=Fal
     if isinstance(group, str):
         group = get_group(group, 'gpu')
     return dist.reduce_scatter(output, input_list, op=op, group=group, async_op=async_op)
+
+
+def gather_by_tp_sizes(x: torch.Tensor,
+                       tp_sizes: List[int],
+                       group: Optional[dist.ProcessGroup] = None,
+                       async_op: bool = False):
+    """Gather input."""
+    assert all(size >= 0 for size in tp_sizes), f'Invalid tp sizes: {tp_sizes}'
+    shape = (*x.shape[:-2], sum(tp_sizes), *x.shape[-1:])
+    new_x = x.new_empty(shape)
+    split_new_x = list(new_x.split(tp_sizes, -2))
+    handle = dist.all_gather(split_new_x, x, group=group, async_op=async_op)
+    if async_op:
+        return new_x, handle
+    return new_x
+
+
+def reduce_scatter_by_tp_sizes(out: torch.Tensor, rank: int, tp_sizes: List[int], group: dist.ProcessGroup):
+    """Reduce scatter."""
+    attn_tp = get_dist_manager().current_config().attn_tp
+    outs = list(out.split(tp_sizes, -2))
+    outs = [item for item in outs for _ in range(attn_tp)]
+    out = outs[rank]
+    dist.reduce_scatter(out, outs, group=group)
+    return out

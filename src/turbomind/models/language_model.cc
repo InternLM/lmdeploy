@@ -168,8 +168,9 @@ LanguageModel::Impl::Impl(DataType              dtype,
     generation_ = std::make_unique<Generation>(kFloat32,
                                                engine.max_batch_size,
                                                engine.session_len,
-                                               model.tokenizer_size,
+                                               model.vocab_size,
                                                weights.post_decoder_embedding.output_dim * tp_size_,
+                                               comm_.h_tp_group,
                                                phases);
 
     const int     vocab_size     = weights_.post_decoder_embedding.output_dim * tp_size_;

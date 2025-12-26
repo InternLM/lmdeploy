@@ -11,6 +11,7 @@
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/request.h"
 
+#include "src/turbomind/generation/guided_decoding.h"
 #include "src/turbomind/generation/logits_processor.h"
 #include "src/turbomind/generation/sampling.h"
 #include "src/turbomind/generation/stop_criteria.h"
@@ -45,6 +46,7 @@ struct Generation::Impl {
     unique_ptr<LogitsProcessor> logits_processor_;
     unique_ptr<Sampling>        sampling_;
     shared_ptr<StopCriteria>    stop_criteria_;
+    unique_ptr<GuidedDecoding>  guided_decoding_;
 
     // persistent
     Tensor_<int> token_ids_;
@@ -72,7 +74,13 @@ struct Generation::Impl {
     const int max_batch_size_;
     const int session_len_;
 
-    Impl(DataType dtype, int max_batch_size, int session_len, int vocab_size, int vocab_size_padded, int phases):
+    Impl(DataType              dtype,
+         int                   max_batch_size,
+         int                   session_len,
+         int                   vocab_size,
+         int                   vocab_size_padded,
+         const comm::HostComm& tp_group,
+         int                   phases):
         max_batch_size_{max_batch_size}, session_len_{session_len}
     {
         TM_CHECK_EQ(dtype, kFloat32);
@@ -80,6 +88,7 @@ struct Generation::Impl {
         logits_processor_ = std::make_unique<LogitsProcessor>(base, phases);
         sampling_         = std::make_unique<Sampling>(base, phases);
         stop_criteria_    = std::make_unique<StopCriteria>(base, phases);
+        guided_decoding_  = std::make_unique<GuidedDecoding>(base, tp_group, phases);
 
         static_assert(sizeof(curandState_t) % alignof(curandState_t) == 0);
         random_state_ = {{max_batch_size_, (int)sizeof(curandState_t)}, kUint8, kDEVICE};
@@ -188,6 +197,7 @@ struct Generation::Impl {
         logits_processor_->Setup(phase, env);
         sampling_->Setup(phase, env);
         stop_criteria_->Setup(phase, env);
+        guided_decoding_->Setup(phase, env);
     }
 
     void Prepare(int phase, TensorMap& env)
@@ -270,7 +280,13 @@ struct Generation::Impl {
             Copy(env.at("sequence_length").buffer(), gs, output_pos);
 
             logits_processor_->Forward(phase, env);
+
+            guided_decoding_->FillMask(phase, env);
+            guided_decoding_->ApplyMask(phase, env);
+
             sampling_->Forward(phase, env);
+
+            guided_decoding_->Update(phase, env);
 
             AppendTokenIds(d.token_ids_ptrs.data(), output_ids_.data(), output_pos.data(), gs, stream);
 
@@ -281,9 +297,14 @@ struct Generation::Impl {
 
 Generation::~Generation() = default;
 
-Generation::Generation(
-    DataType dtype, int max_batch_size, int session_len, int vocab_size, int vocab_size_padded, int phases):
-    impl_{std::make_unique<Impl>(dtype, max_batch_size, session_len, vocab_size, vocab_size_padded, phases)}
+Generation::Generation(DataType              dtype,
+                       int                   max_batch_size,
+                       int                   session_len,
+                       int                   vocab_size,
+                       int                   vocab_size_padded,
+                       const comm::HostComm& tp_group,
+                       int                   phases):
+    impl_{std::make_unique<Impl>(dtype, max_batch_size, session_len, vocab_size, vocab_size_padded, tp_group, phases)}
 {
 }
 

@@ -1,14 +1,45 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
+from functools import wraps
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
-from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters, RopeType, RotaryEmbeddingBuilder,
-                                RotaryEmbeddingImpl, YarnParameters)
+from ..rotary_embedding import (FopeParameters, Llama3Parameters, LongRoPEScalingParameters, RopeType,
+                                RotaryEmbeddingBuilder, RotaryEmbeddingImpl, YarnParameters)
 
 
+def safe_torch_compile(**compile_kwargs):
+    """Auto fallback."""
+
+    def decorator(func):
+        compiled_func = None
+        compile_failed = False
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            nonlocal compiled_func, compile_failed
+
+            if compile_failed:
+                return func(*args, **kwargs)
+
+            if compiled_func is None:
+                try:
+                    compiled_func = torch.compile(func, **compile_kwargs)
+                except Exception:
+                    compile_failed = True
+                    return func(*args, **kwargs)
+
+            return compiled_func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+@safe_torch_compile(dynamic=True)
 def _rotary_embedding_fwd(position_ids: torch.Tensor,
                           inv_freq: torch.Tensor,
                           scaling_factor: float,
@@ -27,7 +58,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
     # See https://github.com/huggingface/transformers/pull/29285
     device_type = device_type if isinstance(device_type, str) and device_type != 'mps' else 'cpu'
     with torch.autocast(device_type=device_type, enabled=False):
-        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+        freqs = (inv_freq_expanded.float() * position_ids_expanded.float()).transpose(1, 2)
         emb = freqs.repeat(1, 1, 2)
         cos = emb.cos()
         sin = emb.sin()
@@ -270,6 +301,68 @@ class LongRoPEScalingRotaryEmbeddingImpl(RotaryEmbeddingImpl):
                                      device_type=device)
 
 
+class FopeRotaryEmbeddingImpl(RotaryEmbeddingImpl):
+
+    def __init__(self,
+                 dim: int,
+                 max_position_embeddings: int = 4096,
+                 scaling_factor: float = 1.0,
+                 params: FopeParameters = None):
+        super().__init__(dim, scaling_factor=scaling_factor)
+        self.head_dim = dim
+        self.max_position_embeddings = max_position_embeddings
+        self.attention_scaling = scaling_factor
+        self.params = params
+
+        inv_freq = self.params.inv_freq
+        inv_freq_idx_selected = torch.ones_like(inv_freq, dtype=torch.bool)
+        if self.params.num_inv_freq is not None:
+            num_inv_freq = self.params.num_inv_freq
+            inv_freq_idx_selected[num_inv_freq:] = False
+        else:
+            inv_freq_idx_selected = inv_freq > (2.0 * torch.pi / self.max_position_embeddings)
+            num_inv_freq = inv_freq_idx_selected.sum().item()
+
+        self.inv_freq = inv_freq[inv_freq_idx_selected]
+        self.register_buffer('inv_freq', self.inv_freq, persistent=False)
+
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor, sin_coef: torch.Tensor, cos_coef: torch.Tensor):
+        """forward."""
+        if self.inv_freq.device != x.device:
+            self.inv_freq = self.inv_freq.to(x.device)
+
+        inv_freq = self.inv_freq
+        inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        position_ids_expanded = position_ids[:, None, :].float()
+        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+
+        batch_size, seq_len, _ = x.shape
+        if self.params.fope_sep_head:
+            pos_cos = freqs.cos().unsqueeze(1).expand(batch_size, self.params.num_key_value_heads, seq_len, -1)
+            pos_sin = freqs.sin().unsqueeze(1).expand(batch_size, self.params.num_key_value_heads, seq_len, -1)
+        else:
+            pos_cos = freqs.cos()
+            pos_sin = freqs.sin()
+
+        if self.params.fope_sep_head:
+            sin = torch.einsum('bhtD, hDd -> bthd', pos_sin, sin_coef.float())
+            cos = torch.einsum('bhtD, hDd -> bthd', pos_cos, cos_coef.float())
+        else:
+            sin = torch.einsum('btD, Dd -> btd', pos_sin, sin_coef.float())
+            cos = torch.einsum('btD, Dd -> btd', pos_cos, cos_coef.float())
+
+        sin = F.pad(input=sin, pad=(0, self.head_dim // 2 - sin.size(-1)), mode='constant', value=1)
+        cos = F.pad(input=cos, pad=(0, self.head_dim // 2 - cos.size(-1)), mode='constant', value=1)
+
+        sin = torch.cat((sin, sin), dim=-1)
+        cos = torch.cat((cos, cos), dim=-1)
+
+        cos = cos * self.attention_scaling
+        sin = sin * self.attention_scaling
+
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+
 class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
     """Rotary embedding builder."""
 
@@ -282,6 +375,7 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         yarn_params: YarnParameters = None,
         longrope_params: LongRoPEScalingParameters = None,
         llama3_params: Llama3Parameters = None,
+        fope_params: FopeParameters = None,
         emb_type: RopeType = RopeType.Default,
     ):
         """build."""
@@ -301,6 +395,13 @@ class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
                 base,
                 max_position_embeddings=max_position_embeddings,
                 longrope_params=longrope_params,
+            )
+        elif emb_type == RopeType.Fope:
+            return FopeRotaryEmbeddingImpl(
+                dim,
+                max_position_embeddings=max_position_embeddings,
+                scaling_factor=scaling_factor,
+                params=fope_params,
             )
         else:
             raise NotImplementedError(f'Unsupported embedding type: {emb_type}')

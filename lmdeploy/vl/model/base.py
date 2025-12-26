@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from itertools import groupby
 from typing import Dict, List, Union
 
 import numpy as np
@@ -11,7 +12,7 @@ from lmdeploy.archs import get_model_arch
 VISION_MODELS = Registry('vision_model')
 
 
-class VisonModel(ABC):
+class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: Union[str, List[str]] = None
 
@@ -104,6 +105,18 @@ class VisonModel(ABC):
         """  # noqa
         raise NotImplementedError()
 
+    def has_input_ids(self, messages: List[Dict]) -> bool:
+        """Check whether the messages contain input_ids directly.
+
+        Args:
+            messages (List[Dict]): a list of message, which is supposed to be
+                the output of `preprocess`
+        Returns:
+            bool: whether the messages contain input_ids directly
+        """
+        users = [x['content'] for x in messages if x['role'] == 'user']
+        return len(users) == 1 and isinstance(users[0], List) and isinstance(users[0][0].get('text', ''), List)
+
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
@@ -119,7 +132,7 @@ class VisonModel(ABC):
         if self.backend == 'turbomind':
             raise NotImplementedError()
 
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
         """Pack the preprocessing results in a format compatible with what is
         required by pytorch engine. ONLY implement it when the backend is
         pytorch engine.
@@ -129,11 +142,13 @@ class VisonModel(ABC):
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
             sequence_start: starting flag of a sequence
+            chat_template_kwargs: additional arguments for chat template
+                processing, such as `add_vision_id` and `enable_thinking`
         """
         if self.backend == 'pytorch':
             raise NotImplementedError()
 
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, **kwargs):
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start, chat_template_kwargs=None, **kwargs):
         """Pack the forwarding results in a format compatible with what is
         required by turbomind engine. ONLY implement it when the backend is
         turbomind engine.
@@ -143,6 +158,8 @@ class VisonModel(ABC):
             chat_template: the chat template defined in `lmdeploy/model.py`
             tokenzer: the tokenizer model
             sequence_start: starting flag of a sequence
+            chat_template_kwargs: additional arguments for chat template
+                processing, such as `add_vision_id` and `enable_thinking`
         """
         if self.backend == 'turbomind':
             raise NotImplementedError()
@@ -167,6 +184,64 @@ class VisonModel(ABC):
                 for k, v in x.items() if k not in {'type', 'image'}
             }) for x in content if x['type'] == 'image'])
         return images
+
+    @staticmethod
+    def IMAGE_TOKEN_included(messages):
+        """Check whether the IMAGE_TOKEN is included in the messages.
+
+        Args:
+            messages (List[Dict]): a list of message
+        Returns:
+            bool: whether the IMAGE_TOKEN is included in the messages
+        """
+        for message in messages:
+            role, content = message['role'], message['content']
+            if role != 'user':
+                continue
+            if isinstance(content, str) and '<IMAGE_TOKEN>' in content:
+                return True
+            elif isinstance(content, List):
+                content = [x['text'] for x in content if x['type'] == 'text']
+                if any('<IMAGE_TOKEN>' in x for x in content):
+                    return True
+        return False
+
+    def to_pytorch_with_input_ids(self, messages):
+        """Pack the preprocessing results in a format compatible with what is
+        required by pytorch engine when input_ids are provided directly.
+
+        Args:
+            messages(List[Dict]): the output of `preprocess`
+        """
+        # collect all preprocessing result from messages
+        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
+        assert len(preps) == 1
+        preps = preps[0]
+
+        _input_ids = messages[0]['content'][0]['text']
+        segs = []
+        for k, g in groupby(_input_ids, lambda x: x == self.image_token_id):
+            if not k:
+                segs.append(list(g))
+            else:
+                segs.extend([[]] * (len(list(g)) - 1))
+        if _input_ids[0] == self.image_token_id:
+            segs = [[]] + segs
+        if _input_ids[-1] == self.image_token_id:
+            segs = segs + [[]]
+
+        assert self.image_token_id == preps[0]['image_token_id']
+        assert len(segs) == len(preps) + 1, (f'the number of image token id {self.image_token_id} is not equal '
+                                             f'to input images, {len(segs) - 1} vs {len(preps)}')
+        input_ids = []
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(preps):
+                preps[i - 1].update(offset=len(input_ids))
+                image_tokens = preps[i - 1]['image_tokens']
+                input_ids.extend([self.image_token_id] * image_tokens)
+            input_ids.extend(seg)
+
+        return dict(prompt=None, input_ids=input_ids, multimodal=preps)
 
     def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """Auxiliary function to pack the preprocessing results in a format

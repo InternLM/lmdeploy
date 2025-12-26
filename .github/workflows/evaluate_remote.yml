@@ -35,7 +35,7 @@ on:
         default: "['chat_models','base_models']"
       backend:
         required: true
-        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
+        description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'
         type: string
         default: "['turbomind', 'pytorch']"
 

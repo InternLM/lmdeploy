@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.11)
 
 find_package(Threads)
 
@@ -21,6 +21,9 @@ if (BUILD_MULTI_GPU)
         add_subdirectory(nccl)
         target_link_libraries(device_comm INTERFACE nccl_comm)
     endif ()
+
+    add_subdirectory(gloo)
+    target_link_libraries(host_comm INTERFACE gloo_comm)
 
     if (BUILD_TEST)
         add_executable(test_comm test_comm.cu)

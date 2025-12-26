@@ -21,8 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        cuda_version: ['cu12.8', cu12, cu11]
-        python_version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        cuda_version: [cu13, cu12]
+        python_version: ['3.10', '3.11', '3.12', '3.13']
     env:
       CUDA_VERSION: ${{ matrix.cuda_version }}
       PYTHON_VERSION: ${{ matrix.python_version }}
@@ -56,6 +56,7 @@ jobs:
           docker images
           docker run --rm lmdeploy:latest lmdeploy check_env
       - name: Dive
+        if: ${{ matrix.cuda_version == 'cu12' }}
         uses: MaxymVlasov/dive-action@v1.5.0
         with:
           image: lmdeploy:latest
@@ -65,8 +66,6 @@ jobs:
     permissions:
       pull-requests: write
     runs-on: ubuntu-22.04-arm
-    env:
-      PYTHON_VERSION: '3.10'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -93,7 +92,7 @@ jobs:
           git config --local --unset "http.https://github.com/.extraheader"
       - name: Build Docker image
         run: |
-          docker build . -t lmdeploy:ascend -f docker/Dockerfile.ascend --build-arg PYTHON_VERSION=${PYTHON_VERSION}
+          docker build . -t lmdeploy:ascend -f docker/Dockerfile_ascend_a3
 #      - name: Test image with lmdeploy check_env
 #        run: |
 #          docker images
@@ -102,4 +101,45 @@ jobs:
         uses: MaxymVlasov/dive-action@v1.5.0
         with:
           image: lmdeploy:ascend
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  test_jetson_docker_image:
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: ${{github.event.inputs.repo_ref}}
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # This might remove tools that are actually needed, if set to "true" but frees about 6 GB
+          tool-cache: false
+          docker-images: false
+          # All of these default to true, but feel free to set to "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Get docker info
+        run: |
+          docker info
+          # remove http extraheader
+          git config --local --unset "http.https://github.com/.extraheader"
+      - name: Build Docker image
+        run: |
+          docker build . -t lmdeploy:jetson -f docker/Dockerfile.jetson
+      - name: Test image with lmdeploy check_env
+        run: |
+          docker images
+          docker run --rm lmdeploy:jetson lmdeploy check_env
+      - name: Dive
+        uses: MaxymVlasov/dive-action@v1.5.0
+        with:
+          image: lmdeploy:jetson
           github-token: ${{ secrets.GITHUB_TOKEN }}

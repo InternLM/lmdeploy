@@ -11,7 +11,7 @@ from lmdeploy.pytorch.ray import RayContext, get_device_str, get_resource_kwargs
 from lmdeploy.utils import get_logger
 
 from .base import MPEngine
-from .base_worker import EngineWorkerBase
+from .base_worker import EngineOutputGather, EngineWorkerBase
 
 logger = get_logger('lmdeploy')
 
@@ -35,12 +35,14 @@ class RayEngineWorker(EngineWorkerBase):
         self._stream_id = 0
         self._stream_aiter = dict()
         self._stream_task = dict()
+        self._engine_output_gather = EngineOutputGather()
 
     async def _stream_task_wrapper(self, stream_id: int, func: str, *args, **kwargs):
         """Create a stream task."""
         method = getattr(self, func)
         event = self._stream_aiter[stream_id][0]
         async for result in method(*args, **kwargs):
+            self._engine_output_gather.add(stream_id, result)
             self._stream_aiter[stream_id][1] = (result, False)
             event.set()
         self._stream_aiter[stream_id][1] = (result, True)
@@ -66,6 +68,8 @@ class RayEngineWorker(EngineWorkerBase):
         await event.wait()
         result, stopped = self._stream_aiter[stream_id][1]
         event.clear()
+
+        result = self._engine_output_gather.pop(stream_id, result)
 
         if stopped:
             self._stream_aiter.pop(stream_id, None)
@@ -107,7 +111,7 @@ class RayMPEngine(MPEngine):
 
     def _create_worker(self, model_path: str, engine_config: PytorchEngineConfig = None, **kwargs):
         """Create a Ray worker."""
-        bundle_id = 0
+        bundle_id = 0 if len(_envs.ray_external_pg_bundles) == 0 else _envs.ray_external_pg_bundles[0]
         scheduling_strategy = PlacementGroupSchedulingStrategy(
             placement_group=self.placement_group,
             placement_group_capture_child_tasks=True,

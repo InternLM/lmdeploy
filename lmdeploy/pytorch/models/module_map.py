@@ -100,6 +100,9 @@ MODULE_MAP.update({'DeepseekV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deep
 # deepseek-v3
 MODULE_MAP.update({'DeepseekV3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'})
 
+# deepseek-v32
+MODULE_MAP.update({'DeepseekV32ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v32.DeepseekV32ForCausalLM'})
+
 # deepseek-vl2
 MODULE_MAP.update({'DeepseekVLV2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_vl2.DeepseekVLV2ForCausalLM'})
 
@@ -145,6 +148,18 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'Qwen2_5_VLForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_5_vl.Qwen2_5_VLForConditionalGeneration',
+})
+
+# qwen3_vl
+MODULE_MAP.update({
+    'Qwen3VLForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl.Qwen3VLForConditionalGeneration',
+})
+
+# qwen3_vl_moe
+MODULE_MAP.update({
+    'Qwen3VLMoeForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_vl_moe.Qwen3VLMoeForConditionalGeneration',
 })
 
 # starcoder2
@@ -225,6 +240,11 @@ MODULE_MAP.update({
     'GptOssForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gpt_oss.GptOssForCausalLM',
 })
 
+# qwen3 next model
+MODULE_MAP.update({
+    'Qwen3NextForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_next.Qwen3NextForCausalLM',
+})
+
 # SDAR
 MODULE_MAP.update({
     'SDARForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.sdar.SDARForCausalLM',
@@ -232,3 +252,13 @@ MODULE_MAP.update({
 })
 
 CUSTOM_MODULE_MAP = dict()
+
+# spec models
+# eagle llama
+MODULE_MAP.update({'EagleLlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle.EagleLlamaForCausalLM'})
+
+# eagle3 llama
+MODULE_MAP.update({'Eagle3LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama_eagle3.Eagle3LlamaForCausalLM'})
+
+# deepseek mtp
+MODULE_MAP.update({'DeepseekMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_mtp.DeepseekMTPModel'})

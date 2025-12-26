@@ -1,10 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.model_inputs import ModelInputs
@@ -14,10 +17,12 @@ from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, St
 SeqList = List[SchedulerSequence]
 
 
+@dataclass
 class ARExtraInputs(ExtraInputs):
     """Ar extra inputs."""
 
 
+@dataclass
 class ARExtraOutputs(ExtraOutputs):
     """Ar extra outputs."""
 
@@ -60,21 +65,22 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         last_idx = seq_length.cumsum(-1) - 1
         return inputs[last_idx]
 
-    def slice_extra_inputs(self, extra_inputs: ARExtraInputs, seq_length: torch.LongTensor) -> ARExtraInputs:
+    def slice_extra_inputs(self, extra_inputs: ARExtraInputs, model_inputs: ModelInputs,
+                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> ARExtraInputs:
         """Slice outputs."""
         return extra_inputs
 
     def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
         """step."""
         sampling_inputs.num_ignore_eos = sampling_inputs.num_ignore_eos - 1
+        if sampling_inputs.random_offsets is not None:
+            # random offset is used to generate random numbers for multinomial sampling
+            # so we need to increase it by 1 at each step
+            sampling_inputs.random_offsets += 1
 
         all_ids = sampling_inputs.all_ids
         if all_ids is not None:
             sampling_inputs.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
-
-        guided_input_ids = sampling_inputs.guided_input_ids
-        if guided_input_ids is not None:
-            sampling_inputs.guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None]], 1)
 
         return sampling_inputs
 
@@ -88,7 +94,7 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         """Create extra inputs."""
         return ARExtraInputs()
 
-    def make_extra_outputs(self, extra_inputs: ARExtraInputs) -> ARExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: ARExtraInputs, **kwargs) -> ARExtraOutputs:
         """Create extra outputs."""
         return ARExtraOutputs()
 
@@ -106,3 +112,12 @@ class ARModelAgentStrategy(ModelAgentStrategy):
                       extra_inputs: ARExtraInputs):
         """Post sampling."""
         return next_token_ids, extra_inputs
+
+    @contextmanager
+    def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: ExtraInputs, dist_ctx: DistContext):
+        """Broadcast next token ids and extra inputs."""
+        tp_gpu_group = dist_ctx.attn_tp_group.gpu_group
+        rank = dist.get_global_rank(tp_gpu_group, 0)
+        handle = dist.broadcast(next_token_ids, src=rank, group=tp_gpu_group, async_op=True)
+        yield
+        handle.wait()

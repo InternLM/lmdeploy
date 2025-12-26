@@ -4,13 +4,13 @@ from typing import Any, List, Optional
 import torch
 
 from lmdeploy.pytorch.backends import OpType, get_backend
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..quant_utils import quant_blocked_fp8
 from ..utils import div_up, get_distribute_size
 from .base import LinearBase
-from .utils import QKVMixin, _get_tp_world_rank, check_qkv_split_layout
+from .utils import QKVMixin, check_qkv_split_layout
 
 
 class BlockedF8Linear(LinearBase):
@@ -24,11 +24,12 @@ class BlockedF8Linear(LinearBase):
         dtype: Optional[torch.dtype] = None,
         device: Optional[torch.device] = None,
         fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+        scale_fmt: Optional[str] = None,
         colwise: bool = True,
         is_tp: bool = False,
         all_reduce: bool = True,
         dp_gather: bool = False,
-        dp_scatter: bool = False,
+        layer_type: str = 'attn',
     ):
         super().__init__(dtype=dtype,
                          device=device,
@@ -36,9 +37,10 @@ class BlockedF8Linear(LinearBase):
                          is_tp=is_tp,
                          all_reduce=all_reduce,
                          dp_gather=dp_gather,
-                         dp_scatter=dp_scatter)
+                         layer_type=layer_type)
         self.block_size = 128
         self.fp8_dtype = fp8_dtype
+        self.scale_fmt = scale_fmt
         if self.is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
         impl_builder = get_backend().get_layer_impl_builder(OpType.LinearBlockedF8)
@@ -47,6 +49,7 @@ class BlockedF8Linear(LinearBase):
                                        block_size=128,
                                        bias=bias is not None,
                                        dtype=self.dtype)
+        self.impl.set_scale_fmt(scale_fmt)
         weight, weight_scale_inv, bias = self.create_weights(in_features, out_features, bias, self.dtype, self.device)
         self.register_all_parameters(weight, weight_scale_inv, bias)
 
@@ -76,7 +79,7 @@ class BlockedF8Linear(LinearBase):
 
     def _get_io_features(self, in_features: int, out_features: int, colwise: bool):
         """Get io features."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = self.get_tp_world_rank()
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank)
         else:
@@ -107,7 +110,7 @@ class BlockedF8Linear(LinearBase):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = _get_tp_world_rank(self.is_tp)
+        world_size, rank = self.get_tp_world_rank()
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -117,7 +120,10 @@ class BlockedF8Linear(LinearBase):
         """Weight loader with weight quant."""
         if loaded_weight.dtype != param.dtype:
             # quant loaded weight
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device),
+                                                        param.dtype,
+                                                        self.block_size,
+                                                        scale_fmt=self.scale_fmt)
             self.weight_loader(self.weight, quanted_weight)
             self.weight_loader(self.weight_scale_inv, scaling)
         else:
@@ -142,11 +148,18 @@ class BlockedF8Linear(LinearBase):
 
     def _forward_default(self, x, all_reduce, tp_sizes):
         """Default forward implement."""
-        if self.dp_scatter:
-            _, rank = get_tp_world_rank()
-            return self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, all_reduce, rank, tp_sizes)
+        if self.tp_mode == TPMode.DP_TP:
+            rank = self.tp_rank
+            return self.impl.forward(x,
+                                     self.weight,
+                                     self.weight_scale_inv,
+                                     self.bias,
+                                     all_reduce,
+                                     group=self.tp_group,
+                                     rank=rank,
+                                     scatter_size=tp_sizes)
         else:
-            return self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, all_reduce)
+            return self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, all_reduce, group=self.tp_group)
 
 
 class MergedBlockedF8Linear(BlockedF8Linear):
@@ -157,17 +170,19 @@ class MergedBlockedF8Linear(BlockedF8Linear):
                  all_out_features: List[int],
                  bias: bool,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 scale_fmt: Optional[str] = None,
                  replicate: Optional[List[bool]] = None,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  out_names: Optional[List[int]] = None,
-                 dp_gather: bool = False):
+                 dp_gather: bool = False,
+                 layer_type: str = 'attn'):
+        self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type=layer_type)
         if replicate is None:
             replicate = tuple(False for _ in all_out_features)
         self.block_size = 128
         self.split_section = all_out_features
-        self.is_tp = is_tp
         self.scale_split_section = [section // self.block_size for section in self.split_section]
         all_out_features = self._update_all_out_features(all_out_features, replicate)
         self.all_out_features = all_out_features
@@ -183,9 +198,11 @@ class MergedBlockedF8Linear(BlockedF8Linear):
                          dtype,
                          device,
                          fp8_dtype=fp8_dtype,
+                         scale_fmt=scale_fmt,
                          colwise=True,
                          is_tp=is_tp,
-                         dp_gather=dp_gather)
+                         dp_gather=dp_gather,
+                         layer_type=layer_type)
         self.setup_loaders()
 
     def setup_loaders(self):
@@ -207,7 +224,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def _update_all_out_features(self, all_out_features: List[int], replicate: Optional[List[bool]]):
         """Update all out features."""
-        world_size, rank = _get_tp_world_rank(self.is_tp)
+        world_size, rank = self.get_tp_world_rank()
         new_all_out_features = []
         for out_feat, rep in zip(all_out_features, replicate):
             if rep:
@@ -218,7 +235,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """Weight loader."""
-        world_size, rank = _get_tp_world_rank(self.is_tp)
+        world_size, rank = self.get_tp_world_rank()
         shard_idx = self.out_names_map[shard_id]
         if loaded_weight.dim() == 2 and loaded_weight.dtype != self.fp8_dtype:
             loaded_weight = loaded_weight.to(torch.float32)
@@ -234,7 +251,10 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         """Weight loader with weight quant."""
         if loaded_weight.dtype != param.dtype:
             # quant loaded weight
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device),
+                                                        param.dtype,
+                                                        self.block_size,
+                                                        scale_fmt=self.scale_fmt)
             self.weight_loader(self.weight, quanted_weight, shard_id)
             self.weight_loader(self.weight_scale_inv, scaling, shard_id)
         else:
@@ -261,19 +281,23 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                  head_size_v: int,
                  bias: bool = False,
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 scale_fmt: Optional[str] = None,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  dp_gather: bool = False,
                  num_replicate_kv_heads: int = 1):
         self.block_size = 128
+        self.init_tp_args(is_tp, all_reduce=False, colwise=True, layer_type='attn')
         QKVMixin.__init__(self,
                           num_q_heads=num_q_heads,
                           num_kv_heads=num_kv_heads,
                           head_size=head_size,
                           head_size_v=head_size_v,
                           num_replicate_kv_heads=num_replicate_kv_heads,
-                          is_tp=is_tp)
+                          is_tp=is_tp,
+                          tp=self.tp,
+                          tp_rank=self.tp_rank)
 
         all_out_features = self.get_qkv_out_feautures()
         out_names = ('q', 'k', 'v')
@@ -281,11 +305,13 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
                          all_out_features,
                          dtype=dtype,
                          fp8_dtype=fp8_dtype,
+                         scale_fmt=scale_fmt,
                          bias=bias,
                          device=device,
                          is_tp=is_tp,
                          out_names=out_names,
-                         dp_gather=dp_gather)
+                         dp_gather=dp_gather,
+                         layer_type='attn')
 
     def _update_all_out_features(self, all_out_features: List[int], replicate: Optional[List[bool]]):
         """Update all out features."""
@@ -293,7 +319,7 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """Weight loader."""
-        _, rank = _get_tp_world_rank(self.is_tp)
+        _, rank = self.get_tp_world_rank()
         shard_idx = self.out_names_map[shard_id]
 
         num_head = self.num_q_heads if shard_id == 'q' \
@@ -320,7 +346,10 @@ class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
         """Weight loader with weight quant."""
         if loaded_weight.dtype != param.dtype:
             # quant loaded weight
-            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device), param.dtype, self.block_size)
+            quanted_weight, scaling = quant_blocked_fp8(loaded_weight.to(param.device),
+                                                        param.dtype,
+                                                        self.block_size,
+                                                        scale_fmt=self.scale_fmt)
             self.weight_loader(self.weight, quanted_weight, shard_id)
             self.weight_loader(self.weight_scale_inv, scaling, shard_id)
         else:

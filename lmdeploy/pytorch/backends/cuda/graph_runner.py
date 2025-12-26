@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.deepep_moe_checker import get_moe_backend
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
@@ -68,6 +69,7 @@ class CUDASingleGraphRunner:
         pool: Tuple[int, int],
         model_config: ModelConfig,
         device: torch.device,
+        decode_query_len: int = 1,
     ):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
@@ -82,6 +84,11 @@ class CUDASingleGraphRunner:
             input_buffers=dict(),
             output_buffers=dict(),
             vocab_size=self.model_config.vocab_size,
+            use_mla_fp8_cache=getattr(self.model_config, 'use_mla_fp8_cache', False),
+            use_flash_mla=getattr(self.model_config, 'use_flash_mla', False),
+            mla_index_topk=getattr(self.model_config, 'mla_index_topk', None),
+            decode_query_len=decode_query_len,
+            use_fa3_decoding=model_config.model_paradigm == 'ar_spec',
         )
         self.device = device
         self.max_batches = max_batches
@@ -102,7 +109,8 @@ class CUDASingleGraphRunner:
         current_stream = torch.cuda.current_stream()
 
         # warmup
-        self.model(**padded_kwargs)
+        warmup_output = self.model(**padded_kwargs)
+        warmup_buffers = self.model.make_output_buffers(warmup_output)
 
         self._graph = torch.cuda.CUDAGraph()
         # unsafe kernel call in other thread might invalid the capture
@@ -110,21 +118,21 @@ class CUDASingleGraphRunner:
         with torch.cuda.graph(self._graph, pool=self.pool, stream=current_stream, capture_error_mode='thread_local'):
             output = self.model(**padded_kwargs)
 
-        output_buffers = dict(logits=output)
+        output_buffers = self.model.make_output_buffers(output)
         self.meta.output_buffers = output_buffers
+        output = self.model.get_outputs_cudagraph(warmup_buffers, **kwargs)
         return output
 
     @record_function('forward_cudagraph')
     def forward(self, **kwargs):
         """forward."""
-        num_tokens = kwargs['input_ids'].size(-1)
         assert self._graph is not None
         self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
         self.model.update_context_cudagraph(self.meta, context)
         self._graph.replay()
-
-        output = self.meta.output_buffers['logits'][:, :num_tokens]
+        output_buffers = self.meta.output_buffers
+        output = self.model.get_outputs_cudagraph(output_buffers, **kwargs)
         return output
 
     def __del__(self):
@@ -187,17 +195,21 @@ class CUDAGraphRunner(GraphRunner):
         batch_size = attn_metadata.q_seqlens.size(0)
         meta = self.get_meta()
         enable_microbatch = get_step_ctx_manager().current_context().enable_microbatch
+        # for draft model to distinguish inputs from target model and itself
+        query_len = input_ids.size(1) // batch_size
         if meta.padding_batch_size is None:
             batch_size = self._get_capture_tokens(batch_size)
         else:
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
-        return (batch_size, is_decoding, enable_microbatch)
+        return (batch_size, is_decoding, enable_microbatch, query_len)
 
-    def _get_max_tokens(self, graph_key: tuple):
+    def _get_max_tokens(self, graph_key: tuple, input_ids: torch.Tensor, q_seqlens: torch.Tensor):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
         assert is_decoding
-        return self.cudagraph_strategy.get_max_tokens(max_batches)
+        origin_batch_size = q_seqlens.size(0)
+        num_tokens = input_ids.size(1)
+        return self.cudagraph_strategy.get_max_tokens(max_batches, origin_batch_size, num_tokens)
 
     def __call__(self, **kwargs):
         """call."""
@@ -208,27 +220,34 @@ class CUDAGraphRunner(GraphRunner):
 
         if not enable_graph:
             with record_function('forward_eager'):
-                return self.model(**kwargs)
+                output = self.model(**kwargs)
+                return self.model.make_output_buffers(output)
 
         graph_key = self.get_graph_key(**kwargs)
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
+        decode_query_len = graph_key[3]
         if graph_key not in self._runner_map:
-            max_tokens = self._get_max_tokens(graph_key)
-            runner = CUDASingleGraphRunner(self.model,
-                                           max_batches=max_batches,
-                                           max_tokens=max_tokens,
-                                           num_blocks=self.num_blocks,
-                                           is_decoding=is_decoding,
-                                           pool=self.graph_pool_handle,
-                                           model_config=self.model_config,
-                                           device=self.device)
-            runner.capture(**kwargs)
+            max_tokens = self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens)
+            runner = CUDASingleGraphRunner(
+                self.model,
+                max_batches=max_batches,
+                max_tokens=max_tokens,
+                num_blocks=self.num_blocks,
+                is_decoding=is_decoding,
+                pool=self.graph_pool_handle,
+                model_config=self.model_config,
+                device=self.device,
+                decode_query_len=decode_query_len,
+            )
+            output = runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
+            # SSM would update the state in capture(warmup), replay the graph will leads unexpected state update.
+            return output
         else:
             runner = self._runner_map[graph_key]
-        output = runner.forward(**kwargs)
-        return output
+            output = runner.forward(**kwargs)
+            return output
 
     @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
@@ -238,6 +257,12 @@ class CUDAGraphRunner(GraphRunner):
         context: StepContext = None,
     ):
         """Prepare inputs."""
+
+        if get_moe_backend().use_deepep_moe_backend():
+            from dlblas.layers.moe.token_dispatcher import DeepEPBuffer, DeepEPMode
+            deepep_mode = DeepEPMode.LOW_LATENCY if context.is_decoding else DeepEPMode.NORMAL
+            DeepEPBuffer.set_deepep_mode(deepep_mode)
+
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
@@ -258,7 +283,7 @@ class CUDAGraphRunner(GraphRunner):
             meta = self.get_meta()
             padding_batch_size = meta.padding_batch_size
             tp_size = self._get_capture_tokens(padding_batch_size)
-            dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
+            dp_meta.sync_tp_size(tp_size)
         return inputs
 
     def get_capture_batch_sizes(self) -> List[int]:

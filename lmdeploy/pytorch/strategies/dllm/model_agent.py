@@ -1,13 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 
 from lmdeploy.pytorch import consts
 from lmdeploy.pytorch.config import DLLMConfig
+from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.model_inputs import ModelInputs
@@ -22,6 +25,9 @@ SeqList = List[SchedulerSequence]
 class DLLMExtraInputs(ExtraInputs):
     """DLLM extra inputs."""
     dllm_mask: torch.Tensor
+
+    def broadcast(self, src: int, group, async_op=False):
+        return dist.broadcast(self.dllm_mask, src=src, group=group, async_op=async_op)
 
 
 @dataclass
@@ -148,9 +154,10 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         inputs = inputs[index]
         return inputs
 
-    def slice_extra_inputs(self, extra_inputs: DLLMExtraInputs, seq_length: torch.LongTensor) -> DLLMExtraInputs:
+    def slice_extra_inputs(self, extra_inputs: DLLMExtraInputs, model_inputs: ModelInputs,
+                           model_outputs: Dict[str, torch.Tensor], **kwargs) -> DLLMExtraInputs:
         """Slice outputs."""
-        dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, seq_length)
+        dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, model_inputs.seq_length)
         return DLLMExtraInputs(dllm_mask=dllm_mask)
 
     def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
@@ -163,6 +170,10 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         num_ignore_eos = sampling_inputs.num_ignore_eos.view(-1, dllm_block_size)
         num_ignore_eos = torch.where(is_unmasked, num_ignore_eos - dllm_block_size, num_ignore_eos)
         sampling_inputs.num_ignore_eos = num_ignore_eos.flatten()
+        if sampling_inputs.random_offsets is not None:
+            # random offset is used to generate random numbers for multinomial sampling
+            # so we need to increase it by 1 at each step
+            sampling_inputs.random_offsets += 1
         return sampling_inputs
 
     def make_stopping_criteria(self, seqs: SeqList) -> DLLMStoppingCriteria:
@@ -186,7 +197,7 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         dllm_masks = torch.as_tensor(np.concatenate(dllm_masks))
         return DLLMExtraInputs(dllm_mask=dllm_masks)
 
-    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs) -> DLLMExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs, **kwargs) -> DLLMExtraOutputs:
         """Create extra outputs."""
         dllm_mask = extra_inputs.dllm_mask
         return DLLMExtraOutputs(dllm_mask=dllm_mask)
@@ -216,3 +227,19 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
 
         extra_inputs.dllm_mask = dllm_mask
         return next_token_ids, extra_inputs
+
+    def make_dummy_next_token(self, inputs: 'ModelInputs', logits: torch.Tensor, extra_inputs: DLLMExtraInputs):
+        """Make dummy next token for broadcast."""
+        with torch.inference_mode():
+            next_token_ids = inputs.input_ids.new_zeros(logits.size(0))
+        return next_token_ids, extra_inputs
+
+    @contextmanager
+    def broadcast_next_token(self, next_token_ids: torch.Tensor, extra_inputs: DLLMExtraInputs, dist_ctx: DistContext):
+        """Broadcast next token ids and extra inputs."""
+        tp_gpu_group = dist_ctx.attn_tp_group.gpu_group
+        rank = dist.get_global_rank(tp_gpu_group, 0)
+        dist.broadcast(next_token_ids, src=rank, group=tp_gpu_group, async_op=True)
+        handle = extra_inputs.broadcast(src=rank, group=tp_gpu_group, async_op=True)
+        yield
+        handle.wait()

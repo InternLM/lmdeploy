@@ -39,6 +39,15 @@ struct RequestData {
     bool        abort;
 };
 
+template<class Archive>
+void serdes(Archive& ar, RequestData& r)
+{
+    ar & r.infer;
+    ar & r.kill;
+    ar & r.cancel;
+    ar & r.abort;
+}
+
 struct Engine::Impl {
 
     using Requests = vector<shared_ptr<Request>>;
@@ -224,10 +233,11 @@ void Engine::Impl::CreateSequenceManager()
                                                  param_.cache_chunk_size,
                                                  param_.enable_prefix_caching,
                                                  tp_rank_,
+                                                 param_.attn_cp_size,
                                                  core::Context::alloc(kDEVICE),
                                                  get_free_size);
 
-    const auto max_cached_tokens = seq_mgr_->max_block_count() * (size_t)cache_block_seq_len;
+    const auto max_cached_tokens = seq_mgr_->max_block_count() * (size_t)cache_block_seq_len * param_.attn_cp_size;
     session_len_trunc_           = std::min(max_cached_tokens, (size_t)param_.session_len);
     TM_LOG_INFO("max cached tokens: %lld", max_cached_tokens);
     if (session_len_trunc_ != param_.session_len) {
@@ -707,13 +717,23 @@ void Engine::Impl::InternalThreadEntry()
 
         if (tp_rank_ == 0) {
             rs = std::make_shared<RequestData>();
-            gateway_.pop(rs->infer,  //
-                         rs->kill,
-                         param_.max_batch_size - st.size() + st.finish,
-                         st.size() - st.finish == 0,
-                         rs->abort,
-                         dp_rank_);
+
+            const int  n_free   = param_.max_batch_size - st.size() + st.finish;
+            const bool is_empty = n_free == param_.max_batch_size;
+
+            // Block if batch is empty AND no silbings are ready AND comm in same node
+            const bool is_block = is_empty && dp_group_->is_same_process();
+            bool       wait     = 0;
+            do {
+                gateway_.pop(rs->infer, rs->kill, n_free, is_block, rs->abort, dp_rank_);
+                if (!dp_group_->is_same_process()) {
+                    wait = is_empty && rs->infer.empty() && rs->kill.empty() && rs->abort == false;
+                    wait = AllReduce(dp_group_, (int)wait, comm::RedOp::kSum) == dp_group_->n_ranks();
+                }
+            } while (wait);
+
             Validate(rs->infer, rs->kill);
+
             rs->cancel = GetCanceled();
         }
 
@@ -721,7 +741,14 @@ void Engine::Impl::InternalThreadEntry()
             tp_group_->Sync(true);
         }
 
-        Broadcast(tp_group_, rs, 0);
+        if (tp_group_->n_ranks() > 1) {
+            Broadcast(tp_group_, rs, 0);
+        }
+
+        /// TODO: revise DP aborting procedure
+        if (!dp_group_->is_same_process()) {
+            rs->abort = AllReduce(dp_group_, (int)rs->abort, comm::RedOp::kSum) > 0;
+        }
 
         if (rs->abort) {
             TM_LOG_INFO("[Engine] stop requested.");

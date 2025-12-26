@@ -47,8 +47,6 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
     device = os.environ.get('DEVICE', '')
     if device:
         backend_config.device_type = device
-        if device == 'ascend':
-            backend_config.eager_mode = True
 
     if 'lora' in backend_type:
         backend_config.adapters = extra.get('adapters')
@@ -59,6 +57,9 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
 
     if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
         backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
+
+    if extra and extra.get('enable_prefix_caching', False):
+        backend_config.enable_prefix_caching = True
 
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'

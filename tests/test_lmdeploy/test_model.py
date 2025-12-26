@@ -388,3 +388,66 @@ def test_HFChatTemplate_DeepSeek_thinking(model_path):
 
     prompt = 'How to apply chat template using transformers?'
     assert model.get_prompt(prompt, sequence_start=False) == f'<｜User｜>{prompt}<｜Assistant｜><think>\n'
+
+
+@pytest.mark.parametrize('model_path', ['Qwen/Qwen3-VL-8B-Instruct'])
+def test_HFChatTemplate_Qwen3_VL_with_vision_id(model_path):
+    model = MODELS.get('hf')(model_path=model_path)
+
+    # testcase from https://github.com/QwenLM/Qwen3-VL
+    messages = [
+        {
+            'role': 'user',
+            'content': [{
+                'type': 'image'
+            }, {
+                'type': 'text',
+                'text': 'Hello, how are you?'
+            }],
+        },
+        {
+            'role': 'assistant',
+            'content': "I'm doing well, thank you for asking. How can I assist you today?",
+        },
+        {
+            'role':
+            'user',
+            'content': [
+                {
+                    'type': 'text',
+                    'text': 'Can you describe these images and video?'
+                },
+                {
+                    'type': 'image'
+                },
+                {
+                    'type': 'image'
+                },
+                {
+                    'type': 'video'
+                },
+                {
+                    'type': 'text',
+                    'text': 'These are from my vacation.'
+                },
+            ],
+        },
+        {
+            'role':
+            'assistant',
+            'content':
+            """I'd be happy to describe the images and video for you.
+                Could you please provide more context about your vacation?""",
+        },
+        {
+            'role': 'user',
+            'content': 'It was a trip to the mountains. Can you see the details in the images and video?',
+        },
+    ]
+
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    expected = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, add_vision_id=True)
+    chat_template_kwargs = dict(add_vision_id=True)
+    lm_res = model.messages2prompt(messages, **chat_template_kwargs)
+    assert expected == lm_res

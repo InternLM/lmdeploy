@@ -14,9 +14,12 @@ class TestRequestHander:
     def event_loop(self):
         old_loop = asyncio.get_event_loop()
         new_loop = asyncio.new_event_loop()
-        yield new_loop
-        new_loop.stop()
-        asyncio.set_event_loop(old_loop)
+        try:
+            asyncio.set_event_loop(new_loop)
+            yield new_loop
+        finally:
+            new_loop.stop()
+            asyncio.set_event_loop(old_loop)
 
     @pytest.fixture
     def manager(self):
@@ -39,7 +42,7 @@ class TestRequestHander:
                     return
 
         sender = manager.build_sender()
-        manager.start_loop(__dummy_loop)
+        manager.set_main_loop_func(__dummy_loop)
 
         # test not bind
         resp = sender.send_async(RequestType.STOP_ENGINE, None)

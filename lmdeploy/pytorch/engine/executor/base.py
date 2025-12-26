@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 from typing import Any, Dict, List, Optional
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
@@ -24,6 +24,7 @@ class ExecutorBase:
                  dist_config: DistConfig,
                  misc_config: MiscConfig,
                  adapters: Dict[str, str] = None,
+                 specdecode_config: SpecDecodeConfig = None,
                  device_type: str = 'cuda'):
         """Initialize Executor."""
         cache_config.window_size = model_config.sliding_window
@@ -37,9 +38,9 @@ class ExecutorBase:
         self.dist_config = dist_config
         self.misc_config = misc_config
         self.dp = dist_config.dp
-        self.tp = dist_config.tp
         self.world_size = dist_config.world_size
         self.device_type = device_type
+        self.specdecode_config = specdecode_config
 
     def download_models(self):
         """Download model."""
@@ -53,11 +54,11 @@ class ExecutorBase:
         """Gather available memory."""
         raise NotImplementedError('Not Implemented.')
 
-    def set_cache_config(self, cache_config: CacheConfig):
+    def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
         """Set all cache config."""
         raise NotImplementedError('Not Implemented.')
 
-    def set_model_config(self, model_config: ModelConfig):
+    def set_model_config(self, model_config: ModelConfig, spec_model_config: ModelConfig = None):
         """Set all model config."""
         raise NotImplementedError('Not Implemented.')
 
@@ -135,7 +136,7 @@ class ExecutorBase:
             # estimate runtime mem size
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocal_size * 2)
             num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
-            if int(num_available) // cache_block_size >= 16:
+            if cache_block_size == 0 or int(num_available) // cache_block_size >= 16:
                 break
             max_prefill_token_num = max_prefill_token_num // 2
         return runtime_cache_size, max_prefill_token_num
@@ -153,25 +154,72 @@ class ExecutorBase:
                 f'Update `block_size={self.cache_config.block_size}` for large `head_dim={self.model_config.k_head_dim}`.'  # noqa
             )
 
+    def _get_state_cache_mem(self):
+        """Get state cache mem usage."""
+        cache_config = self.cache_config
+        if len(cache_config.states_shapes) == 0:
+            return 0
+
+        from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
+
+        num_state_caches = cache_config.num_state_caches
+        if num_state_caches is None:
+            # add more caches for eviction
+            # TODO: Share memory between state cache and pageable cache
+            num_state_caches = int(cache_config.max_batches + 8)
+            cache_config.num_state_caches = num_state_caches
+
+        mems = StateCacheEngine.get_cache_state_size(cache_config.states_shapes)
+        mems *= num_state_caches
+
+        if cache_config.enable_prefix_caching:
+            cache_config.enable_prefix_caching = False
+            logger.warning('Prefix caching has not been support for state space model.')
+
+        return mems
+
     def update_configs(self):
         """Update cache config."""
         self._adjust_block_size()
+        # spec
+        if self.specdecode_config and self.specdecode_config.cache_config:
+            self.specdecode_config.cache_config.block_size = self.cache_config.block_size
         cache_config = self.cache_config
         model_config = self.model_config
+        cache_config.states_shapes = model_config.states_shapes
+
+        # get free mems
         free_mems = self.gather_free_mem()
         free_mem = min(free_mems)
         logger.debug(f'minimal free gpu memory: {free_mem >> 20} mb')
-        vocal_size = self.model_config.vocab_size
 
-        tp = self.dist_config.attn_config.tp
-        cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, tp,
-                                                            cache_config.quant_policy)
-        runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mem, cache_block_size, vocal_size)
+        # get state cache size
+        state_cache_mem = self._get_state_cache_mem()
+        free_mem = free_mem - state_cache_mem
+        assert free_mem > 0, 'No enough gpu memory for state cache. Please reduce max_batch_size.'
+
+        vocal_size = self.model_config.vocab_size
+        tp = self.dist_config.attn_tp
+        cache_block_size = CacheEngine.get_cache_block_size(cache_config, model_config, tp)
+        spec_cache_config = None
+        spec_model_config = None
+        spec_cache_block_size = 0
+        if self.specdecode_config:
+            spec_model_config = self.specdecode_config.model_config
+            if spec_cache_config := self.specdecode_config.cache_config:
+                spec_cache_block_size = CacheEngine.get_cache_block_size(spec_cache_config, spec_model_config, 1)
+
+        runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mem, cache_block_size + spec_cache_block_size,
+                                                                    vocal_size)
         if cache_config.max_prefill_token_num != max_prefill_token_num:
             if max_prefill_token_num <= 0:
                 raise RuntimeError('No enough gpu memory for runtime.')
             cache_config.max_prefill_token_num = max_prefill_token_num
             logger.warning(f'No enough memory. Update max_prefill_token_num={max_prefill_token_num}')
+
+        if spec_cache_config is not None:
+            spec_cache_config.max_prefill_token_num = max_prefill_token_num
+
         free_mem -= runtime_mem
         logger.debug(f'estimated max runtime memory: {runtime_mem >> 20} mb')
         available_mem = free_mem * cache_config.cache_max_entry_count
@@ -180,8 +228,11 @@ class ExecutorBase:
             cache_config.num_gpu_blocks = int(available_mem / cache_block_size)
             if cache_config.num_gpu_blocks <= 0:
                 raise RuntimeError('No enough gpu memory for kv cache.')
-        self.set_cache_config(cache_config)
-        self.set_model_config(model_config)
+            if spec_cache_config is not None:
+                spec_cache_config.num_gpu_blocks = cache_config.num_gpu_blocks
+
+        self.set_cache_config(cache_config, spec_cache_config)
+        self.set_model_config(model_config, spec_model_config)
 
     def init(self):
         """init."""
@@ -192,6 +243,9 @@ class ExecutorBase:
         logger.info('Building GraphRunner and warmup ops, please waiting.')
         self.build_graph_runner()
         logger.info(f'Building CacheEngine with config: \n{self.cache_config}.')
+        if self.specdecode_config:
+            if spec_cache_config := self.specdecode_config.cache_config:
+                logger.info(f'Building Spec CacheEngine with config: \n{spec_cache_config}.')
         self.build_cache_engine()
         logger.info('Warming up model.')
         self.warmup()

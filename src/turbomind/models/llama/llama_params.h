@@ -29,7 +29,6 @@ struct ModelParam {
     size_t   vocab_size;
     size_t   vocab_size_padded;
     size_t   embedding_size;
-    size_t   tokenizer_size;
     float    norm_eps;
     int      quant_policy;
     bool     attn_bias;
@@ -106,8 +105,14 @@ struct EngineParam {
     int attn_dp_rank;
     int attn_tp_size;
     int attn_tp_rank;
+    int attn_cp_size;
+    int attn_cp_rank;
     int mlp_tp_size;
     int mlp_tp_rank;
+
+    // multi-node
+    int nnodes;
+    int node_rank;
 
     std::vector<int> devices;
 };

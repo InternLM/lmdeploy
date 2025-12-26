@@ -58,17 +58,22 @@ def split_decoder_layer_inputs(batch_size, *args: Union[torch.Tensor, Any],
     return batch_args, batch_kwargs
 
 
-def concat_decoder_layer_outputs(batch_outputs: List[Tuple[Any]]) -> Tuple[Any]:
+def concat_decoder_layer_outputs(batch_outputs: List[Any]) -> Any:
     """This function concatenates individual decoder layer outputs into a
     batched output.
 
     Args:
-        batch_outputs (List[Tuple[Any]]): A list of tuples, where each tuple
+        batch_outputs (List[Any]): A list, where each tuple
             represents the output from an individual element in the batch.
 
     Returns:
-        Tuple[Any]: A tuple representing the batched output.
+        Any: Batched output.
     """
+
+    output_is_tuple = True
+    if not isinstance(batch_outputs[0], tuple):
+        output_is_tuple = False
+        batch_outputs = [(output, ) for output in batch_outputs]
 
     num_returns = len(batch_outputs[0])
 
@@ -105,4 +110,7 @@ def concat_decoder_layer_outputs(batch_outputs: List[Tuple[Any]]) -> Tuple[Any]:
             out_i = torch.cat([out[i] for out in batch_outputs])
         new_outputs.append(out_i)
 
-    return tuple(new_outputs)
+    if output_is_tuple:
+        return tuple(new_outputs)
+    else:
+        return new_outputs[0]
