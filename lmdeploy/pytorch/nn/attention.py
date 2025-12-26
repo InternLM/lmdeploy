@@ -29,7 +29,7 @@ class Attention(nn.Module):
         v_head_size: int = None,
         alibi: bool = False,
         sliding_window: int = None,
-        logit_softcapping: float = None,
+        logit_softcapping: float = 0.0,
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
@@ -112,7 +112,7 @@ class FlashAttention(nn.Module):
         v_head_dim: int = None,
         causal: bool = True,
         sliding_window: int = None,
-        logit_softcapping: float = None,
+        logit_softcapping: float = 0.0,
         **kwargs,
     ):
         super().__init__()

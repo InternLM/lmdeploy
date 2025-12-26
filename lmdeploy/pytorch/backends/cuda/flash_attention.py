@@ -36,8 +36,8 @@ class TritonFlashAttentionImpl(FlashAttentionImpl):
         self.sliding_window = sliding_window
         self.logical_softcapping = logical_softcapping
 
-        from lmdeploy.pytorch.kernels.cuda import flash_attention_fwd
-        self.flash_attention_fwd = flash_attention_fwd
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_varlen_func
+        self.flash_attention_fwd = flash_attn_varlen_func
 
     def forward(self,
                 query: Tensor,
@@ -53,19 +53,18 @@ class TritonFlashAttentionImpl(FlashAttentionImpl):
         q_shape = query.shape
         o_shape = q_shape[:-1] + (self.v_head_dim, )
         out = query.new_empty(o_shape)
-        self.flash_attention_fwd(
+        out = self.flash_attention_fwd(
             query,
             key,
             value,
-            out,
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
             kv_start_loc=kv_start_loc,
             kv_seqlens=kv_seqlens,
-            max_seqlen=max_q_seqlen,
+            max_seqlen_q=max_q_seqlen,
             window_size=self.sliding_window,
-            sm_scale=self.scale,
-            logit_softcapping=self.logical_softcapping,
+            softmax_scale=self.scale,
+            softcap=self.logical_softcapping,
             causal=self.causal,
             kv_layout='shd',
         )

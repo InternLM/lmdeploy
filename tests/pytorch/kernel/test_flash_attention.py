@@ -152,8 +152,10 @@ class TestFlashAttention:
         yield torch.tensor(request.param, device='cuda')
 
     @pytest.fixture
-    def q_start_loc(self, q_seqlens):
-        yield q_seqlens.cumsum(0) - q_seqlens
+    def cu_seqlens_q(self, q_seqlens):
+        cu_seqlens = q_seqlens.cumsum(0)
+        cu_zero = cu_seqlens.new_zeros(1)
+        yield torch.cat([cu_zero, cu_seqlens]).int()
 
     @pytest.fixture
     def history_lens(self, request):
@@ -164,8 +166,10 @@ class TestFlashAttention:
         yield q_seqlens + history_lens
 
     @pytest.fixture
-    def kv_start_loc(self, kv_seqlens):
-        yield kv_seqlens.cumsum(0) - kv_seqlens
+    def cu_seqlens_k(self, kv_seqlens):
+        cu_seqlens = kv_seqlens.cumsum(0)
+        cu_zero = cu_seqlens.new_zeros(1)
+        yield torch.cat([cu_zero, cu_seqlens]).int()
 
     @pytest.fixture
     def batched_q(self, q_seqlens, num_heads_q, head_dim_k, dtype):
@@ -216,23 +220,18 @@ class TestFlashAttention:
     @pytest.mark.parametrize('num_heads_k', [2], indirect=True)
     @pytest.mark.parametrize('causal', [True, False], indirect=True)
     @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [([30, 50, 70, 90], [50, 40, 30, 20])], indirect=True)
-    def test_flash_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens, head_dim_v,
-                             causal, conti_gt):
-        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
+    def test_flash_attention(self, conti_q, conti_kv, q_seqlens, cu_seqlens_q, cu_seqlens_k, causal, conti_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attn_varlen_func
         max_seq_len = q_seqlens.max().item()
 
         conti_k, conti_v = conti_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], head_dim_v)
-        flash_attention_fwd(conti_q,
-                            conti_k,
-                            conti_v,
-                            out,
-                            q_start_loc=q_start_loc,
-                            q_seqlens=q_seqlens,
-                            kv_start_loc=kv_start_loc,
-                            kv_seqlens=kv_seqlens,
-                            max_seqlen=max_seq_len,
-                            causal=causal)
+        out = flash_attn_varlen_func(conti_q,
+                                     conti_k,
+                                     conti_v,
+                                     cu_seqlens_q,
+                                     cu_seqlens_k,
+                                     max_seqlen_q=max_seq_len,
+                                     causal=causal)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
 
     @pytest.fixture
@@ -256,23 +255,19 @@ class TestFlashAttention:
         ([30, 50, 70, 90], [50, 40, 30, 90]),
     ], indirect=True)
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
-    def test_window_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens, head_dim_v,
-                              win_size, window_gt):
-        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
+    def test_window_attention(self, conti_q, conti_kv, q_seqlens, cu_seqlens_q, cu_seqlens_k, win_size, window_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attn_varlen_func
         max_seq_len = q_seqlens.max().item()
 
         conti_k, conti_v = conti_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], head_dim_v)
-        flash_attention_fwd(conti_q,
-                            conti_k,
-                            conti_v,
-                            out,
-                            q_start_loc=q_start_loc,
-                            q_seqlens=q_seqlens,
-                            kv_start_loc=kv_start_loc,
-                            kv_seqlens=kv_seqlens,
-                            max_seqlen=max_seq_len,
-                            window_size=win_size)
+        out = flash_attn_varlen_func(conti_q,
+                                     conti_k,
+                                     conti_v,
+                                     cu_seqlens_q,
+                                     cu_seqlens_k,
+                                     max_seqlen_q=max_seq_len,
+                                     window_size=win_size,
+                                     causal=True)
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
 
     @pytest.fixture
@@ -293,24 +288,19 @@ class TestFlashAttention:
     @pytest.mark.parametrize('num_heads_k', [2], indirect=True)
     @pytest.mark.parametrize('causal', [True], indirect=True)
     @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [([30, 50, 70, 90], [50, 40, 30, 20])], indirect=True)
-    def test_sinks(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens, head_dim_v, causal, sinks,
-                   conti_sink_gt):
-        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
+    def test_sinks(self, conti_q, conti_kv, q_seqlens, cu_seqlens_q, cu_seqlens_k, causal, sinks, conti_sink_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attn_varlen_func
         max_seq_len = q_seqlens.max().item()
 
         conti_k, conti_v = conti_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], head_dim_v)
-        flash_attention_fwd(conti_q,
-                            conti_k,
-                            conti_v,
-                            out,
-                            q_start_loc=q_start_loc,
-                            q_seqlens=q_seqlens,
-                            kv_start_loc=kv_start_loc,
-                            kv_seqlens=kv_seqlens,
-                            max_seqlen=max_seq_len,
-                            sinks=sinks,
-                            causal=causal)
+        out = flash_attn_varlen_func(conti_q,
+                                     conti_k,
+                                     conti_v,
+                                     cu_seqlens_q,
+                                     cu_seqlens_k,
+                                     max_seqlen_q=max_seq_len,
+                                     sinks=sinks,
+                                     causal=causal)
         torch.testing.assert_close(out, conti_sink_gt, atol=1e-3, rtol=1e-5)
 
     # block sparse attention
@@ -332,22 +322,19 @@ class TestFlashAttention:
     @pytest.mark.parametrize('num_heads_q', [8], indirect=True)
     @pytest.mark.parametrize('num_heads_k', [2], indirect=True)
     @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [([16, 32], [64, 8])], indirect=True)
-    def test_block_sparse_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens,
-                                    head_dim_v, block_sparse_size, block_sparse_gt):
-        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
+    def test_block_sparse_attention(self, conti_q, conti_kv, q_seqlens, cu_seqlens_q, cu_seqlens_k, block_sparse_size,
+                                    block_sparse_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attn_varlen_func
         max_seq_len = q_seqlens.max().item()
 
         conti_k, conti_v = conti_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], head_dim_v)
-        flash_attention_fwd(conti_q,
-                            conti_k,
-                            conti_v,
-                            out,
-                            q_start_loc=q_start_loc,
-                            q_seqlens=q_seqlens,
-                            kv_start_loc=kv_start_loc,
-                            kv_seqlens=kv_seqlens,
-                            max_seqlen=max_seq_len,
-                            block_sparse_size=block_sparse_size)
+        out = flash_attn_varlen_func(conti_q,
+                                     conti_k,
+                                     conti_v,
+                                     cu_seqlens_q,
+                                     cu_seqlens_k,
+                                     max_seqlen_q=max_seq_len,
+                                     block_sparse_size=block_sparse_size,
+                                     causal=True)
         gt = _conti_input(block_sparse_gt, q_seqlens)
         torch.testing.assert_close(out, gt, atol=1e-3, rtol=1e-5)

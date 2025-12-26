@@ -265,20 +265,16 @@ class TestPagedAttention(TestPagedAttentionBase):
     @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     @pytest.mark.parametrize('layout', ['bshd', 'bhsd'], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, layout, conti_gt):
-        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, conti_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
-
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens,
-                            kv_layout=layout)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      kv_layout=layout)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
 
     @pytest.fixture
@@ -304,21 +300,17 @@ class TestPagedAttention(TestPagedAttentionBase):
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
-    def test_window_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, win_size, layout,
-                              window_gt):
-        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_window_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, win_size, layout, window_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens,
-                            window_size=win_size,
-                            kv_layout=layout)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      window_size=win_size,
+                                      kv_layout=layout)
         torch.testing.assert_close(out, window_gt, atol=1e-3, rtol=1e-5)
 
 
@@ -342,22 +334,18 @@ class TestPagedAttentionSink(TestPagedAttentionBase):
     @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, layout, sinks,
-                             conti_sink_gt):
-        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, sinks, conti_sink_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
 
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens,
-                            sinks=sinks,
-                            kv_layout=layout)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      sinks=sinks,
+                                      kv_layout=layout)
         torch.testing.assert_close(out, conti_sink_gt, atol=1e-3, rtol=1e-5)
 
 
@@ -427,23 +415,19 @@ class TestPagedAttentionInt8(TestPagedAttention):
     @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(8, 2), (2, 2)], indirect=True)
     @pytest.mark.parametrize('history_lens', [(50, 40, 30, 20)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, seq_lens, history_lens, feat_dim_v, conti_gt,
-                             nbits):
-        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, conti_gt, nbits):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
 
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            k_scales_zeros=blocked_ksz,
-                            v_scales_zeros=blocked_vsz,
-                            quant_policy=nbits,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      k_scales_zeros=blocked_ksz,
+                                      v_scales_zeros=blocked_vsz,
+                                      quant_policy=nbits,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens)
         if nbits == 4:
             torch.testing.assert_close(out, conti_gt, atol=0.05, rtol=0.01)
         else:
@@ -457,23 +441,19 @@ class TestPagedAttentionInt8(TestPagedAttention):
     ], indirect=True)
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
-    def test_window_attention(self, conti_q, blocked_kv, block_offsets, history_lens, feat_dim_v, win_size, window_gt,
-                              nbits):
-        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
-        kv_seq_lens = 1 + history_lens
+    def test_window_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, win_size, window_gt, nbits):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v, blocked_ksz, blocked_vsz = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            k_scales_zeros=blocked_ksz,
-                            v_scales_zeros=blocked_vsz,
-                            quant_policy=nbits,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens,
-                            window_size=win_size)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      k_scales_zeros=blocked_ksz,
+                                      v_scales_zeros=blocked_vsz,
+                                      quant_policy=nbits,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      window_size=win_size)
         if nbits == 4:
             torch.testing.assert_close(out, window_gt, atol=0.05, rtol=0.01)
         else:
@@ -512,19 +492,15 @@ class TestPagedAttentionBlockDecoding(TestPagedAttentionBase):
     @pytest.mark.parametrize('history_lens', [(52, 40, 32, 20)], indirect=True)
     @pytest.mark.parametrize('block_size', [16], indirect=True)
     @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
-    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, seq_lens, history_lens, feat_dim_v, layout,
-                             conti_gt):
-        from lmdeploy.pytorch.kernels.cuda import paged_attention_fwd
-        kv_seq_lens = seq_lens + history_lens
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, conti_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
 
         blocked_k, blocked_v = blocked_kv
-        out = conti_q.new_empty(*conti_q.shape[:-1], feat_dim_v)
 
-        paged_attention_fwd(conti_q,
-                            blocked_k,
-                            blocked_v,
-                            out,
-                            block_offsets=block_offsets,
-                            kv_seqlens=kv_seq_lens,
-                            kv_layout=layout)
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      kv_layout=layout)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
