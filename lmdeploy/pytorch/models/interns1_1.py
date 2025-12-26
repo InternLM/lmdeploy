@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 import torch
 from torch import nn
@@ -12,99 +11,9 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from .patch import get_build_model_context
 from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLForConditionalGeneration
-from .qwen3_vl import Qwen3VLTextRotaryEmbedding as Qwen3VLMoeTextRotaryEmbedding
 
 
-class Qwen3VLMoeTextModel(Qwen3MoeModel):
-    """Text part of Qwen3VL.
-
-    not a pure text-only model, as DeepStack integrates visual features into the early hidden states.
-    """
-
-    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-        super().__init__(config=config, dtype=dtype, device=device)
-
-        # build rotary embedding
-        # TODO: zhouxinyu, add triton kernel for interleaved mrope
-        self.rotary_emb = Qwen3VLMoeTextRotaryEmbedding(config, device=device)
-
-    def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        attn_metadata: Any = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        all_routed_experts: torch.Tensor = None,
-        mrope_position_ids: torch.LongTensor = None,
-        # args for deepstack
-        visual_pos_masks: Optional[torch.Tensor] = None,
-        deepstack_visual_embeds: Optional[list[torch.Tensor]] = None,
-    ):
-        """visual_pos_masks (`torch.Tensor` of shape `(batch_size, seqlen)`,
-        *optional*):
-
-        The mask of the visual positions. deepstack_visual_embeds (`list[torch.Tensor]`, *optional*):     The deepstack
-        visual embeddings. The shape is (num_layers, visual_seqlen, embed_dim).     The feature is extracted from the
-        different visual encoder layers, and fed to the decoder     hidden states. It's from the paper DeepStack (
-        https://arxiv.org/abs/2406.04)
-        """
-
-        # token embedding
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
-
-        hidden_states = inputs_embeds
-
-        # rotary embedding
-        if mrope_position_ids is None:
-            cos, sin = self.rotary_emb(hidden_states, position_ids)
-        else:
-            mrope_position_ids = mrope_position_ids.unsqueeze(1)
-            cos, sin = self.rotary_emb(hidden_states, mrope_position_ids)
-
-        cos, sin = cos[0], sin[0]
-        rotary_pos_emb = (cos, sin)
-
-        # decoding
-        residual = None
-        for idx, decoder_layer in enumerate(self.layers):
-            past_key_value = past_key_values[idx]
-            hidden_states, residual = decoder_layer(
-                hidden_states,
-                rotary_pos_emb=rotary_pos_emb,
-                past_key_value=past_key_value,
-                residual=residual,
-                attn_metadata=attn_metadata,
-                all_routed_experts=all_routed_experts,
-            )
-
-            # add visual features to the hidden states of first several layers
-            if deepstack_visual_embeds is not None and idx in range(len(deepstack_visual_embeds)):
-                hidden_states = hidden_states + residual
-                hidden_states = self._deepstack_process(
-                    hidden_states,
-                    visual_pos_masks,
-                    deepstack_visual_embeds[idx],
-                )
-                residual = None
-
-        # norm
-        hidden_states, _ = self.norm(hidden_states, residual)
-
-        return hidden_states
-
-    def _deepstack_process(self, hidden_states: torch.Tensor, visual_pos_masks: torch.Tensor,
-                           visual_embeds: torch.Tensor):
-        visual_pos_masks = visual_pos_masks.to(hidden_states.device)
-        visual_embeds = visual_embeds.to(hidden_states.device, hidden_states.dtype)
-        local = torch.zeros_like(hidden_states)
-        local.masked_scatter_(visual_pos_masks, visual_embeds)
-        hidden_states += local
-        return hidden_states
-
-
-class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
+class InternS1_1_ForConditionalGeneration(Qwen3VLForConditionalGeneration):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -126,7 +35,7 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
                  device: torch.device = None):
         super().__init__(config=config, ctx_mgr=ctx_mgr, dtype=dtype, device=device)
 
-        self.language_model = Qwen3VLMoeTextModel(config.text_config, dtype=dtype, device=device)
+        self.language_model = Qwen3MoeModel(config.text_config, dtype=dtype, device=device)
 
         # for router replay
         bm_ctx = get_build_model_context()
@@ -139,7 +48,6 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
-        mrope_position_ids: torch.Tensor = None,
         pixel_values: torch.Tensor = None,
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
@@ -150,8 +58,6 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
     ):
         """Model forward, return logits."""
 
-        visual_pos_masks = None
-        deepstack_visual_embeds = None
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
@@ -160,11 +66,12 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
                 pixel_values = pixel_values.to(dtype)
                 vis_pos_emb = (vis_pos_emb[0].to(dtype), vis_pos_emb[1].to(dtype))
 
-                # get image embeds and deepstack visual embeds
-                image_embeds, deepstack_visual_embeds = self.visual(pixel_values,
-                                                                    cu_seqlens=vis_cu_seqlens,
-                                                                    rotary_pos_emb=vis_pos_emb,
-                                                                    pos_embeds=pos_embeds)
+                # get image embeds
+                # different from qwen3vl, interns1_1 does not use deepstack visual embeds
+                image_embeds, _ = self.visual(pixel_values,
+                                              cu_seqlens=vis_cu_seqlens,
+                                              rotary_pos_emb=vis_pos_emb,
+                                              pos_embeds=pos_embeds)
 
                 # split image embeds per sample
                 split_sizes = (grid_thw.prod(-1) // self.visual.spatial_merge_size**2).tolist()
@@ -175,8 +82,6 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
                 expanded_image_mask = image_mask.unsqueeze(-1).expand_as(inputs_embeds)
                 inputs_embeds = inputs_embeds.masked_scatter(expanded_image_mask, image_embeds)
 
-                visual_pos_masks = expanded_image_mask
-
         # router replay
         all_routed_experts = None
         if self.enable_return_routed_experts:
@@ -184,18 +89,12 @@ class Qwen3VLMoeForConditionalGeneration(Qwen3VLForConditionalGeneration):
                                                       self.config.text_config.num_experts_per_tok),
                                                      dtype=torch.uint16)
 
-        hidden_states = self.language_model(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
-            inputs_embeds=inputs_embeds,
-            all_routed_experts=all_routed_experts,
-            mrope_position_ids=mrope_position_ids,
-            # args for deepstack
-            visual_pos_masks=visual_pos_masks,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-        )
+        hidden_states = self.language_model(input_ids=input_ids,
+                                            position_ids=position_ids,
+                                            past_key_values=past_key_values,
+                                            attn_metadata=attn_metadata,
+                                            inputs_embeds=inputs_embeds,
+                                            all_routed_experts=all_routed_experts)
 
         if all_routed_experts is None:
             return hidden_states

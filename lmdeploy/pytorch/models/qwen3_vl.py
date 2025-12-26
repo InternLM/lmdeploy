@@ -92,8 +92,7 @@ class Qwen3VLTextModel(Qwen3model):
 
         # build rotary embedding
         # TODO: zhouxinyu, add triton kernel for interleaved mrope
-        if not self.use_fope:
-            self.rotary_emb = Qwen3VLTextRotaryEmbedding(config, device=device)
+        self.rotary_emb = Qwen3VLTextRotaryEmbedding(config, device=device)
 
     def forward(
         self,
@@ -123,7 +122,7 @@ class Qwen3VLTextModel(Qwen3model):
         hidden_states = inputs_embeds
 
         # rotary embedding
-        if mrope_position_ids is None or self.use_fope:
+        if mrope_position_ids is None:
             cos, sin = self.rotary_emb(hidden_states, position_ids)
         else:
             mrope_position_ids = mrope_position_ids.unsqueeze(1)

@@ -3,12 +3,12 @@ from .builder import AutoModelConfigBuilder
 from .default import DefaultModelConfigBuilder
 
 
-class Qwen3VLModelConfigBuilder(AutoModelConfigBuilder):
+class InterS1_1_ModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type in ['qwen3_vl', 'qwen3_vl_moe']
+        return hf_config.model_type == 'interns1_1'
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
