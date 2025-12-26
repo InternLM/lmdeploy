@@ -83,6 +83,9 @@ jobs:
         run: |
           CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=allure-results --clean-alluredir
           CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m 'pr_test and gpu_num_1' -n 2 -x --alluredir=allure-results
+      - name: Update transformers
+        run: |
+          pip install transformers==4.57.3
       - name: Test restful server - turbomind Qwen3-32B
         run: |
           CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > turbomind_Qwen3-32B_start_restful.log 2>&1 &
@@ -101,6 +104,7 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          cat turbomind_Qwen3-32B_start_restful.log
           exit 1
       - name: Test restful server - turbomind InternVL3-38B
         run: |
@@ -120,6 +124,7 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          cat turbomind_InternVL3-38B_start_restful.log
           exit 1
       - name: Test restful server - turbomind Qwen3-30B-A3B
         run: |
@@ -139,6 +144,7 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          cat turbomind_Qwen3-30B-A3B_start_restful.log
           exit 1
       - name: Test restful server - pytorch Qwen3-30B-A3B
         run: |
@@ -158,6 +164,7 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          cat pytorch_Qwen3-30B-A3B_start_restful.log
           exit 1
       - name: Test restful server - pytorch Qwen3-VL-30B-A3B-Instruct
         run: |
@@ -177,6 +184,7 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          cat pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log
           exit 1
       - name: Test restful server - pytorch InternVL3_5-30B-A3B
         run: |
@@ -196,6 +204,7 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
+          cat pytorch_InternVL3_5-30B-A3B_start_restful.log
           exit 1
       - name: Generate reports
         if: always()
