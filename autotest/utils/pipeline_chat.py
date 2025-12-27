@@ -50,7 +50,6 @@ def run_pipeline_chat_test(config,
 
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
-        # quantization
         try:
             response = subprocess.run([cmd],
                                       shell=True,
@@ -59,7 +58,8 @@ def run_pipeline_chat_test(config,
                                       encoding='utf-8',
                                       errors='replace',
                                       env=env,
-                                      timeout=900)
+                                      timeout=900,
+                                      start_new_session=True)
         except subprocess.TimeoutExpired as e:
             assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
@@ -126,7 +126,6 @@ def run_pipeline_vl_chat_test(config,
 
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
-        # quantization
         try:
             response = subprocess.run([cmd],
                                       shell=True,
@@ -135,7 +134,8 @@ def run_pipeline_vl_chat_test(config,
                                       encoding='utf-8',
                                       errors='replace',
                                       env=env,
-                                      timeout=900)
+                                      timeout=900,
+                                      start_new_session=True)
         except subprocess.TimeoutExpired as e:
             assert False, f'Test command timed out after 15 minutes: {e.cmd}'
 
