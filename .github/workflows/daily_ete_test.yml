@@ -381,16 +381,8 @@ jobs:
             model: InternVL3_5-30B-A3B
             model_path: OpenGVLab/InternVL3_5-30B-A3B
             case_info: ['chat_completions_v1', 'generate']
-            generate_type: all
-            extra: '--logprobs-mode raw_logprobs --enable-return-routed-experts'
-            backend: pytorch
-          - tp: 2
-            model: InternVL3_5-30B-A3B
-            model_path: OpenGVLab/InternVL3_5-30B-A3B
-            case_info: ['chat_completions_v1', 'generate']
             generate_type: logprob
             extra: '--logprobs-mode raw_logprobs'
-            backend: turbomind
           - tp: 2
             model: Qwen3-VL-30B-A3B-Instruct
             model_path: Qwen/Qwen3-VL-30B-A3B-Instruct
