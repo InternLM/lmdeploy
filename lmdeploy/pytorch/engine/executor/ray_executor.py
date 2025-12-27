@@ -414,13 +414,13 @@ class RayExecutor(ExecutorBase):
             raise
         finally:
             logger.debug(f'RayExecutor DP[{dp_rank}] wait_tasks cleanup.')
-            # for task in tasks_to_cancel:
-            #     try:
-            #         ray.cancel(task)
-            #     except ray.exceptions.ActorDiedError:
-            #         logger.debug('RayExecutor worker has been killed before finish cancel task.')
-            #     except Exception as e:
-            #         logger.error(f'RayExecutor DP[{dp_rank}] Cancel wait_tasks failed: {e}')
+            for task in tasks_to_cancel:
+                try:
+                    ray.cancel(task)
+                except ray.exceptions.ActorDiedError:
+                    logger.debug('RayExecutor worker has been killed before finish cancel task.')
+                except Exception as e:
+                    logger.error(f'RayExecutor DP[{dp_rank}] Cancel wait_tasks failed: {e}')
 
     def stop(self):
         """Stop engine loop."""
