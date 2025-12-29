@@ -6,13 +6,20 @@
 #include <variant>
 
 #include <cuda_runtime.h>
-#include <driver_types.h>
 
 #include "src/turbomind/core/check.h"
 
 namespace turbomind::core {
 
 // picked from "cudaTypedefs.h"
+
+typedef struct CUmemcpyAttributes_st {
+    CUmemcpySrcAccessOrder srcAccessOrder;
+    CUmemLocation          srcLocHint;
+    CUmemLocation          dstLocHint;
+    unsigned int           flags;
+} CUmemcpyAttributes_v1;
+
 typedef CUresult(CUDAAPI* PFN_cuMemcpyBatchAsync_v12080)(CUdeviceptr_v2*        dsts,
                                                          CUdeviceptr_v2*        srcs,
                                                          size_t*                sizes,
