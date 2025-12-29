@@ -331,6 +331,8 @@ if (MSVC)
     CMAKE_CUDA_FLAGS_RELWITHDEBINFO)
     string(REGEX REPLACE "-Wall" " /W0 " ${flag_var} "${${flag_var}}")
   endforeach()
+  # avoid min/max macro in "windows.h" conflict with std::min/std::max
+  add_definitions(-DNOMINMAX=1)
 endif()
 
 include_directories(

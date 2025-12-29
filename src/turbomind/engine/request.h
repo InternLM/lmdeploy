@@ -109,7 +109,7 @@ struct Request {
 
     std::shared_ptr<RequestMetrics> metrics;
 
-    int ec;  // set when disabling conflicting requests
+    int ec = -1;  // set when disabling conflicting requests
 
     enum {
         kOk            = 0,
