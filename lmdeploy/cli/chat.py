@@ -32,6 +32,10 @@ def build_pipe(model_path, backend, **kwargs):
             from .utils import get_lora_adapters
             adapters = get_lora_adapters(kwargs['adapters'])
             engine_config.adapters = adapters
+    # disable metrics to avoid installing prometheus_client, which is not needed
+    # in interactive chat
+    engine_config.enable_metrics = False
+
     # set chat template config
     chat_template = kwargs.get('chat_template', None)
     chat_template_config = None

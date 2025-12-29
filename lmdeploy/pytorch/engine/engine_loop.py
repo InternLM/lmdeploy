@@ -13,7 +13,7 @@ from lmdeploy.messages import RequestMetrics
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
-from lmdeploy.pytorch.utils import wait_for_async_tasks
+from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
 from lmdeploy.utils import get_logger
 
 from .engine import InferOutput, ResponseType, response_reqs
@@ -465,13 +465,16 @@ class EngineLoop:
         try:
             await wait_for_async_tasks(tasks)
         except asyncio.CancelledError:
-            logger.debug('EngineLoop wait_tasks cancelled.')
+            logger.info('EngineLoop wait_tasks cancelled.')
             raise
         except BaseException:
             logger.error('EngineLoop wait_tasks failed.')
             raise
         finally:
             logger.debug('EngineLoop wait_tasks cleanup.')
+            # Make sure task finished/cancelled here.
+            # Error might happen if executor release before executor wait_tasks finish.
+            await cancel_async_tasks(tasks)
 
     def stop(self):
         """Stop all loops."""

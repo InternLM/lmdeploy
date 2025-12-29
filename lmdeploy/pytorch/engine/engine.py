@@ -466,6 +466,7 @@ class Engine(EngineBase):
             logger.exception('Engine main loop failed.')
             raise
         finally:
+            logger.debug('Engine main loop finally cleanup.')
             self._loop_finally()
 
     def close(self):

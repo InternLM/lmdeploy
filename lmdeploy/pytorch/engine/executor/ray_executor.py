@@ -401,13 +401,16 @@ class RayExecutor(ExecutorBase):
                 # It is safe to ignore wait tasks on died actor
                 logger.info('RayExecutor worker has been killed before finish wait_tasks.')
 
-        tasks = [event_loop.create_task(_wait_single_worker(worker)) for worker in self.workers]
+        tasks = [
+            event_loop.create_task(_wait_single_worker(worker), name=f'WorkerWaitTasks_{idx}')
+            for idx, worker in enumerate(self.workers)
+        ]
         if self._prefetch_task is not None:
             tasks.append(self._prefetch_task)
         try:
             await wait_for_async_tasks(tasks)
         except asyncio.CancelledError:
-            logger.debug(f'RayExecutor DP[{dp_rank}] wait_tasks cancelled.')
+            logger.info(f'RayExecutor DP[{dp_rank}] wait_tasks cancelled.')
             raise
         except BaseException:
             logger.error(f'RayExecutor DP[{dp_rank}] wait_tasks failed.')

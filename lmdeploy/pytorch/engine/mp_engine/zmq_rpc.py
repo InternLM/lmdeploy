@@ -94,7 +94,8 @@ class AsyncRPCServer:
             response = dict(success=False, request_id=request_id, error=str(e))
         self.send_multipart(client_id, response)
 
-    async def _method_async_streaming_task(self, stream_id, method: Callable, args: tuple, kwargs: Dict):
+    async def _method_async_streaming_task(self, stream_id: int, init_event: asyncio.Event, method: Callable,
+                                           args: tuple, kwargs: Dict):
         """Call method in a task for streaming."""
         stream_out = dict(
             event=asyncio.Event(),
@@ -104,6 +105,7 @@ class AsyncRPCServer:
         self.stream_output[stream_id] = stream_out
         try:
             generator = method(*args, **kwargs)
+            init_event.set()
             async for result in generator:
                 self._engine_output_gather.add(stream_id, result)
                 stream_out['result'] = result
@@ -113,6 +115,7 @@ class AsyncRPCServer:
             stream_out['event'].set()
         finally:
             stream_out['stopped'] = True
+            init_event.set()
 
     async def get_stream_output(self, stream_id: int):
         """Get streaming output."""
@@ -120,7 +123,7 @@ class AsyncRPCServer:
             raise ValueError(f'Stream ID {stream_id} not found')
         stream_out = self.stream_output[stream_id]
         event = stream_out['event']
-        await stream_out['event'].wait()
+        await event.wait()
         event.clear()
         result = stream_out['result']
         stopped = stream_out['stopped']
@@ -128,10 +131,10 @@ class AsyncRPCServer:
         if stopped:
             self.stream_output.pop(stream_id)
         if 'error' in stream_out:
-            raise Exception(stream_out['error'])
+            raise stream_out['error']
         return result, stopped
 
-    def call_method_async(self, client_id, method: Callable, request: Dict):
+    async def call_method_async(self, client_id, method: Callable, request: Dict):
         """Call method async."""
         request_id = request.get('request_id')
         method_name = request.get('method')
@@ -142,10 +145,17 @@ class AsyncRPCServer:
         if request.get('streaming', False):
             # if method is a streaming method, use a different task
             stream_id = self._get_next_stream_id()
-            task = event_loop.create_task(self._method_async_streaming_task(stream_id, method, args, kwargs), name=name)
+            init_event = asyncio.Event()
+            task = event_loop.create_task(self._method_async_streaming_task(stream_id, init_event, method, args,
+                                                                            kwargs),
+                                          name=name)
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
             response = dict(success=True, request_id=request_id, result=stream_id)
+            await init_event.wait()
+            session_id = kwargs.get('session_id', None)
+            if session_id is None:
+                session_id = args[0]
             self.send_multipart(client_id, response)
         else:
             task = event_loop.create_task(self._method_async_task(client_id, request_id, method, args, kwargs),
@@ -168,7 +178,7 @@ class AsyncRPCServer:
         else:
             method_type, method = self.methods[method_name]
             if method_type in ('async', 'async_streaming'):
-                self.call_method_async(client_id, method, request)
+                await self.call_method_async(client_id, method, request)
             else:
                 self.call_method_default(client_id, method, request)
 

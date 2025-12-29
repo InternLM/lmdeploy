@@ -217,3 +217,14 @@ async def wait_for_async_tasks(tasks: Sequence[asyncio.Task],
         raise
 
     return done, pending
+
+
+async def cancel_async_tasks(tasks: Sequence[asyncio.Task]):
+    """Cancel async tasks."""
+    if isinstance(tasks, asyncio.Task):
+        tasks = [tasks]
+
+    tasks = list(task for task in tasks if not task.done())
+    for task in tasks:
+        task.cancel()
+    return await asyncio.gather(*tasks, return_exceptions=True)
