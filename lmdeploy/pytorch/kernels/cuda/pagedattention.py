@@ -42,6 +42,7 @@ def _fwd_grouped_split_kernel(
     Cache_seqlens,
     Block_offsets,
     Acc_out,
+    alibi_slopes_ptr,
     stride_qbs: tl.constexpr,
     stride_qh: tl.constexpr,
     stride_qd: tl.constexpr,
@@ -95,6 +96,10 @@ def _fwd_grouped_split_kernel(
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
+    if alibi_slopes_ptr is not None:
+        alibi_slopes = tl.load(alibi_slopes_ptr + cur_head, mask=mask_h, other=1.0) * tl_log2(math.e)
+    else:
+        alibi_slopes = None
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
@@ -180,6 +185,11 @@ def _fwd_grouped_split_kernel(
                 -float('inf'),
             )
 
+        if alibi_slopes_ptr is not None:
+            relative_pos = kv_seqlen - start_n - offs_n[None, :]
+            bias = -tl.abs(relative_pos).to(tl.float32) * alibi_slopes[:, None]
+            qk += bias
+
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
         p = tl_exp2(qk - m_i_new[:, None])
@@ -219,6 +229,7 @@ def _fwd_grouped_split_quant_kernel(
     Cache_seqlens,
     Block_offsets,
     Acc_out,
+    alibi_slopes_ptr,
     stride_qbs: tl.constexpr,
     stride_qh: tl.constexpr,
     stride_qd: tl.constexpr,
@@ -284,6 +295,10 @@ def _fwd_grouped_split_quant_kernel(
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
+    if alibi_slopes_ptr is not None:
+        alibi_slopes = tl.load(alibi_slopes_ptr + cur_head, mask=mask_h, other=1.0) * tl_log2(math.e)
+    else:
+        alibi_slopes = None
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
@@ -397,6 +412,11 @@ def _fwd_grouped_split_quant_kernel(
                 qk,
                 -float('inf'),
             )
+
+        if alibi_slopes_ptr is not None:
+            relative_pos = kv_seqlen - start_n - offs_n[None, :]
+            bias = -tl.abs(relative_pos).to(tl.float32) * alibi_slopes[:, None]
+            qk += bias
 
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
@@ -544,6 +564,7 @@ def flash_attn_with_kvcache(
     softcap: float = None,
     scheduler_metadata: Tensor = None,  # not used, for align with fa
     # args not in fa
+    alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
     quant_policy: Literal[0, 4, 8] = 0,
@@ -655,6 +676,7 @@ def flash_attn_with_kvcache(
                                               cache_seqlens,
                                               page_table,
                                               acc,
+                                              alibi_slopes,
                                               stride_qbs=q.stride(-3),
                                               stride_qh=q.stride(-2),
                                               stride_qd=q.stride(-1),
@@ -703,6 +725,7 @@ def flash_attn_with_kvcache(
                                         cache_seqlens,
                                         page_table,
                                         acc,
+                                        alibi_slopes,
                                         stride_qbs=q.stride(-3),
                                         stride_qh=q.stride(-2),
                                         stride_qd=q.stride(-1),

@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from ..default.w8a8_kernels import per_channel_quant
-from .alibi_pagedattention import alibi_paged_attention_fwd
 from .apply_rotary_pos_emb import apply_rotary_pos_emb
 from .fill_kv_cache import fill_kv_cache
 from .flashattention import flash_attn_varlen_func
@@ -16,7 +15,6 @@ __all__ = [
     'apply_rotary_pos_emb',
     'fused_moe',
     'flash_attn_with_kvcache',
-    'alibi_paged_attention_fwd',
     'fill_kv_cache',
     'multinomial_sampling',
     'rms_norm',

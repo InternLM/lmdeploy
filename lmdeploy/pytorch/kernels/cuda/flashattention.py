@@ -54,8 +54,8 @@ def _load_kv(ptrs, boundary_check: tl.constexpr):
 
 
 @triton.jit
-def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, history_mask,
-                       kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
+def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, alibi_slope,
+                       global_offs_m, history_mask, kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
                        logit_softcapping: tl.constexpr, k_bound: tl.constexpr, v_bound: tl.constexpr,
                        shared_kv: tl.constexpr, block_sparse_size: tl.constexpr, BLOCK_N: tl.constexpr,
                        BLOCK_DK1: tl.constexpr):
@@ -116,6 +116,11 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
             m_i_new = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_i_new[:, None]
 
+        if alibi_slope is not None:
+            relative_pos = start_n + offs_n[None, :] - global_offs_m[:, None]
+            bias = -tl.abs(relative_pos).to(tl.float32) * alibi_slope * tl_log2(math.e)
+            qk += bias
+
         # -- compute p, m_i and l_i
         p = tl_exp2(qk)
         alpha = tl_exp2(m_i - m_i_new)
@@ -168,6 +173,7 @@ def _flash_prefill_fwd_kernel(
     kv_start_loc_ptr,
     kv_seqlens_ptr,
     sinks,
+    alibi_slopes_ptr,
     sm_scale,
     stride_qs: tl.constexpr,
     stride_qh: tl.constexpr,
@@ -253,6 +259,13 @@ def _flash_prefill_fwd_kernel(
         order=(1, 0),
     )
 
+    # for alibi
+    if alibi_slopes_ptr is not None:
+        alibi_slope = tl.load(alibi_slopes_ptr + head_id)
+    else:
+        alibi_slope = None
+    global_offs_m = history_len + offs_m
+
     if BLOCK_DK + BLOCK_DK1 == head_dim_k:
         k_bound0: tl.constexpr = None
         k_bound1: tl.constexpr = (1, )
@@ -307,6 +320,8 @@ def _flash_prefill_fwd_kernel(
                                        loop_start,
                                        loop_end,
                                        sm_scale,
+                                       alibi_slope,
+                                       global_offs_m,
                                        history_mask,
                                        kv_min_loc,
                                        causal_mask=False,
@@ -335,6 +350,8 @@ def _flash_prefill_fwd_kernel(
                                        loop_start,
                                        loop_end,
                                        sm_scale,
+                                       alibi_slope,
+                                       global_offs_m,
                                        history_mask,
                                        kv_min_loc,
                                        causal_mask=True,
@@ -473,6 +490,7 @@ def flash_attn_varlen_func(
     kv_start_loc: Tensor = None,
     kv_seqlens: Tensor = None,
     # args not in fa
+    alibi_slopes: Tensor = None,
     sinks: Tensor = None,
     block_sparse_size: int = 1,
     kv_layout: str = 'hsd',
@@ -566,6 +584,7 @@ def flash_attn_varlen_func(
         kv_start_loc,
         kv_seqlens,
         sinks,
+        alibi_slopes,
         sm_scale=softmax_scale,
         stride_qs=q.stride(0),
         stride_qh=q.stride(1),

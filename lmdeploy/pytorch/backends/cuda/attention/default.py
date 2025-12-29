@@ -70,12 +70,11 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         )
         assert not (alibi and not causal)
 
-        from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd, fill_kv_cache, flash_attn_varlen_func,
-                                                   flash_attn_with_kvcache, flatten_kv_cache)
+        from lmdeploy.pytorch.kernels.cuda import (fill_kv_cache, flash_attn_varlen_func, flash_attn_with_kvcache,
+                                                   flatten_kv_cache)
 
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = flash_attn_with_kvcache
-        self.alibi_paged_attention_fwd = alibi_paged_attention_fwd
         self.flatten_kv_cache = flatten_kv_cache
         self.flash_attention_fwd = flash_attn_varlen_func
 
@@ -172,8 +171,6 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
     ) -> torch.Tensor:
         """forward."""
         block_offsets = attn_metadata.block_offsets
-        q_start_loc = attn_metadata.q_start_loc
-        q_seqlens = attn_metadata.q_seqlens
         kv_start_loc = attn_metadata.kv_start_loc
         kv_seqlens = attn_metadata.kv_seqlens
         kv_flatten_size = attn_metadata.kv_flatten_size
@@ -193,28 +190,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
 
         is_decoding = attn_metadata.is_decoding
 
-        # for alibi attention, not optimized yet
         if self.alibi:
-            q_shape = query.shape
-            o_shape = q_shape[:-1] + (self.v_head_size, )
-            attn_output = query.new_empty(o_shape)
-            self.alibi_paged_attention_fwd(
-                query,
-                k_cache,
-                v_cache,
-                attn_output,
-                block_offsets,
-                b_start_loc=q_start_loc,
-                b_seq_len=q_seqlens,
-                b_kv_seq_len=kv_seqlens,
-                max_input_len=max_q_seqlen,
-                head_offset=self.alibi_head_offset,
-                num_heads=self.alibi_num_heads,
-                k_scales_zeros=k_scales_zeros,
-                v_scales_zeros=v_scales_zeros,
-                quant_policy=quant_policy,
-            )
-            return attn_output
+            assert self.alibi_slopes is not None, 'alibi_slopes is not set.'
 
         if is_decoding:
             # decoding
@@ -231,6 +208,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 window_size=self.sliding_window,
                 # custom args
                 sinks=learnable_sink,
+                alibi_slopes=self.alibi_slopes,
                 quant_policy=quant_policy,
                 k_scales_zeros=k_scales_zeros,
                 v_scales_zeros=v_scales_zeros,
@@ -269,6 +247,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 causal=self.causal,
                 # custom args
                 sinks=learnable_sink,
+                alibi_slopes=self.alibi_slopes,
                 block_sparse_size=self.block_sparse_size,
                 kv_layout=kv_layout,
             )

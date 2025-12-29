@@ -33,6 +33,29 @@ def _make_bias(q_seqlens, history_lens, neg_val, causal):
         return (~mask).float() * neg_val
 
 
+def _make_bias_alibi(q_seqlens, history_lens, neg_val, causal, alibi_slopes):
+
+    batch_size = q_seqlens.shape[0]
+    kv_seqlens = q_seqlens + history_lens
+    max_q_len = q_seqlens.max().item()
+    max_kv_len = kv_seqlens.max().item()
+
+    device = 'cuda'
+    q_ranges = torch.arange(max_q_len, device=device)
+    seq_ranges = q_ranges.repeat(batch_size, 1) + history_lens[:, None]
+
+    kv_ranges = torch.arange(max_kv_len, device=device)
+    kv_ranges = kv_ranges.repeat(batch_size, 1)
+
+    diff = (seq_ranges[:, :, None] - kv_ranges[:, None, :]).abs()
+    slope_diff = -diff[:, None] * alibi_slopes[None, :, None, None]
+
+    # add bias
+    bias = _make_bias(q_seqlens, history_lens, neg_val, causal)
+    bias = bias[:, None] + slope_diff
+    return bias
+
+
 def _make_block_sparse_bias(q_seqlens: torch.Tensor, history_lens: torch.Tensor, neg_val: float,
                             block_sparse_size: int):
     """Make block sparse bias."""
@@ -71,7 +94,9 @@ def _naive_attention(batched_q, batched_kv, bias, sinks=None):
     v = v.unsqueeze(2).expand(-1, -1, group, -1, -1).flatten(1, 2)
 
     qk = torch.matmul(q, k) / math.sqrt(head_dim)
-    attn_weight = qk + bias[:, None]
+    if bias.dim() == 3:
+        bias = bias[:, None]
+    attn_weight = qk + bias
     if sinks is None:
         attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
     else:
@@ -338,3 +363,44 @@ class TestFlashAttention:
                                      causal=True)
         gt = _conti_input(block_sparse_gt, q_seqlens)
         torch.testing.assert_close(out, gt, atol=1e-3, rtol=1e-5)
+
+    @pytest.fixture
+    def alibi_slopes(self, num_heads_q):
+        yield torch.rand(num_heads_q, dtype=torch.float32, device='cuda')
+
+    @pytest.fixture
+    def alibi_bias(self, q_seqlens, history_lens, causal, alibi_slopes):
+        neg_val = -1e30
+        yield _make_bias_alibi(q_seqlens, history_lens, neg_val, causal, alibi_slopes)
+
+    @pytest.fixture
+    def alibi_gt(self, batched_q, batched_kv, alibi_bias):
+        yield _naive_attention(batched_q, batched_kv, alibi_bias)
+
+    @pytest.fixture
+    def conti_alibi_gt(self, alibi_gt, q_seqlens):
+        yield _conti_input(alibi_gt, q_seqlens)
+
+    @pytest.mark.parametrize('head_dim_k', [128], indirect=True)
+    @pytest.mark.parametrize('head_dim_v', [128], indirect=True)
+    @pytest.mark.parametrize('num_heads_q', [40], indirect=True)
+    @pytest.mark.parametrize('num_heads_k', [8], indirect=True)
+    @pytest.mark.parametrize('causal', [True], indirect=True)
+    @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [
+        ([30, 50, 70, 90], [50, 40, 30, 20]),
+    ], indirect=True)
+    def test_alibi(self, conti_q, conti_kv, q_seqlens, cu_seqlens_q, cu_seqlens_k, causal, alibi_slopes,
+                   conti_alibi_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attn_varlen_func
+        max_seq_len = q_seqlens.max().item()
+
+        conti_k, conti_v = conti_kv
+        out = flash_attn_varlen_func(conti_q,
+                                     conti_k,
+                                     conti_v,
+                                     cu_seqlens_q,
+                                     cu_seqlens_k,
+                                     max_seqlen_q=max_seq_len,
+                                     alibi_slopes=alibi_slopes,
+                                     causal=causal)
+        torch.testing.assert_close(out, conti_alibi_gt, atol=1e-3, rtol=1e-5)

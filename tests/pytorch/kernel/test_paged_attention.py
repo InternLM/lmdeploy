@@ -25,6 +25,27 @@ def _make_bias(q_seqlens, history_lens, neg_val):
     return mask.float() * neg_val
 
 
+def _make_alibi_bias(q_seqlens, history_lens, neg_val, alibi_slopes):
+    batch_size = q_seqlens.shape[0]
+    kv_seqlens = q_seqlens + history_lens
+    max_seq_len = q_seqlens.max().item()
+    max_kv_len = kv_seqlens.max().item()
+
+    seq_ranges = torch.arange(max_seq_len).cuda()
+    seq_ranges = seq_ranges.repeat(batch_size, 1) + history_lens[:, None]
+
+    kv_ranges = torch.arange(max_kv_len).cuda()
+    kv_ranges = kv_ranges.repeat(batch_size, 1)
+
+    diff = (seq_ranges[:, :, None] - kv_ranges[:, None, :]).abs()
+    slope_diff = -diff[:, None] * alibi_slopes[None, :, None, None]
+
+    # add bias
+    bias = _make_bias(q_seqlens, history_lens, neg_val)
+    bias = bias[:, None] + slope_diff
+    return bias
+
+
 def _make_block_sparse_bias(q_seqlens: torch.Tensor, history_lens: torch.Tensor, neg_val: float,
                             block_sparse_size: int):
     """Make block sparse bias."""
@@ -97,7 +118,9 @@ def _naive_attention(batched_q, batched_kv, bias, sinks=None):
     v = v.unsqueeze(2).expand(-1, -1, group, -1, -1).flatten(1, 2)
 
     qk = torch.matmul(q, k) / math.sqrt(head_dim)
-    attn_weight = qk + bias[:, None]
+    if bias.dim() == 3:
+        bias = bias[:, None]
+    attn_weight = qk + bias
     if sinks is None:
         attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
     else:
@@ -502,5 +525,37 @@ class TestPagedAttentionBlockDecoding(TestPagedAttentionBase):
                                       blocked_v,
                                       page_table=block_offsets,
                                       cache_seqlens=kv_seqlens,
+                                      kv_layout=layout)
+        torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
+
+
+class TestPagedAttentionAlibi(TestPagedAttentionBase):
+
+    @pytest.fixture
+    def alibi_slopes(self, num_heads_q):
+        yield torch.rand(num_heads_q, dtype=torch.float32, device='cuda')
+
+    @pytest.fixture
+    def mask(self, seq_lens, history_lens, alibi_slopes):
+        neg_val = -1e30
+        yield _make_alibi_bias(seq_lens, history_lens, neg_val, alibi_slopes)
+
+    @pytest.mark.parametrize('feat_dim', [128], indirect=True)
+    @pytest.mark.parametrize('feat_dim_v', [128], indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(40, 8)], indirect=True)
+    @pytest.mark.parametrize('history_lens', [(52, 40, 32, 20)], indirect=True)
+    @pytest.mark.parametrize('layout', ['bshd'], indirect=True)
+    @pytest.mark.parametrize('block_size', [16], indirect=True)
+    def test_paged_attention(self, conti_q, blocked_kv, block_offsets, kv_seqlens, layout, alibi_slopes, conti_gt):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
+
+        blocked_k, blocked_v = blocked_kv
+
+        out = flash_attn_with_kvcache(conti_q,
+                                      blocked_k,
+                                      blocked_v,
+                                      page_table=block_offsets,
+                                      cache_seqlens=kv_seqlens,
+                                      alibi_slopes=alibi_slopes,
                                       kv_layout=layout)
         torch.testing.assert_close(out, conti_gt, atol=1e-3, rtol=1e-5)
