@@ -647,7 +647,7 @@ void TurboMind::Impl::WarmUp(int rank)
         }
 
         auto str = Join(bss.begin(), bss.end(), ", ");
-        TM_LOG_INFO("[Engine] Tuning sequence: %s", str.c_str());
+        TM_LOG_INFO("[Engine] Warm-up lengths: %s", str.c_str());
 
         if (!bss.empty()) {
             const auto                         max_bs = *std::max_element(bss.begin(), bss.end());

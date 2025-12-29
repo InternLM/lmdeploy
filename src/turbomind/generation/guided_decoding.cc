@@ -21,7 +21,7 @@ GuidedDecoding::GuidedDecoding(const BaseGenerationParam& base, const comm::Host
 {
     const auto bitmask_size = xgrammar::GetBitmaskSize(vocab_size_padded_);
 
-    bitmask_buf_    = {{max_batch_size_, vocab_size_}, kCPUpinned};
+    bitmask_buf_    = {{max_batch_size_, bitmask_size}, kCPUpinned};
     output_ids_buf_ = {max_batch_size_, kCPUpinned};
 
     for (int i = 0; i < phases; ++i) {
@@ -38,17 +38,26 @@ void GuidedDecoding::Setup(int phase, TensorMap& env)
     d.matchers.clear();
     d.active = false;
     for (const auto& r : b.rc) {
-        d.matchers.push_back(r->req->matcher);
+        if (d.matchers.emplace_back(r->req->matcher)) {
+            d.active = true;
+        }
     }
 }
 
 void GuidedDecoding::FillMask(int phase, TensorMap& env)
 {
     if (auto& d = *data_.at(phase); d.active) {
-        DLTensor dlbitmask{bitmask_buf_.data(), DLDevice{kDLCPU, 0}, bitmask_buf_.ndim(), xgrammar::GetBitmaskDLType()};
+        static_assert(sizeof(ssize_t) == sizeof(int64_t));
+        DLTensor dlbitmask{bitmask_buf_.data(),
+                           DLDevice{kDLCPU, 0},
+                           bitmask_buf_.ndim(),
+                           xgrammar::GetBitmaskDLType(),
+                           (int64_t*)bitmask_buf_.shape().data(),
+                           nullptr,
+                           0};
         if (tp_group_->rank() == 0) {
             for (size_t i = 0; i < d.matchers.size(); ++i) {
-                if (const auto& matcher = d.matchers[i]) {
+                if (const auto& matcher = d.matchers[i]; matcher && !matcher->IsTerminated()) {
                     matcher->FillNextTokenBitmask(&dlbitmask, i);
                 }
                 else {
@@ -79,7 +88,7 @@ void GuidedDecoding::Update(int phase, TensorMap& env)
         core::Context::stream().Sync();
         if (tp_group_->rank() == 0) {
             for (size_t i = 0; i < d.matchers.size(); ++i) {
-                if (const auto& matcher = d.matchers[i]) {
+                if (const auto& matcher = d.matchers[i]; matcher && !matcher->IsTerminated()) {
                     matcher->AcceptToken(output_ids_buf_[i]);
                 }
             }
