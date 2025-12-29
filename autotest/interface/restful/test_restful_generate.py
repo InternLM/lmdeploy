@@ -1121,9 +1121,10 @@ class TestGenerateComprehensive:
         text2 = data2['text']
         finish_reason = data2['meta_info']['finish_reason']['type']
 
-        if '.' in text2:
-            assert text2.strip().endswith('.'), \
-                "Stop token '.' should cause generation to end at period"
+        assert '. ' not in text2 and not text2.strip().endswith(
+            '.'), "Stop token '.' should cause generation to end at period"
+
+        assert not text2.strip().endswith('.'), "Stop token '.' should cause generation to end at period"
 
         assert finish_reason in ['stop', 'eos'], \
             f'Expected to end due to stop token, actual: {finish_reason}, content is {text2}'
