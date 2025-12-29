@@ -620,7 +620,7 @@ void TurboMind::Impl::WarmUp(int rank)
         std::ifstream ifs(str);
         const int     n_imported = linear.Import(ifs);
         if (tp_rank == 0) {
-            TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
+            TM_LOG_INFO("[GEMM] %d records imported", n_imported);
         }
         return;
     }
@@ -647,7 +647,7 @@ void TurboMind::Impl::WarmUp(int rank)
         }
 
         auto str = Join(bss.begin(), bss.end(), ", ");
-        TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
+        TM_LOG_INFO("[Engine] Tuning sequence: %s", str.c_str());
 
         if (!bss.empty()) {
             const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
@@ -662,7 +662,7 @@ void TurboMind::Impl::WarmUp(int rank)
 
             for (auto token_num : bss) {
 
-                TM_LOG_INFO("[Gemm2] %d", token_num);
+                TM_LOG_INFO("[WarmUp] %d", token_num);
 
                 auto r = CreateRequest();
 
@@ -674,32 +674,39 @@ void TurboMind::Impl::WarmUp(int rank)
                 param.gen_cfg.max_new_tokens = 1;
                 param.tensors                = std::make_shared<TensorMap>(inputs);
 
-                ModelRequest::OutputParam out;
+                std::promise<void> promise;
 
-                std::promise<int> promise;
-                auto              future = promise.get_future();
+                bool flag   = true;
+                auto future = promise.get_future();
 
-                out = r->Forward(std::move(param), [&] {
-                    if (auto state = out.state->exchange(nullptr)) {
-                        promise.set_value(state->status);
+                ModelRequest::OutputParam out = r->Forward(std::move(param), [&]() {
+                    if (std::exchange(flag, false)) {
+                        promise.set_value();
                     }
                 });
 
-                if (auto status = future.get(); status != Request::kFinish) {
-                    TM_LOG_ERROR("Warm-up for %d tokens failed with status %d", status);
+                future.get();
+
+                int status = -1;
+                if (auto state = out.state->exchange(nullptr)) {
+                    status = state->status;
+                }
+
+                if (status != Request::kFinish) {
+                    TM_LOG_ERROR("[Engine] Warm-up for %d tokens failed with status %d", (int)token_num, (int)status);
                 }
             }
 
             auto tock = std::chrono::steady_clock::now();
 
-            TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
+            TM_LOG_INFO("[WarmUp] Warm-up finished in %.2f seconds.",
                         std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
         }
 
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);
             const auto    n_records = linear.Export(ofs);
-            TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
+            TM_LOG_INFO("[GEMM] %d records exported.", n_records);
         }
     }
 

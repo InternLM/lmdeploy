@@ -13,7 +13,7 @@ if(NOT pybind11_FOUND)
 endif()
 
 pybind11_add_module(${PROJECT_NAME} bind.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE turbomind)
+target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
 
 pybind11_add_module(_xgrammar xgrammar_bind.cpp)
 target_link_libraries(_xgrammar PRIVATE core xgrammar)

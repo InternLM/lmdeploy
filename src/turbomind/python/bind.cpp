@@ -12,7 +12,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
-#include <xgrammar/xgrammar.h>
+#include "xgrammar/compiler.h"
 
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
