@@ -76,7 +76,7 @@ struct Engine::Impl {
 
     void Accept(const Requests& rs, vector<Signal>& signals);
 
-    Signal Interrupt(shared_ptr<RequestCache> c, int status);
+    void Interrupt(RequestCache& c);
 
     // Allocation of memory / compute resources
     void Schedule();
@@ -192,7 +192,7 @@ Engine::Impl::Impl(DataType      dtype,
         data_.emplace_back();
     }
 
-    executor_ = ModelExecutor{model_, device_id_, outbound_, inbound_};
+    executor_ = ModelExecutor{model_, ctx, device_id_, outbound_, inbound_};
 
     CreateSequenceManager();  // initializes `session_len_trunc_`
 
@@ -332,26 +332,30 @@ void Engine::Impl::Kill(const Requests& kills, vector<Signal>& signals)
     }
 }
 
-Signal Engine::Impl::Interrupt(shared_ptr<RequestCache> c, int status)
+void Engine::Impl::Interrupt(RequestCache& c)
 {
-    auto& s = *TM_CHECK_NOTNULL(c->seq);
-    if (c->req->session.end_flag) {
+    auto& s = *TM_CHECK_NOTNULL(c.seq);
+    if (c.req->session.end_flag) {
         seq_mgr_->CacheGeneration(s);
-        TM_CHECK(seq_mgr_->Erase(c->req->id));
+        TM_CHECK(seq_mgr_->Erase(c.req->id));
     }
     else {
         seq_mgr_->UpdateAndSetUnlock(s);
     }
-    c->seq = nullptr;
-    return [r = c->req, len = c->seq_len, status] { UpdateState(*r, status, len); };
+    c.seq = nullptr;
 }
 
 void Engine::Impl::Cancel(vector<int>& indices, vector<Signal>& signals)
 {
     auto& s = states_.at(0);
     for (const auto& i : indices) {
-        s.rc[i]->done = true;
-        signals.push_back(Interrupt(std::move(s.rc[i]), Request::kCancel));
+        auto& c = TM_CHECK_NOTNULL(s.rc[i]);
+        c->done = true;
+        Interrupt(*c);
+        signals.push_back([r = std::move(c->req), l = c->seq_len] {  //
+            UpdateState(*r, Request::kCancel, l);
+        });
+        c.reset();
         s.finish += 1;
     }
 }
@@ -657,8 +661,13 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
                 if (const int new_tokens = c.seq_len - s.tokens.size()) {
                     s.tokens.insert(s.tokens.end(), c.token_ids + c.seq_len - new_tokens, c.token_ids + c.seq_len);
                 }
-                if (c.req->stream_output) {
-                    signals.push_back([this, r = c.req, l = sequence_length[i]] {  //
+                if (TM_UNLIKELY(finished[i])) {
+                    signals.push_back([this, r = c.req, l = c.seq_len] {  //
+                        UpdateState(*r, Request::kFinish, l);
+                    });
+                }
+                else if (c.req->stream_output) {
+                    signals.push_back([this, r = c.req, l = c.seq_len] {  //
                         UpdateState(*r, Request::kOk, l);
                     });
                 }
@@ -682,14 +691,16 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
                 c.beta  = c.generating;
             }
             else {
+                // Just got swaped-out
                 c.alpha = c.beta = 0;
             }
         }
     }
 
     for (auto& x : s.rc) {
-        if (x->done) {
-            signals.push_back(Interrupt(std::move(x), Request::kFinish));
+        if (TM_UNLIKELY(x->done)) {
+            Interrupt(*x);
+            x.reset();
             s.finish += 1;
         }
     }
@@ -783,6 +794,7 @@ void Engine::Impl::InternalThreadEntry()
                 break;
             }
 
+            // Must assume `d` is not the same one as above
             TM_CHECK_NOTNULL(d);
 
             core::Context::stream().Wait(d->done);
@@ -817,8 +829,6 @@ Engine::Engine(DataType      dtype,
     impl_{std::make_unique<Impl>(dtype, param, std::move(model), ctx, gateway, device_id, dp_rank, phases)}
 {
 }
-
-void Engine::WarmUp() {}
 
 void Engine::Start()
 {

@@ -499,7 +499,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
     }
 
-    if (d.prefill.n && !isTuning()) {
+    if (d.prefill.n && !gIsWarmUp()) {
         const int offset = d.decode.n;
         // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
         // disable split kv for prefill for now
@@ -517,7 +517,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         }
     }
 
-    if (d.decode.n && !isTuning()) {
+    if (d.decode.n && !gIsWarmUp()) {
         auto params = CreateParams(0, d.decode, kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
@@ -530,7 +530,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         check_cuda_error(cudaStreamWaitEvent(stream, aux_event_));
     }
 
-    if (isTuning()) {
+    if (gIsWarmUp()) {
         rng_.set_stream(stream);
         rng_.GenerateUniform(attn.data<T>(), attn.size(), .02f, -.01f);
     }

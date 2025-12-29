@@ -109,7 +109,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                      st);
     sync_check_cuda_error();
 
-    if (isTuning()) {
+    if (gIsWarmUp()) {
         std::mt19937     g;
         const auto       expert_ids = SampleUniform(tokens, expert_num, param_.experts_per_token, g);
         std::vector<int> cnt(expert_num);

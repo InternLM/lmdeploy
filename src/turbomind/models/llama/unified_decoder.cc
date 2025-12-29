@@ -180,7 +180,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         // stack_alloc->iter();
 
         /// TODO: do not skip the layers when they are heterogeneous
-        if (isTuning() && layer >= tune_layer_num_) {
+        if (gIsWarmUp() && layer >= tune_layer_num_) {
             continue;
         }
 

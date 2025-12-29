@@ -495,7 +495,7 @@ def _get_metrics(metrics):
             out.req_metrics = RequestMetrics(token_timestamp=time.time())
         else:
             events = [
-                EngineEvent(EventType.QUEUED, metrics.enque_time / 1000000),
+                EngineEvent(EventType.QUEUED, metrics.enqueue_time / 1000000),
                 EngineEvent(EventType.SCHEDULED, metrics.scheduled_time / 1000000),
             ]
             out.req_metrics = RequestMetrics(token_timestamp=time.time(), engine_events=events)

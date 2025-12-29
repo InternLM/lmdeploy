@@ -35,8 +35,6 @@ public:
            int           dp_rank,
            int           phases);
 
-    void WarmUp();
-
     void Start();
 
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics();

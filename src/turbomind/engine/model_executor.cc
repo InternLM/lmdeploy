@@ -5,10 +5,10 @@
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/copy.h"
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/models/language_model.h"
-
-#include "src/turbomind/core/copy.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 
 // #include "dbg.h"
@@ -21,6 +21,7 @@ using std::unique_ptr;
 struct ModelExecutor::Impl {
 
     LanguageModel& model_;
+    LlamaLinear&   linear_;
 
     const int device_id_;
 
@@ -41,6 +42,9 @@ struct ModelExecutor::Impl {
 
         core::ContextGuard ctx{stream, h_alloc, d_alloc};
 
+        linear_.set_measure(true);
+        gIsWarmUp() = true;
+
         unique_ptr<BatchData> d;
 
         while (inbound_.pop(d)) {
@@ -54,9 +58,16 @@ struct ModelExecutor::Impl {
 
     void Run(BatchData& d)
     {
-        auto      batch = &d;
-        BatchCopy copy;
+        auto batch = &d;
 
+        if (gIsWarmUp()) {
+            if (!std::all_of(d.rc.begin(), d.rc.end(), [](auto& c) { return c->req->session.is_warm_up; })) {
+                gIsWarmUp() = false;
+                linear_.set_measure(false);
+            }
+        }
+
+        BatchCopy copy;
         TensorMap env{{"batch", d.buf()}, {"copy", copy.buf()}};
 
         model_.Run(BatchOp::kPrepare, d.phase, env);
@@ -73,10 +84,11 @@ struct ModelExecutor::Impl {
     }
 
     Impl(LanguageModel&                model,
+         Context&                      context,
          int                           device_id,
          Queue<unique_ptr<BatchData>>& inbound,
          Queue<unique_ptr<BatchData>>& outbound):
-        model_{model}, device_id_{device_id}, inbound_{inbound}, outbound_{outbound}
+        model_{model}, linear_{*context.linear}, device_id_{device_id}, inbound_{inbound}, outbound_{outbound}
     {
     }
 
@@ -100,10 +112,11 @@ ModelExecutor::ModelExecutor(ModelExecutor&&) noexcept            = default;
 ModelExecutor& ModelExecutor::operator=(ModelExecutor&&) noexcept = default;
 
 ModelExecutor::ModelExecutor(LanguageModel&                model,
+                             Context&                      context,
                              int                           device_id,
                              Queue<unique_ptr<BatchData>>& inbound,
                              Queue<unique_ptr<BatchData>>& outbound):
-    impl_{std::make_unique<Impl>(model, device_id, inbound, outbound)}
+    impl_{std::make_unique<Impl>(model, context, device_id, inbound, outbound)}
 {
 }
 

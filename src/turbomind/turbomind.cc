@@ -575,25 +575,17 @@ void TurboMind::Impl::CreateEngine(int device_id, int rank)
                             dp_rank,
                             phases};
 
-    h_comm->Sync();
-
-    // tune GEMM ops
-    engines_[rank].WarmUp();
-
-    h_comm->Sync();
-
     core::Context::stream().Sync();
 
-    // create sequence manager
-    engines_[rank].Start();
+    h_comm->Sync();
+
+    engines_[rank].Start();  // after this point, `h_comm` is owned by engine's internal thread
 
     WarmUp(rank);
-
-    ctx->comm.h_tp_group->Sync();
 }
 
-template<class First, class Last>
-static std::string Join(First first, Last last, const std::string& delim)
+template<class Iter>
+static std::string Join(Iter first, Iter last, const std::string& delim)
 {
     if (first == last) {
         return {};
@@ -624,11 +616,6 @@ void TurboMind::Impl::WarmUp(int rank)
         }
         return;
     }
-
-    isTuning() = true;
-    linear.set_measure(true);
-
-    tp_group->Sync(true);
 
     if (tp_rank == 0) {
 
@@ -671,6 +658,7 @@ void TurboMind::Impl::WarmUp(int rank)
                 ModelRequest::InputParam param{};
                 param.session.start_flag     = true;
                 param.session.end_flag       = true;
+                param.session.is_warm_up     = true;
                 param.gen_cfg.max_new_tokens = 1;
                 param.tensors                = std::make_shared<TensorMap>(inputs);
 
@@ -679,7 +667,8 @@ void TurboMind::Impl::WarmUp(int rank)
                 bool flag   = true;
                 auto future = promise.get_future();
 
-                ModelRequest::OutputParam out = r->Forward(std::move(param), [&]() {
+                ModelRequest::OutputParam out = r->Forward(std::move(param), [&] {
+                    /// NOTE: It is risky to set `out.state` here, `out` may not be initialized at this point
                     if (std::exchange(flag, false)) {
                         promise.set_value();
                     }
@@ -709,13 +698,6 @@ void TurboMind::Impl::WarmUp(int rank)
             TM_LOG_INFO("[GEMM] %d records exported.", n_records);
         }
     }
-
-    tp_group->Sync(true);
-
-    linear.set_measure(false);
-    isTuning() = false;
-
-    tp_group->Sync(true);
 }
 
 TurboMind::~TurboMind() = default;

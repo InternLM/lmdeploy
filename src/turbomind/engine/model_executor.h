@@ -8,6 +8,8 @@
 #include "src/turbomind/engine/queue.h"
 #include "src/turbomind/models/language_model.h"
 
+#include "src/turbomind/models/llama/context.h"
+
 namespace turbomind {
 
 // Model executor for auto-regressive language models
@@ -25,6 +27,7 @@ public:
     }
 
     ModelExecutor(LanguageModel&                     model,
+                  Context&                           context,
                   int                                device_id,
                   Queue<std::unique_ptr<BatchData>>& inbound,
                   Queue<std::unique_ptr<BatchData>>& outbound);

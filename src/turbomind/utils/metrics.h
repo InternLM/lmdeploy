@@ -50,7 +50,7 @@ inline std::ostream& operator<<(std::ostream& os, const ScheduleMetrics& m)
 inline std::ostream& operator<<(std::ostream& os, const RequestMetrics& m)
 {
     os << "RequestMetrics { ";
-    os << "enque_time=" << m.enqueue_time.load(std::memory_order_relaxed);
+    os << "enqueue_time=" << m.enqueue_time.load(std::memory_order_relaxed);
     os << ", scheduled_time=" << m.scheduled_time.load(std::memory_order_relaxed);
     os << " }";
     return os;

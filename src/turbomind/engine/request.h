@@ -59,6 +59,8 @@ struct SessionParam {
     bool start_flag;
     bool end_flag;
     bool kill_flag;
+
+    bool is_warm_up;
 };
 
 struct RequestState {
