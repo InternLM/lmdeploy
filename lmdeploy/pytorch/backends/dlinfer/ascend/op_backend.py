@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 import torch
+import torch.distributed as dist
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.utils import get_logger
 
 from ..op_backend import DlinferOpsBackend
@@ -92,6 +94,7 @@ class AscendOpsBackend(DlinferOpsBackend):
     half_negative_inf = torch.finfo(torch.float16).min
     total_slots = None
     max_batches = None
+    max_tokens_accros_dp = 0
 
     @staticmethod
     def get_name() -> str:
@@ -219,6 +222,18 @@ class AscendOpsBackend(DlinferOpsBackend):
 
             return kv_start_indices, attention_mask
 
+        def get_max_tokens_across_dp():
+            dist_ctx = get_dist_manager().current_context()
+            if dist_ctx.dist_config.dp > 1:
+                total_token_current_rank = torch.sum(step_context.q_seqlens).to(step_context.q_seqlens.dtype)
+                world_size = dist_ctx.dist_config.world_size
+                total_token_buffer = torch.zeros(world_size, dtype=step_context.q_seqlens.dtype, device=torch.npu.current_device())
+                dist.all_gather_into_tensor(total_token_buffer, total_token_current_rank, dist_ctx.ep_gpu_group)
+                max_tokens_accros_dp = torch.max(total_token_buffer).item()
+            else:
+                max_tokens_accros_dp = 0
+            return max_tokens_accros_dp
+
         q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding, is_unpaged_prefill)
         q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_cpu,
                                                            kv_seqlens_cpu)
@@ -228,6 +243,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                                                                                    is_unpaged_prefill, q_seqlens_list,
                                                                                    kv_seqlens_list, max_q_seq_len,
                                                                                    max_kv_seq_len)
+        cls.max_tokens_accros_dp = get_max_tokens_across_dp()
 
         if not cls.enable_graph and step_context.kv_quant_policy == 8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
