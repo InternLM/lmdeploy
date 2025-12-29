@@ -2,6 +2,7 @@
 import dlinfer.ops as ext_ops
 import torch
 from torch import Tensor
+from lmdeploy.pytorch.backends.dlinfer import DlinferDistContext
 
 
 def fused_moe(
@@ -12,9 +13,8 @@ def fused_moe(
     topk_ids: Tensor,
     topk: int,
     renormalize: bool,
-    ep_size: int,
-    ep_group: torch.distributed.ProcessGroup = None,
+    dist_ctx: DlinferDistContext,
 ):
     """Dlinfer fused moe."""
     return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize,
-                             ep_size, ep_group)
+                             dist_ctx)
