@@ -11,7 +11,15 @@
 
 namespace turbomind::core {
 
-// picked from "cudaTypedefs.h"
+// picked from "cudaTypedefs.h" / "cuda.h"
+
+typedef enum CUmemcpySrcAccessOrder_enum {
+    CU_MEMCPY_SRC_ACCESS_ORDER_INVALID         = 0x0,
+    CU_MEMCPY_SRC_ACCESS_ORDER_STREAM          = 0x1,
+    CU_MEMCPY_SRC_ACCESS_ORDER_DURING_API_CALL = 0x2,
+    CU_MEMCPY_SRC_ACCESS_ORDER_ANY             = 0x3,
+    CU_MEMCPY_SRC_ACCESS_ORDER_MAX             = 0x7FFFFFFF
+} CUmemcpySrcAccessOrder;
 
 typedef struct CUmemcpyAttributes_st {
     CUmemcpySrcAccessOrder srcAccessOrder;
