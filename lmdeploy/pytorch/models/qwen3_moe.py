@@ -192,7 +192,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             self.hidden_dim,
             self.num_experts,
             bias=False,
-            dtype=dtype,
+            dtype=torch.float32,
             device=device,
             is_tp=False,
         )
@@ -229,7 +229,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        router_logits = self.gate(hidden_states)
+        router_logits = self.gate(hidden_states.to(self.gate.weight.dtype))
         topk_weights, topk_ids = self.softmax_topk(router_logits)
         if all_routed_experts is not None:
             all_routed_experts[:, self.layer_idx, :] = topk_ids

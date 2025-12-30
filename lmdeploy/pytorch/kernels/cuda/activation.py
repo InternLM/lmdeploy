@@ -46,10 +46,11 @@ def _silu_and_mul_kernel(
     for _ in tl.range(m_id_start, M, m_id_stride):
         gate = tl.load(gate_ptrs, mask=mask)
         up = tl.load(up_ptrs, mask=mask)
+        # exp expect fp32
         gate = gate.to(tl.float32)
-        up = up.to(tl.float32)
 
         gate = gate / (1 + fast_expf(-gate))
+        gate = gate.to(gateup_ptr.dtype.element_ty)
         out = gate * up
 
         tl.store(out_ptrs, out, mask=mask)
