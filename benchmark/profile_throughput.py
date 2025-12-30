@@ -231,7 +231,10 @@ class Engine:
 
         profiler.start()
 
-        asyncio.run(_gather_tasks(tasks))
+        # asyncio.run will close the loop after finish
+        # PytorchEngine is stopped and cleanup after the loop is closed
+        # The cleanup overhead will be counted in profiler.finish()
+        event_loop.run_until_complete(_gather_tasks(tasks))
 
         profiler.finish()
 
