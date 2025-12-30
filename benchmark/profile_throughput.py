@@ -222,21 +222,14 @@ class Engine:
             tasks.append(task)
 
         async def _gather_tasks(tasks):
-            return await asyncio.gather(*tasks)
+            profiler.start()
+            ret = await asyncio.gather(*tasks)
+            profiler.finish()
+            return ret
 
         self.pbar = tqdm(total=len(requests))
 
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(event_loop)
-
-        profiler.start()
-
-        # asyncio.run will close the loop after finish
-        # PytorchEngine is stopped and cleanup after the loop is closed
-        # The cleanup overhead will be counted in profiler.finish()
-        event_loop.run_until_complete(_gather_tasks(tasks))
-
-        profiler.finish()
+        asyncio.run(_gather_tasks(tasks))
 
         self.pbar.close()
 

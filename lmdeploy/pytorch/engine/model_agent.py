@@ -939,7 +939,7 @@ class BaseModelAgent:
         if self.profiler is not None:
             self.profiler.dump()
 
-        for task in self._async_tasks:
+        for task in self.tasks:
             if not task.done():
                 task.cancel()
 
