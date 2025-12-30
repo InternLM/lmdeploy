@@ -80,6 +80,19 @@ class NSAIndicesUpdater:
 
 
 class FlashMLAImpl(TritonAttentionImpl):
+    """Flash MLA (Multi-head Latent Attention) implementation.
+
+    This implementation supports multiple execution paths:
+    - Decoding: Uses flash_mla_with_kvcache with paged KV cache
+    - Prefill with NSA: Uses flash_mla_sparse_fwd for sparse attention
+    - Prefill with FA3: Uses flash_attn_varlen_func with split q_rope/q_nope
+    - Prefill fallback: Uses custom Triton kernel
+    """
+
+    # MLA-specific constants
+    _MLA_HEAD_ALIGNMENT = 64  # Query heads must be multiple of 64 for flash_mla
+    _MLA_NOPE_SIZE = 512  # Size of non-positional embeddings
+    _MLA_SCALE_SIZE = 16  # Size of FP8 quantization scales
 
     def __init__(
         self,
@@ -98,7 +111,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         assert (sliding_window is None
                 or all(win == -1 for win in sliding_window)), ('sliding window not supported for FlashMLA')
         assert alibi is False, 'alibi not supported for FlashMLA'
-        if logit_softcapping <= 0.0:
+        if logit_softcapping > 0.0:
             logger.warning('logit_softcapping not properly supported for FlashMLA, using -1.0')
             logit_softcapping = -1.0
         super().__init__(
@@ -180,16 +193,30 @@ class FlashMLAImpl(TritonAttentionImpl):
         attn_output = attn_output.squeeze(1)
         return attn_output
 
-    def flash_mla_prefill(self, query: torch.Tensor, flatten_k: torch.Tensor, nsa_indices: torch.Tensor,
-                          attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
-        """Flash mla prefill, only used in sparse attention."""
+    def _prefill_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor, nsa_indices: torch.Tensor,
+                        attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+        """Sparse prefill using flash_mla_sparse_fwd.
+
+        This path is used when NSA (Non-contiguous Sparse Attention) indices are provided.
+        Requires FP8 KV cache and flash_mla library.
+
+        Args:
+            query: Query tensor.
+            flatten_k: Flattened key cache.
+            nsa_indices: Sparse attention indices.
+            attn_metadata: Attention metadata.
+
+        Returns:
+            Attention output tensor.
+        """
         q_seqlens = attn_metadata.q_seqlens
         flash_mla_sparse_fwd = self._get_flash_mla_sparse_fwd()
 
         num_q_heads = query.size(1)
-        # flash_mla_sparse_fwd requires query heads to be multiple of 64
-        if num_q_heads % 64 != 0:
-            query = torch.nn.functional.pad(query, (0, 0, 0, 64 - num_q_heads % 64))
+        # flash_mla_sparse_fwd requires query heads to be multiple of alignment
+        if num_q_heads % self._MLA_HEAD_ALIGNMENT != 0:
+            padding = self._MLA_HEAD_ALIGNMENT - num_q_heads % self._MLA_HEAD_ALIGNMENT
+            query = torch.nn.functional.pad(query, (0, 0, 0, padding))
 
         nsa_indices = self.nsa_updater.update_prefill(nsa_indices, q_seqlens, attn_metadata.cu_seqlens_k)
         output = flash_mla_sparse_fwd(
@@ -202,14 +229,27 @@ class FlashMLAImpl(TritonAttentionImpl):
         attn_output = attn_output[:, :num_q_heads]
         return attn_output
 
-    def flash_attn_triton(
+    def _prefill_triton(
         self,
         query: torch.Tensor,
         flatten_k: torch.Tensor,
         flatten_v: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
-    ):
-        """Triton flash attention, used if flash-attn is not available."""
+    ) -> torch.Tensor:
+        """Triton-based prefill fallback.
+
+        This is the fallback path when Flash Attention 3 is not available.
+        Uses custom Triton kernel for attention computation.
+
+        Args:
+            query: Query tensor.
+            flatten_k: Flattened key cache.
+            flatten_v: Flattened value cache.
+            attn_metadata: Attention metadata.
+
+        Returns:
+            Attention output tensor.
+        """
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
 
         attn_output = self.flash_attention_fwd(
@@ -228,16 +268,30 @@ class FlashMLAImpl(TritonAttentionImpl):
 
         return attn_output
 
-    def flash_attn_fa3(
+    def _prefill_fa3(
         self,
         query: torch.Tensor,
         flatten_k: torch.Tensor,
         attn_metadata: TritonAttentionMetadata,
-    ):
-        """Flash attention 3, used if flash-attn 3 is available."""
+    ) -> torch.Tensor:
+        """Flash Attention 3 optimized prefill.
+
+        This path uses Flash Attention 3's optimized kernels with split
+        rope (positional) and nope (non-positional) components.
+
+        Args:
+            query: Query tensor.
+            flatten_k: Flattened key cache.
+            attn_metadata: Attention metadata.
+
+        Returns:
+            Attention output tensor.
+        """
         max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         kv_flatten_size = attn_metadata.kv_flatten_size
         causal = self.causal
+
+        # Split query and key into rope (positional) and nope (non-positional) parts
         q_rope = query[:, :, self.v_head_size:]
         q_nope = query[:, :, :self.v_head_size]
         k_rope = flatten_k.view(kv_flatten_size, self.num_kv_heads, -1)[:, :, self.v_head_size:]
@@ -294,7 +348,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                 out_dtype=out_dtype,
                 flatten_kv_layout=flatten_kv_layout,
             )
-            flatten_v = flatten_k[..., :512]
+            flatten_v = flatten_k[..., :self._MLA_NOPE_SIZE]
         else:
             flatten_k, flatten_v = self.flatten_kv_cache(
                 k_cache,
@@ -360,11 +414,14 @@ class FlashMLAImpl(TritonAttentionImpl):
             max_q_seqlen,
         )
 
-        k_cache_scale = k_cache[..., 512:512 + 16].view(torch.float32)
-        k_cache_nope = k_cache[..., :512]
-        k_cache_pe = k_cache[..., 512 + 16:].view(key.dtype)
+        # Split k_cache into nope, scale, and pe components
+        scale_offset = self._MLA_NOPE_SIZE
+        scale_end = scale_offset + self._MLA_SCALE_SIZE
+        k_cache_scale = k_cache[..., scale_offset:scale_end].view(torch.float32)
+        k_cache_nope = k_cache[..., :self._MLA_NOPE_SIZE]
+        k_cache_pe = k_cache[..., scale_end:].view(key.dtype)
         self.fill_kv_cache_blocked_fp8(
-            key[..., :512],
+            key[..., :self._MLA_NOPE_SIZE],
             None,
             k_cache_nope,
             None,
@@ -378,7 +435,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             scale_fmt='ue8m0',
         )
         self.fill_kv_cache(
-            key[..., 512:],
+            key[..., self._MLA_NOPE_SIZE:],
             None,
             k_cache_pe,
             None,
@@ -388,6 +445,77 @@ class FlashMLAImpl(TritonAttentionImpl):
             max_q_seq_length=fill_max_q_seqlen,
             block_offsets=block_offsets,
         )
+
+    def _forward_decoding(
+        self,
+        query: torch.Tensor,
+        k_cache: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+        nsa_indices: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """Forward pass for decoding stage.
+
+        Uses flash_mla_with_kvcache for efficient decoding with paged KV cache.
+        Supports both regular and sparse (NSA) attention patterns.
+
+        Args:
+            query: Query tensor.
+            k_cache: Key cache tensor.
+            attn_metadata: Attention metadata.
+            nsa_indices: Optional sparse attention indices.
+
+        Returns:
+            Attention output tensor.
+        """
+        return self.flash_mla_decoding(query, k_cache, nsa_indices, attn_metadata)
+
+    def _forward_prefill(
+        self,
+        query: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+        nsa_indices: torch.Tensor = None,
+        k_scales_zeros: torch.Tensor = None,
+        v_scales_zeros: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """Forward pass for prefill stage.
+
+        Supports three execution paths:
+        1. Sparse (NSA + FP8): flash_mla_sparse_fwd for sparse attention
+        2. FA3 optimized: flash_attn_varlen_func with split q_rope/q_nope
+        3. Triton fallback: Custom Triton kernel implementation
+
+        Args:
+            query: Query tensor.
+            k_cache: Key cache tensor.
+            v_cache: Value cache tensor.
+            attn_metadata: Attention metadata.
+            nsa_indices: Optional sparse attention indices.
+            k_scales_zeros: Key quantization scales/zeros.
+            v_scales_zeros: Value quantization scales/zeros.
+
+        Returns:
+            Attention output tensor.
+        """
+        # Flatten KV cache once for all prefill paths
+        flatten_k, flatten_v = self.run_flatten_kv_cache(
+            k_cache,
+            v_cache,
+            attn_metadata,
+            out_dtype=query.dtype,
+            is_nsa=nsa_indices is not None,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+        )
+
+        # Dispatch to appropriate prefill implementation
+        if nsa_indices is not None:
+            return self._prefill_sparse(query, flatten_k, nsa_indices, attn_metadata)
+        elif self.use_fa3:
+            return self._prefill_fa3(query, flatten_k, attn_metadata)
+        else:
+            return self._prefill_triton(query, flatten_k, flatten_v, attn_metadata)
 
     def forward(
         self,
@@ -402,17 +530,45 @@ class FlashMLAImpl(TritonAttentionImpl):
         nsa_indices: torch.Tensor = None,
         **kwargs,
     ) -> torch.Tensor:
-        """forward."""
+        """Forward pass for MLA attention computation.
 
-        # check nsa
-        is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
+        This method handles both prefill and decoding stages by:
+        1. Validating NSA requirements (FP8 KV cache)
+        2. Computing max query sequence length
+        3. Filling KV cache if new key/value are provided
+        4. Dispatching to appropriate stage-specific method
+
+        Architecture:
+        - Decoding: Uses flash_mla_with_kvcache with paged KV cache
+        - Prefill: Three paths based on availability and requirements
+          * Sparse (NSA + FP8): flash_mla_sparse_fwd
+          * FA3 optimized: flash_attn_varlen_func with split q_rope/q_nope
+          * Triton fallback: Custom triton kernel
+
+        Args:
+            query: Query tensor.
+            key: Key tensor (None for decoding-only).
+            value: Value tensor (None for decoding-only).
+            k_cache: Key cache tensor.
+            v_cache: Value cache tensor.
+            attn_metadata: Attention metadata containing stage info and indices.
+            k_scales_zeros: Key quantization scales/zeros.
+            v_scales_zeros: Value quantization scales/zeros.
+            nsa_indices: Optional sparse attention indices.
+
+        Returns:
+            Attention output tensor.
+        """
+        # Validate NSA requirements
         is_nsa = nsa_indices is not None
         if is_nsa:
-            assert is_fp8_kvcache
+            is_fp8_kvcache = k_cache.dtype == torch.float8_e4m3fn
+            assert is_fp8_kvcache, 'NSA sparse attention requires FP8 KV cache'
 
+        # Shared preparation
         max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
 
-        # fill kv cache
+        # Fill KV cache with new key/value if provided
         self._fill_kv_cache_impl(
             key,
             value,
@@ -424,22 +580,16 @@ class FlashMLAImpl(TritonAttentionImpl):
             v_scales_zeros=v_scales_zeros,
         )
 
-        is_decoding = attn_metadata.is_decoding
-        if is_decoding:
-            attn_output = self.flash_mla_decoding(query, k_cache, nsa_indices, attn_metadata)
+        # Dispatch to stage-specific forward method
+        if attn_metadata.is_decoding:
+            return self._forward_decoding(query, k_cache, attn_metadata, nsa_indices)
         else:
-            flatten_k, flatten_v = self.run_flatten_kv_cache(k_cache,
-                                                             v_cache,
-                                                             attn_metadata,
-                                                             out_dtype=query.dtype,
-                                                             is_nsa=nsa_indices is not None,
-                                                             k_scales_zeros=k_scales_zeros,
-                                                             v_scales_zeros=v_scales_zeros)
-            if is_nsa:
-                attn_output = self.flash_mla_prefill(query, flatten_k, nsa_indices, attn_metadata)
-            elif self.use_fa3:
-                attn_output = self.flash_attn_fa3(query, flatten_k, attn_metadata)
-            else:
-                attn_output = self.flash_attn_triton(query, flatten_k, flatten_v, attn_metadata)
-
-        return attn_output
+            return self._forward_prefill(
+                query,
+                k_cache,
+                v_cache,
+                attn_metadata,
+                nsa_indices,
+                k_scales_zeros,
+                v_scales_zeros,
+            )
