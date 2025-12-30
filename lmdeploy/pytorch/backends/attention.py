@@ -117,7 +117,7 @@ class AttentionBuilder(ABC, Generic[T]):
         v_head_size: int = None,
         alibi: bool = False,
         sliding_window: int = None,
-        logical_softcapping: float = 0.0,
+        logit_softcapping: float = 0.0,
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,

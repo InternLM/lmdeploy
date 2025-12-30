@@ -92,7 +92,7 @@ class FA3Impl(TritonAttentionImpl):
                     softmax_scale=self.scale,
                     causal=self.causal,
                     window_size=sliding_window,
-                    softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
+                    softcap=self.logit_softcapping,
                 )
             else:
                 attn_output = self.paged_attention_fwd(
@@ -141,6 +141,6 @@ class FA3Impl(TritonAttentionImpl):
                 softmax_scale=self.scale,
                 causal=self.causal,
                 window_size=sliding_window,
-                softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
+                softcap=self.logit_softcapping,
             )
         return attn_output

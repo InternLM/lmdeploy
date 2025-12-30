@@ -16,7 +16,7 @@ class TritonFlashAttentionImpl(FlashAttentionImpl):
         v_head_dim: int = None,
         causal: bool = True,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
     ):
         if scale is None:
             scale = 1.0 / (head_dim**0.5)
@@ -34,7 +34,7 @@ class TritonFlashAttentionImpl(FlashAttentionImpl):
         self.v_head_dim = v_head_dim
         self.causal = causal
         self.sliding_window = sliding_window
-        self.logical_softcapping = logical_softcapping
+        self.logit_softcapping = logit_softcapping
 
         from lmdeploy.pytorch.kernels.cuda import flash_attn_varlen_func
         self.flash_attention_fwd = flash_attn_varlen_func
@@ -49,10 +49,6 @@ class TritonFlashAttentionImpl(FlashAttentionImpl):
                 kv_seqlens: Tensor,
                 max_q_seqlen: int = None):
         """forward."""
-
-        q_shape = query.shape
-        o_shape = q_shape[:-1] + (self.v_head_dim, )
-        out = query.new_empty(o_shape)
         out = self.flash_attention_fwd(
             query,
             key,
@@ -64,7 +60,7 @@ class TritonFlashAttentionImpl(FlashAttentionImpl):
             max_seqlen_q=max_q_seqlen,
             window_size=self.sliding_window,
             softmax_scale=self.scale,
-            softcap=self.logical_softcapping,
+            softcap=self.logit_softcapping,
             causal=self.causal,
             kv_layout='shd',
         )
@@ -84,7 +80,7 @@ class TritonFlashAttentionBuilder(FlashAttentionBuilder):
         v_head_dim: int = None,
         causal: bool = True,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
         **kwargs,
     ) -> FlashAttentionImpl:
         """build."""
@@ -96,5 +92,5 @@ class TritonFlashAttentionBuilder(FlashAttentionBuilder):
             v_head_dim=v_head_dim,
             causal=causal,
             sliding_window=sliding_window,
-            logical_softcapping=logical_softcapping,
+            logit_softcapping=logit_softcapping,
         )

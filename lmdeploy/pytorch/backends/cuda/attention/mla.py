@@ -90,7 +90,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         v_head_size: int = None,
         alibi: bool = False,
         sliding_window: tuple = None,
-        logit_softcapping: float = None,
+        logit_softcapping: float = 0.0,
         causal: bool = True,
         use_fa3: bool = False,
         **kwargs,
@@ -98,7 +98,9 @@ class FlashMLAImpl(TritonAttentionImpl):
         assert (sliding_window is None
                 or all(win == -1 for win in sliding_window)), ('sliding window not supported for FlashMLA')
         assert alibi is False, 'alibi not supported for FlashMLA'
-        assert (logit_softcapping is None or logit_softcapping == 0.0), ('logit_softcapping not supported for FlashMLA')
+        if logit_softcapping <= 0.0:
+            logger.warning('logit_softcapping not properly supported for FlashMLA, using -1.0')
+            logit_softcapping = -1.0
         super().__init__(
             num_heads=num_heads,
             head_size=head_size,
@@ -253,7 +255,6 @@ class FlashMLAImpl(TritonAttentionImpl):
             softmax_scale=self.scale,
             causal=causal,
             window_size=(-1, -1) if self.sliding_window is None else self.sliding_window,
-            softcap=-1.0 if self.logit_softcapping is None else self.logit_softcapping,
         )
         return attn_output
 
@@ -348,8 +349,6 @@ class FlashMLAImpl(TritonAttentionImpl):
             )
 
         block_offsets = attn_metadata.block_offsets
-        q_start_loc = attn_metadata.q_start_loc
-        fill_q_start_loc = q_start_loc
         kv_seqlens = attn_metadata.kv_seqlens
         quant_policy = attn_metadata.quant_policy
         assert quant_policy == 0

@@ -51,7 +51,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         v_head_size: int = None,
         alibi: bool = False,
         sliding_window: int = None,
-        logical_softcapping: float = 0.0,
+        logit_softcapping: float = 0.0,
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
@@ -77,7 +77,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                 v_head_size=v_head_size,
                                 alibi=alibi,
                                 sliding_window=sliding_window,
-                                logical_softcapping=logical_softcapping,
+                                logit_softcapping=logit_softcapping,
                                 causal=causal,
                                 use_fa3=use_fa3,
                                 **kwargs)
@@ -91,7 +91,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                            v_head_size=v_head_size,
                            alibi=alibi,
                            sliding_window=sliding_window,
-                           logical_softcapping=logical_softcapping,
+                           logit_softcapping=logit_softcapping,
                            causal=causal,
                            **kwargs)
         else:
@@ -103,7 +103,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                        v_head_size=v_head_size,
                                        alibi=alibi,
                                        sliding_window=sliding_window,
-                                       logical_softcapping=logical_softcapping,
+                                       logit_softcapping=logit_softcapping,
                                        causal=causal,
                                        block_sparse_size=block_sparse_size,
                                        **kwargs)

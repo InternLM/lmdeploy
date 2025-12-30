@@ -68,6 +68,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             causal=causal,
             **kwargs,
         )
+        self.logit_softcapping = -1 if self.logit_softcapping <= 0.0 else self.logit_softcapping
         assert not (alibi and not causal)
 
         from lmdeploy.pytorch.kernels.cuda import (fill_kv_cache, flash_attn_varlen_func, flash_attn_with_kvcache,
