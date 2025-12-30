@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from dlinfer.utils.type_annotation import DlinferDistContext
 from ..default import multinomial_sampling, per_channel_quant
 from .apply_rotary_pos_emb import apply_rotary_pos_emb
 from .awq_kernels import awq_linear

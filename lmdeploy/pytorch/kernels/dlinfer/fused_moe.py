@@ -2,7 +2,7 @@
 import dlinfer.ops as ext_ops
 import torch
 from torch import Tensor
-from lmdeploy.pytorch.backends.dlinfer import DlinferDistContext
+from . import DlinferDistContext
 
 
 def fused_moe(

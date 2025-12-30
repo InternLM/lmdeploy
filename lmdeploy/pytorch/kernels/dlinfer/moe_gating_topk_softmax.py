@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dlinfer.ops as ext_ops
 from torch import Tensor
-from lmdeploy.pytorch.backends.dlinfer import DlinferDistContext
+from . import DlinferDistContext
 
 
 def moe_gating_topk_softmax(router_logits: Tensor, topk: int, dist_ctx: DlinferDistContext):
