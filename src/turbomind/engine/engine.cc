@@ -454,11 +454,18 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         buf[i] = incoming[i].get();
     }
 
+    // This includes checks from all modules handling `Add` operation
     Run(BatchOp::kAdd, -1, TensorMap{{"requests", buf}});
 
     for (auto& x : incoming) {
         if (x->status == 0) {
             s.rc.push_back(std::move(x));
+        }
+        else {
+            Interrupt(*x);
+            signals.push_back([r = x->req, ec = x->status] {  //
+                UpdateState(*r, ec, 0);
+            });
         }
     }
 }

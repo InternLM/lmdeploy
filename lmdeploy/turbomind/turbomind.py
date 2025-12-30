@@ -15,11 +15,9 @@ from multiprocessing.reduction import ForkingPickler
 from queue import Queue
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pybase64
 import torch
 import yaml
-from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
@@ -592,47 +590,27 @@ class TurboMindInstance:
 
     def prepare_embeddings(self, input_embeddings=None, input_embedding_ranges=None):
         """Convert embeddings."""
-        if input_embeddings is None:
+        if not input_embeddings:
             return None, None
 
+        assert isinstance(input_embeddings, List)
+        assert isinstance(input_embedding_ranges, List)
         assert len(input_embeddings) == len(input_embedding_ranges)
-        if not isinstance(input_embeddings[0], (list, type(None))):
-            input_embeddings = [input_embeddings]
-            input_embedding_ranges = [input_embedding_ranges]
 
-        if all([isinstance(x, type(None)) for x in input_embeddings]):
-            return None, None
+        length = sum([x.shape[0] for x in input_embeddings])
 
-        hidden_dim = None
-        for embeddings in input_embeddings:
-            if embeddings is not None:
-                hidden_dim = embeddings[0].squeeze().shape[-1]
-                break
-        assert hidden_dim is not None
+        _MAP = dict(bfloat16=torch.bfloat16, float16=torch.float16)
+        dtype = _MAP[self.tm_model.config.model_config.data_type]
 
-        # construct input_embeddings
-        for i in range(len(input_embeddings)):
-            item = input_embeddings[i] or []
-            # convert to torch.Tensor if input is np.ndarray
-            if item and isinstance(item[0], np.ndarray):
-                item = [torch.from_numpy(x).squeeze() for x in item]
-            # convert to lookup table type
-            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16, fp8=torch.bfloat16)
-            dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
-            item = [x.to(dtype=dtype) for x in item]
-            item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
-            input_embeddings[i] = item
-        input_embeddings = [torch.cat(x) for x in input_embeddings]
-        input_embeddings = pad_sequence(input_embeddings, batch_first=True)
-        input_embeddings = input_embeddings.reshape(input_embeddings.shape[0], -1).view(torch.int8)
-        # construct input_embedding_ranges
-        for i in range(len(input_embedding_ranges)):
-            item = input_embedding_ranges[i] or []
-            item = torch.IntTensor(item).reshape(-1, 2)
-            input_embedding_ranges[i] = item
-        input_embedding_ranges = pad_sequence(input_embedding_ranges, batch_first=True, padding_value=-1)
+        values = torch.empty((length, input_embeddings[0].shape[-1]), dtype=dtype, device='cpu')
+        ranges = torch.tensor(input_embedding_ranges, dtype=torch.int32, device='cpu')
 
-        return input_embeddings, input_embedding_ranges
+        offset = 0
+        for embeds in input_embeddings:
+            values[offset:offset + embeds.shape[0]].copy_(embeds)
+            offset += embeds.shape[0]
+
+        return values, ranges
 
     def prepare_mrope(self, input_meta: Dict[str, Any], input_len: int):
         mrope_position_ids = input_meta['mrope_position_ids']

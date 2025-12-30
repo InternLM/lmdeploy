@@ -31,7 +31,7 @@ public:
             d.autoreg_ids_pos = {max_batch_size_, kCPU};  // ! CPU buffer
 
             /// TODO: initialize only when required
-            d.input_embeds_buf = {{max_forward_token_num_, (int)model.embedding_size}, model.data_type, kCPUpinned};
+            d.input_embeds_buf = {{max_forward_token_num_, (int)model.hidden_units}, model.data_type, kCPUpinned};
         }
     }
 
@@ -59,10 +59,9 @@ public:
             offsets.resize(i + 1);
         }
 
-        if (auto ranges_ptr = r.inputs.try_("input_embedding_ranges")) {  // [1, n, 2]
-            auto embeds = r.inputs.at("input_embeddings");                // [1, k, d]
-
-            if (ranges_ptr->ndim() != 3 || embeds.ndim() != 3 || ranges_ptr->shape(2) != 2) {
+        if (auto ranges_ptr = r.inputs.try_("input_embedding_ranges")) {  // [n, 2]
+            auto embeds = r.inputs.at("input_embeddings");                // [k, d]
+            if (ranges_ptr->ndim() != 2 || embeds.ndim() != 2 || ranges_ptr->shape(1) != 2) {
                 /// TODO: reject for invalid shapes
                 return Request::kInvalid;
             }
@@ -73,8 +72,8 @@ public:
                 std::copy_n((const uint8_t*)tmp.raw_data(), tmp.byte_size(), (uint8_t*)embeds.raw_data());
             }
 
-            const auto [sum, dim] = embeds.shapes(1, 2);
-            const auto n          = ranges_ptr->shape(1);
+            const auto [sum, dim] = embeds.shapes(0, 1);
+            const auto n          = ranges_ptr->shape(0);
             const auto ranges     = ranges_ptr->data<int>();
 
             int offset = 0;
