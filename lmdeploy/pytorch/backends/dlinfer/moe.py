@@ -6,10 +6,9 @@ from typing import Callable, List
 import torch
 
 from lmdeploy.pytorch.distributed import get_dist_manager
-from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
+from lmdeploy.pytorch.kernels.dlinfer import DlinferDistContext, fused_moe, moe_gating_topk_softmax
 
 from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
-from . import DlinferDistContext
 
 
 def get_dist_ctx():
