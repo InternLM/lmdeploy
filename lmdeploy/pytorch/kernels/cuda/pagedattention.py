@@ -35,13 +35,13 @@ else:
 
 @triton.jit
 def _fwd_grouped_split_kernel(
-    Q,
-    K,
-    V,
-    sm_scale,
-    Cache_seqlens,
-    Block_offsets,
-    Acc_out,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    sm_scale: tl.constexpr,
+    cache_seqlens_ptr,
+    page_table_ptr,
+    acc_out_ptr,
     alibi_slopes_ptr,
     stride_qbs: tl.constexpr,
     stride_qh: tl.constexpr,
@@ -92,7 +92,7 @@ def _fwd_grouped_split_kernel(
     mask_h = mask_h & (cur_head < num_heads_q)
 
     q_seqlen = 1
-    kv_seqlen = tl.load(Cache_seqlens + cur_batch)
+    kv_seqlen = tl.load(cache_seqlens_ptr + cur_batch)
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
@@ -113,21 +113,21 @@ def _fwd_grouped_split_kernel(
     off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd + offs_n[:, None] * stride_vbs)
 
     off_q = (cur_token[:, None] * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
-    q = tl.load(Q + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
+    q = tl.load(q_ptr + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
 
-    k_ptrs = K + off_k
-    v_ptrs = V + off_v
+    k_ptrs = k_ptr + off_k
+    v_ptrs = v_ptr + off_v
 
     if BLOCK_DMODEL1 != 0:
         offs_d1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
         mask_d1 = offs_d1 < head_size
         offs_d1 = offs_d1 % head_size
         off_q1 = (cur_token[:, None] * stride_qbs + cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
-        q1 = tl.load(Q + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
+        q1 = tl.load(q_ptr + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
         off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
-        k1_ptrs = K + off_k1
+        k1_ptrs = k_ptr + off_k1
 
-    block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
+    block_offset_ptrs = page_table_ptr + cur_batch * stride_boffb
 
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_H], dtype=tl.float32) - float('inf')
@@ -211,24 +211,24 @@ def _fwd_grouped_split_kernel(
     if loop_end > loop_start:
         off_acc = (cur_token[:, None] * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
                    offs_dv[None, :] * stride_od)
-        tl.store(Acc_out + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
+        tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
     off_meta = (cur_token * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
-    tl.store(Acc_out + off_meta, m_i, mask=mask_h)
-    tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
+    tl.store(acc_out_ptr + off_meta, m_i, mask=mask_h)
+    tl.store(acc_out_ptr + off_meta + 1, l_i, mask=mask_h)
 
 
 @triton.jit
 def _fwd_grouped_split_quant_kernel(
-    Q,
-    K,
-    V,
+    q_ptr,
+    k_ptr,
+    v_ptr,
     KScalesZeros,
     VScalesZeros,
     sm_scale,
-    Cache_seqlens,
-    Block_offsets,
-    Acc_out,
+    cache_seqlens_ptr,
+    page_table_ptr,
+    acc_out_ptr,
     alibi_slopes_ptr,
     stride_qbs: tl.constexpr,
     stride_qh: tl.constexpr,
@@ -291,7 +291,7 @@ def _fwd_grouped_split_quant_kernel(
         cur_kv_head = (cur_kv_head * HEAD_PER_CTA) // kv_group_num
 
     q_seqlen = 1
-    kv_seqlen = tl.load(Cache_seqlens + cur_batch)
+    kv_seqlen = tl.load(cache_seqlens_ptr + cur_batch)
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
@@ -315,7 +315,7 @@ def _fwd_grouped_split_quant_kernel(
     off_vsz = (cur_kv_head * stride_vszh + offs_dsz[None, :] * stride_vszd + offs_n[:, None] * stride_vszbs)
 
     off_q = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
-    q = tl.load(Q + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
+    q = tl.load(q_ptr + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
 
     ksz_ptrs = KScalesZeros + off_ksz
     vsz_ptrs = VScalesZeros + off_vsz
@@ -325,10 +325,10 @@ def _fwd_grouped_split_quant_kernel(
         mask_d1 = offs_d1 < head_size
         offs_d1 = offs_d1 % head_size
         off_q1 = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
-        q1 = tl.load(Q + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
+        q1 = tl.load(q_ptr + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
         off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
 
-    block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
+    block_offset_ptrs = page_table_ptr + cur_batch * stride_boffb
 
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_H], dtype=tl.float32) - float('inf')
@@ -371,22 +371,22 @@ def _fwd_grouped_split_quant_kernel(
 
         # -- compute qk ----
         # k = tl.load(k_ptrs + b_offset * stride_kp)
-        k = tl.load(K + off_k + b_offset * stride_kp)
+        k = tl.load(k_ptr + off_k + b_offset * stride_kp)
         if quant_policy == 4:
             k = (k >> shift_kd) & 0x0F
         ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
         kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
         if BLOCK_DMODEL1 != 0:
-            k1 = tl.load(K + off_k1 + b_offset * stride_kp)
+            k1 = tl.load(k_ptr + off_k1 + b_offset * stride_kp)
             if quant_policy == 4:
                 k1 = (k1 >> shift_k1d) & 0x0F
             k1 = ((k1 - kz) * ks).to(q.dtype)
 
         if quant_policy == 4:
-            v = tl.load(V + off_v + b_offset * stride_vp)
+            v = tl.load(v_ptr + off_v + b_offset * stride_vp)
             v = (v >> shift_vd) & 0x0F
         else:
-            v = tl.load(V + off_v + b_offset * stride_vp)
+            v = tl.load(v_ptr + off_v + b_offset * stride_vp)
         vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
         vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
 
@@ -439,21 +439,21 @@ def _fwd_grouped_split_quant_kernel(
     if loop_end > loop_start:
         off_acc = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
                    offs_dv[None, :] * stride_od)
-        tl.store(Acc_out + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
+        tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
     if quant_policy == 4:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 2)
     else:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
-    tl.store(Acc_out + off_meta, m_i, mask=mask_h)
-    tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
+    tl.store(acc_out_ptr + off_meta, m_i, mask=mask_h)
+    tl.store(acc_out_ptr + off_meta + 1, l_i, mask=mask_h)
 
 
 @triton.jit
 def _reduce_split_kernel(
-    Acc,
-    Out,
-    sinks,
+    acc_ptr,
+    out_ptr,
+    sinks_ptr,
     stride_ak,
     stride_abs,
     stride_ah,
@@ -478,9 +478,9 @@ def _reduce_split_kernel(
                 offs_dv[None, :] * stride_ad)
     offs_mi = (cur_batch * stride_abs + cur_head * stride_ah + stride_ak * offs_k + head_size_v)
 
-    m_k = tl.load(Acc + offs_mi)
-    l_k = tl.load(Acc + offs_mi + 1)
-    acc_k = tl.load(Acc + offs_acc, mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')), other=0.0)
+    m_k = tl.load(acc_ptr + offs_mi)
+    l_k = tl.load(acc_ptr + offs_mi + 1)
+    acc_k = tl.load(acc_ptr + offs_acc, mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')), other=0.0)
 
     m_max = tl.max(m_k, 0)
     alpha = tl_exp2(m_k - m_max)
@@ -490,13 +490,13 @@ def _reduce_split_kernel(
     acc = tl.sum(acc_k, 0)
     l_sum = tl.sum(l_k, 0)
 
-    if sinks is not None:
-        sink = tl.load(sinks + cur_head).to(l_sum.dtype)
+    if sinks_ptr is not None:
+        sink = tl.load(sinks_ptr + cur_head).to(l_sum.dtype)
         l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
     acc = acc / l_sum
 
     out_offs = (cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od)
-    tl.store(Out + out_offs, acc, mask=mask_dv)
+    tl.store(out_ptr + out_offs, acc, mask=mask_dv)
 
 
 @triton.jit
