@@ -467,6 +467,8 @@ class Engine(EngineBase):
             raise
         finally:
             logger.debug('Engine main loop finally cleanup.')
+            if engine_loop is not None:
+                engine_loop.stop()
             self._loop_finally()
 
     def close(self):

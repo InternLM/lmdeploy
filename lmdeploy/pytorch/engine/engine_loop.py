@@ -478,6 +478,9 @@ class EngineLoop:
 
     def stop(self):
         """Stop all loops."""
+        if self.stop_event.is_set():
+            # Already stopped, avoid calling executor.stop() multiple times
+            return
         self.executor.stop()
         self.stop_event.set()
         self.cancel()
