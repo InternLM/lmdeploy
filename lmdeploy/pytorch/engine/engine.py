@@ -482,8 +482,15 @@ class Engine(EngineBase):
         else:
             self._loop_finally()
 
+    def start(self):
+        """Start engine loop tasks."""
+        if self.req_manager.is_loop_alive():
+            return True
+        self.req_manager.create_loop_task()
+        return True
+
     def stop(self):
-        """Alias of close."""
+        """Stop engine loop tasks."""
         if self._loop_main is not None:
             self._loop_main.cancel()
 
@@ -511,11 +518,8 @@ class Engine(EngineBase):
         return EngineInstance(self)
 
     def start_loop(self):
-        """Start engine loop."""
-        if self.req_manager.is_loop_alive():
-            return True
-        self.req_manager.create_loop_task()
-        return True
+        """Alias of start, API for AsyncEngine."""
+        return self.start()
 
     def end_session(self, session_id: int):
         """End session."""

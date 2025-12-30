@@ -434,7 +434,7 @@ class RayExecutor(ExecutorBase):
         # therefore only issued when dp == 1.
         if self.dp == 1:
             try:
-                self.collective_rpc('stop_async')
+                self.collective_rpc('stop_async', timeout=5.0)
             except ray.exceptions.ActorDiedError:
                 logger.info('RayExecutor worker has been killed before finish stop_async.')
             logger.debug('RayExecutor workers stopped.')
