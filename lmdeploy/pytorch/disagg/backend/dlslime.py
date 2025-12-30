@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import json
 import os
 from typing import Dict
@@ -59,7 +60,8 @@ class DLSlimeMigrationManagement:
 
         future = self.endpoint[assignment.protocol].read(batch)
         if LMDEPLOY_USE_ASYNC_MIGRATION:
-            return future
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, future.wait)
         else:
             return future.wait()
 
