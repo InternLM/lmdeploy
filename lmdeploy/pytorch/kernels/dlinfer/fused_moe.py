@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dlinfer.ops as ext_ops
+import torch
 from torch import Tensor
+from . import DlinferDistContext
 
 
 def fused_moe(
@@ -11,6 +13,8 @@ def fused_moe(
     topk_ids: Tensor,
     topk: int,
     renormalize: bool,
+    dist_ctx: DlinferDistContext,
 ):
     """Dlinfer fused moe."""
-    return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize)
+    return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize,
+                             dist_ctx)
