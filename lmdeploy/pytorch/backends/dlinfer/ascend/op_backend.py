@@ -231,7 +231,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 dist.all_gather_into_tensor(total_token_buffer, total_token_current_rank, dist_ctx.ep_gpu_group)
                 max_tokens_accros_dp = torch.max(total_token_buffer).item()
             else:
-                max_tokens_accros_dp = 0
+                max_tokens_accros_dp = torch.sum(step_context.q_seqlens).item()
             return max_tokens_accros_dp
 
         q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding, is_unpaged_prefill)
