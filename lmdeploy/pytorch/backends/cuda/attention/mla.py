@@ -331,7 +331,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         BLOCK_BS = k_cache.size(1)
 
         # pad one more block to avoid invalid kv visit
-        if self.use_fa3:
+        if self.use_fa3 or is_nsa:
             out_size = kv_flatten_size
             flatten_kv_layout = 'shd'
         else:
