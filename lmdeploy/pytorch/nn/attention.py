@@ -29,7 +29,7 @@ class Attention(nn.Module):
         v_head_size: int = None,
         alibi: bool = False,
         sliding_window: int = None,
-        logit_softcapping: float = None,
+        logit_softcapping: float = 0.0,
         causal: bool = True,
         use_flash_mla: bool = False,
         learnable_sink: bool = False,
@@ -41,7 +41,9 @@ class Attention(nn.Module):
             num_kv_heads = num_heads
         if v_head_size is None:
             v_head_size = head_size
+        self.origin_num_heads = num_heads
         num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads)
+        self.num_heads = num_heads
 
         layer_backend = get_backend()
         impl_builder = layer_backend.get_layer_impl_builder(OpType.PagedAttention)
@@ -62,6 +64,26 @@ class Attention(nn.Module):
             **kwargs,
         )
 
+        if alibi:
+            self.alibi_ready = False
+        else:
+            self.alibi_ready = True
+
+    def _lazy_init(self, device):
+        """Lazy init."""
+        if not self.alibi_ready:
+            _, rank = get_tp_world_rank('attn')
+            start = self.num_heads * rank
+            end = start + self.num_heads
+            alibi_slopes = self.impl.make_alibi_slopes(start,
+                                                       end,
+                                                       self.origin_num_heads,
+                                                       alibi_scale=1,
+                                                       dtype=torch.float32,
+                                                       device=device)
+            self.impl.set_alibi_slopes(alibi_slopes)
+            self.alibi_ready = True
+
     def forward(
         self,
         query: torch.Tensor,
@@ -77,6 +99,8 @@ class Attention(nn.Module):
         inplace: bool = True,
     ) -> torch.Tensor:
         """forward."""
+        self._lazy_init(query.device)
+
         kwargs = dict()
         if nsa_indices is not None:
             kwargs['nsa_indices'] = nsa_indices
@@ -112,7 +136,7 @@ class FlashAttention(nn.Module):
         v_head_dim: int = None,
         causal: bool = True,
         sliding_window: int = None,
-        logit_softcapping: float = None,
+        logit_softcapping: float = 0.0,
         **kwargs,
     ):
         super().__init__()
