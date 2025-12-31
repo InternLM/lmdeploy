@@ -51,6 +51,18 @@ class FA3Impl(TritonAttentionImpl):
         self.flash_attn_varlen_func_v3 = flash_attn_varlen_func
         self.flash_attn_with_kvcache_v3 = flash_attn_with_kvcache
 
+    def _get_max_q_seqlen(
+        self,
+        query: torch.Tensor,
+        attn_metadata: TritonAttentionMetadata,
+    ) -> int:
+        """Get max q seqlen."""
+        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        if attn_metadata.is_decoding:
+            batch_size = attn_metadata.q_seqlens.size(0)
+            max_q_seqlen = max_q_seqlen // batch_size
+        return max_q_seqlen
+
     def _normalize_sliding_window(self, sliding_window):
         """Normalize sliding window to tuple format.
 

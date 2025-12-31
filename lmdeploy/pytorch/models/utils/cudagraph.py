@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
 BuffType = Dict[str, Tensor]
 
@@ -109,9 +109,16 @@ class CudaGraphMixin:
     def update_meta_flashattn(self, graph_meta: CudaGraphMeta, block_size: int, max_seqlen_k: int,
                               cache_seqlens: torch.Tensor):
         """Update meta flashattn."""
+        ctx_mgr = get_step_ctx_manager()
+        step_ctx = ctx_mgr.current_context()
+        model_config = step_ctx.model_config
         batch_size = graph_meta.max_batchs
         max_seqlen_q = graph_meta.decode_query_len
-        sliding_window = self.config.sliding_window
+        sliding_window = model_config.sliding_window
+        num_attention_heads = model_config.num_attention_heads
+        num_key_value_heads = model_config.num_key_value_heads
+        headdim = model_config.head_dim
+        torch_dtype = model_config.dtype
         if sliding_window is None:
             window_size = (-1, -1)
         elif isinstance(sliding_window, int):
@@ -121,11 +128,11 @@ class CudaGraphMixin:
             batch_size=batch_size,
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
-            num_heads_q=self.config.num_attention_heads,
-            num_heads_kv=self.config.num_key_value_heads,
-            headdim=self.config.head_dim,
+            num_heads_q=num_attention_heads,
+            num_heads_kv=num_key_value_heads,
+            headdim=headdim,
             cache_seqlens=cache_seqlens,
-            qkv_dtype=self.config.torch_dtype,
+            qkv_dtype=torch_dtype,
             page_size=block_size,
             window_size=window_size,
         )
