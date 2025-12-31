@@ -416,13 +416,13 @@ class Engine(EngineBase):
         """Model config."""
         return self.executor.model_config
 
-    async def p2p_initialize(self, init_request: DistServeInitRequest):
-        return await self.engine_conn.p2p_initialize(init_request)
+    def p2p_initialize(self, init_request: DistServeInitRequest):
+        return self.engine_conn.p2p_initialize(init_request)
 
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         return self.engine_conn.p2p_connect(conn_request)
 
-    async def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
+    def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
         return self.engine_conn.p2p_drop_connect(drop_conn_request)
 
     def _loop_finally(self):

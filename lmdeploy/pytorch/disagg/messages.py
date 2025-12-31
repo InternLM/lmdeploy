@@ -16,7 +16,7 @@ class MigrationExecutionBatch(BaseModel):
 
 class AssignmentInstruct(BaseModel):
     """Assignment Batch."""
-    mr_key: str
+    mr_key: int
     target_offset: int
     source_offset: int
     length: int
@@ -42,7 +42,7 @@ class DistServeRegisterMRMessage(BaseModel):
     protocol: MigrationProtocol
 
     remote_engine_id: str
-    mr_key: str
+    mr_key: int
     addr: int
     offset: int
     length: int
