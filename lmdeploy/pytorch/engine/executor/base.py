@@ -74,7 +74,7 @@ class ExecutorBase:
         """warmup."""
         raise NotImplementedError('Not Implemented.')
 
-    def sleep(self, level: int = 1):
+    async def sleep(self, level: int = 1):
         """Sleep."""
         raise NotImplementedError('Not Implemented.')
 
