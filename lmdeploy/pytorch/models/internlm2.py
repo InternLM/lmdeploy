@@ -7,12 +7,13 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
-from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, Embedding, RMSNorm, SiluAndMul,
+                                 build_rotary_embedding_from_config)
+from lmdeploy.pytorch.nn.linear import build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixinV1
 
 
 class InternLM2Attention(nn.Module):
@@ -208,11 +209,11 @@ class InternLM2Model(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.tok_embeddings = nn.Embedding(config.vocab_size,
-                                           config.hidden_size,
-                                           self.padding_idx,
-                                           dtype=dtype,
-                                           device=device)
+        self.tok_embeddings = Embedding(config.vocab_size,
+                                        config.hidden_size,
+                                        self.padding_idx,
+                                        dtype=dtype,
+                                        device=device)
 
         # build all decode layers
         self.layers = nn.ModuleList([
@@ -269,7 +270,7 @@ class InternLM2Model(nn.Module):
         return self.tok_embeddings
 
 
-class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
+class InternLM2ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
     """Rewrote model of InternLM2ForCausalLM."""
 
     packed_modules_mapping = {
@@ -290,11 +291,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         # build Model
         self.model = InternLM2Model(config, dtype=dtype, device=device)
         # build lm_head
-        self.output = build_rowwise_linear(config.hidden_size,
-                                           config.vocab_size,
-                                           bias=False,
-                                           dtype=dtype,
-                                           device=device)
+        self.output = self.build_lm_head(config.hidden_size, config.vocab_size, bias=False, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -315,9 +312,9 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         )
         return hidden_states
 
-    def get_logits(self, hidden_states: torch.Tensor):
-        """Compute logits of the model output."""
-        return self.output(hidden_states)
+    def get_lm_head(self):
+        """Get lm_head."""
+        return self.output
 
     def get_input_embeddings(self):
         """Get input embeddings."""
