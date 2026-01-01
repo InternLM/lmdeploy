@@ -104,6 +104,28 @@ class SubCliLite(object):
         ArgumentHelper.download_dir(parser)
 
     @staticmethod
+    def add_parser_blocked_fp8():
+        """Add parser for blocked_fp8 command."""
+        parser = SubCliLite.subparsers.add_parser('blocked_fp8',
+                                                  formatter_class=DefaultsAndTypesHelpFormatter,
+                                                  description=SubCliLite.blocked_fp8.__doc__,
+                                                  help=SubCliLite.blocked_fp8.__doc__)
+        parser.set_defaults(run=SubCliLite.blocked_fp8)
+        parser.add_argument('model', type=str, help='The name or path of the model to be loaded')
+        parser.add_argument('--work-dir',
+                            type=str,
+                            default='./work_dir',
+                            help='The working directory for outputs. defaults to "./work_dir"')
+        parser.add_argument('--quant-dtype',
+                            type=str,
+                            default='float8_e4m3fn',
+                            choices=['fp8', 'float8_e4m3fn', 'float8_e5m2'],
+                            help='The quantization data type for weight')
+        parser.add_argument('--block-size', type=int, default=128, help='Block size for blocked-fp8 quantization')
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.download_dir(parser)
+
+    @staticmethod
     def auto_awq(args):
         """Perform weight quantization using AWQ algorithm."""
         from lmdeploy.lite.apis.auto_awq import auto_awq
@@ -116,6 +138,13 @@ class SubCliLite(object):
         from lmdeploy.lite.apis.gptq import auto_gptq
         kwargs = convert_args(args)
         auto_gptq(**kwargs)
+
+    @staticmethod
+    def blocked_fp8(args):
+        """Perform weight quantization to blocked fp8 format."""
+        from lmdeploy.lite.apis.blocked_fp8 import blocked_fp8
+        kwargs = convert_args(args)
+        blocked_fp8(**kwargs)
 
     @staticmethod
     def calibrate(args):
@@ -138,3 +167,4 @@ class SubCliLite(object):
         SubCliLite.add_parser_auto_gptq()
         SubCliLite.add_parser_calibrate()
         SubCliLite.add_parser_smooth_quant()
+        SubCliLite.add_parser_blocked_fp8()
