@@ -16,7 +16,7 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
         v_head_dim: int = None,
         causal: bool = True,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
     ):
         if scale is None:
             scale = 1.0 / (head_dim**0.5)
@@ -31,7 +31,7 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
         self.v_head_dim = v_head_dim
         self.causal = causal
         self.sliding_window = sliding_window
-        self.logical_softcapping = logical_softcapping
+        self.logit_softcapping = logit_softcapping
         from lmdeploy.pytorch.kernels.dlinfer import flash_attention_fwd
         self.flash_attention_fwd = flash_attention_fwd
 
@@ -62,7 +62,7 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
             max_q_seqlen=max_q_seqlen,
             window_size=self.sliding_window,
             sm_scale=self.scale,
-            logit_softcapping=self.logical_softcapping,
+            logit_softcapping=self.logit_softcapping,
             causal=self.causal,
         )
         return out
@@ -80,7 +80,7 @@ class DlinferFlashAttentionBuilder(FlashAttentionBuilder):
         v_head_dim: int = None,
         causal: bool = True,
         sliding_window: int = None,
-        logical_softcapping: float = None,
+        logit_softcapping: float = None,
         **kwargs,
     ) -> FlashAttentionImpl:
         """build."""
@@ -92,5 +92,5 @@ class DlinferFlashAttentionBuilder(FlashAttentionBuilder):
             v_head_dim=v_head_dim,
             causal=causal,
             sliding_window=sliding_window,
-            logical_softcapping=logical_softcapping,
+            logit_softcapping=logit_softcapping,
         )
