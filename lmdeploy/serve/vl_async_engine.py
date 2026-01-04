@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import PIL
 
@@ -51,29 +51,6 @@ class VLAsyncEngine(AsyncEngine):
         else:
             _prompts = prompts
         return _prompts
-
-    async def _get_prompt_input(self,
-                                messages: Union[str, List[Dict]],
-                                do_preprocess: bool,
-                                sequence_start: bool,
-                                adapter_name: str,
-                                tools: Optional[List[object]] = None,
-                                chat_template_kwargs: Optional[Dict] = None,
-                                mm_processor_kwargs: Optional[Dict[str, Any]] = None,
-                                **kwargs):
-        """Process messages and return the required data for the inference
-        engines.
-
-        Delegates to MultimodalProcessor which handles both text and multimodal inputs.
-        """
-        return await self.prompt_processor.get_prompt_input(prompt=messages,
-                                                            do_preprocess=do_preprocess,
-                                                            sequence_start=sequence_start,
-                                                            adapter_name=adapter_name,
-                                                            tools=tools,
-                                                            chat_template_kwargs=chat_template_kwargs,
-                                                            mm_processor_kwargs=mm_processor_kwargs,
-                                                            **kwargs)
 
     @classmethod
     async def async_convert_to_pil_images(cls, messages: List[Dict]) -> List[Dict]:
