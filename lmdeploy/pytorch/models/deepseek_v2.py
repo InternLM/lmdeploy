@@ -965,11 +965,12 @@ class DeepseekV2Model(nn.Module):
         self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        self.embed_tokens = ParallelEmbedding(config.vocab_size,
+                                              config.hidden_size,
+                                              self.padding_idx,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True)
 
         if get_dist_manager().current_context().dist_config.enable_eplb:
             ep_size_, _ = get_ep_world_rank()
