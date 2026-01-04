@@ -634,7 +634,7 @@ class TestGenerateComprehensive:
 
     def test_same_session_id_allowed(self):
         print(f'\n[Model: {self.model_name}] Running same session_id test')
-        sid = 9999 + int(time.time_ns()) % 100000
+        sid = int(time.time_ns()) % 100000
 
         resp1 = self._post({'prompt': 'First message:', 'session_id': sid, 'max_tokens': 2})
         resp2 = self._post({'prompt': 'Second message:', 'session_id': sid, 'max_tokens': 2})
