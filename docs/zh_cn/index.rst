@@ -114,6 +114,7 @@ LMDeploy 工具箱提供以下核心功能：
    :caption: API 文档
 
    api/pipeline.rst
+   api/openapi.rst
 
 索引与表格
 ==================

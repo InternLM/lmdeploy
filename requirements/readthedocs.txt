@@ -1,7 +1,14 @@
 accelerate
+aiohttp
+fastapi
 mmengine-lite
+openai_harmony
+partial_json_parser
 pillow
 pydantic
+pyyaml
+shortuuid
 torch
 transformers
 urllib3<2.0.0
+uvicorn

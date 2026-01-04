@@ -113,6 +113,7 @@ Documentation
    :caption: API Reference
 
    api/pipeline.rst
+   api/openapi.rst
 
 Indices and tables
 ==================
