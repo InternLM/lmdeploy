@@ -24,9 +24,14 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
     if quant_method == 'awq':
-        logger.debug('set torch_dtype to float16 for awq.')
-        config.hf_config.torch_dtype = 'float16'
-        config.dtype = torch.float16
+        if dtype == 'bfloat16':
+            logger.debug('set torch_dtype to bfloat16 for awq.')
+            config.hf_config.torch_dtype = 'bfloat16'
+            config.dtype = torch.bfloat16
+        else:
+            logger.debug('set torch_dtype to float16 for awq.')
+            config.hf_config.torch_dtype = 'float16'
+            config.dtype = torch.float16
         return config
 
     torch_dtype = getattr(config.hf_config, 'dtype', None)
