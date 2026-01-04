@@ -233,13 +233,6 @@ class InputsMakerAsync:
             local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
             model_inputs.local_adapter_ids = local_adapter_ids
 
-        # cross for mllama
-        cross_length = torch.tensor([msg.num_cross for msg in messages])
-        history_cross_length = torch.tensor([msg.num_history_cross for msg in messages])
-        if (cross_length + history_cross_length).max().item() > 0:
-            model_inputs.cross_length = cross_length
-            model_inputs.history_cross_length = history_cross_length
-
         # vision inputs
         vision_model_inputs = self._create_vision_model_inputs(messages, model_inputs)
         model_inputs.vision_inputs = vision_model_inputs

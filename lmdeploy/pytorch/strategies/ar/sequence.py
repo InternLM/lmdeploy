@@ -74,11 +74,6 @@ class SchedulerSequenceDefault(SchedulerSequence):
 
         self.model_meta = None
 
-        # cross
-        if self.history_multimodals is not None:
-            self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
-            self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
-
         if self.return_routed_experts:
             self.all_routed_experts.resize(step)
 

@@ -593,8 +593,6 @@ class SchedulerSequence:
 
         # vlm
         self._num_images: int = len(self.history_embeddings)
-        self._num_history_cross: int = 0
-        self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
         self._state = None
 
     @property
@@ -690,16 +688,6 @@ class SchedulerSequence:
         return self._num_history_ids + self._num_token_ids
 
     @property
-    def num_cross(self):
-        """Num cross."""
-        return self._num_cross
-
-    @property
-    def num_history_cross(self):
-        """Num history cross."""
-        return self._num_history_cross
-
-    @property
     def num_blocks(self):
         """Num blocks."""
         return len(self.logical_blocks)
@@ -719,10 +707,6 @@ class SchedulerSequence:
     @property
     def return_logits(self):
         return self.sampling_param.out_logits
-
-    def num_all_cross_tokens(self):
-        """Num of all cross tokens."""
-        return self._num_cross + self._num_history_cross
 
     def get_input_multimodals(self):
         """Get input multimodals."""
@@ -749,15 +733,10 @@ class SchedulerSequence:
 
     def _update_multimodals(self, multimodals: MultiModalInputs):
         """Update input multimodals."""
-        self._num_history_cross += self._num_cross
         if multimodals is None:
-            self._num_cross = 0
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
         self.history_multimodals.add_inputs(multimodals)
-
-        # for mllama
-        self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, self._num_history_ids)
 
     def update_token_ids(self,
                          token_ids: Tensor,

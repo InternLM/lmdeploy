@@ -162,8 +162,6 @@ class ModelInputs:
     sum_kv_seqlen: int
     local_adapter_ids: torch.LongTensor = None
     vision_inputs: VisionModelInputs = None
-    cross_length: torch.LongTensor = None
-    history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
     enable_microbatch: bool = False
@@ -190,7 +188,6 @@ class ModelInputs:
 
         def __add_overlapped_multimodal(flatten_mms: List, input_mms: Dict, end: int, mm_end: int):
             """Add overlapped multimodal data."""
-            nonlocal cross_length
             while len(flatten_mms) > 0:
                 next_mm = flatten_mms[0]
                 next_start = next_mm[1].start
@@ -206,11 +203,6 @@ class ModelInputs:
                 end += max(0, next_end - mm_end)
                 flatten_mms.pop(0)
 
-                # for mllama
-                if cross_length is not None:
-                    encoder_len = next_mm[1].encoder_len
-                    if encoder_len is not None:
-                        cross_length += encoder_len
             return input_mms, end
 
         def __make_next_vision_inputs(flatten_mms: List, start: int):
@@ -253,11 +245,6 @@ class ModelInputs:
         start = 0
         max_kv_seqlen = self.max_kv_seqlen - self.max_q_seqlen
 
-        # for mllama
-        history_cross_length = self.history_cross_length
-        cross_length = None
-        if history_cross_length is not None:
-            cross_length = self.history_cross_length.clone()
         while start < max_seq_len:
             if len(flatten_mms) > 0:
                 vision_inputs, end = __make_next_vision_inputs(flatten_mms, start)
@@ -286,14 +273,11 @@ class ModelInputs:
                 local_adapter_ids=self.local_adapter_ids,
                 vision_inputs=vision_inputs,
                 model_metas=self.model_metas,
-                cross_length=cross_length,
-                history_cross_length=history_cross_length,
                 state_offsets=self.state_offsets,
                 target_hidden_states=target_hidden_states,
                 target_position_ids=target_position_ids,
             )
             ret.append(inp)
-            history_cross_length = cross_length
 
             start = end
 
@@ -350,9 +334,6 @@ class StepContext:
     input_multimodals: List[MultiModalTensor] = None
     vision_inputs: VisionModelInputs = None
     attn_metadata: Any = None
-    cross_seqlens: torch.LongTensor = None
-    cross_kv_seqlens: torch.LongTensor = None
-    cross_attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
@@ -399,12 +380,6 @@ class StepContext:
         attention_mask, position_ids = cls.get_mask_and_position_ids(inputs)
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
 
-        # cross
-        cross_seqlens = inputs.cross_length
-        cross_kv_seqlens = None
-        if inputs.cross_length is not None:
-            cross_kv_seqlens = (inputs.cross_length + inputs.history_cross_length)
-
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
@@ -430,8 +405,6 @@ class StepContext:
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
             model_metas=inputs.model_metas,
-            cross_seqlens=cross_seqlens,
-            cross_kv_seqlens=cross_kv_seqlens,
             dp_meta=inputs.dp_meta,
             enable_microbatch=inputs.enable_microbatch,
             state_caches=state_caches,
