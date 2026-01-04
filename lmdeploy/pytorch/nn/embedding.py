@@ -46,7 +46,8 @@ class ParallelEmbedding(nn.Module):
 
         if is_tp and self.tp > 1:
             self.vocab_size_padded = pad_vocab_size(self.vocab_size, self.padding_size)
-            assert self.vocab_size_padded % self.tp == 0
+            assert self.vocab_size_padded % self.tp == 0, \
+                f'vocab_size_padded({self.vocab_size_padded}) must be divisible by tp({self.tp})'
             self.vocab_size_padded = self.vocab_size_padded // self.tp
         else:
             self.vocab_size_padded = self.vocab_size
