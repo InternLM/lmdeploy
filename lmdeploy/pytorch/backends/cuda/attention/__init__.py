@@ -113,8 +113,6 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         """
         # Normalize sliding window format
         sliding_window = _normalize_sliding_window(sliding_window)
-        if logit_softcapping is None:
-            logit_softcapping = -1
 
         # Common arguments for all implementations
         common_args = dict(
