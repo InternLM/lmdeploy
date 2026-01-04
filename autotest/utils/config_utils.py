@@ -542,12 +542,12 @@ def get_benchmark_model_list(parallel_config: Optional[Union[int, Dict[str, int]
         in_turbomind = False
         if 'turbomind_chat_model' in config:
             turbomind_models = _extract_models_from_config(config['turbomind_chat_model'])
-            in_turbomind = base_name in turbomind_models
+            in_turbomind = base_name in turbomind_models and 'w8a8' not in item
 
         in_pytorch = False
         if 'pytorch_chat_model' in config:
             pytorch_models = _extract_models_from_config(config['pytorch_chat_model'])
-            in_pytorch = base_name in pytorch_models
+            in_pytorch = base_name in pytorch_models and 'gptq' not in item
 
         if in_turbomind:
             tp_num = parallel_info.get('tp', 1)

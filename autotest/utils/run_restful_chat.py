@@ -5,7 +5,6 @@ import subprocess
 from time import sleep, time
 
 import allure
-import psutil
 import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
@@ -38,7 +37,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     # temp remove testcase because of issue 3434
     if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
         if 'turbomind' in backend_type and extra is not None and 'cuda-ipc' in extra and tp_num > 1:
-            return
+            return 0, 'skip'
 
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
@@ -58,7 +57,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     else:
         port = DEFAULT_PORT + worker_num
 
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --server-port ' + str(port),
+    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --server-port ' + str(port) +
+                                 ' --allow-terminate-by-client',
                                  config,
                                  model,
                                  need_tp=True,
@@ -111,7 +111,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
                                 shell=True,
                                 text=True,
                                 encoding='utf-8',
-                                errors='replace')
+                                errors='replace',
+                                start_new_session=True)
     pid = startRes.pid
 
     http_url = BASE_HTTP_URL + ':' + str(port)
@@ -145,16 +146,39 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
 def stop_restful_api(pid, startRes, param):
     if pid > 0:
-        parent = psutil.Process(pid)
-        for child in parent.children(recursive=True):
-            child.terminate()
-        parent.terminate()
+        startRes.terminate()
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
         if modelscope:
             del os.environ['LMDEPLOY_USE_MODELSCOPE']
     if 'MASTER_PORT' in os.environ:
         del os.environ['MASTER_PORT']
+
+
+def terminate_restful_api(worker_id, param):
+    worker_num = get_workerid(worker_id)
+    if worker_num is None:
+        port = DEFAULT_PORT
+    else:
+        port = DEFAULT_PORT + worker_num
+    http_url = BASE_HTTP_URL + ':' + str(port)
+
+    response = None
+    request_error = None
+    try:
+        response = requests.get(f'{http_url}/terminate')
+    except requests.exceptions.RequestException as exc:
+        request_error = exc
+    finally:
+        if 'modelscope' in param.keys():
+            modelscope = param['modelscope']
+            if modelscope:
+                del os.environ['LMDEPLOY_USE_MODELSCOPE']
+        if 'MASTER_PORT' in os.environ:
+            del os.environ['MASTER_PORT']
+    if request_error is not None:
+        assert False, f'terminate request failed: {request_error}'
+    assert response is not None and response.status_code == 200, f'terminate with {response}'
 
 
 def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
