@@ -159,7 +159,7 @@ int64_t& gSequenceIds(int batch_idx)
     return ids.at(batch_idx);
 }
 
-bool& isTuning()
+bool& gIsWarmUp()
 {
     thread_local bool value{};
     return value;

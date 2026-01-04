@@ -79,6 +79,6 @@ struct NvtxScope {
 
 int64_t& gSequenceIds(int batch_idx);
 
-bool& isTuning();
+bool& gIsWarmUp();
 
 }  // namespace turbomind

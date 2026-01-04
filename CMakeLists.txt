@@ -71,11 +71,9 @@ FetchContent_MakeAvailable(repo-cutlass)
 FetchContent_Declare(
   yaml-cpp
   GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-  GIT_TAG                 0.8.0
+  GIT_TAG                 65c1c270dbe7eec37b2df2531d7497c4eea79aee
   GIT_PROGRESS            TRUE
   USES_TERMINAL_DOWNLOAD  TRUE
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_SOURCE_DIR}/cmake/yaml-cpp_cmake_policy.patch
-  UPDATE_DISCONNECTED     1
 )
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
 FetchContent_MakeAvailable(yaml-cpp)
@@ -87,7 +85,6 @@ FetchContent_Declare(
   GIT_SUBMODULES          "3rdparty/dlpack"
   GIT_PROGRESS            TRUE
   USES_TERMINAL_DOWNLOAD  TRUE
-  UPDATE_DISCONNECTED     1
 )
 
 FetchContent_GetProperties(xgrammar)
@@ -110,6 +107,7 @@ endif()
 
 # the environment variable
 #   ASAN_OPTIONS=protect_shadow_gap=0,intercept_tls_get_addr=0
+#   LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.6:/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 # must be set at runtime
 # https://github.com/google/sanitizers/issues/1322
 if (LMDEPLOY_ASAN_ENABLE)
@@ -333,6 +331,8 @@ if (MSVC)
     CMAKE_CUDA_FLAGS_RELWITHDEBINFO)
     string(REGEX REPLACE "-Wall" " /W0 " ${flag_var} "${${flag_var}}")
   endforeach()
+  # avoid min/max macro in "windows.h" conflict with std::min/std::max
+  add_definitions(-DNOMINMAX=1)
 endif()
 
 include_directories(

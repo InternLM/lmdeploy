@@ -69,11 +69,15 @@ void Copy(const Buffer& a, Ref<Buffer> b_)
     Copy(a, b_, Context::stream());
 }
 
+namespace detail {
+
 void* Copy(const void* a, ssize_t n, void* b, const Stream& stream)
 {
     check_cuda_error(cudaMemcpyAsync(b, a, n, cudaMemcpyDefault, stream.handle()));
-    return (char*)b + n;
+    return (uint8_t*)b + n;
 }
+
+}  // namespace detail
 
 void Clear(Ref<Buffer> b_, const Stream& stream)
 {
