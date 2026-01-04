@@ -62,7 +62,7 @@ class GemmaAttention(nn.Module):
             self.sliding_window = (getattr(config, 'sliding_window', -1) if is_sliding else -1)
         else:
             self.sliding_window = (getattr(config, 'sliding_window', -1) if not bool(layer_idx % 2) else -1)
-        logit_softcapping = getattr(config, 'attn_logit_softcapping', None)
+        logit_softcapping = getattr(config, 'attn_logit_softcapping', -1)
         self.attn_fwd = Attention(num_heads,
                                   head_dim,
                                   scale=self.scaling,
