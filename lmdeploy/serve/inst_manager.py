@@ -1,0 +1,47 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
+from typing import TYPE_CHECKING
+
+from lmdeploy.utils import get_logger
+
+from .utils import singleton
+
+if TYPE_CHECKING:
+    from lmdeploy.serve.async_engine import AsyncEngine
+
+logger = get_logger('lmdeploy')
+
+
+@singleton
+class InferInstManager:
+    """Manages inference instances."""
+
+    def __init__(self, engine: 'AsyncEngine', size: int):
+        self.engine = engine.engine
+        self.size = size
+        self.insts = [self.engine.create_instance() for _ in range(size)]
+        # `asyncio.Queue` must be created in an async context, refer to `get` method
+        self.pool: asyncio.Queue = None
+
+    async def get(self):
+        """Get a free generator from the pool."""
+        # Lazy initialization: create pool on first use
+        if self.pool is None:
+            self.pool = asyncio.Queue()
+            for inst in self.insts:
+                self.pool.put_nowait(inst)
+
+        return await self.pool.get()
+
+    def ret(self, inst):
+        """Return a generator to the pool."""
+        if inst is not None and self.pool is not None:
+            self.pool.put_nowait(inst)
+
+    def rebuild(self, engine):
+        """Rebuild all generator instances.
+
+        Used after wakeup for turbomind backend.
+        """
+        self.insts = [engine.create_instance() for _ in range(self.size)]
+        self.pool = None

@@ -73,7 +73,7 @@ def main(model_path, backend, **kwargs):
 
     quit = False
     while not quit:
-        with pipe.session(gen_config) as sess:
+        with pipe.session() as sess:
             while True:
                 try:
                     prompt = input_prompt()
@@ -88,7 +88,7 @@ def main(model_path, backend, **kwargs):
                     break
                 if prompt.strip() == '':
                     continue
-                resps = sess(prompt, adapter_name=adapter_name)
+                resps = sess(prompt, gen_config=gen_config, adapter_name=adapter_name)
                 try:
                     for resp in resps:
                         print(resp.text, end='', flush=True)
