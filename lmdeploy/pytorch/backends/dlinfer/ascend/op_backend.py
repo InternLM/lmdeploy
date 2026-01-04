@@ -227,7 +227,9 @@ class AscendOpsBackend(DlinferOpsBackend):
             if dist_ctx.dist_config.dp > 1:
                 total_token_current_rank = torch.sum(step_context.q_seqlens).to(step_context.q_seqlens.dtype)
                 world_size = dist_ctx.dist_config.world_size
-                total_token_buffer = torch.zeros(world_size, dtype=step_context.q_seqlens.dtype, device=torch.npu.current_device())
+                total_token_buffer = torch.zeros(world_size,
+                                                 dtype=step_context.q_seqlens.dtype,
+                                                 device=torch.npu.current_device())
                 dist.all_gather_into_tensor(total_token_buffer, total_token_current_rank, dist_ctx.ep_gpu_group)
                 max_tokens_accros_dp = torch.max(total_token_buffer).item()
             else:

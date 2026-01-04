@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-from dataclasses import dataclass
 from typing import Callable, List
 
 import torch
@@ -13,16 +11,16 @@ from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopK
 
 def get_dist_ctx():
     dist_ctx = get_dist_manager().current_context()
-    
-    return DlinferDistContext(dp_size = dist_ctx.dist_config.dp,
-                              tp_size = dist_ctx.dist_config.tp,
-                              ep_size = dist_ctx.dist_config.ep,
-                              dp_rank = dist_ctx.dp_rank,
-                              tp_rank = dist_ctx.attn_tp_group.rank,
-                              ep_rank = dist_ctx.ep_rank,
-                              max_tokens_accros_dp = 1,
-                              tp_group = dist_ctx.attn_tp_group.gpu_group,
-                              ep_group = dist_ctx.ep_gpu_group)
+
+    return DlinferDistContext(dp_size=dist_ctx.dist_config.dp,
+                              tp_size=dist_ctx.dist_config.tp,
+                              ep_size=dist_ctx.dist_config.ep,
+                              dp_rank=dist_ctx.dp_rank,
+                              tp_rank=dist_ctx.attn_tp_group.rank,
+                              ep_rank=dist_ctx.ep_rank,
+                              max_tokens_accros_dp=1,
+                              tp_group=dist_ctx.attn_tp_group.gpu_group,
+                              ep_group=dist_ctx.ep_gpu_group)
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
