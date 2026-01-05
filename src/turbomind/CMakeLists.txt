@@ -28,7 +28,7 @@ add_library(turbomind STATIC turbomind.cc)
 set_property(TARGET turbomind PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(turbomind PUBLIC
         engine
-        models  
+        models
         device_comm
         host_comm
         core
@@ -37,4 +37,3 @@ target_link_libraries(turbomind PUBLIC
         CUDA::cublasLt
         CUDA::cudart
         yaml-cpp::yaml-cpp)
-

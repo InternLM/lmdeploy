@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/engine/request_queue.h"
 
 namespace turbomind {
@@ -31,22 +32,25 @@ void Gateway::push(std::shared_ptr<Request> r)
 {
     int rank = -1;
 
-    if (!r->session.start_flag) {
+    if (TM_UNLIKELY(!r->session.start_flag)) {
         // route to corresponding rank
         rank = binding_.find(r->session.id);
     }
-    else {
+    else if (TM_LIKELY(size_)) {
         rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
     }
+    else {
+        TM_LOG_ERROR("[Gateway] No queues available for submitting the request");
+        notify({[r = std::move(r)] { UpdateState(*r, Request::kNoQueue, 0); }});
+        return;
+    }
 
-    if (rank >= 0) {
+    if (TM_LIKELY(rank >= 0)) {
         queues_[rank]->push({std::move(r)});
     }
     else {
         TM_LOG_ERROR("[Gateway] Failed to find a binded queue for %lu", r->session.id);
-        notify({[r = std::move(r)] {  //
-            UpdateState(*r, Request::kInvalid, 0);
-        }});
+        notify({[r = std::move(r)] { UpdateState(*r, Request::kInvalid, 0); }});
     }
 }
 

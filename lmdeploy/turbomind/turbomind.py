@@ -206,7 +206,6 @@ class TurboMind:
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
 
-
         # create weight
         def _create_weight_func(device_id):
             model_comm.create_weights(device_id)
@@ -549,6 +548,7 @@ class TurboMindInstance:
             7: ResponseType.FINISH,
             8: ResponseType.CANCEL,
             9: ResponseType.PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE,
+            10: ResponseType.NO_QUEUE,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 

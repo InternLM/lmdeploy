@@ -122,6 +122,7 @@ struct Request {
         kFinish        = 7,
         kCancel        = 8,
         kInconsistency = 9,  // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
+        kNoQueue       = 10, // No queue available for submitting the request (in current process)
     };
 
     std::shared_ptr<xgrammar::CompiledGrammar> grammer;

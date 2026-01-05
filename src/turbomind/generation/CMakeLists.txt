@@ -15,20 +15,20 @@
 cmake_minimum_required(VERSION 3.11)
 
 add_library(guided_decoding STATIC guided_decoding.cc)
-target_link_libraries(guided_decoding PRIVATE 
-    apply_token_bitmask_inplace_cuda 
-    xgrammar 
+target_link_libraries(guided_decoding PRIVATE
+    apply_token_bitmask_inplace_cuda
+    xgrammar
     core)
 set_property(TARGET guided_decoding PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-add_library(generation STATIC 
+add_library(generation STATIC
     generation.cc
-    logits_processor.cc 
-    sampling.cc 
+    logits_processor.cc
+    sampling.cc
     stop_criteria.cc)
 set_property(TARGET generation PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET generation PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(generation PUBLIC 
+target_link_libraries(generation PUBLIC
     ban_bad_words
     sampling_penalty_kernels
     sampling_topk_kernels
@@ -36,7 +36,5 @@ target_link_libraries(generation PUBLIC
     sampling_kernels
     stop_criteria
     guided_decoding
-    memory_utils 
+    memory_utils
     CUDA::cudart)
-
-

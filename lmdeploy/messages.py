@@ -442,6 +442,7 @@ class ResponseType(enum.Enum):
     INTERNAL_ENGINE_ERROR = enum.auto()
     CANCEL = enum.auto()
     PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
+    NO_QUEUE = enum.auto()
 
 
 @dataclass
