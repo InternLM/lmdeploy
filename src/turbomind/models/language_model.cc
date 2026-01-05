@@ -183,7 +183,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
 
         ssize_t bytes{};
         bytes = std::max(bytes, byte_size(dtype_, max_fwd_tokens * engine.attn_dp_size * model.hidden_units));
-        bytes = std::max(bytes, byte_size(dtype_, engine.max_batch_size * model.vocab_size_padded));
+        bytes = std::max(bytes, byte_size(dtype_, engine.max_batch_size * vocab_size));
 
         symm_buf_ = {bytes, symm_alloc};
         // Compute max logits length based on symm buffer size

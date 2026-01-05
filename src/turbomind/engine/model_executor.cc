@@ -71,6 +71,8 @@ struct ModelExecutor::Impl {
         copy.Run();
 
         // TM_CHECK(0);
+        // AnomalyHandler::instance().Summarize([](...) {});
+        // AnomalyHandler::instance().Reset();
     }
 
     Impl(LanguageModel&                model,
