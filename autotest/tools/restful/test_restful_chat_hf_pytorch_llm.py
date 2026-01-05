@@ -8,7 +8,7 @@ from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wa
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_openai_service,
                                     terminate_restful_api)
-from tools.common_testcase import PYTORCH_MODELSCOPE_CONFIG
+from autotest.tools.common_testcase_config import PYTORCH_MODELSCOPE_CONFIG, PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2
 
 @pytest.fixture(scope='function', autouse=True)
 def prepare_environment(request, config, worker_id):
@@ -124,6 +124,33 @@ def test_restful_chat_tp16(config, common_case_config, worker_id):
     run_all_step(config, common_case_config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api_pytorch
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_distributed_tp16
+@pytest.mark.parametrize('model_param', get_func_config_list(BACKEND, {'tp': 16}))
+def test_restful_chat_distributed_tp16(shared_ray_manager, config, model_param, common_case_config, worker_id):
+    _run_ray_distributed_test(config=config,
+                              model_param=model_param,
+                              common_case_config=common_case_config,
+                              worker_id=worker_id,
+                              manager=shared_ray_manager)
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api_pytorch
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_distributed_dpep16
+@pytest.mark.parametrize('model_param', get_func_config_list(BACKEND, {'dp': 16, 'ep': 16}))
+def test_restful_chat_distributed_dpep16(shared_proxy_manager, config, model_param, common_case_config, worker_id):
+    _run_proxy_distributed_test(config=config,
+                                model_param=model_param,
+                                common_case_config=common_case_config,
+                                worker_id=worker_id,
+                                manager=shared_proxy_manager)
+
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('prepare_environment',
@@ -144,18 +171,7 @@ def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'meta-llama/Llama-2-7b-chat-hf',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {
-        'adapters': 'lora/Llama2-Chinese-7b-Chat-LoRA'
-    }
-}],
+@pytest.mark.parametrize('prepare_environment', PYTORCH_LORA_TEST_LLM_GPU1,
                          indirect=True)
 def test_pytorch_chat_with_lora_tp1(config, common_case_config, worker_id):
     run_all_step(config, common_case_config, port=DEFAULT_PORT + get_workerid(worker_id))
@@ -163,18 +179,7 @@ def test_pytorch_chat_with_lora_tp1(config, common_case_config, worker_id):
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'baichuan-inc/Baichuan2-13B-Chat',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {
-        'adapters': 'a=lora/2024-01-25_self_dup b=lora/2024-01-25_self'
-    }
-}],
+@pytest.mark.parametrize('prepare_environment',PYTORCH_LORA_TEST_LLM_GPU2,
                          indirect=True)
 def test_pytorch_chat_with_lora_tp2(config, common_case_config, worker_id):
     run_all_step(config, common_case_config, port=DEFAULT_PORT + get_workerid(worker_id))

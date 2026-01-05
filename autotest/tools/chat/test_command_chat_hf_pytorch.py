@@ -36,6 +36,7 @@ def test_hf_pytorch_chat_tp8(config, run_config, cli_case_config, worker_id):
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_16
+@pytest.mark.test_ascend
 @pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 16}))
 def test_hf_pytorch_chat_tp16(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)

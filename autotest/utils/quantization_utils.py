@@ -42,9 +42,7 @@ def quantization(config,
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
 
-    if not _is_bf16_supported_by_device() or quantization_type == 'gptq':
-        quantization_cmd += ' --batch-size 8'
-    elif str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
+    if quantization_type == 'gptq' or str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         quantization_cmd += ' --batch-size 8'
     else:
         quantization_cmd += ' --batch-size 32'
