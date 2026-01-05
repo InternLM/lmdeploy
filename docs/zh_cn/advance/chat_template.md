@@ -22,10 +22,6 @@ LMDeploy 支持两种添加对话模板的形式：
   }
   ```
 
-  model_name 为必填项，可以是 LMDeploy 内置对话模板名（通过 `lmdeploy list` 可查阅），也可以是新名字。其他字段可选填。
-  当 model_name 是内置对话模板名时，json文件中各非 null 字段会覆盖原有对话模板的对应属性。
-  而当 model_name 是新名字时，它会把将`BaseChatTemplate`直接注册成新的对话模板。其具体定义可以参考[BaseChatTemplate](https://github.com/InternLM/lmdeploy/blob/24bd4b9ab6a15b3952e62bcfc72eaba03bce9dcb/lmdeploy/model.py#L113-L188)。
-
   这样一个模板将会以下面的形式进行拼接。
 
   ```
