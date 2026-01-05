@@ -1228,6 +1228,9 @@ async def startup_event():
 
     if VariableInterface.proxy_url is None:
         return
+    elif getattr(async_engine.engine, 'is_dummy', False):
+        logger.info('Dummy node started')
+        return
     try:
         import requests
         engine_config = VariableInterface.async_engine.backend_config

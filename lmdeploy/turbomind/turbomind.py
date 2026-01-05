@@ -1,10 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-import base64
 import copy
 import json
 import math
+import os
 import os.path as osp
 import sys
 from collections.abc import Sequence
@@ -16,6 +16,7 @@ from queue import Queue
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pybase64
 import torch
 import yaml
 from torch.nn.utils.rnn import pad_sequence
@@ -86,10 +87,11 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
+    cfg.device_num = len(cfg.devices) * cfg.nnodes if cfg.devices else cfg.device_num
     if not complete_parallel_config(cfg):
         total = cfg.dp * cfg.tp
         if not cfg.device_num:
-            count = torch.cuda.device_count()
+            count = torch.cuda.device_count() * cfg.nnodes
             if total < count:
                 count = total
             cfg.device_num = count
@@ -106,7 +108,10 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
-    cfg.devices = cfg.devices or list(range(cfg.device_num))
+    # update devices
+    cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
+    cfg.devices = cfg.devices[:cfg.device_num // cfg.nnodes]
+    assert len(cfg.devices) == cfg.device_num // cfg.nnodes
 
 
 class TurboMind:
@@ -142,14 +147,27 @@ class TurboMind:
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
         update_parallel_config(_engine_config)
+        if _engine_config.nnodes > 1:
+            logger.info(f'dist_init_addr={_engine_config.dist_init_addr}')
+            assert _engine_config.dist_init_addr is not None
+            hostname, port = _engine_config.dist_init_addr.split(':')
+            os.environ['LMDEPLOY_DIST_INIT_ADDR'] = hostname
+            os.environ['LMDEPLOY_DIST_INIT_PORT'] = port
+            # this will block the process and ignore signals until all ranks done
+            from torch.distributed import TCPStore
+            self.store = TCPStore(host_name=hostname,
+                                  port=int(port),
+                                  world_size=_engine_config.nnodes,
+                                  is_master=_engine_config.node_rank == 0)
 
-        self.gpu_count = _engine_config.device_num
+        self.gpu_count = len(_engine_config.devices)
         self.devices = _engine_config.devices
         self._engine_created = False
 
         if not osp.exists(model_path):
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
         self.model_comm = self._from_hf(model_path=model_path, engine_config=_engine_config)
+        self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path)
         if not _engine_config.empty_init:
             self._load_weights()
@@ -192,10 +210,8 @@ class TurboMind:
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
 
-        # TODO: support mpi
-        self.node_id = 0
-        self.node_num = 1
-        torch.cuda.synchronize()
+        engine_cfg = self.config_dict['engine_config']
+        self.node_id = engine_cfg['node_rank']
 
         # create weight
         def _create_weight_func(device_id):
@@ -328,7 +344,7 @@ class TurboMind:
 
         with torch.cuda.device(self.devices[0]):
             if isinstance(request.serialized_named_tensors, str):
-                weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
+                weights = ForkingPickler.loads(pybase64.b64decode(request.serialized_named_tensors))
                 weights = {k: _construct(v) for k, v in weights}
             else:
                 weights = request.serialized_named_tensors
@@ -382,6 +398,8 @@ class TurboMind:
         if self.model_comm is not None:
             self.model_comm = None
         self._engine_created = False
+        if hasattr(self, 'store'):
+            del self.store
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -526,11 +544,6 @@ class TurboMindInstance:
     def __init__(self, tm_model: TurboMind, config: TurbomindModelConfig, cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
-
-        self.node_id = tm_model.node_id
-        self.gpu_count = tm_model.gpu_count
-
-        self.session_len = tm_model.session_len
 
         # create model instances
         lazy_init = self.tm_model.config_dict['engine_config'].get('empty_init', False)

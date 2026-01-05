@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 
 from .activation import silu_and_mul
-from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize
+from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize, moe_reduce
 from .w8a8_triton_kernels import per_token_quant_int8
 
 
@@ -60,7 +60,6 @@ def fused_moe_w8a8_kernel(
     SortedIdx,
     ExpStart,
     ExpEnd,
-    Weights,
     N: tl.constexpr,
     K: tl.constexpr,
     stride_am: tl.constexpr,
@@ -76,7 +75,6 @@ def fused_moe_w8a8_kernel(
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
     M_NP2: tl.constexpr,
-    ENABLE_WEIGHTS: tl.constexpr,
     top_k: tl.constexpr,
     expert_offset: tl.constexpr,
     reindex_a: tl.constexpr,
@@ -144,10 +142,6 @@ def fused_moe_w8a8_kernel(
     c = accumulator.to(ascale.dtype)
     c = c * ascale[:, None] * bscale[None, :]
 
-    if ENABLE_WEIGHTS:
-        weight = tl.load(Weights + sid, mask=mask_sid)
-        c = c * weight[:, None].to(c.dtype)
-
     c = c.to(C.dtype.element_ty)
 
     if reindex_c:
@@ -167,8 +161,6 @@ def fused_moe_w8a8_kernel_launcher(
     sorted_idx: torch.Tensor,
     exp_start: torch.Tensor,
     exp_end: torch.Tensor,
-    weights: torch.Tensor,
-    enable_weights: bool = False,
     top_k: int = 1,
     num_tokens: int = None,
     expert_offset: int = 0,
@@ -204,7 +196,6 @@ def fused_moe_w8a8_kernel_launcher(
         sorted_idx,
         exp_start,
         exp_end,
-        weights,
         N=N,
         K=K,
         stride_am=A.stride(0),
@@ -215,7 +206,6 @@ def fused_moe_w8a8_kernel_launcher(
         stride_bse=B_scale.stride(0),
         stride_cm=C.stride(0),
         stride_cn=C.stride(1),
-        ENABLE_WEIGHTS=enable_weights,
         top_k=top_k,
         expert_offset=expert_offset,
         reindex_a=reindex_a,
@@ -261,8 +251,6 @@ def fused_moe_w8a8(input: torch.Tensor,
         sorted_idx=sorted_idx,
         exp_start=exp_start,
         exp_end=exp_end,
-        weights=topk_weights,
-        enable_weights=False,
         top_k=topk,
         num_tokens=M,
         expert_offset=expert_offset,
@@ -289,8 +277,6 @@ def fused_moe_w8a8(input: torch.Tensor,
         sorted_idx=sorted_idx,
         exp_start=exp_start,
         exp_end=exp_end,
-        weights=topk_weights,
-        enable_weights=True,
         top_k=1,
         num_tokens=M,
         expert_offset=expert_offset,
@@ -298,5 +284,5 @@ def fused_moe_w8a8(input: torch.Tensor,
         reindex_c=True,
     )
 
-    ret = intermediate_cache2.sum(dim=1)
+    ret = moe_reduce(intermediate_cache2, topk_weights)
     return ret

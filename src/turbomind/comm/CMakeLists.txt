@@ -22,6 +22,9 @@ if (BUILD_MULTI_GPU)
         target_link_libraries(device_comm INTERFACE nccl_comm)
     endif ()
 
+    add_subdirectory(gloo)
+    target_link_libraries(host_comm INTERFACE gloo_comm)
+
     if (BUILD_TEST)
         add_executable(test_comm test_comm.cu)
         target_link_libraries(test_comm PRIVATE device_comm host_comm core pthread nvtx_utils)

@@ -97,13 +97,12 @@ class EngineInstance(EngineInstanceBase):
         routed_experts = resp.data.get('routed_experts', None) if resp.data else None
         if routed_experts is not None and resp.type in [ResponseType.FINISH, ResponseType.CANCEL]:
             if self._enable_transfer_obj_ref:
-                import base64
-
+                import pybase64
                 import ray
 
                 ref = ray.put(routed_experts)
                 data = ray.cloudpickle.dumps(ref)
-                outputs['routed_experts'] = base64.b64encode(data).decode('utf-8')
+                outputs['routed_experts'] = pybase64.b64encode(data).decode('utf-8')
             else:
                 outputs['routed_experts'] = routed_experts
         return outputs
@@ -187,12 +186,17 @@ class EngineInstance(EngineInstanceBase):
                 output_offset = len(token_ids)
             elif resp.type in (ResponseType.FINISH, ResponseType.CANCEL):
                 resp_data = resp.data
-                token_ids = resp_data['token_ids']
-                logits = resp_data['logits']
+                if resp_data is None:
+                    # request might be cancelled before any output
+                    token_ids = []
+                    logits = None
+                else:
+                    token_ids = resp_data['token_ids'][output_offset:].tolist()
+                    logits = resp_data.get('logits', None)
                 num_ids = len(token_ids) - output_offset
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
-                                   token_ids[output_offset:].tolist(),
+                                   token_ids,
                                    logits=logits,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,
