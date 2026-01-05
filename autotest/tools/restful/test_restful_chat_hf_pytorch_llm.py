@@ -8,7 +8,7 @@ from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wa
 from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_openai_service,
                                     terminate_restful_api)
-
+from tools.common_testcase import PYTORCH_MODELSCOPE_CONFIG
 
 @pytest.fixture(scope='function', autouse=True)
 def prepare_environment(request, config, worker_id):
@@ -135,31 +135,7 @@ def test_restful_chat_turbomind_prefix_cache_tp2(config, common_case_config, wor
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'Qwen/Qwen2.5-7B-Instruct',
-    'backend': BACKEND,
-    'communicator': 'cuda-ipc',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {},
-    'env': {
-        'LMDEPLOY_USE_MODELSCOPE': 'True'
-    }
-}, {
-    'model': 'Qwen/Qwen2.5-7B-Instruct',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {},
-    'env': {
-        'LMDEPLOY_USE_MODELSCOPE': 'True'
-    }
-}],
+@pytest.mark.parametrize('prepare_environment', PYTORCH_MODELSCOPE_CONFIG,
                          indirect=True)
 def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}

@@ -1,9 +1,9 @@
 import pytest
 from utils.config_utils import get_cuda_id_by_workerid, get_func_config_list
 from utils.run_client_chat import run_tests
+from tools.common_testcase_config import PYTORCH_PR_TEST_LLM_GPU2, PYTORCH_PR_TEST_LLM_GPU1, PYTORCH_MODELSCOPE_CONFIG, PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2
 
 BACKEND = 'pytorch'
-
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
@@ -58,25 +58,7 @@ def test_hf_pytorch_base_tp2(config, run_config, cli_case_config, worker_id):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('run_config', [{
-    'model': 'internlm/internlm2_5-20b-chat',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}, {
-    'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}])
+@pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU2)
 def test_hf_turbomind_chat_pr_tp2(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id, gpu_num='5,6')
 
@@ -84,25 +66,7 @@ def test_hf_turbomind_chat_pr_tp2(config, run_config, cli_case_config, worker_id
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
 @pytest.mark.pr_test
-@pytest.mark.parametrize('run_config', [{
-    'model': 'meta-llama/Llama-2-7b-chat-hf',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}, {
-    'model': 'OpenGVLab/InternVL3-8B',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}])
+@pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU1)
 def test_hf_turbomind_chat_pr_tp1(config, run_config, cli_case_config, worker_id):
     gpu_num = get_cuda_id_by_workerid(worker_id)
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id, gpu_num=str(int(gpu_num) + 5))
@@ -110,25 +74,7 @@ def test_hf_turbomind_chat_pr_tp1(config, run_config, cli_case_config, worker_id
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('run_config', [{
-    'model': 'Qwen/Qwen2.5-7B-Instruct',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}, {
-    'model': 'Qwen/Qwen2.5-7B-Instruct',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}])
+@pytest.mark.parametrize('run_config', PYTORCH_MODELSCOPE_CONFIG)
 def test_modelscope_turbomind_chat_tp1(config, run_config, cli_case_config, worker_id):
     run_config['env'] = {'LMDEPLOY_USE_MODELSCOPE': 'True'}
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
@@ -139,18 +85,7 @@ def test_modelscope_turbomind_chat_tp1(config, run_config, cli_case_config, work
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.other
-@pytest.mark.parametrize('run_config', [{
-    'model': 'meta-llama/Llama-2-7b-chat-hf',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {
-        'adapters': 'lora/Llama2-Chinese-7b-Chat-LoRA'
-    }
-}])
+@pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU1)
 def test_pytorch_chat_with_lora_tp1(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
 
@@ -160,17 +95,6 @@ def test_pytorch_chat_with_lora_tp1(config, run_config, cli_case_config, worker_
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.other
-@pytest.mark.parametrize('run_config', [{
-    'model': 'baichuan-inc/Baichuan2-13B-Chat',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {
-        'adapters': 'a=lora/2024-01-25_self_dup b=lora/2024-01-25_self'
-    }
-}])
+@pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU2)
 def test_pytorch_chat_with_lora_tp2(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)

@@ -3,6 +3,7 @@ from utils.config_utils import get_func_config_list, get_workerid
 from utils.constant import DEFAULT_PORT
 from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_openai_service,
                                     terminate_restful_api, test_logprobs)
+from tools.common_testcase_config import TURBOMIND_PR_TEST_LLM_GPU2, TURBOMIND_PR_TEST_LLM_GPU1, TURBOMIND_FALLBACK_TEST_LLM_GPU1, TURBOMIND_FALLBACK_TEST_LLM_GPU2, TURBOMIND_MODELSCOPE_CONFIG,TURBOMIND_LOGPROBS_TEST_LLM_GPU2
 
 
 @pytest.fixture(scope='function', autouse=True)
@@ -63,34 +64,7 @@ def test_restful_chat_prefix_cache_tp2(config, common_case_config, worker_id):
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'microsoft/Phi-4-mini-instruct',
-    'backend': BACKEND,
-    'communicator': 'cuda-ipc',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}, {
-    'model': 'microsoft/Phi-4-mini-instruct-inner-4bits',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 4,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}, {
-    'model': 'microsoft/Phi-4-mini-instruct-inner-w8a8',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}],
+@pytest.mark.parametrize('prepare_environment', TURBOMIND_FALLBACK_TEST_LLM_GPU1,
                          indirect=True)
 def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
@@ -99,25 +73,7 @@ def test_restful_chat_fallback_backend_tp1(config, common_case_config, worker_id
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'google/gemma-2-27b-it',
-    'backend': BACKEND,
-    'communicator': 'cuda-ipc',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}, {
-    'model': 'deepseek-ai/deepseek-moe-16b-chat',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}],
+@pytest.mark.parametrize('prepare_environment', TURBOMIND_FALLBACK_TEST_LLM_GPU2,
                          indirect=True)
 def test_restful_chat_fallback_backend_tp2(config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
@@ -128,36 +84,19 @@ def test_restful_chat_fallback_backend_tp2(config, common_case_config, worker_id
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.pr_test
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'internlm/internlm2_5-20b-chat',
-    'backend': BACKEND,
-    'communicator': 'cuda-ipc',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}, {
-    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}, {
-    'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}],
+@pytest.mark.parametrize('prepare_environment', TURBOMIND_PR_TEST_LLM_GPU2,
                          indirect=True)
-def test_restful_chat_pr(config, common_case_config, worker_id):
+def test_restful_chat_pr_tp2(config, common_case_config, worker_id):
+    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
+    run_all_step(config, case_config, port=DEFAULT_PORT + get_workerid(worker_id))
+    
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.pr_test
+@pytest.mark.parametrize('prepare_environment', TURBOMIND_PR_TEST_LLM_GPU1,
+                         indirect=True)
+def test_restful_chat_pr_tp1(config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
     run_all_step(config, case_config, port=DEFAULT_PORT + get_workerid(worker_id))
 
@@ -165,25 +104,7 @@ def test_restful_chat_pr(config, common_case_config, worker_id):
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'internlm/internlm2_5-20b-chat',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}, {
-    'model': 'OpenGVLab/InternVL3-38B',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}],
+@pytest.mark.parametrize('prepare_environment', TURBOMIND_LOGPROBS_TEST_LLM_GPU2,
                          indirect=True)
 def test_restful_logprobs(worker_id):
     test_logprobs(worker_id)
@@ -191,31 +112,7 @@ def test_restful_logprobs(worker_id):
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'Qwen/Qwen2.5-7B-Instruct',
-    'backend': BACKEND,
-    'communicator': 'cuda-ipc',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {},
-    'env': {
-        'LMDEPLOY_USE_MODELSCOPE': 'True'
-    }
-}, {
-    'model': 'Qwen/Qwen2.5-7B-Instruct',
-    'backend': BACKEND,
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {},
-    'env': {
-        'LMDEPLOY_USE_MODELSCOPE': 'True'
-    }
-}],
+@pytest.mark.parametrize('prepare_environment', TURBOMIND_MODELSCOPE_CONFIG,
                          indirect=True)
 def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
     case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
