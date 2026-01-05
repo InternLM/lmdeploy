@@ -156,7 +156,7 @@ class CalibrationContext():
             del batch_outputs, batch_args, batch_kwargs, args
             mod.to('cpu')
             torch.cuda.empty_cache()
-            max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+            max_memory = torch.cuda.max_memory_allocated(device=self.device) / 1024 / 1024 / 1024
             print(f'{m_name}, samples: {samples}, '
                   f'max gpu memory: {max_memory:.2f} GB')
             return outputs
@@ -428,7 +428,7 @@ class CalibrationContextV2(CalibrationContext):
             import gc
             gc.collect()
             torch.cuda.empty_cache()
-            max_memory = torch.cuda.max_memory_allocated() / (1 << 30)
+            max_memory = torch.cuda.max_memory_allocated(device=self.device) / (1 << 30)
             print(f'{m_name}, samples: {samples}, '
                   f'max gpu memory: {max_memory:.2f} GB')
             return outputs

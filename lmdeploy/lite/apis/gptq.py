@@ -3,7 +3,7 @@ import logging
 from typing import Literal
 
 import torch
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer
 
 from lmdeploy.lite.utils.calib_dataloader import get_calib_loaders
 
@@ -12,18 +12,20 @@ def auto_gptq(model: str,
               work_dir: str = './work_dir',
               w_bits: int = 4,
               w_group_size: int = 128,
-              calib_dataset: str = 'ptb',
+              calib_dataset: str = 'wikitext2',
               calib_samples: int = 128,
               calib_seqlen: int = 2048,
               batch_size: int = 1,
               dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-              revision: str = None):
+              revision: str = None,
+              device: str = 'cuda'):
     """Perform weight quantization using AWQ algorithm.
 
     Args:
         model (str): The path of model in hf format.
         work_dir (str): The working directory to save results.
         calib_dataset (str): The calibration dataset name.
+            Defaults to 'wikitext2'.
         calib_samples (int): The number of samples for calibration.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size
@@ -35,6 +37,7 @@ def auto_gptq(model: str,
         revision (str): The specific model version to use. It can be a
             branch name, a tag name, or a commit id. If unspecified,
             will use the default version.
+        device (str): Device type of running.
     """
     try:
         from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
@@ -61,8 +64,13 @@ def auto_gptq(model: str,
     quantized_model_dir = work_dir
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(pretrained_model_dir, trust_remote_code=True)
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
+    calib_loader, _ = get_calib_loaders(calib_dataset,
+                                        tokenizer,
+                                        processor,
+                                        nsamples=calib_samples,
+                                        seqlen=calib_seqlen)
     all_data = [data if isinstance(data, torch.Tensor) else data[0] for data in calib_loader]
     attention_mask = [1] * calib_seqlen
     examples = [dict(input_ids=data.flatten().tolist(), attention_mask=attention_mask) for data in all_data]
@@ -86,7 +94,7 @@ def auto_gptq(model: str,
                                                 quantize_config,
                                                 revision=revision,
                                                 torch_dtype=torch_dtype,
-                                                trust_remote_code=True).cuda()
+                                                trust_remote_code=True).to(device)
 
     # quantize model, the examples should be list of dict whose keys
     # can only be "input_ids" and "attention_mask"

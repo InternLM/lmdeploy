@@ -388,7 +388,12 @@ class ArgumentHelper:
     def calib_dataset(parser):
         """Add argument calib_dataset to parser."""
 
-        return parser.add_argument('--calib-dataset', type=str, default='ptb', help='The calibration dataset name')
+        return parser.add_argument('--calib-dataset',
+                                   type=str,
+                                   default='wikitext2',
+                                   help=('The calibration dataset name. Supported datasets: '
+                                         'wikitext2, c4, pileval, ultrachat_200k, gsm8k, '
+                                         'neuralmagic_calibration, open-platypus, openwebtext.'))
 
     @staticmethod
     def calib_samples(parser):
