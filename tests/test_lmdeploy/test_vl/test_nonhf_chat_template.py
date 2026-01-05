@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from lmdeploy.model import MODELS, best_match_model
+from lmdeploy.model import MODELS
 from lmdeploy.vl.model.builder import load_vl_model
 
 
@@ -15,8 +15,7 @@ def get_model_and_chat_template(model_path):
         from huggingface_hub import snapshot_download
     model_path = snapshot_download(model_path, allow_patterns=['*.json', '*.py', '*.txt', '*.model', '*.jinja'])
     model = load_vl_model(model_path=model_path, with_llm=False, backend='pytorch')
-    chat_template_name = best_match_model(model_path)
-    chat_template = MODELS.module_dict[chat_template_name](model_path=model_path)
+    chat_template = MODELS.module_dict['hf'](model_path=model_path)
     return model, chat_template
 
 

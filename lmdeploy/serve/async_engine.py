@@ -22,7 +22,7 @@ from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, 
                                TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
-from lmdeploy.model import ChatTemplateConfig, best_match_model
+from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
 from lmdeploy.serve.multimodal_processor import MultimodalProcessor
@@ -243,20 +243,11 @@ class AsyncEngine(LogitsMixin):
                  speculative_config: SpeculativeConfig = None,
                  **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
-        logger.info(f'input chat_template_config={chat_template_config}')
         logger.info(f'speculative_config={speculative_config}')
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
         self.model_name = model_name if model_name else model_path
-        chat_template_name = best_match_model(model_path)
-        if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(chat_template_name, model_path=model_path)
-        elif chat_template_config.model_name is None:
-            chat_template_config.model_name = chat_template_name
-        self.chat_template = chat_template_config.chat_template
-
-        logger.info(f'updated chat_template_onfig={chat_template_config}')
-
+        self.chat_template = get_chat_template(model_path, chat_template_config)
         self.tokenizer = Tokenizer(model_path)
         self.prompt_processor = MultimodalProcessor(self.tokenizer, self.chat_template)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
@@ -322,20 +313,17 @@ class AsyncEngine(LogitsMixin):
                 self.free_insts.put_nowait(inst)
         return self.free_insts
 
-    def _build_turbomind(self,
-                         model_path: str,
-                         backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-                         **kwargs):
-        """Innter build method for turbomind backend."""
+    def _build_turbomind(self, model_path: str, backend_config: TurbomindEngineConfig = None, **kwargs):
+        """Inner build method for turbomind backend."""
         from lmdeploy import turbomind as tm
         return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
-                       backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+                       backend_config: PytorchEngineConfig = None,
                        speculative_config: SpeculativeConfig = None,
                        **kwargs):
-        """Innter build method for pytorch backend."""
+        """Inner build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
         return Engine.from_pretrained(model_path, engine_config=backend_config, speculative_config=speculative_config)
 
