@@ -379,7 +379,7 @@ class AsyncEngine(LogitsMixin):
         return self.free_insts
 
     def _build_turbomind(self, model_path: str, backend_config: TurbomindEngineConfig = None, **kwargs):
-        """Innter build method for turbomind backend."""
+        """Inner build method for turbomind backend."""
         from lmdeploy import turbomind as tm
         return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
 
@@ -388,7 +388,7 @@ class AsyncEngine(LogitsMixin):
                        backend_config: PytorchEngineConfig = None,
                        speculative_config: SpeculativeConfig = None,
                        **kwargs):
-        """Innter build method for pytorch backend."""
+        """Inner build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
         return Engine.from_pretrained(model_path, engine_config=backend_config, speculative_config=speculative_config)
 
