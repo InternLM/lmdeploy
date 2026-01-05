@@ -43,6 +43,8 @@ private:
 
     const int tune_layer_num_;
 
+    int& is_warm_up_;
+
     std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
     std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;

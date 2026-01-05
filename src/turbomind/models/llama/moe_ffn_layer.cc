@@ -22,6 +22,7 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     hidden_dim_(model.hidden_units),
     tp_size_(engine.mlp_tp_size),
     param_(param),
+    is_warm_up_{*ctx.is_warm_up},
     linear_(*ctx.linear)
 {
     TM_CHECK(!param.expert_num.empty());
@@ -109,7 +110,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                      st);
     sync_check_cuda_error();
 
-    if (gIsWarmUp()) {
+    if (is_warm_up_) {
         std::mt19937     g;
         const auto       expert_ids = SampleUniform(tokens, expert_num, param_.experts_per_token, g);
         std::vector<int> cnt(expert_num);

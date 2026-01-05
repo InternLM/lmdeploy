@@ -32,7 +32,7 @@ public:
            Context&      ctx,
            Gateway&      gateway,
            int           device_id,
-           int           dp_rank,
+           int           queue_id,
            int           phases);
 
     void Start();

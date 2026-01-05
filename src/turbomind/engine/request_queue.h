@@ -2,7 +2,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <condition_variable>
 #include <list>
 #include <memory_resource>
@@ -14,7 +13,7 @@ namespace turbomind {
 
 class RequestQueue {
 public:
-    explicit RequestQueue(std::atomic<uint64_t>* flag): flag_{flag}, queue_{&pool_} {}
+    explicit RequestQueue(): queue_{&pool_} {}
 
     void push(std::shared_ptr<Request> r)
     {
@@ -40,29 +39,7 @@ public:
         cv_.notify_one();
     }
 
-    int try_pop(std::vector<std::shared_ptr<Request>>& rs, int max_rs_size, int max_count)
-    {
-        std::lock_guard lock{mutex_};
-
-        auto it = queue_.begin();
-        int  count{};
-        while ((int)rs.size() < max_rs_size && count < max_count && it != queue_.end()) {
-            if ((*it)->session.start_flag) {
-                rs.push_back(std::move(*it));
-                ++count;
-                auto tmp = it;
-                ++it;
-                queue_.erase(tmp);
-            }
-            else {
-                ++it;
-            }
-        }
-
-        return count;
-    }
-
-    bool pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
+    void pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
              std::vector<std::shared_ptr<Request>>& kill_reqs,
              unsigned                               max_infer,
              bool                                   blocking,
@@ -70,24 +47,12 @@ public:
     {
         std::unique_lock lock{mutex_};
 
-        ++expected_;
-
         if (blocking) {
-            cv_.wait(lock, [this] {
-                return !(queue_.empty() && kill_.empty())                      //
-                       || flag_->load(std::memory_order_relaxed) == expected_  //
-                       || closed_;
-            });
+            cv_.wait(lock, [this] { return !(queue_.empty() && kill_.empty()) || closed_; });
         }
+
         if (closed_) {
             abort = true;
-            return false;
-        }
-
-        bool is_first = false;
-        // Update the flag of current sync DP group
-        if (auto old = flag_->exchange(expected_); old < expected_) {
-            is_first = true;
         }
 
         while (!queue_.empty() && infer_reqs.size() < max_infer) {
@@ -100,8 +65,6 @@ public:
 
         kill_reqs.insert(kill_reqs.end(), kill_.begin(), kill_.end());
         kill_.clear();
-
-        return is_first;
     }
 
     void close()
@@ -126,9 +89,6 @@ public:
     }
 
 private:
-    std::atomic<uint64_t>* flag_;
-    uint64_t               expected_{};
-
     std::atomic<uint64_t> unique_id_{};
 
     std::pmr::unsynchronized_pool_resource   pool_;

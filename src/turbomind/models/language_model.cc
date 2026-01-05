@@ -209,9 +209,11 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 
     const int token_num = input_ids.size();
 
-    TM_CHECK_GT(token_num, 0);
-
     Tensor input_embeds{{token_num, hidden_units}, dtype_, kDEVICE};
+
+    if (token_num == 0) {
+        return input_embeds;
+    }
 
     if (tp_size_ == 1) {
         invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, st);
@@ -274,6 +276,10 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     const int bsz              = features.shape(0);
     const int local_vocab_size = weights_.post_decoder_embedding.output_dim;
     const int vocab_size       = local_vocab_size * tp_size_;
+
+    if (bsz == 0) {
+        return Tensor{{0, vocab_size}, dtype_, kDEVICE};
+    }
 
     if (tp_size_ == 1) {
         Tensor logits{{bsz, vocab_size}, dtype_, kDEVICE};
@@ -426,6 +432,7 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         copy.Run();
 
         env.produce("input_embeds", std::move(input_embeds));
+        // dbg(env);
     }
 
     if (symm_buf_) {

@@ -59,7 +59,7 @@ struct Engine::Impl {
          Context&      ctx,
          Gateway&      gateway,
          int           device_id,
-         int           dp_rank,
+         int           queue_id,
          int           phases);
 
     void CreateSequenceManager();
@@ -112,10 +112,14 @@ struct Engine::Impl {
 
     const int tp_rank_;
     const int dp_rank_;
+    const int dp_size_;
 
     const int device_id_;
+    const int queue_id_;
 
     const int async_;
+
+    int& is_warm_up_;
 
     unique_ptr<SequenceManager> seq_mgr_;
 
@@ -173,7 +177,7 @@ Engine::Impl::Impl(DataType      dtype,
                    Context&      ctx,
                    Gateway&      gateway,
                    int           device_id,
-                   int           dp_rank,
+                   int           queue_id,
                    int           phases):
     dtype_{dtype},
     param_{param},
@@ -182,8 +186,11 @@ Engine::Impl::Impl(DataType      dtype,
     dp_group_{ctx.comm.h_dp_group},
     tp_rank_{tp_group_->rank()},
     dp_rank_{dp_group_->rank()},
+    dp_size_{dp_group_->n_ranks()},
     device_id_{device_id},
+    queue_id_{queue_id},
     async_{phases > 1},
+    is_warm_up_{*ctx.is_warm_up},
     model_{std::move(model)}
 {
     states_.emplace_back();
@@ -511,9 +518,16 @@ void Engine::Impl::Schedule()
                         return sequences[i]->status == Sequence::kActive;  // IS active
                     })};
 
-    subrange inactive{active.end(), idxs.end()};
-
     TM_CHECK(sequences.empty() || !active.empty()) << "No enough blocks";
+
+    if (is_warm_up_) {
+        // Avoid extra iteration for warm up request in async mode (force inactivate)
+        active = {active.begin(), std::stable_partition(active.begin(), active.end(), [&](int i) {  //
+                      return alpha[i] == 0;
+                  })};
+    }
+
+    subrange inactive{active.end(), idxs.end()};
 
     subrange existing{active.begin(), std::stable_partition(active.begin(), active.end(), [&](int i) {
                           return status[i] == Sequence::kActive;  // WAS active in active
@@ -629,9 +643,13 @@ void Engine::Impl::Setup(BatchData& d)
     // dbg(copy);
     copy.Run();
 
-    /// FIXME: all-gather
-    d.local_token_num  = {*env.at("local_token_num").data<int>()};
-    d.global_token_num = d.local_token_num[0];
+    d.local_token_num.resize(dp_size_);
+    d.local_token_num[dp_rank_] = *env.at("token_num").data<int>();
+    if (dp_size_ > 1) {
+        AllGather(dp_group_, d.local_token_num.data(), 1);
+    }
+    d.global_token_num = std::accumulate(d.local_token_num.begin(), d.local_token_num.end(), 0);
+    // dbg(dp_group_->rank(), d.local_token_num, d.global_token_num);
 }
 
 void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
@@ -737,35 +755,22 @@ void Engine::Impl::InternalThreadEntry()
             rs = std::make_shared<RequestData>();
 
             const int  n_free   = param_.max_batch_size - st.size() + st.finish;
-            const bool is_empty = n_free == param_.max_batch_size;
+            const bool blocking = n_free == param_.max_batch_size;
 
-            // Block if batch is empty AND no silbings are ready AND comm in same node
-            const bool is_block = is_empty && dp_group_->is_same_process();
-            bool       wait     = 0;
-            do {
-                gateway_.pop(rs->infer, rs->kill, n_free, is_block, rs->abort, dp_rank_);
-                if (!dp_group_->is_same_process()) {
-                    wait = is_empty && rs->infer.empty() && rs->kill.empty() && rs->abort == false;
-                    wait = AllReduce(dp_group_, (int)wait, comm::RedOp::kSum) == dp_group_->n_ranks();
-                }
-            } while (wait);
+            gateway_.pop(rs->infer, rs->kill, n_free, blocking, rs->abort, dp_group_, queue_id_);
 
             Validate(rs->infer, rs->kill);
 
             rs->cancel = GetCanceled();
         }
 
-        if (st.size() - st.finish == 0) {
+        if (st.size() - st.finish == 0 && tp_group_->is_same_process()) {
+            // Only thread comm has blocking sync
             tp_group_->Sync(true);
         }
 
         if (tp_group_->n_ranks() > 1) {
             Broadcast(tp_group_, rs, 0);
-        }
-
-        /// TODO: revise DP aborting procedure
-        if (!dp_group_->is_same_process()) {
-            rs->abort = AllReduce(dp_group_, (int)rs->abort, comm::RedOp::kSum) > 0;
         }
 
         if (rs->abort) {
@@ -783,9 +788,13 @@ void Engine::Impl::InternalThreadEntry()
 
         gateway_.notify(std::move(signals), tp_rank_ == 0);
 
-        TM_CHECK_GE(st.size(), st.finish);
+        int n_active = st.size() - st.finish;
 
-        if (st.size() - st.finish) {
+        TM_CHECK_GE(n_active, 0);
+
+        n_active = AllReduce(dp_group_, n_active, comm::RedOp::kSum);
+
+        if (n_active) {
 
             Schedule();
 

@@ -37,6 +37,8 @@ private:
 
     const MoeParam param_;
 
+    int& is_warm_up_;
+
     LlamaLinear& linear_;
 
     std::unique_ptr<LlamaFfnLayer> expert_ffn_;

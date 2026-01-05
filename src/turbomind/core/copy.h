@@ -58,10 +58,11 @@ public:
             return dst + size;
         }
         else {
-            src_.push_back((const char*)src);
-            dst_.push_back((char*)dst);
-            size_.push_back(sizeof(T) * size);
-            count_ += 1;
+            gsize_   = sizeof(T) * size;
+            src_ptr_ = reinterpret_cast<const char*>(src + size);
+            dst_ptr_ = reinterpret_cast<char*>(dst + size);
+            count_   = 1;
+            group_commit();
             return dst + size;
         }
     }
@@ -116,9 +117,9 @@ private:
             src_.push_back(src_ptr_ - gsize_);
             dst_.push_back(dst_ptr_ - gsize_);
             size_.push_back(gsize_);
-            src_ptr_ = dst_ptr_ = {};
-            gsize_              = {};
         }
+        src_ptr_ = dst_ptr_ = {};
+        gsize_              = {};
     }
 
 private:

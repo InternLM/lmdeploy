@@ -90,6 +90,8 @@ private:
     const LoraParam      lora_param_;
     const Context&       context_;
 
+    int& is_warm_up_;
+
     LlamaLinear& linear_;
     const int    arch_{};
 

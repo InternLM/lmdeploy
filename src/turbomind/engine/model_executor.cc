@@ -42,9 +42,6 @@ struct ModelExecutor::Impl {
 
         core::ContextGuard ctx{stream, h_alloc, d_alloc};
 
-        linear_.set_measure(true);
-        gIsWarmUp() = true;
-
         unique_ptr<BatchData> d;
 
         while (inbound_.pop(d)) {
@@ -59,13 +56,6 @@ struct ModelExecutor::Impl {
     void Run(BatchData& d)
     {
         auto batch = &d;
-
-        if (gIsWarmUp()) {
-            if (!std::all_of(d.rc.begin(), d.rc.end(), [](auto& c) { return c->req->session.is_warm_up; })) {
-                gIsWarmUp() = false;
-                linear_.set_measure(false);
-            }
-        }
 
         BatchCopy copy;
         TensorMap env{{"batch", d.buf()}, {"copy", copy.buf()}};

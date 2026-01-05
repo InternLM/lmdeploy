@@ -106,7 +106,7 @@ struct OutputProcessor::Impl {
             // dbg(&all_tokens.back(), &sel_tokens.back());
         }
 
-        const int token_num = *env.at("local_token_num").data<int>();
+        const int token_num = *env.at("token_num").data<int>();
 
         d.full_logits = {INT_MAX, 0};
         d.full_states = {INT_MAX, 0};

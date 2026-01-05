@@ -49,8 +49,9 @@ void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_, const Stream& stream)
     TM_CHECK_EQ(a.dtype(), b.dtype());
     TM_CHECK_LE(n, a.size());
     TM_CHECK_LE(n, b.size());
-    check_cuda_error(
-        cudaMemcpyAsync(b.raw_data(), a.raw_data(), byte_size(a.dtype(), n), cudaMemcpyDefault, stream.handle()));
+    if (auto size = byte_size(a.dtype(), n)) {
+        check_cuda_error(cudaMemcpyAsync(b.raw_data(), a.raw_data(), size, cudaMemcpyDefault, stream.handle()));
+    }
 }
 
 void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_)
@@ -73,7 +74,9 @@ namespace detail {
 
 void* Copy(const void* a, ssize_t n, void* b, const Stream& stream)
 {
-    check_cuda_error(cudaMemcpyAsync(b, a, n, cudaMemcpyDefault, stream.handle()));
+    if (n) {
+        check_cuda_error(cudaMemcpyAsync(b, a, n, cudaMemcpyDefault, stream.handle()));
+    }
     return (uint8_t*)b + n;
 }
 
@@ -82,7 +85,9 @@ void* Copy(const void* a, ssize_t n, void* b, const Stream& stream)
 void Clear(Ref<Buffer> b_, const Stream& stream)
 {
     auto& b = b_.get();
-    check_cuda_error(cudaMemsetAsync(b.raw_data(), 0, b.byte_size(), stream.handle()));
+    if (auto size = b.byte_size()) {
+        check_cuda_error(cudaMemsetAsync(b.raw_data(), 0, b.byte_size(), stream.handle()));
+    }
 }
 
 void Clear(Ref<Buffer> b_)

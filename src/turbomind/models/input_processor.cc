@@ -151,7 +151,7 @@ public:
         d.input_token_num = input_ids_offsets_buf_[b.bsz];
         // dbg(d.input_token_num);
 
-        env.produce("local_token_num", Buffer{&d.input_token_num, 1, kCPU});
+        env.produce("token_num", Buffer{&d.input_token_num, 1, kCPU});
 
         ////////////////////////////////////////////////////////////////
         /// input embeddings

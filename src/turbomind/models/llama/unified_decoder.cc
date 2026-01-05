@@ -18,6 +18,8 @@
 
 #include "src/turbomind/engine/request.h"
 
+// #include "dbg.h"
+
 namespace turbomind {
 
 void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
@@ -41,7 +43,8 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     attn_tp_group_(ctx.comm.d_tp_group),
     rmsnorm_eps_(model.norm_eps),
     d_comm_(ctx.comm.d_comm),
-    tune_layer_num_(model.tune_layer_num)
+    tune_layer_num_(model.tune_layer_num),
+    is_warm_up_{*ctx.is_warm_up}
 {
     attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, engine, lora, attn_tp_size_, ctx, phases);
 
@@ -131,7 +134,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     constexpr auto device = kDEVICE;
 
-    Tensor      local_residual   = args.consume("input_embeds");
+    Tensor      local_residual   = args.try_consume("input_embeds");
     const auto& local_token_nums = args.at("batch").data<BatchData*>()[0]->local_token_num;
 
     const auto local_token_num  = local_residual.shape(0);
@@ -157,6 +160,8 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         std::inclusive_scan(local_token_nums.data(), local_token_nums.data() + attn_dp_size_, offsets.begin() + 1);
         const int offset    = offsets[attn_dp_rank_];
         local_hidden_states = global_hidden_states.slice({offset, 0}, {local_token_num, -1});
+
+        // dbg(attn_dp_size_, attn_dp_rank_, local_token_nums, local_token_num, global_token_num);
     }
     else {
         local_hidden_states = global_hidden_states;
@@ -179,8 +184,11 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         // stack_alloc->iter();
 
-        /// TODO: do not skip the layers when they are heterogeneous
-        if (gIsWarmUp() && layer >= tune_layer_num_) {
+        if (global_token_num == 0) {
+            break;
+        }
+
+        if (is_warm_up_ && layer >= tune_layer_num_) {
             continue;
         }
 
@@ -252,6 +260,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     // Token indices selected for decoding
     const Buffer selected_pos = args.consume("selected_token_pos").buffer();
+    // dbg(selected_pos);
     // When there are no prefill sequences, token selection is not needed
     const bool reuse_hidden_states = selected_pos.size() == local_token_num;
 

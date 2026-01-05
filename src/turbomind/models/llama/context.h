@@ -17,6 +17,7 @@
 namespace turbomind {
 
 struct Communicators {
+    comm::HostComm h_global;
     comm::HostComm h_comm;
     comm::HostComm h_tp_group;
     comm::HostComm h_dp_group;
@@ -34,11 +35,13 @@ struct Context {
     std::unique_ptr<LlamaLinear> linear;
     cudaDeviceProp               device_prop;
     Communicators                comm;  // initialize later
+    std::unique_ptr<int>         is_warm_up;
 
     Context(int device_id):
         core_stream{core::Stream::create()},
         allocator{core::Allocator(core_stream, false)},
-        stream{core_stream.handle()}
+        stream{core_stream.handle()},
+        is_warm_up{std::make_unique<int>()}
     {
         core::ContextGuard guard{core_stream};
         linear = std::make_unique<LlamaLinear>();

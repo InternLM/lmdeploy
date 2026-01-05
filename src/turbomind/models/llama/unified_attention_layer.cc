@@ -108,6 +108,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     engine_param_(engine),
     cp_fn_ctx_(ctx.comm.d_comm, ctx.comm.d_cp_group),
     lora_param_(lora),
+    is_warm_up_{*ctx.is_warm_up},
     context_(ctx),
     linear_(*ctx.linear),
     arch_(getSMVersion())
@@ -499,7 +500,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
     }
 
-    if (d.prefill.n && !gIsWarmUp()) {
+    if (d.prefill.n && !is_warm_up_) {
         const int offset = d.decode.n;
         // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
         // disable split kv for prefill for now
@@ -517,7 +518,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         }
     }
 
-    if (d.decode.n && !gIsWarmUp()) {
+    if (d.decode.n && !is_warm_up_) {
         auto params = CreateParams(0, d.decode, kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
@@ -530,7 +531,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         check_cuda_error(cudaStreamWaitEvent(stream, aux_event_));
     }
 
-    if (gIsWarmUp()) {
+    if (is_warm_up_) {
         rng_.set_stream(stream);
         rng_.GenerateUniform(attn.data<T>(), attn.size(), .02f, -.01f);
     }
