@@ -1,6 +1,6 @@
 import pytest
 
-from lmdeploy.model import MODELS, best_match_model
+from lmdeploy.model import MODELS
 
 HF_MODELS_WITH_CHAT_TEMPLATES = [
     'Qwen/Qwen1.5-7B-Chat',
@@ -81,28 +81,6 @@ def test_HFChatTemplate_message2prompt_sequence_start_True(model_path):
     expected = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     assert model.messages2prompt(prompt, sequence_start=True) == expected
     assert model.messages2prompt(messages, sequence_start=True) == expected
-
-
-@pytest.mark.parametrize('model_path', HF_MODELS_WITH_CHAT_TEMPLATES)
-def test_best_match_model_hf(model_path):
-    assert best_match_model(model_path) == 'hf'
-
-
-@pytest.mark.parametrize('model_path_and_name', [
-    ('internlm/internlm-chat-7b', ['internlm']),
-    ('internlm/internlm2-1_8b', ['base']),
-    ('codellama/CodeLlama-7b-hf', ['codellama']),
-    ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
-    ('THUDM/chatglm2-6b', ['chatglm']),
-    ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
-    ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
-])
-def test_best_match_model(model_path_and_name):
-    deduced_name = best_match_model(model_path_and_name[0])
-    if deduced_name is not None:
-        assert deduced_name in model_path_and_name[1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
-    else:
-        assert deduced_name in model_path_and_name[1], f'expect {model_path_and_name[1]}, but got {deduced_name}'
 
 
 def test_base_model():
@@ -247,10 +225,7 @@ def test_codellama_others():
     'model_path_or_name',
     ['deepseek-ai/deepseek-vl2-tiny', 'deepseek-ai/deepseek-vl2-small', 'deepseek-ai/deepseek-vl2'])
 def test_deepseek_vl2(model_path_or_name):
-    deduced_name = best_match_model(model_path_or_name)
-    assert deduced_name == 'deepseek-vl2'
-
-    chat_template = MODELS.get(deduced_name)()
+    chat_template = MODELS.get('deepseek-vl2')()
     messages = [{
         'role': 'user',
         'content': 'This is image_1: <image>\n'
@@ -278,9 +253,7 @@ def test_qwen3(model_path, enable_thinking):
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    chat_template_name = best_match_model(model_path)
-    assert chat_template_name == 'hf'
-    chat_template = MODELS.get(chat_template_name)(model_path)
+    chat_template = MODELS.get('hf')(model_path)
 
     messages = [{
         'role': 'system',
@@ -316,8 +289,7 @@ def test_interns1(model_path, enable_thinking, has_user_sys):
     except OSError:
         pytest.skip(reason=f'{model_path} not exists')
 
-    chat_template_name = best_match_model(model_path)
-    chat_template = MODELS.get(chat_template_name)(model_path)
+    chat_template = MODELS.get('hf')(model_path)
 
     messages = [{
         'role': 'system',

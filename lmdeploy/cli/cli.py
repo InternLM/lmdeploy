@@ -15,15 +15,6 @@ class CLI(object):
     subparsers = parser.add_subparsers(title='Commands', description='lmdeploy has following commands:', dest='command')
 
     @staticmethod
-    def add_parser_list():
-        """Add parser for list command."""
-        parser = CLI.subparsers.add_parser('list',
-                                           formatter_class=DefaultsAndTypesHelpFormatter,
-                                           description=CLI.list.__doc__,
-                                           help=CLI.list.__doc__)
-        parser.set_defaults(run=CLI.list)
-
-    @staticmethod
     def add_parser_chat():
         """Add parser for list command."""
         parser = CLI.subparsers.add_parser('chat',
@@ -96,15 +87,6 @@ class CLI(object):
                             help='The file path to save env info. Only '
                             'support file format in `json`, `yml`,'
                             ' `pkl`')
-
-    @staticmethod
-    def list(args):
-        """List the supported model names."""
-        from lmdeploy.model import MODELS
-        model_names = list(MODELS.module_dict.keys())
-        model_names.sort()
-        print('The supported chat template names are:')
-        print('\n'.join(model_names))
 
     @staticmethod
     def check_env(args):
@@ -185,6 +167,5 @@ class CLI(object):
     @staticmethod
     def add_parsers():
         """Add all parsers."""
-        CLI.add_parser_list()
         CLI.add_parser_checkenv()
         CLI.add_parser_chat()

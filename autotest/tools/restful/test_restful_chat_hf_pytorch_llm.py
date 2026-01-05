@@ -5,7 +5,8 @@ import pytest
 from utils.config_utils import get_torch_model_list, get_workerid
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
-from utils.run_restful_chat import run_all_step, run_reasoning_case, run_tools_case, start_restful_api, stop_restful_api
+from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_restful_api,
+                                    terminate_restful_api)
 
 DEFAULT_PORT = 23333
 PROXY_PORT = 8000
@@ -19,8 +20,11 @@ def prepare_environment(request, config, worker_id):
         model_path = config.get('model_path') + '/' + model
 
         pid, startRes = start_restful_api(config, param, model, model_path, 'pytorch', worker_id)
-        yield
-        stop_restful_api(pid, startRes, param)
+        try:
+            yield param
+        finally:
+            if pid > 0:
+                terminate_restful_api(worker_id, param)
     else:
         yield
 

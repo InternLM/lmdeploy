@@ -203,6 +203,14 @@ class CUDAGraphRunner(GraphRunner):
             batch_size = self._get_capture_tokens(meta.padding_batch_size)
         return (batch_size, is_decoding, enable_microbatch, query_len)
 
+    def _prepare_inputs(self, **kwargs):
+        """Prepare inputs."""
+        assert 'attn_metadata' in kwargs, 'attn_metadata is required for cudagraph.'
+        attn_metadata: TritonAttentionMetadata = kwargs['attn_metadata']
+        if not attn_metadata.block_offsets.dtype == torch.int32:
+            attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
+        return kwargs
+
     def _get_max_tokens(self, graph_key: tuple, input_ids: torch.Tensor, q_seqlens: torch.Tensor):
         max_batches = graph_key[0]
         is_decoding = graph_key[1]
@@ -216,6 +224,7 @@ class CUDAGraphRunner(GraphRunner):
         if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
             self._try_compile_model_once()
 
+        kwargs = self._prepare_inputs(**kwargs)
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:

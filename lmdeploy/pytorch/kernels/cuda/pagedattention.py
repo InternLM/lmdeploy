@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/ModelTC/lightllm
 import math
-from typing import Literal
+from typing import Literal, Sequence
 
 import torch
 import triton
@@ -35,13 +35,14 @@ else:
 
 @triton.jit
 def _fwd_grouped_split_kernel(
-    Q,
-    K,
-    V,
-    sm_scale,
-    KV_seqlens,
-    Block_offsets,
-    Acc_out,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    sm_scale: tl.constexpr,
+    cache_seqlens_ptr,
+    page_table_ptr,
+    acc_out_ptr,
+    alibi_slopes_ptr,
     stride_qbs: tl.constexpr,
     stride_qh: tl.constexpr,
     stride_qd: tl.constexpr,
@@ -91,10 +92,14 @@ def _fwd_grouped_split_kernel(
     mask_h = mask_h & (cur_head < num_heads_q)
 
     q_seqlen = 1
-    kv_seqlen = tl.load(KV_seqlens + cur_batch)
+    kv_seqlen = tl.load(cache_seqlens_ptr + cur_batch)
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
+    if alibi_slopes_ptr is not None:
+        alibi_slopes = tl.load(alibi_slopes_ptr + cur_head, mask=mask_h, other=1.0) * tl_log2(math.e)
+    else:
+        alibi_slopes = None
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
@@ -108,21 +113,21 @@ def _fwd_grouped_split_kernel(
     off_v = (cur_kv_head * stride_vh + offs_dv[None, :] * stride_vd + offs_n[:, None] * stride_vbs)
 
     off_q = (cur_token[:, None] * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
-    q = tl.load(Q + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
+    q = tl.load(q_ptr + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
 
-    k_ptrs = K + off_k
-    v_ptrs = V + off_v
+    k_ptrs = k_ptr + off_k
+    v_ptrs = v_ptr + off_v
 
     if BLOCK_DMODEL1 != 0:
         offs_d1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
         mask_d1 = offs_d1 < head_size
         offs_d1 = offs_d1 % head_size
         off_q1 = (cur_token[:, None] * stride_qbs + cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
-        q1 = tl.load(Q + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
+        q1 = tl.load(q_ptr + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
         off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
-        k1_ptrs = K + off_k1
+        k1_ptrs = k_ptr + off_k1
 
-    block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
+    block_offset_ptrs = page_table_ptr + cur_batch * stride_boffb
 
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_H], dtype=tl.float32) - float('inf')
@@ -180,6 +185,11 @@ def _fwd_grouped_split_kernel(
                 -float('inf'),
             )
 
+        if alibi_slopes_ptr is not None:
+            relative_pos = kv_seqlen - start_n - offs_n[None, :]
+            bias = -tl.abs(relative_pos).to(tl.float32) * alibi_slopes[:, None]
+            qk += bias
+
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
         p = tl_exp2(qk - m_i_new[:, None])
@@ -201,24 +211,25 @@ def _fwd_grouped_split_kernel(
     if loop_end > loop_start:
         off_acc = (cur_token[:, None] * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
                    offs_dv[None, :] * stride_od)
-        tl.store(Acc_out + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
+        tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
     off_meta = (cur_token * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
-    tl.store(Acc_out + off_meta, m_i, mask=mask_h)
-    tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
+    tl.store(acc_out_ptr + off_meta, m_i, mask=mask_h)
+    tl.store(acc_out_ptr + off_meta + 1, l_i, mask=mask_h)
 
 
 @triton.jit
 def _fwd_grouped_split_quant_kernel(
-    Q,
-    K,
-    V,
+    q_ptr,
+    k_ptr,
+    v_ptr,
     KScalesZeros,
     VScalesZeros,
     sm_scale,
-    KV_seqlens,
-    Block_offsets,
-    Acc_out,
+    cache_seqlens_ptr,
+    page_table_ptr,
+    acc_out_ptr,
+    alibi_slopes_ptr,
     stride_qbs: tl.constexpr,
     stride_qh: tl.constexpr,
     stride_qd: tl.constexpr,
@@ -280,10 +291,14 @@ def _fwd_grouped_split_quant_kernel(
         cur_kv_head = (cur_kv_head * HEAD_PER_CTA) // kv_group_num
 
     q_seqlen = 1
-    kv_seqlen = tl.load(KV_seqlens + cur_batch)
+    kv_seqlen = tl.load(cache_seqlens_ptr + cur_batch)
     if kv_seqlen <= 0:
         return
     history_len = kv_seqlen - q_seqlen
+    if alibi_slopes_ptr is not None:
+        alibi_slopes = tl.load(alibi_slopes_ptr + cur_head, mask=mask_h, other=1.0) * tl_log2(math.e)
+    else:
+        alibi_slopes = None
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
@@ -300,7 +315,7 @@ def _fwd_grouped_split_quant_kernel(
     off_vsz = (cur_kv_head * stride_vszh + offs_dsz[None, :] * stride_vszd + offs_n[:, None] * stride_vszbs)
 
     off_q = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
-    q = tl.load(Q + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
+    q = tl.load(q_ptr + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
 
     ksz_ptrs = KScalesZeros + off_ksz
     vsz_ptrs = VScalesZeros + off_vsz
@@ -310,10 +325,10 @@ def _fwd_grouped_split_quant_kernel(
         mask_d1 = offs_d1 < head_size
         offs_d1 = offs_d1 % head_size
         off_q1 = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
-        q1 = tl.load(Q + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
+        q1 = tl.load(q_ptr + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
         off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
 
-    block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
+    block_offset_ptrs = page_table_ptr + cur_batch * stride_boffb
 
     # initialize pointer to m and l
     m_i = tl.zeros([BLOCK_H], dtype=tl.float32) - float('inf')
@@ -356,22 +371,22 @@ def _fwd_grouped_split_quant_kernel(
 
         # -- compute qk ----
         # k = tl.load(k_ptrs + b_offset * stride_kp)
-        k = tl.load(K + off_k + b_offset * stride_kp)
+        k = tl.load(k_ptr + off_k + b_offset * stride_kp)
         if quant_policy == 4:
             k = (k >> shift_kd) & 0x0F
         ks = tl.load(ksz_ptrs + b_offset * stride_kszp)
         kz = tl.load(ksz_ptrs + b_offset * stride_kszp + 1)
         if BLOCK_DMODEL1 != 0:
-            k1 = tl.load(K + off_k1 + b_offset * stride_kp)
+            k1 = tl.load(k_ptr + off_k1 + b_offset * stride_kp)
             if quant_policy == 4:
                 k1 = (k1 >> shift_k1d) & 0x0F
             k1 = ((k1 - kz) * ks).to(q.dtype)
 
         if quant_policy == 4:
-            v = tl.load(V + off_v + b_offset * stride_vp)
+            v = tl.load(v_ptr + off_v + b_offset * stride_vp)
             v = (v >> shift_vd) & 0x0F
         else:
-            v = tl.load(V + off_v + b_offset * stride_vp)
+            v = tl.load(v_ptr + off_v + b_offset * stride_vp)
         vs = tl.load(vsz_ptrs + b_offset * stride_vszp)
         vz = tl.load(vsz_ptrs + b_offset * stride_vszp + 1)
 
@@ -398,6 +413,11 @@ def _fwd_grouped_split_quant_kernel(
                 -float('inf'),
             )
 
+        if alibi_slopes_ptr is not None:
+            relative_pos = kv_seqlen - start_n - offs_n[None, :]
+            bias = -tl.abs(relative_pos).to(tl.float32) * alibi_slopes[:, None]
+            qk += bias
+
         # -- compute p, m_i and l_i
         m_i_new = tl.maximum(m_i, tl.max(qk, 1))
         p = tl_exp2(qk - m_i_new[:, None])
@@ -419,21 +439,21 @@ def _fwd_grouped_split_quant_kernel(
     if loop_end > loop_start:
         off_acc = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
                    offs_dv[None, :] * stride_od)
-        tl.store(Acc_out + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
+        tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
     if quant_policy == 4:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 2)
     else:
         off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
-    tl.store(Acc_out + off_meta, m_i, mask=mask_h)
-    tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
+    tl.store(acc_out_ptr + off_meta, m_i, mask=mask_h)
+    tl.store(acc_out_ptr + off_meta + 1, l_i, mask=mask_h)
 
 
 @triton.jit
 def _reduce_split_kernel(
-    Acc,
-    Out,
-    sinks,
+    acc_ptr,
+    out_ptr,
+    sinks_ptr,
     stride_ak,
     stride_abs,
     stride_ah,
@@ -458,9 +478,9 @@ def _reduce_split_kernel(
                 offs_dv[None, :] * stride_ad)
     offs_mi = (cur_batch * stride_abs + cur_head * stride_ah + stride_ak * offs_k + head_size_v)
 
-    m_k = tl.load(Acc + offs_mi)
-    l_k = tl.load(Acc + offs_mi + 1)
-    acc_k = tl.load(Acc + offs_acc, mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')), other=0.0)
+    m_k = tl.load(acc_ptr + offs_mi)
+    l_k = tl.load(acc_ptr + offs_mi + 1)
+    acc_k = tl.load(acc_ptr + offs_acc, mask=mask_dv[None, :] & (m_k[:, None] > -float('inf')), other=0.0)
 
     m_max = tl.max(m_k, 0)
     alpha = tl_exp2(m_k - m_max)
@@ -470,13 +490,13 @@ def _reduce_split_kernel(
     acc = tl.sum(acc_k, 0)
     l_sum = tl.sum(l_k, 0)
 
-    if sinks is not None:
-        sink = tl.load(sinks + cur_head).to(l_sum.dtype)
+    if sinks_ptr is not None:
+        sink = tl.load(sinks_ptr + cur_head).to(l_sum.dtype)
         l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
     acc = acc / l_sum
 
     out_offs = (cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od)
-    tl.store(Out + out_offs, acc, mask=mask_dv)
+    tl.store(out_ptr + out_offs, acc, mask=mask_dv)
 
 
 @triton.jit
@@ -530,34 +550,30 @@ def _get_split_k(device_idx: int, head_grid: int, batch_size: int, num_warps: in
     return SPLIT_K
 
 
-def paged_attention_fwd(
+def flash_attn_with_kvcache(
     q: Tensor,
-    k: Tensor,
-    v: Tensor,
-    o: Tensor,
-    block_offsets: Tensor,
-    kv_seqlens: Tensor,
+    k_cache: Tensor,
+    v_cache: Tensor,
+    cache_seqlens: Tensor,
+    page_table: Tensor,
+    cu_seqlens_q: Tensor = None,  # not used, for align with fa
+    max_seqlen_q: int = None,
+    softmax_scale: float = None,
+    causal: bool = False,  # not used, for align with fa
+    window_size: int = None,
+    softcap: float = None,
+    scheduler_metadata: Tensor = None,  # not used, for align with fa
+    # args not in fa
+    alibi_slopes: Tensor = None,
     k_scales_zeros: Tensor = None,
     v_scales_zeros: Tensor = None,
     quant_policy: Literal[0, 4, 8] = 0,
-    window_size: int = None,
-    sm_scale: float = None,
-    logit_softcapping: float = None,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
 ):
     """Paged Attention forward.
 
-    Args:
-        q (Tensor): Query state.
-        k (Tensor): Key state caches.
-        v (Tensor): Value state caches.
-        o (Tensor): Output state.
-        block_offsets (Tensor): The block offset of key and value.
-        q_start_loc (Tensor): Start token location of each data in batch.
-        kv_seqlens (Tensor): Key/Value length for each data in batch.
-        max_seqlen (int): The max input length.
-        BLOCK (int): The kernel block size.
+    Note that this kernel is decoding-only
     """
 
     global _nv_cap
@@ -573,11 +589,13 @@ def paged_attention_fwd(
 
     if window_size is None:
         window_size = -1
+    elif isinstance(window_size, Sequence):
+        window_size = window_size[0]
 
-    if logit_softcapping is None:
-        logit_softcapping = -1.0
+    if softcap is None:
+        softcap = -1.0
 
-    shared_kv = k.data_ptr() == v.data_ptr()
+    shared_kv = k_cache.data_ptr() == v_cache.data_ptr()
 
     def _get_block_d(Lk):
         """Get block d."""
@@ -590,24 +608,26 @@ def paged_attention_fwd(
         return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
 
     # shape constraints
-    Lq, Lk, Lv = q.shape[-1], k.shape[d_dim], v.shape[d_dim]
+    Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
     if quant_policy == 4:
-        assert Lq == Lk * 2 and Lv * 2 == o.shape[-1]
+        assert Lq == Lk * 2
+        o = q.new_empty(q.shape[:-1] + (Lv * 2, ))
     else:
-        assert Lq == Lk and Lv == o.shape[-1]
+        assert Lq == Lk
+        o = q.new_empty(q.shape[:-1] + (Lv, ))
 
-    if sm_scale is None:
-        sm_scale = 1.0 / (Lq**0.5)
-    batch, head = kv_seqlens.shape[0], q.shape[-2]
+    if softmax_scale is None:
+        softmax_scale = 1.0 / (Lq**0.5)
+    batch, head = cache_seqlens.shape[0], q.shape[-2]
     num_tokens = q.shape[-3]
-    num_kv_heads = k.shape[h_dim]
+    num_kv_heads = k_cache.shape[h_dim]
     kv_group_num = head // num_kv_heads
 
     if sinks is not None:
         assert sinks.is_contiguous()
         assert sinks.numel() == head
 
-    BLOCK = k.size(s_dim)
+    BLOCK = k_cache.size(s_dim)
     assert BLOCK >= 16
     if Lq > 512 and BLOCK > 32:
         logger.warning(f'`head_dim={Lq}` and `block_size={BLOCK}` '
@@ -617,6 +637,8 @@ def paged_attention_fwd(
     valid = num_tokens % batch == 0
     assert valid, 'we only support decoding paged attention.'
     seq_len = num_tokens // batch
+    if max_seqlen_q is not None:
+        assert max_seqlen_q == seq_len, 'we only support decoding paged attention.'
 
     BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq)
     HEADS_PER_REQ = kv_group_num * seq_len
@@ -646,25 +668,26 @@ def paged_attention_fwd(
 
     if quant_policy > 0:
         _fwd_grouped_split_quant_kernel[grid](q,
-                                              k,
-                                              v,
+                                              k_cache,
+                                              v_cache,
                                               k_scales_zeros,
                                               v_scales_zeros,
-                                              sm_scale,
-                                              kv_seqlens,
-                                              block_offsets,
+                                              softmax_scale,
+                                              cache_seqlens,
+                                              page_table,
                                               acc,
+                                              alibi_slopes,
                                               stride_qbs=q.stride(-3),
                                               stride_qh=q.stride(-2),
                                               stride_qd=q.stride(-1),
-                                              stride_kp=k.stride(b_dim),
-                                              stride_kbs=k.stride(s_dim),
-                                              stride_kh=k.stride(h_dim),
-                                              stride_kd=k.stride(d_dim),
-                                              stride_vp=v.stride(b_dim),
-                                              stride_vbs=v.stride(s_dim),
-                                              stride_vh=v.stride(h_dim),
-                                              stride_vd=v.stride(d_dim),
+                                              stride_kp=k_cache.stride(b_dim),
+                                              stride_kbs=k_cache.stride(s_dim),
+                                              stride_kh=k_cache.stride(h_dim),
+                                              stride_kd=k_cache.stride(d_dim),
+                                              stride_vp=v_cache.stride(b_dim),
+                                              stride_vbs=v_cache.stride(s_dim),
+                                              stride_vh=v_cache.stride(h_dim),
+                                              stride_vd=v_cache.stride(d_dim),
                                               stride_kszp=k_scales_zeros.stride(b_dim),
                                               stride_kszbs=k_scales_zeros.stride(s_dim),
                                               stride_kszh=k_scales_zeros.stride(h_dim),
@@ -678,13 +701,13 @@ def paged_attention_fwd(
                                               stride_obs=acc.stride(-4),
                                               stride_oh=acc.stride(-3),
                                               stride_od=acc.stride(-1),
-                                              stride_boffb=block_offsets.stride(0),
+                                              stride_boffb=page_table.stride(0),
                                               kv_group_num=kv_group_num,
                                               window_size=window_size,
                                               head_size=Lq,
                                               head_size_v=Lv,
                                               num_heads_q=head,
-                                              logit_softcapping=logit_softcapping,
+                                              logit_softcapping=softcap,
                                               SPLIT_K=SPLIT_K,
                                               BLOCK_DMODEL=BLOCK_DMODEL,
                                               BLOCK_DV=BLOCK_DV,
@@ -696,35 +719,36 @@ def paged_attention_fwd(
 
     else:
         _fwd_grouped_split_kernel[grid](q,
-                                        k,
-                                        v,
-                                        sm_scale,
-                                        kv_seqlens,
-                                        block_offsets,
+                                        k_cache,
+                                        v_cache,
+                                        softmax_scale,
+                                        cache_seqlens,
+                                        page_table,
                                         acc,
+                                        alibi_slopes,
                                         stride_qbs=q.stride(-3),
                                         stride_qh=q.stride(-2),
                                         stride_qd=q.stride(-1),
-                                        stride_kp=k.stride(b_dim),
-                                        stride_kbs=k.stride(s_dim),
-                                        stride_kh=k.stride(h_dim),
-                                        stride_kd=k.stride(d_dim),
-                                        stride_vp=v.stride(b_dim),
-                                        stride_vbs=v.stride(s_dim),
-                                        stride_vh=v.stride(h_dim),
-                                        stride_vd=v.stride(d_dim),
+                                        stride_kp=k_cache.stride(b_dim),
+                                        stride_kbs=k_cache.stride(s_dim),
+                                        stride_kh=k_cache.stride(h_dim),
+                                        stride_kd=k_cache.stride(d_dim),
+                                        stride_vp=v_cache.stride(b_dim),
+                                        stride_vbs=v_cache.stride(s_dim),
+                                        stride_vh=v_cache.stride(h_dim),
+                                        stride_vd=v_cache.stride(d_dim),
                                         stride_ok=acc.stride(-2),
                                         stride_obs=acc.stride(-4),
                                         stride_oh=acc.stride(-3),
                                         stride_od=acc.stride(-1),
-                                        stride_boffb=block_offsets.stride(0),
+                                        stride_boffb=page_table.stride(0),
                                         kv_group_num=kv_group_num,
                                         seq_len=seq_len,
                                         window_size=window_size,
                                         head_size=Lk,
                                         head_size_v=Lv,
                                         num_heads_q=head,
-                                        logit_softcapping=logit_softcapping,
+                                        logit_softcapping=softcap,
                                         shared_kv=shared_kv,
                                         SPLIT_K=SPLIT_K,
                                         BLOCK_DMODEL=BLOCK_DMODEL,
@@ -755,3 +779,4 @@ def paged_attention_fwd(
                                BLOCK_DV=BLOCK_DV,
                                num_warps=num_warps,
                                num_stages=1)
+    return o
