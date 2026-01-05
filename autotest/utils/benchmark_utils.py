@@ -4,7 +4,7 @@ from subprocess import PIPE
 
 import allure
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import _is_bf16_supported_by_device, get_workerid
+from utils.config_utils import _is_bf16_supported_by_device, get_case_str_by_config, get_workerid
 from utils.run_restful_chat import health_check
 
 DEFAULT_PORT = 23333
@@ -15,28 +15,26 @@ GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
 def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_id: str = '', is_smoke: bool = False):
     model = run_config['model']
     backend = run_config['backend']
-    tp_num = run_config['tp_num']
-    if backend == 'turbomind':
-        quant_policy = run_config['quant_policy']
-    model_path = '/'.join([config.get('model_path'), model])
-    log_path = config.get('log_path')
+    # parallel_config = run_config.get('parallel_config', 1)
+    tp_num = run_config.get('tp_num', 1)
+    quant_policy = run_config.get('quant_policy', 0)
+    model_path = os.path.join(config.get('model_path'), model)
     dataset_path = config.get('dataset_path')
-    benchmark_log = os.path.join(log_path, 'benchmark_throughput_' + model.split('/')[1] + worker_id + '.log')
-    if backend == 'turbomind' and quant_policy != 0:
-        benchmark_path = '/'.join(
-            [config.get('benchmark_path'), run_id, model, f'benchmark-throughput-{backend}-kvint{quant_policy}'])
-    else:
-        benchmark_path = '/'.join([config.get('benchmark_path'), run_id, model, f'benchmark-throughput-{backend}'])
 
-    create_multi_level_directory(benchmark_path)
+    case_name = get_case_str_by_config(run_config)
+    benchmark_path = os.path.join(config.get('benchmark_path'), run_id, 'throughtput')
+    work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
+    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
+
+    os.makedirs(work_dir, exist_ok=True)
 
     command = f'python3 benchmark/profile_throughput.py {dataset_path} {model_path} '  # noqa: F401, E501
     command = get_command_with_extra(command, cuda_prefix)
 
     if is_smoke:
-        run_config = '--num-prompts 500'
+        num_prompts = '--num-prompts 500'
     else:
-        run_config = '--num-prompts 5000'
+        num_prompts = '--num-prompts 5000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
         if not _is_bf16_supported_by_device():
@@ -44,13 +42,13 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
     else:
         if '4bit' in model:
             command += ' --model-format awq'
-        command = command + f' --quant-policy {quant_policy}'
+    command = command + f' --quant-policy {quant_policy}'
 
     for batch in [128, 256]:
-        csv_path = f'{benchmark_path}/throughput_batch_{batch}_1th.csv'
+        csv_path = f'{work_dir}/throughput_batch_{batch}_1th.csv'
         cmd = ' '.join([
             command, '--concurrency',
-            str(batch), run_config, '--tp',
+            str(batch), num_prompts, '--tp',
             str(tp_num),
             get_max_cache_entry(model, backend), '--csv ', csv_path
         ])
@@ -74,21 +72,18 @@ def longtext_throughput_test(config,
                              is_smoke: bool = False):
     model = run_config['model']
     backend = run_config['backend']
-    tp_num = run_config['tp_num']
-    if backend == 'turbomind':
-        quant_policy = run_config['quant_policy']
-    model_path = '/'.join([config.get('model_path'), model])
-    log_path = config.get('log_path')
+    # parallel_config = run_config.get('parallel_config', 1)
+    tp_num = run_config.get('tp_num', 1)
+    quant_policy = run_config.get('quant_policy', 0)
+    model_path = os.path.join(config.get('model_path'), model)
     dataset_path = config.get('dataset_path')
-    if backend == 'turbomind' and quant_policy != 0:
-        benchmark_path = '/'.join([
-            config.get('benchmark_path'), run_id, model, f'benchmark-longtext-throughput-{backend}-kvint{quant_policy}'
-        ])
-    else:
-        benchmark_path = '/'.join(
-            [config.get('benchmark_path'), run_id, model, f'benchmark-longtext-throughput-{backend}'])
 
-    create_multi_level_directory(benchmark_path)
+    case_name = get_case_str_by_config(run_config)
+    benchmark_path = os.path.join(config.get('benchmark_path'), run_id, 'longtext-throughtput')
+    work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
+    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
+
+    os.makedirs(work_dir, exist_ok=True)
 
     command = f'python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} --tp {tp_num}'  # noqa: F401, E501
     command = get_command_with_extra(command, cuda_prefix)
@@ -107,9 +102,7 @@ def longtext_throughput_test(config,
                                                                     (65536, 1024, 15, '64k-1k', 15),
                                                                     (198000, 1024, 3, '198k-1k', 1)]:
         session_len = input_len + out_len + 1
-        csv_path = f'{benchmark_path}/longtext_{case_name}_1th.csv'
-        benchmark_log = os.path.join(
-            log_path, f'benchmark_longtext_throughput_{case_name}' + model.split('/')[1] + worker_id + '.log')
+        csv_path = f'{work_dir}/longtext_{case_name}_1th.csv'
         cmd = ' '.join([
             command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
             f'--num-prompts {num_prompts}', '--stream-output', f'--session-len {session_len}', '--random-range-ratio 1',
@@ -130,20 +123,15 @@ def longtext_throughput_test(config,
 
 def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config['model']
-    backend = run_config['backend']
-    if backend == 'turbomind':
-        quant_policy = run_config['quant_policy']
-    model_path = '/'.join([config.get('model_path'), model])
-    log_path = config.get('log_path')
+    model_path = os.path.join(config.get('model_path'), model)
     dataset_path = config.get('dataset_path')
-    benchmark_log = os.path.join(log_path, 'benchmark_restful_' + model.split('/')[1] + worker_id + '.log')
-    if backend == 'turbomind' and quant_policy != 0:
-        benchmark_path = '/'.join(
-            [config.get('benchmark_path'), run_id, model, f'benchmark-restful-{backend}-kvint{quant_policy}'])
-    else:
-        benchmark_path = '/'.join([config.get('benchmark_path'), run_id, model, f'benchmark-restful-{backend}'])
 
-    create_multi_level_directory(benchmark_path)
+    case_name = get_case_str_by_config(run_config)
+    benchmark_path = os.path.join(config.get('benchmark_path'), run_id, 'restful')
+    work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
+    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
+
+    os.makedirs(work_dir, exist_ok=True)
 
     worker_num = get_workerid(worker_id)
     if worker_num is None:
@@ -162,7 +150,7 @@ def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool
         command += ' --num-prompts 5000'
 
     for batch in [128, 256]:
-        csv_path = f'{benchmark_path}/restful_batch_{batch}_1th.csv'
+        csv_path = f'{work_dir}/restful_batch_{batch}_1th.csv'
         cmd = ' '.join([command, '--concurrency', str(batch), '--csv', csv_path])
 
         with open(benchmark_log, 'w') as f:
@@ -183,60 +171,6 @@ def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool
     return benchmark_res.returncode == 0, benchmark_res.stderr
 
 
-def restful_test_new(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
-    model = run_config['model']
-    backend = run_config['backend']
-    if backend == 'turbomind':
-        quant_policy = run_config['quant_policy']
-    log_path = config.get('log_path')
-    dataset_path = config.get('dataset_path')
-    benchmark_log = os.path.join(log_path, 'benchmark_restful_' + model.split('/')[1] + worker_id + '.log')
-    if backend == 'turbomind' and quant_policy != 0:
-        benchmark_path = '/'.join(
-            [config.get('benchmark_path'), run_id, model, f'benchmark-restful-{backend}-kvint{quant_policy}'])
-    else:
-        benchmark_path = '/'.join([config.get('benchmark_path'), run_id, model, f'benchmark-restful-{backend}'])
-
-    create_multi_level_directory(benchmark_path)
-
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
-
-    http_url = f'http://localhost:{port}'  # noqa: E231
-    if not health_check(http_url):
-        return False, 'server not start'
-
-    command = f'python3 benchmark/profile_restful_api.py --port {port} --host localhost --backend lmdeploy --dataset-path {dataset_path} --request-rate-range 2,30,2 --multi '  # noqa: F401, E501, E231
-
-    if is_smoke:
-        command += ' --num-prompts 200'
-    else:
-        command += ' --num-prompts 5000'
-
-    csv_path = f'{benchmark_path}/restful_batch_1th.csv'
-    cmd = ' '.join([command, '--output-file', csv_path])
-
-    with open(benchmark_log, 'w') as f:
-        f.writelines('reproduce command: ' + cmd + '\n')
-        print('reproduce command: ' + cmd)
-
-        benchmark_res = subprocess.run([cmd],
-                                       stdout=f,
-                                       stderr=PIPE,
-                                       shell=True,
-                                       text=True,
-                                       encoding='utf-8',
-                                       errors='replace')
-        f.writelines(benchmark_res.stderr)
-    allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
-    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
-        return False, 'result is empty'
-    return benchmark_res.returncode == 0, benchmark_res.stderr
-
-
 def prefixcache_throughput_test(config,
                                 run_id,
                                 run_config,
@@ -245,21 +179,17 @@ def prefixcache_throughput_test(config,
                                 is_smoke: bool = False):
     model = run_config['model']
     backend = run_config['backend']
-    tp_num = run_config['tp_num']
-    if backend == 'turbomind':
-        quant_policy = run_config['quant_policy']
-    model_path = '/'.join([config.get('model_path'), model])
-    log_path = config.get('log_path')
+    # parallel_config = run_config.get('parallel_config', 1)
+    tp_num = run_config.get('tp_num', 1)
+    quant_policy = run_config.get('quant_policy', 0)
+    model_path = os.path.join(config.get('model_path'), model)
     dataset_path = config.get('prefix_dataset_path')
 
-    if backend == 'turbomind' and quant_policy != 0:
-        benchmark_path = '/'.join(
-            [config.get('benchmark_path'), run_id, model, f'benchmark-prefix-throughput-{backend}-kvint{quant_policy}'])
-    else:
-        benchmark_path = '/'.join(
-            [config.get('benchmark_path'), run_id, model, f'benchmark-prefix-throughput-{backend}'])
+    case_name = get_case_str_by_config(run_config)
+    benchmark_path = os.path.join(config.get('benchmark_path'), run_id, 'prefix-throughtput')
+    work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
 
-    create_multi_level_directory(benchmark_path)
+    os.makedirs(work_dir, exist_ok=True)
 
     base_command = f'python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} --tp {tp_num}'
     base_command = get_command_with_extra(base_command, cuda_prefix)
@@ -279,10 +209,8 @@ def prefixcache_throughput_test(config,
         suffix = '_cache' if enable_prefix_caching else '_no_cache'
 
         for input_len, out_len, num_prompts, case_name, concurrency in test_configs:
-            csv_path = f'{benchmark_path}/{case_name}{suffix}.csv'
-            benchmark_log = os.path.join(
-                log_path,
-                f'benchmark_prefix_throughput_{case_name}{suffix}_' + model.split('/')[1] + worker_id + '.log')
+            benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{suffix}.log')
+            csv_path = f'{work_dir}/{case_name}{suffix}.csv'
 
             command = ' '.join([
                 base_command, '--dataset-name random', f'--random-input-len {input_len}',
@@ -311,13 +239,6 @@ def get_command_with_extra(cmd, cuda_prefix: str = None):
         cmd = ' '.join([cuda_prefix, cmd])
     print(cmd)
     return cmd
-
-
-def create_multi_level_directory(path):
-    try:
-        os.makedirs(path)
-    except FileExistsError:
-        return
 
 
 def get_max_cache_entry(model, backend):

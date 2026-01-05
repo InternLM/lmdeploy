@@ -4,7 +4,7 @@ import sys
 from typing import Tuple
 
 
-def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
+def execute_command_with_logging(cmd, log_file_path: str, timeout: int = 3600) -> Tuple[bool, str]:
     if os.path.isfile(log_file_path):
         write_type = 'a'
     else:
@@ -24,7 +24,8 @@ def execute_command_with_logging(cmd, log_file_path: str) -> Tuple[bool, str]:
                                      errors='replace',
                                      stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT,
-                                     bufsize=1)
+                                     bufsize=1,
+                                     timeout=timeout)
 
             if process.stdout:
                 print(process.stdout, end='')

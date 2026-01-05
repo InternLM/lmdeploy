@@ -1,73 +1,64 @@
 import os
 from subprocess import PIPE, Popen
 
-from utils.config_utils import _is_bf16_supported_by_device
-from utils.get_run_config import get_command_with_extra, get_model_name
+import allure
+from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid
 from utils.rule_condition_assert import assert_result
 
 TEMPLATE = 'autotest/template.json'
 
 
-def hf_command_line_test(config,
-                         case,
-                         case_info,
-                         model_case,
-                         type,
-                         cuda_prefix: str = None,
-                         extra: str = '',
-                         use_local_model: bool = True):
-    if use_local_model:
-        model_path = config.get('model_path') + '/' + model_case
+def run_tests(config, usercase, cli_case_config, run_config, worker_id):
+    if 'coder' in run_config['model'].lower() and usercase == 'chat_testcase':
+        usercase = 'code_testcase'
+
+    hf_command_line_test(config,
+                         usercase,
+                         cli_case_config.get(usercase),
+                         run_config,
+                         cuda_prefix=get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config')))
+
+
+def hf_command_line_test(config, case, case_info, run_config, cuda_prefix: str = ''):
+    model = run_config.get('model')
+    # [TM][FATAL] models/llama/LlamaBatch.cc(362): Check failed: r->session.start_flag Mrope doesn't support interactive chat # noqa
+    if 'Qwen2.5-VL' in model or 'Qwen2-VL' in model:
+        return
+    if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
+        model_path = model
+
     else:
-        model_path = model_case
+        model_path = config.get('model_path') + '/' + model
 
-    if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
-        extra += ' --cache-max-entry-count 0.7'
-
-    cmd = get_command_with_extra(' '.join(['lmdeploy chat', model_path, '--backend', type, extra,
-                                           '--session-len 4096']),
-                                 config,
-                                 model_case,
-                                 need_tp=True,
-                                 cuda_prefix=cuda_prefix)
-
-    if type == 'pytorch':
-        if not _is_bf16_supported_by_device():
-            cmd += ' --dtype float16'
-    if type == 'turbomind':
-        if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
-            cmd += ' --model-format awq'
-        elif 'gptq' in model_case.lower():
-            cmd += ' --model-format gptq'
-
+    run_config['extra_params']['session_len'] = 4096
     if case == 'base_testcase':
-        cmd += ' --chat-template ' + TEMPLATE
+        run_config['extra_params']['chat_template'] = TEMPLATE
+        run_config['extra_params']['session_len'] = 512
 
-    # Add device option if specified in environment
-    device = os.environ.get('DEVICE', '')
-    if device:
-        cmd += f' --device {device} '
+    print(run_config)
 
-    return command_test(config, [cmd], model_case, '_'.join(['hf', type, case]), case_info, True)
+    cmd = ' '.join([cuda_prefix, ' '.join(['lmdeploy chat', model_path, get_cli_common_param(run_config)])]).strip()
+
+    result, chat_log, msg = command_test(config, cmd, run_config, case_info, True)
+    if chat_log:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+    assert result, msg
 
 
-def command_test(config, cmd, model, case, case_info, need_extract_output, worker_id: str = ''):
+def command_test(config, cmd, run_config, case_info, need_extract_output):
     try:
         log_path = config.get('log_path')
-        model_name = get_model_name(model)
+        case_name = get_case_str_by_config(run_config)
 
-        if '/' in model:
-            chat_log = os.path.join(log_path, 'chat_' + model.split('/')[1] + worker_id + '_' + case + '.log')
-        else:
-            chat_log = os.path.join(log_path, 'chat_' + model + worker_id + '_' + case + '.log')
+        chat_log = os.path.join(log_path, f'chat_{case_name}.log')
 
         file = open(chat_log, 'w')
 
         returncode = -1
         result = True
 
-        print('reproduce command chat: ' + ' '.join(cmd) + '\n')
-        file.writelines('reproduce command chat: ' + ' '.join(cmd) + '\n')
+        print(f'reproduce command chat: {cmd} \n')
+        file.writelines(f'reproduce command chat: {cmd} \n')
 
         spliter = '\n\n'
         # join prompt together
@@ -78,7 +69,11 @@ def command_test(config, cmd, model, case, case_info, need_extract_output, worke
 
         msg = ''
 
-        with Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=True, text=True, encoding='utf-8') as proc:
+        env = os.environ.copy()
+        env.update(run_config.get('env', {}))
+
+        with Popen([cmd], stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=True, text=True, encoding='utf-8',
+                   env=env) as proc:
             file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)
@@ -88,17 +83,16 @@ def command_test(config, cmd, model, case, case_info, need_extract_output, worke
                 result = False
                 return result, chat_log, errors
 
-            outputDialogs = parse_dialogue(outputs, model, spliter)
+            outputDialogs = parse_dialogue(outputs)
             file.writelines('answersize:' + str(len(outputDialogs)) + '\n')
 
-            # 结果判断
             index = 0
             for prompt_detail in case_info:
                 if need_extract_output:
-                    output = extract_output(outputDialogs[index], model)
+                    output = extract_output(outputDialogs[index], run_config.get('model'))
                 else:
                     output = outputDialogs[index]
-                case_result, reason = assert_result(output, prompt_detail.values(), model_name)
+                case_result, reason = assert_result(output, prompt_detail.values(), run_config.get('model'))
                 file.writelines('prompt:' + list(prompt_detail.keys())[0] + '\n')
                 file.writelines('output:' + output + '\n')
                 file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
@@ -114,14 +108,13 @@ def command_test(config, cmd, model, case, case_info, need_extract_output, worke
         return False, None, f'Unknown error: {e}'
 
 
-# 从输出中解析模型输出的对话内容
-def parse_dialogue(inputs: str, model: str, spliter: str):
+def parse_dialogue(inputs: str):
     dialogues = inputs.strip()
     sep = 'double enter to end input >>>'
     dialogues = dialogues.strip()
     dialogues = dialogues.split(sep)
     dialogues = [d.strip() for d in dialogues]
-    return dialogues[1:-1]  # 去除首尾无用字符
+    return dialogues[1:-1]
 
 
 def extract_output(output: str, model: str):

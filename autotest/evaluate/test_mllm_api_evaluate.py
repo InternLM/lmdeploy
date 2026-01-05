@@ -6,7 +6,7 @@ from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_r
 
 
 @pytest.fixture(scope='function')
-def prepare_environment(request, config, worker_id):
+def prepare_environment(request, config, run_id, worker_id):
     param = request.param
     model = param['model']
     backend = param['backend']
@@ -23,7 +23,7 @@ def prepare_environment(request, config, worker_id):
 
 
 @pytest.fixture(scope='function')
-def prepare_environment_judge_evaluate(request, config, worker_id):
+def prepare_environment_judge_evaluate(request, config, run_id, worker_id):
     if get_workerid(worker_id) is None:
         port = constant.PROXY_PORT
     else:
@@ -92,7 +92,6 @@ def run_test(config, run_id, prepare_environment, worker_id, test_type='infer', 
         result, msg = mllm_eval_test(config,
                                      run_id,
                                      prepare_environment,
-                                     worker_id=worker_id,
                                      port=port,
                                      test_type=test_type,
                                      **preset_config)
@@ -100,7 +99,6 @@ def run_test(config, run_id, prepare_environment, worker_id, test_type='infer', 
         result, msg = mllm_eval_test(config,
                                      run_id,
                                      prepare_environment,
-                                     worker_id=worker_id,
                                      port=port + get_workerid(worker_id),
                                      test_type=test_type,
                                      **preset_config)

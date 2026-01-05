@@ -38,6 +38,8 @@ EVAL_CONFIGS = {
     }
 }
 
+MLLM_EVAL_CONFIGS = {'default': '--temperature 0.7 --top-k 20 --top-p 0.8 --repetition-penalty 1.0'}
+
 BACKEND_LIST = ['turbomind', 'pytorch']
 
 RESTFUL_MODEL_LIST = [
@@ -48,3 +50,7 @@ RESTFUL_MODEL_LIST = [
 ]
 
 RESTFUL_BASE_MODEL_LIST = ['Qwen/Qwen3-8B-Base', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B']
+
+SUFFIX_INNER_AWQ = '-inner-4bits'
+SUFFIX_INNER_GPTQ = '-inner-gptq'
+SUFFIX_INNER_W8A8 = '-inner-w8a8'

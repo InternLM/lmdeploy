@@ -1,49 +1,49 @@
 model_path: /nvme/qa_test_models
 resource_path: /nvme/qa_test_models/resource
 log_path: /nvme/qa_test_models/autotest_model/log
-eval_log_path: /nvme/qa_test_models/evaluation_report
-mllm_eval_log_path: /nvme/qa_test_models/mllm_evaluation_report
+server_log_path: /nvme/qa_test_models/server_log
+eval_path: /nvme/qa_test_models/evaluation_report
+mllm_eval_path: /nvme/qa_test_models/mllm_evaluation_report
 benchmark_path: /nvme/qa_test_models/benchmark-reports
 dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 prefix_dataset_path: /nvme/qa_test_models/datasets/prefix_cache_test.json
 env_tag: a100
+device: cuda
 
-
-tp_config:
-    Llama-4-Scout-17B-16E-Instruct: 4
-    Meta-Llama-3-1-70B-Instruct: 4
-    Intern-S1: 8
-    internlm2_5-20b-chat: 2
-    internlm2_5-20b: 2
-    internlm2_5-7b-chat-1m: 4
-    InternVL3-38B: 2
-    InternVL2_5-26B: 2
-    InternVL2_5-26B-MPO: 2
-    InternVL2_5-38B: 4
-    InternVL2-40B: 4
-    Qwen3-235B-A22B: 8
-    Qwen3-32B: 2
-    Qwen3-30B-A3B: 2
-    Qwen3-VL-32B-Instruct: 2
-    Qwen3-VL-30B-A3B-Instruct: 2
-    Qwen3-30B-A3B-Base: 2
-    Qwen2.5-32B-Instruct: 2
-    Qwen2.5-72B-Instruct: 4
-    Qwen2.5-VL-32B-Instruct: 2
-    DeepSeek-V2-Lite-Chat: 2
-    DeepSeek-R1-Distill-Qwen-32B: 2
-    deepseek-vl2: 2
-    Baichuan2-13B-Chat: 2
-    Mixtral-8x7B-Instruct-v0.1: 2
-    llava-v1.5-13b: 2
-    MiniCPM-V-2_6: 2
-    gemma-2-27b-it: 2
-    InternVL2-Llama3-76B-AWQ: 4
-    gpt-oss-20b-BF16: 2
-    gpt-oss-120b-BF16: 4
-    InternVL3_5-30B-A3B: 2
-
-
+config:
+    tp:
+        meta-llama/Llama-4-Scout-17B-16E-Instruct: 4
+        meta-llama/Meta-Llama-3-1-70B-Instruct: 4
+        internlm/Intern-S1: 8
+        internlm/internlm2_5-20b-chat: 2
+        internlm/internlm2_5-20b: 2
+        internlm/internlm2_5-7b-chat-1m: 4
+        OpenGVLab/InternVL3-38B: 2
+        OpenGVLab/InternVL2_5-26B: 2
+        OpenGVLab/InternVL2_5-26B-MPO: 2
+        OpenGVLab/InternVL2_5-38B: 4
+        OpenGVLab/InternVL2-40B: 4
+        Qwen/Qwen3-235B-A22B: 8
+        Qwen/Qwen3-32B: 2
+        Qwen/Qwen3-30B-A3B: 2
+        Qwen/Qwen3-VL-32B-Instruct: 2
+        Qwen/Qwen3-VL-30B-A3B-Instruct: 2
+        Qwen/Qwen3-30B-A3B-Base: 2
+        Qwen/Qwen2.5-32B-Instruct: 2
+        Qwen/Qwen2.5-72B-Instruct: 4
+        Qwen/Qwen2.5-VL-32B-Instruct: 2
+        deepseek-ai/DeepSeek-V2-Lite-Chat: 2
+        deepseek-ai/DeepSeek-R1-Distill-Qwen-32B: 2
+        deepseek-ai/deepseek-vl-1.3b-chat: 2
+        baichuan-inc/Baichuan2-13B-Chat: 2
+        mistralai/Mixtral-8x7B-Instruct-v0.1: 2
+        liuhaotian/llava-v1.5-13b: 2
+        openbmb/MiniCPM-V-2_6: 2
+        google/gemma-2-27b-it: 2
+        OpenGVLab/InternVL2-Llama3-76B-AWQ: 4
+        unsloth/gpt-oss-20b-BF16: 2
+        unsloth/gpt-oss-120b-BF16: 4
+        OpenGVLab/InternVL3_5-30B-A3B: 2
 
 turbomind_chat_model:
     tp:
@@ -79,9 +79,6 @@ turbomind_chat_model:
         - Qwen/Qwen3-32B
         - Qwen/Qwen3-30B-A3B
         - Qwen/Qwen3-235B-A22B
-        - Qwen/Qwen3-VL-8B-Instruct
-        - Qwen/Qwen3-VL-32B-Instruct
-        - Qwen/Qwen3-VL-30B-A3B-Instruct
         - Qwen/Qwen2.5-0.5B-Instruct
         - Qwen/Qwen2.5-7B-Instruct
         - Qwen/Qwen2.5-32B-Instruct
@@ -110,7 +107,7 @@ turbomind_chat_model:
         - THUDM/codegeex4-all-9b
         - openbmb/MiniCPM-Llama3-V-2_5
         - openbmb/MiniCPM-V-2_6
-        - allenai/Molmo-7B-D-0924
+        # - allenai/Molmo-7B-D-0924  This modeling file requires the following packages that were not found in your environment: tensorflow. Run `pip install tensorflow`
 
 pytorch_chat_model:
     tp:
@@ -204,9 +201,6 @@ turbomind_vl_model:
         - OpenGVLab/InternVL2-2B
         - OpenGVLab/InternVL2-40B
         - OpenGVLab/InternVL2-Llama3-76B-AWQ
-        - Qwen/Qwen3-VL-8B-Instruct
-        - Qwen/Qwen3-VL-32B-Instruct
-        - Qwen/Qwen3-VL-30B-A3B-Instruct
         - Qwen/Qwen2.5-VL-7B-Instruct
         - Qwen/Qwen2.5-VL-32B-Instruct
         - Qwen/Qwen2-VL-2B-Instruct
@@ -289,8 +283,7 @@ turbomind_quantization:
         - deepseek-ai/deepseek-coder-1.3b-instruct
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - codellama/CodeLlama-7b-Instruct-hf
-        - microsoft/Phi-4-mini-instruct
-        - allenai/Molmo-7B-D-0924
+        # - allenai/Molmo-7B-D-0924  This modeling file requires the following packages that were not found in your environment: tensorflow. Run `pip install tensorflow`
         - THUDM/codegeex4-all-9b
     gptq:
         - internlm/internlm2_5-7b-chat
@@ -321,7 +314,7 @@ turbomind_quantization:
         - Qwen/Qwen2-VL-7B-Instruct
         - Qwen/Qwen1.5-MoE-A2.7B-Chat
         - microsoft/Phi-3.5-mini-instruct
-        - allenai/Molmo-7B-D-0924
+        # - allenai/Molmo-7B-D-0924  This modeling file requires the following packages that were not found in your environment: tensorflow. Run `pip install tensorflow`
         - deepseek-ai/DeepSeek-V2-Lite-Chat
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Chat
@@ -342,6 +335,7 @@ pytorch_quantization:
         - Qwen/Qwen3-32B
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
+        - microsoft/Phi-4-mini-instruct
         - THUDM/glm-4v-9b
     w8a8:
         - meta-llama/Meta-Llama-3-8B-Instruct
@@ -354,6 +348,7 @@ pytorch_quantization:
         - mistralai/Mistral-7B-Instruct-v0.3
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
+        - microsoft/Phi-4-mini-instruct
         - internlm/internlm2_5-20b
         - internlm/internlm2_5-7b
         - meta-llama/Meta-Llama-3-1-8B-Instruct
@@ -394,7 +389,7 @@ pytorch_quantization:
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 
-longtext_model:
+longtext_benchmark_model:
     - Qwen/Qwen3-8B
     - Qwen/Qwen3-32B
     - Qwen/Qwen3-30B-A3B
@@ -417,7 +412,6 @@ benchmark_model:
     - Qwen/Qwen2.5-72B-Instruct
     - unsloth/gpt-oss-20b-BF16
     - unsloth/gpt-oss-120b-BF16
-
 
 evaluate_model:
   - google/gemma-2-9b-it

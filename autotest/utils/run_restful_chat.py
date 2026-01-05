@@ -8,8 +8,8 @@ import allure
 import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
-from utils.config_utils import _is_bf16_supported_by_device, get_cuda_prefix_by_workerid, get_workerid
-from utils.get_run_config import get_command_with_extra
+from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
+from utils.constant import DEFAULT_PORT, PROXY_PORT
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
@@ -17,109 +17,49 @@ from lmdeploy.serve.openai.api_client import APIClient
 
 MASTER_ADDR = os.getenv('MASTER_ADDR', 'localhost')
 BASE_HTTP_URL = f'http://{MASTER_ADDR}'
-DEFAULT_PORT = 23333
-PROXY_PORT = 8000
 
 
-def start_restful_api(config, param, model, model_path, backend_type, worker_id):
-    log_path = config.get('log_path')
-
-    cuda_prefix = param['cuda_prefix']
-    tp_num = param['tp_num']
-
-    parallel_config = param.get('parallel_config', {})
-
-    if 'extra' in param.keys():
-        extra = param['extra']
-    else:
-        extra = ''
-
-    # temp remove testcase because of issue 3434
-    if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
-        if 'turbomind' in backend_type and extra is not None and 'cuda-ipc' in extra and tp_num > 1:
-            return 0, 'skip'
-
-    if 'modelscope' in param.keys():
-        modelscope = param['modelscope']
-        if modelscope:
-            os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
-            model_path = model
-
-    if cuda_prefix is None:
-        cuda_prefix = get_cuda_prefix_by_workerid(worker_id, parallel_config=tp_num)
-
-    if tp_num > 1 and 'gw' in worker_id:
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
-
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --server-port ' + str(port) +
-                                 ' --allow-terminate-by-client',
-                                 config,
-                                 model,
-                                 need_tp=True,
-                                 cuda_prefix=cuda_prefix,
-                                 extra=extra)
-
-    device = os.environ.get('DEVICE', '')
-    if device:
-        cmd += f' --device {device} '
-
-    if parallel_config:
-        if 'dp' in parallel_config:
-            dp = parallel_config['dp']
-            cmd += f' --dp {dp}'
-        if 'ep' in parallel_config:
-            ep = parallel_config['ep']
-            cmd += f' --ep {ep}'
-        if 'cp' in parallel_config:
-            cp = parallel_config['cp']
-            cmd += f' --cp {cp}'
-
-    if backend_type == 'turbomind':
-        if ('w4' in model or '4bits' in model or 'awq' in model.lower()):
-            cmd += ' --model-format awq'
-        elif 'gptq' in model.lower():
-            cmd += ' --model-format gptq'
-    if backend_type == 'pytorch':
-        cmd += ' --backend pytorch'
-        if not _is_bf16_supported_by_device():
-            cmd += ' --dtype float16'
-    if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
-        quant_policy = param['quant_policy']
-        cmd += f' --quant-policy {quant_policy}'
-
-    if not _is_bf16_supported_by_device():
-        cmd += ' --cache-max-entry-count 0.5'
-    if str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
-        cmd += ' --cache-max-entry-count 0.5'
-
+def start_openai_service(config, run_config, worker_id):
+    case_name = get_case_str_by_config(run_config)
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '_' + timestamp + '.log')
+    server_log = os.path.join(config.get('server_log_path', '/nvme/qa_test_models/server_log/local_run'),
+                              f'log_{case_name}_{timestamp}.log')
+
+    port = DEFAULT_PORT + get_workerid(worker_id)
+    model = run_config.get('model')
+    if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
+        model_path = model
+    else:
+        model_path = config.get('model_path') + '/' + model
+
+    cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
+
+    run_config['extra_params']['server-port'] = str(port)
+    run_config['extra_params']['allow-terminate-by-client'] = None
+    cmd = ' '.join([cuda_prefix, ' '.join(['lmdeploy serve api_server', model_path,
+                                           get_cli_common_param(run_config)])]).strip()
 
     print('reproduce command restful: ' + cmd)
 
-    file = open(start_log, 'w')
+    env = os.environ.copy()
+    env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
+    env.update(run_config.get('env', {}))
 
-    startRes = subprocess.Popen([cmd],
+    file = open(server_log, 'w')
+    startRes = subprocess.Popen(cmd,
                                 stdout=file,
                                 stderr=file,
                                 shell=True,
                                 text=True,
+                                env=env,
                                 encoding='utf-8',
                                 errors='replace',
                                 start_new_session=True)
     pid = startRes.pid
 
-    http_url = BASE_HTTP_URL + ':' + str(port)
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
     start_time = int(time())
-    start_timeout = 300
-    if not _is_bf16_supported_by_device() or tp_num >= 4:
-        start_timeout = 720
+    start_timeout = 720
 
     sleep(5)
     for i in range(start_timeout):
@@ -133,14 +73,14 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
             # Check if process is still running
             return_code = startRes.wait(timeout=1)  # Small timeout to check status
             if return_code != 0:
-                with open(start_log, 'r') as f:
+                with open(server_log, 'r') as f:
                     content = f.read()
                     print(content)
                 return 0, startRes
         except subprocess.TimeoutExpired:
             continue
     file.close()
-    allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(server_log, attachment_type=allure.attachment_type.TEXT)
     return pid, startRes
 
 
@@ -156,12 +96,8 @@ def stop_restful_api(pid, startRes, param):
 
 
 def terminate_restful_api(worker_id, param):
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
-    http_url = BASE_HTTP_URL + ':' + str(port)
+    port = DEFAULT_PORT + get_workerid(worker_id)
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
     response = None
     request_error = None
@@ -169,20 +105,13 @@ def terminate_restful_api(worker_id, param):
         response = requests.get(f'{http_url}/terminate')
     except requests.exceptions.RequestException as exc:
         request_error = exc
-    finally:
-        if 'modelscope' in param.keys():
-            modelscope = param['modelscope']
-            if modelscope:
-                del os.environ['LMDEPLOY_USE_MODELSCOPE']
-        if 'MASTER_PORT' in os.environ:
-            del os.environ['MASTER_PORT']
     if request_error is not None:
         assert False, f'terminate request failed: {request_error}'
     assert response is not None and response.status_code == 200, f'terminate with {response}'
 
 
-def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
-    http_url = BASE_HTTP_URL + ':' + str(port)
+def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
     model = get_model(http_url)
 
     if model is None:
@@ -194,16 +123,16 @@ def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PO
         case_info = cases_info.get(case)
 
         with allure.step(case + ' restful_test - openai chat'):
-            restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, worker_id)
+            restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, port)
             allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
 
 
-def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
+def open_chat_test(config, case, case_info, model, url, port: int = DEFAULT_PORT):
     log_path = config.get('log_path')
 
-    restful_log = os.path.join(log_path, 'restful_' + model + worker_id + '_' + case + '.log')
+    restful_log = os.path.join(log_path, 'restful_' + model + str(port) + '_' + case + '.log')
 
     file = open(restful_log, 'w')
 
@@ -255,6 +184,7 @@ def health_check(url):
 
 
 def get_model(url):
+    print(url)
     try:
         api_client = APIClient(url)
         model_name = api_client.available_models[0]
@@ -264,12 +194,8 @@ def get_model(url):
 
 
 def test_logprobs(worker_id: str = None):
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
-    http_url = BASE_HTTP_URL + ':' + str(port)
+    port = DEFAULT_PORT + get_workerid(worker_id)
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
     api_client = APIClient(http_url)
     model_name = api_client.available_models[0]
     for output in api_client.chat_completions_v1(model=model_name,
@@ -290,7 +216,7 @@ PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resource
 
 
 def run_vl_testcase(config, port: int = DEFAULT_PORT):
-    http_url = BASE_HTTP_URL + ':' + str(port)
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
     log_path = config.get('log_path')
 
     model = get_model(http_url)
@@ -341,7 +267,7 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
 
 
 def run_reasoning_case(config, port: int = DEFAULT_PORT):
-    http_url = BASE_HTTP_URL + ':' + str(port)
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
     log_path = config.get('log_path')
 
     model = get_model(http_url)
@@ -630,7 +556,7 @@ def test_qwen_multiple_round_prompt(client, model):
 
 
 def run_tools_case(config, port: int = DEFAULT_PORT):
-    http_url = BASE_HTTP_URL + ':' + str(port)
+    http_url = ':'.join([BASE_HTTP_URL, str(port)])
     log_path = config.get('log_path')
 
     model = get_model(http_url)
@@ -746,7 +672,7 @@ def proxy_health_check(url):
 def start_proxy_server(config, worker_id):
     """Start the proxy server for testing with enhanced error handling and
     logging."""
-    log_path = config.get('eval_log_path')
+    log_path = config.get('eval_path')
     if log_path is None:
         log_path = '/nvme/qa_test_models/evaluation_report'
     os.makedirs(log_path, exist_ok=True)
