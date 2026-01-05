@@ -29,7 +29,7 @@ class DLSlimeMigrationManagement:
         if init_request.protocol == MigrationProtocol.RDMA:
             nics = available_nic()
             device_name = nics[self.rank % len(nics)]
-            logger.info(f"use device {device_name} for kv migration")
+            logger.info(f'use device {device_name} for kv migration')
             self.endpoint[MigrationProtocol.RDMA] = RDMAEndpoint(
                 device_name=device_name,
                 ib_port=1,
