@@ -313,7 +313,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
     - model: model name. Available from /v1/models.
     - messages: string prompt or chat history in OpenAI format. Chat history example:
-      `[{"role": "user", "content": "hi"}]`.
+      ``[{"role": "user", "content": "hi"}]``.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most
       probable tokens with probabilities that add up to top_p or higher
@@ -332,11 +332,24 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
       tokens. Only accept stop words that's encoded to one token idex.
     - response_format (Dict | None): To generate response according to given
       schema. Examples:
-      `{"type": "json_schema", "json_schema": {"name": "test","schema": \
-        {"properties": {"name": {"type": "string"}}, "required": ["name"], \
-        "type": "object"}}}`
-      or
-      `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
+
+      .. code-block:: json
+
+        {
+          "type": "json_schema",
+          "json_schema":{
+            "name": "test",
+            "schema":{
+              "properties":{
+                "name":{"type":"string"}
+              },
+              "required":["name"],
+              "type":"object"
+            }
+          }
+        }
+
+      or ``{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}``
     - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
     - tools (List): A list of tools the model may call. Currently, only
       internlm2 functions are supported as a tool. Use this to specify a
@@ -344,7 +357,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - tool_choice (str | object): Controls which (if any) tool is called by
       the model. `none` means the model will not call any tool and instead
       generates a message. Specifying a particular tool via
-      `{"type": "function", "function": {"name": "my_function"}}`
+      ``{"type": "function", "function": {"name": "my_function"}}``
       forces the model to call that tool. `auto` or `required` will put all
       the tools informationto the model.
 
