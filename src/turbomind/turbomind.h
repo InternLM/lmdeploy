@@ -20,21 +20,21 @@ public:
 
     TurboMind(std::string model_dir, std::string config, FFICtxFactory ffi_ctx_factory);
 
-    void CreateWeights(int device_id, int rank);
+    void CreateWeights(int index);
 
-    TensorMap GetWeights(int device_id, int rank);
+    TensorMap GetWeights(int index);
 
-    void ProcessWeights(int device_id, int rank);
+    void ProcessWeights(int index);
 
-    void CreateEngine(int device_id, int rank);
+    void CreateEngine(int index);
 
-    void Sleep(int device_id, int level);
+    void Sleep(int index, int level);
 
-    void WakeUp(int device_id, const std::vector<std::string>& tags, int rank);
+    void WakeUp(int index, const std::vector<std::string>& tags);
 
     bool is_dummy_node() const noexcept;
 
-    std::shared_ptr<ScheduleMetrics> GetScheduleMetrics(int device_id, int rank);
+    std::shared_ptr<ScheduleMetrics> GetScheduleMetrics(int index);
 
     std::unique_ptr<ModelRequest> CreateRequest();
 

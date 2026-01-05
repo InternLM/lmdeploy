@@ -525,52 +525,40 @@ PYBIND11_MODULE(_turbomind, m)
             "weight_type"_a = "half")
         .def(
             "create_request",
-            [](TurboMind* model, int deviceId) { return model->CreateRequest(); },
-            py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a)
-        .def("create_weights",
-             &TurboMind::CreateWeights,
-             py::call_guard<py::gil_scoped_release>(),
-             "device_id"_a,
-             "rank"_a)
+            [](TurboMind* model) { return model->CreateRequest(); },
+            py::call_guard<py::gil_scoped_release>())
+        .def("create_weights", &TurboMind::CreateWeights, py::call_guard<py::gil_scoped_release>(), "index"_a)
         .def(
             "get_weights",
-            [](TurboMind* model, int deviceId, int rank) { return model->GetWeights(deviceId, rank); },
+            [](TurboMind* model, int index) { return model->GetWeights(index); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a)
+            "index"_a)
         .def(
             "process_weight",
-            [](TurboMind* model, int deviceId, int rank) { model->ProcessWeights(deviceId, rank); },
+            [](TurboMind* model, int index) { model->ProcessWeights(index); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a)
+            "index"_a)
         .def(
             "create_engine",
-            [](TurboMind* model, int deviceId, int rank) { model->CreateEngine(deviceId, rank); },
+            [](TurboMind* model, int index) { model->CreateEngine(index); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a)
+            "index"_a)
         .def(
             "get_schedule_metrics",
-            [](TurboMind* model, int deviceId, int rank) { return model->GetScheduleMetrics(deviceId, rank); },
+            [](TurboMind* model, int index) { return model->GetScheduleMetrics(index); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a)
+            "index"_a)
         .def(
             "sleep",
-            [](TurboMind* model, int deviceId, int level) { model->Sleep(deviceId, level); },
+            [](TurboMind* model, int index, int level) { model->Sleep(index, level); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
+            "index"_a,
             "level"_a)
         .def(
             "wakeup",
-            [](TurboMind* model, int deviceId, const std::vector<std::string>& tags, int rank) {
-                model->WakeUp(deviceId, tags, rank);
-            },
+            [](TurboMind* model, int index, const std::vector<std::string>& tags) { model->WakeUp(index, tags); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "tags"_a,
-            "rank"_a)
+            "index"_a,
+            "tags"_a)
         .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); });
 }

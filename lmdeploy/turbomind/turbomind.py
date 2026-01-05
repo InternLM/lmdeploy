@@ -193,28 +193,23 @@ class TurboMind:
     def _process_weights(self):
         """Process weight."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
-            for _ in e.map(self.model_comm.process_weight, range(self.gpu_count), ranks):
+            for _ in e.map(self.model_comm.process_weight, range(self.gpu_count)):
                 pass
 
     def _create_engine(self):
         """Create engine."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
-            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks):
+            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count)):
                 pass
         self._engine_created = True
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
 
-        engine_cfg = self.config_dict['engine_config']
-        self.node_id = engine_cfg['node_rank']
 
         # create weight
         def _create_weight_func(device_id):
-            rank = self.node_id * self.gpu_count + device_id
-            model_comm.create_weights(device_id, rank)
+            model_comm.create_weights(device_id)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
             futures = []
@@ -231,8 +226,7 @@ class TurboMind:
         tm_params.clear()
 
         def _get_params(device_id, que):
-            rank = self.node_id * self.gpu_count + device_id
-            out = model_comm.get_weights(device_id, rank)
+            out = model_comm.get_weights(device_id)
             que.put(out)
 
         que = Queue()
@@ -303,8 +297,7 @@ class TurboMind:
         if tags is None:
             tags = ['weights', 'kv_cache']
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
-            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count, ranks):
+            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count):
                 pass
 
     def update_params(self, request: UpdateParamsRequest):
@@ -539,7 +532,7 @@ class TurboMindInstance:
 
         # create model instances
         lazy_init = self.tm_model.config_dict['engine_config'].get('empty_init', False)
-        self._model_inst = None if lazy_init else self._create_model_instance(0)
+        self._model_inst = None if lazy_init else self._create_model_instance()
 
         self.config = config
         self.lock = None
@@ -562,11 +555,11 @@ class TurboMindInstance:
     @property
     def model_inst(self):
         if self._model_inst is None:
-            self._model_inst = self._create_model_instance(0)
+            self._model_inst = self._create_model_instance()
         return self._model_inst
 
-    def _create_model_instance(self, device_id):
-        model_inst = self.tm_model.model_comm.create_request(device_id)
+    def _create_model_instance(self):
+        model_inst = self.tm_model.model_comm.create_request()
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,

@@ -184,6 +184,8 @@ struct TurboMind::Impl {
 
     FFICtxFactory ffi_ctx_factory_;
 
+    vector<int> global_rank_;
+
     // Weights & engine instances for the ranks
     vector<shared_ptr<LlamaWeight>> weights_;
     vector<shared_ptr<Context>>     contexts_;
@@ -210,22 +212,22 @@ struct TurboMind::Impl {
                                               model_param_.hidden_units);
     }
 
-    void CreateWeights(int device_id, int rank)
+    void CreateWeights(int index)
     {
-        CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
 
-        CreateContext(device_id, rank);
+        CreateContext(index);
 
-        weights_[device_id] = std::make_shared<LlamaWeight>(data_type_,  //
-                                                            model_param_,
-                                                            engine_params_.at(device_id),
-                                                            lora_param_,
-                                                            moe_param_);
+        weights_[index] = std::make_shared<LlamaWeight>(data_type_,  //
+                                                        model_param_,
+                                                        engine_params_.at(index),
+                                                        lora_param_,
+                                                        moe_param_);
     }
 
-    TensorMap GetWeights(int device_id, int rank)
+    TensorMap GetWeights(int index)
     {
-        const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[device_id])->get_parameters();
+        const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[index])->get_parameters();
         TensorMap   params;
         for (const auto& [name, tensor_ptr] : tensor_ptr_map) {
             params[name] = *tensor_ptr;
@@ -233,71 +235,73 @@ struct TurboMind::Impl {
         return params;
     }
 
-    void ProcessWeights(int device_id, int rank)
+    void ProcessWeights(int index)
     {
-        CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
-        FT_CHECK(weights_[device_id] != nullptr);
+        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
+        FT_CHECK(weights_[index] != nullptr);
 
         cudaDeviceProp props{};
-        check_cuda_error(cudaGetDeviceProperties(&props, engine_param_.devices[device_id]));
+        check_cuda_error(cudaGetDeviceProperties(&props, engine_param_.devices[index]));
 
-        weights_[device_id]->prepare(props);
+        weights_[index]->prepare(props);
         sync_check_cuda_error();
     }
 
-    void CreateEngine(int device_id, int rank);
+    void CreateEngine(int index);
 
-    void CreateContext(int device_id, int rank);
+    void CreateContext(int index);
 
-    void Sleep(int device_id, int level)
+    void WarmUp(int index);
+
+    void Sleep(int index, int level)
     {
-        CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
 
         if (level == 2) {
             // free weights
-            weights_[device_id]->release();
+            weights_[index]->release();
         }
         else {
             // offload weights to CPU
             TM_CHECK(moe_param_.experts_per_token == 0) << "level 1 sleep not supported for MoE model";
-            weights_[device_id]->to_device(kCPU);
+            weights_[index]->to_device(kCPU);
         }
 
         // free model (kv cache and buffer)
-        if (device_id == 0) {
+        if (index == 0) {
             gateway_->shutdown();
             gateway_.reset();
         }
 
-        engines_[device_id] = {};
-        contexts_[device_id]->allocator->trim(0);
+        engines_[index] = {};
+        contexts_[index]->allocator->trim(0);
 
-        trim_default_mempool(engine_param_.devices[device_id]);
+        trim_default_mempool(engine_param_.devices[index]);
     }
 
-    void WakeUp(int device_id, const std::vector<std::string>& tags, int rank)
+    void WakeUp(int index, const std::vector<std::string>& tags)
     {
-        CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
 
         std::set<std::string> keys(tags.begin(), tags.end());
 
-        auto& ctx = *TM_CHECK_NOTNULL(contexts_[device_id]);
+        auto& ctx = *TM_CHECK_NOTNULL(contexts_[index]);
 
         if (keys.find("weights") != keys.end()) {
-            TM_CHECK(weights_[device_id] != nullptr);
-            if (weights_[device_id]->is_initialized()) {
-                weights_[device_id]->to_device(kDEVICE);
+            TM_CHECK(weights_[index] != nullptr);
+            if (weights_[index]->is_initialized()) {
+                weights_[index]->to_device(kDEVICE);
             }
             else {
-                weights_[device_id]->initialize();
+                weights_[index]->initialize();
             }
         }
 
         if (keys.find("kv_cache") != keys.end()) {
-            if (device_id == 0) {
+            if (index == 0) {
                 gateway_ = std::make_shared<Gateway>(n_queues_, ffi_ctx_factory_);
             }
-            CreateEngine(device_id, rank);
+            CreateEngine(index);
         }
     }
 
@@ -314,8 +318,6 @@ struct TurboMind::Impl {
             TM_LOG_WARNING("[TM] `max_context_token_num` = %d.", (int)engine_param_.max_context_token_num);
         }
     }
-
-    void WarmUp(int device_id);
 };
 
 TurboMind::Impl::~Impl()
@@ -475,24 +477,30 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
 
     const int devices = engine_param_.devices.size();
 
+    for (int i = 0; i < devices; ++i) {
+        global_rank_.push_back(engine_param_.node_rank * devices + i);
+    }
+
     queue_id_.resize(devices);
     engine_params_.resize(devices, engine_param_);
 }
 
-void TurboMind::Impl::CreateContext(int device_id, int rank)
+void TurboMind::Impl::CreateContext(int index)
 {
-    auto& p = engine_params_[device_id];
+    auto& p = engine_params_[index];
 
-    CudaDeviceGuard dev_guard(p.devices[device_id]);
+    CudaDeviceGuard dev_guard(p.devices[index]);
 
-    TM_CHECK(contexts_[device_id] == nullptr);
+    TM_CHECK(contexts_[index] == nullptr);
 
-    auto& ctx = contexts_[device_id] = std::make_shared<Context>(p.devices[device_id]);
+    auto& ctx = contexts_[index] = std::make_shared<Context>(p.devices[index]);
 
     // Layout: (outer, dp, tp, cp)
 
-    const int outer_rank = rank / comm_size_;
-    const int inner_rank = rank % comm_size_;
+    const int global_rank = global_rank_[index];
+
+    const int outer_rank = global_rank / comm_size_;
+    const int inner_rank = global_rank % comm_size_;
 
     p.outer_dp_rank = outer_rank;
 
@@ -504,7 +512,7 @@ void TurboMind::Impl::CreateContext(int device_id, int rank)
 
     auto& c = ctx->comm;
 
-    c.h_global = group_id_->CreateCommunicator(comm_size_, rank, p.node_rank);
+    c.h_global = group_id_->CreateCommunicator(comm_size_, global_rank, p.node_rank);
 
     c.h_comm = c.h_global->Split(outer_rank, 0);
 
@@ -532,12 +540,12 @@ void TurboMind::Impl::CreateContext(int device_id, int rank)
     }
 
     if (c.h_tp_group->rank() == 0) {
-        queue_id_[device_id] = 1;
+        queue_id_[index] = 1;
     }
 
     c.h_global->Sync();
 
-    if (device_id == 0) {
+    if (index == 0) {
         n_queues_ = 0;
         for (size_t i = 0; i < queue_id_.size(); ++i) {
             queue_id_[i] = queue_id_[i] ? n_queues_++ : -1;
@@ -548,16 +556,16 @@ void TurboMind::Impl::CreateContext(int device_id, int rank)
     c.h_global->Sync();
 }
 
-void TurboMind::Impl::CreateEngine(int device_id, int rank)
+void TurboMind::Impl::CreateEngine(int index)
 {
-    CudaDeviceGuard dev_guard(engine_param_.devices[device_id]);
+    CudaDeviceGuard dev_guard(engine_param_.devices[index]);
 
     // create context
-    auto& ctx = contexts_[device_id];
+    auto& ctx = contexts_[index];
 
     core::ContextGuard guard{ctx->core_stream, ctx->allocator, Allocator{kCPUpinned}};
 
-    const auto& param = engine_params_.at(rank);
+    const auto& param = engine_params_.at(index);
 
     ctx->comm.h_comm->Sync();
 
@@ -570,27 +578,27 @@ void TurboMind::Impl::CreateEngine(int device_id, int rank)
                         attn_param_,
                         moe_param_,
                         *ctx,
-                        *weights_[rank],
+                        *weights_[index],
                         phases};
 
     // create engine
-    engines_[rank] = Engine{data_type_,  //
-                            param,
-                            std::move(model),
-                            *ctx,
-                            *gateway_,
-                            engine_param_.devices[device_id],
-                            queue_id_[device_id],
-                            phases};
+    engines_[index] = Engine{data_type_,  //
+                             param,
+                             std::move(model),
+                             *ctx,
+                             *gateway_,
+                             engine_param_.devices[index],
+                             queue_id_[index],
+                             phases};
 
     core::Context::stream().Sync();
 
     ctx->comm.h_comm->Sync();
 
-    engines_[rank].Start();
+    engines_[index].Start();
 
     if (need_warm_up_) {
-        WarmUp(device_id);
+        WarmUp(index);
     }
 }
 
@@ -608,9 +616,9 @@ static std::string Join(Iter first, Iter last, const std::string& delim)
     return oss.str();
 }
 
-void TurboMind::Impl::WarmUp(int device_id)
+void TurboMind::Impl::WarmUp(int index)
 {
-    auto& ctx = *TM_CHECK_NOTNULL(contexts_[device_id]);
+    auto& ctx = *TM_CHECK_NOTNULL(contexts_[index]);
 
     auto& global = ctx.comm.h_global;
     auto& linear = *ctx.linear;
@@ -618,7 +626,7 @@ void TurboMind::Impl::WarmUp(int device_id)
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {
         std::ifstream ifs(str);
         const int     n_imported = linear.Import(ifs);
-        if (device_id == 0) {
+        if (index == 0) {
             TM_LOG_INFO("[GEMM] %d records imported", n_imported);
         }
         return;
@@ -629,7 +637,7 @@ void TurboMind::Impl::WarmUp(int device_id)
     *ctx.is_warm_up = 1;
     linear.set_measure(true);
 
-    if (device_id == 0) {
+    if (index == 0) {
         gateway_->set_threshold(engine_param_.attn_dp_size);
     }
 
@@ -716,7 +724,7 @@ void TurboMind::Impl::WarmUp(int device_id)
     linear.set_measure(false);
     *ctx.is_warm_up = 0;
 
-    if (device_id == 0) {
+    if (index == 0) {
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);
             const auto    n_records = linear.Export(ofs);
@@ -737,39 +745,39 @@ TurboMind::TurboMind(string model_dir, string config, FFICtxFactory ffi_ctx_fact
 {
 }
 
-void TurboMind::CreateWeights(int device_id, int rank)
+void TurboMind::CreateWeights(int index)
 {
-    return impl_->CreateWeights(device_id, rank);
+    return impl_->CreateWeights(index);
 }
 
-TensorMap TurboMind::GetWeights(int device_id, int rank)
+TensorMap TurboMind::GetWeights(int index)
 {
-    return impl_->GetWeights(device_id, rank);
+    return impl_->GetWeights(index);
 }
 
-void TurboMind::ProcessWeights(int device_id, int rank)
+void TurboMind::ProcessWeights(int index)
 {
-    return impl_->ProcessWeights(device_id, rank);
+    return impl_->ProcessWeights(index);
 }
 
-void TurboMind::CreateEngine(int device_id, int rank)
+void TurboMind::CreateEngine(int index)
 {
-    return impl_->CreateEngine(device_id, rank);
+    return impl_->CreateEngine(index);
 }
 
-void TurboMind::Sleep(int device_id, int level)
+void TurboMind::Sleep(int index, int level)
 {
-    return impl_->Sleep(device_id, level);
+    return impl_->Sleep(index, level);
 }
 
-void TurboMind::WakeUp(int device_id, const vector<string>& tags, int rank)
+void TurboMind::WakeUp(int index, const vector<string>& tags)
 {
-    return impl_->WakeUp(device_id, tags, rank);
+    return impl_->WakeUp(index, tags);
 }
 
-shared_ptr<ScheduleMetrics> TurboMind::GetScheduleMetrics(int device_id, int rank)
+shared_ptr<ScheduleMetrics> TurboMind::GetScheduleMetrics(int index)
 {
-    return impl_->engines_[rank].GetScheduleMetrics();
+    return impl_->engines_[index].GetScheduleMetrics();
 }
 
 unique_ptr<ModelRequest> TurboMind::CreateRequest()
