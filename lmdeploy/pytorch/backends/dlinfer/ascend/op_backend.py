@@ -242,6 +242,9 @@ class AscendOpsBackend(DlinferOpsBackend):
                 AscendKVQuantMeta.set_value(step_context.block_offsets.device, step_context.model_config.dtype,
                                             record_file, total_layers)
 
+        if not step_context.is_decoding and not is_unpaged_prefill:
+            kv_seqlens_cpu = kv_seqlens_cpu.repeat_interleave(q_seqlens_cpu, 0)
+
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
