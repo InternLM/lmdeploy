@@ -1501,7 +1501,8 @@ def serve(model_path: str,
                 port=server_port,
                 log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
                 ssl_keyfile=ssl_keyfile,
-                ssl_certfile=ssl_certfile)
+                ssl_certfile=ssl_certfile,
+                timeout_keep_alive=int(os.environ.get('UVICORN_TIMEOUT_KEEP_ALIVE', 5)))
 
 
 if __name__ == '__main__':
