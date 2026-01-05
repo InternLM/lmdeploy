@@ -391,9 +391,11 @@ class ArgumentHelper:
         return parser.add_argument('--calib-dataset',
                                    type=str,
                                    default='wikitext2',
-                                   help=('The calibration dataset name. Supported datasets: '
-                                         'wikitext2, c4, pileval, ultrachat_200k, gsm8k, '
-                                         'neuralmagic_calibration, open-platypus, openwebtext.'))
+                                   choices=[
+                                       'wikitext2', 'c4', 'pileval', 'ultrachat_200k', 'gsm8k',
+                                       'neuralmagic_calibration', 'open-platypus', 'openwebtext'
+                                   ],
+                                   help='The calibration dataset name.')
 
     @staticmethod
     def calib_samples(parser):

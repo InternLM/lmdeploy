@@ -10,13 +10,18 @@ def set_seed(seed):
     torch.random.manual_seed(seed)
 
 
+# adapted from https://github.com/vllm-project/llm-compressor/blob/main/tests/testing_utils.py
 def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int) -> Dataset:
     """Helper function to preprocess and tokenize a dataset according to
     presets.
 
-    :param ds: language dataset to preprocess and tokenize
-    :param tokenizer: tokenizer to be used for tokenization
-    :param max_seq_length: maximum sequence length of samples
+    Args:
+        ds: Language dataset to preprocess and tokenize.
+        processor: Processor to be used for apply chat template encoding and encode text.
+        max_seq_length: Maximum sequence length of samples.
+
+    Returns:
+        ds: Dataset processed by 'processor'.
     """
     ds_name = ds.info.dataset_name.lower()
     if ds_name == 'gsm8k':
@@ -99,7 +104,9 @@ def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int)
             )
 
     else:
-        raise NotImplementedError(f'Cannot preprocess dataset {ds.info.dataset_name}')
+        raise NotImplementedError(f'Cannot preprocess dataset {ds.info.dataset_name} '
+                                  f'Only `gsm8k`, `ultrachat_200k`, `open-platypus` '
+                                  f'`calibration`, `openwebtext` are supported by preprocess. ')
 
     ds = ds.map(process, remove_columns=ds.column_names)
 
@@ -241,7 +248,7 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
             break
 
     avg_tokens = sum(lengths) / len(lengths)
-    needed_samples = (seqlen * nsamples) // avg_tokens
+    needed_samples = max(1, int((seqlen * nsamples) // avg_tokens))
 
     dataset = dataset.shuffle(seed=seed)
     samples = []
@@ -270,7 +277,7 @@ def get_ultrachat_200k(processor, nsamples, seed, seqlen):
     """Load ultrachat_200k train and test datasets and tokenize.
 
     Args:
-        processor: Processor to apply chatplate encoding and encode text.
+        processor: Processor to apply chat template encoding and encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -279,7 +286,6 @@ def get_ultrachat_200k(processor, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: None.
     """
-    # from datasets import load_dataset, VerificationMode
     from datasets import VerificationMode
     train_data = load_dataset('HuggingFaceH4/ultrachat_200k',
                               data_files={'train_sft': 'data/train_sft-00000-of-00003-a3ecf92756993583.parquet'},
@@ -310,7 +316,7 @@ def get_gsm8k(processor, nsamples, seed, seqlen):
     """Load GSM8K train and test datasets and tokenize.
 
     Args:
-        processor: Processor to apply chatplate encoding and encode text.
+        processor: Processor to apply chat template encoding and encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -327,7 +333,7 @@ def get_gsm8k(processor, nsamples, seed, seqlen):
     # train items to select so it can still yield enough samples after concatenation.
     lengths = torch.tensor([len(sample['input_ids']) for sample in train_data], dtype=torch.long)
     avg_tokens = lengths.sum().item() // len(train_data)
-    needed_samples = (seqlen * nsamples) // avg_tokens
+    needed_samples = max(1, int((seqlen * nsamples) // avg_tokens))
 
     samples = []
     n_run = 0
@@ -359,7 +365,6 @@ def get_neuralmagic_calibration(processor, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: None.
     """
-    # from datasets import load_dataset
     train_data = load_dataset('neuralmagic/calibration', 'LLM', split='train')
     train_data = train_data.shuffle(seed=seed)
     train_data = process_dataset(train_data, processor, seqlen)
@@ -368,7 +373,7 @@ def get_neuralmagic_calibration(processor, nsamples, seed, seqlen):
     # train items to select so it can still yield enough samples after concatenation.
     lengths = torch.tensor([len(sample['input_ids']) for sample in train_data], dtype=torch.long)
     avg_tokens = lengths.sum().item() / len(train_data)
-    needed_samples = (seqlen * nsamples) // avg_tokens
+    needed_samples = max(1, int((seqlen * nsamples) // avg_tokens))
 
     samples = []
     n_run = 0
@@ -391,7 +396,7 @@ def get_open_platypus(processor, nsamples, seed, seqlen):
     """Load open-platypus train and test datasets and tokenize.
 
     Args:
-        processor: Processor to apply chatplate encoding and encode text.
+        processor: Processor to apply chat plate encoding and encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -408,7 +413,7 @@ def get_open_platypus(processor, nsamples, seed, seqlen):
     # train items to select so it can still yield enough samples after concatenation.
     lengths = torch.tensor([len(sample['input_ids']) for sample in train_data], dtype=torch.long)
     avg_tokens = lengths.sum().item() / len(train_data)
-    needed_samples = (seqlen * nsamples) // avg_tokens
+    needed_samples = max(1, int((seqlen * nsamples) // avg_tokens))
 
     samples = []
     n_run = 0
@@ -431,7 +436,7 @@ def get_openwebtext(processor, nsamples, seed, seqlen):
     """Load openwebtext train and test datasets and tokenize.
 
     Args:
-        processor: Processor to apply chatplate encoding and encode text.
+        processor: Processor to apply chat template encoding and encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -473,7 +478,7 @@ def get_calib_loaders(name, tokenizer, processor, nsamples=128, seed=0, seqlen=2
       name: Dataset name ('wikitext2', 'c4', 'pileval', 'ultrachat_200k', 'gsm8k',
             'neuralmagic_calibration', 'open-platypus', 'openwebtext').
       tokenizer: Tokenizer to encode text.
-      processor: Processor to apply chatplate encoding and encode text.
+      processor: Processor to apply chat template encoding and encode text.
       nsamples: Number of samples to take from train set.
       seed: Random seed for sampling.
       seqlen: Maximum sequence length.

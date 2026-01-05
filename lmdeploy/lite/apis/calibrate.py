@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+import logging
 from pathlib import Path
 from typing import Literal, Union
 
@@ -247,7 +247,12 @@ def calibrate(model: str,
 
     # Load tokenizer, processor and configuration
     tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
-    processor = AutoProcessor.from_pretrained(model, trust_remote_code=True)
+    try:
+        processor = AutoProcessor.from_pretrained(model, trust_remote_code=True)
+    except Exception as e:
+        logging.warning(f'Failed to load AutoProcessor for model {model}; '
+                        f'falling back to tokenizer only. Error: {e}')
+        processor = None
 
     if model_type == 'llm':
         model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)

@@ -61,7 +61,6 @@ class SubCliLite(object):
                             type=int,
                             default=128,
                             help='Group size for weight quantization statistics')
-        parser.add_argument('--device', type=str, default='cuda', help='Device for calibrate. (cpu, cuda:0,1,2...)')
 
     @staticmethod
     def add_parser_calibrate():
@@ -79,7 +78,6 @@ class SubCliLite(object):
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.dtype(parser)
-        parser.add_argument('--device', type=str, default='cuda', help='Device for calibrate. (cpu, cuda:0,1,2...)')
 
     @staticmethod
     def add_parser_smooth_quant():

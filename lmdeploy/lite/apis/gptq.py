@@ -17,8 +17,7 @@ def auto_gptq(model: str,
               calib_seqlen: int = 2048,
               batch_size: int = 1,
               dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
-              revision: str = None,
-              device: str = 'cuda'):
+              revision: str = None):
     """Perform weight quantization using AWQ algorithm.
 
     Args:
@@ -37,7 +36,6 @@ def auto_gptq(model: str,
         revision (str): The specific model version to use. It can be a
             branch name, a tag name, or a commit id. If unspecified,
             will use the default version.
-        device (str): Device type of running.
     """
     try:
         from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
@@ -64,7 +62,12 @@ def auto_gptq(model: str,
     quantized_model_dir = work_dir
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=True)
-    processor = AutoProcessor.from_pretrained(pretrained_model_dir, trust_remote_code=True)
+    try:
+        processor = AutoProcessor.from_pretrained(pretrained_model_dir, trust_remote_code=True)
+    except Exception as e:
+        logging.warning(f'Failed to load AutoProcessor for model {pretrained_model_dir}; '
+                        f'falling back to tokenizer only. Error: {e}')
+        processor = None
     print('Loading calibrate dataset ...')
     calib_loader, _ = get_calib_loaders(calib_dataset,
                                         tokenizer,
@@ -94,7 +97,7 @@ def auto_gptq(model: str,
                                                 quantize_config,
                                                 revision=revision,
                                                 torch_dtype=torch_dtype,
-                                                trust_remote_code=True).to(device)
+                                                trust_remote_code=True).cuda()
 
     # quantize model, the examples should be list of dict whose keys
     # can only be "input_ids" and "attention_mask"
