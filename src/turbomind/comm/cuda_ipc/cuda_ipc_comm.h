@@ -16,6 +16,36 @@
 
 namespace turbomind::comm {
 
+class MaxCtas {
+public:
+    MaxCtas(int value = 0): is_set_{}, value_{value} {}
+
+    void set_value(int value)
+    {
+        value_  = value;
+        is_set_ = true;
+    }
+
+    int value()
+    {
+        return value_;
+    }
+
+    int apply(int _default)
+    {
+        if (!is_set_) {  // `value_` is max possible value in this case
+            return std::min(_default, value_);
+        }
+        else {
+            return value_;
+        }
+    }
+
+private:
+    bool is_set_;
+    int  value_;
+};
+
 class CudaIpcCommImpl: public DeviceCommImpl {
     struct Allocation;
     struct Symmetric;
@@ -192,6 +222,9 @@ private:
     };
 
     std::vector<Group> groups_;
+
+    MaxCtas max_ctas_;
+    size_t  copy_threshold_{INT64_MAX};
 };
 
 struct Rank {

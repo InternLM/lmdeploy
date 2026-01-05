@@ -10,10 +10,13 @@
 #include <memory>
 #include <ostream>
 
-#include <xgrammar/xgrammar.h>
-
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/serdes.h"
 #include "src/turbomind/utils/metrics.h"
+
+namespace xgrammar {
+class GrammarMatcher;  // forward declaration
+}  // namespace xgrammar
 
 namespace turbomind {
 
@@ -172,6 +175,82 @@ inline void UpdateState(Request& r, int status, int seq_len)
     catch (...) {
         TM_LOG_ERROR("Unknown error invoking callback for (%lu)", r.id);
     }
+}
+
+template<class Archive>
+void serdes(Archive& ar, GenerationConfig& g)
+{
+    // clang-format off
+    ar & g.max_new_tokens;
+    ar & g.min_new_tokens;
+    ar & g.eos_ids;
+    ar & g.stop_ids[0];
+    ar & g.stop_ids[1];
+    ar & g.bad_ids[0];
+    ar & g.bad_ids[1];
+    ar & g.top_k;
+    ar & g.top_p;
+    ar & g.min_p;
+    ar & g.temperature;
+    ar & g.repetition_penalty;
+    ar & g.random_seed;
+    ar & g.output_logprobs;
+    ar & g.output_last_hidden_state;
+    ar & g.output_logits;
+    // clang-format on
+}
+
+template<class Archive>
+void save_req_output(Archive& ar, const TensorMap& map)
+{
+    // clang-format off
+    ar & map.size();
+    for (const auto& [k, t] : map) {
+        TM_CHECK(t.device().type == kCPU);
+        ar & k;
+        ar & t.layout();
+        ar & t.dtype();
+    }
+    // clang-format on
+}
+
+template<class Archive>
+void load_req_output(Archive& ar, TensorMap& map)
+{
+    // clang-format off
+    decltype(map.size()) size;
+    ar & size;
+    for (int i = 0; i < size; ++i) {
+        std::string k;
+        Layout      layout;
+        DataType    dtype;
+        ar & k;
+        ar & layout;
+        ar & dtype;
+        map.emplace(std::move(k), Tensor{layout, dtype, kCPU});
+    }
+    // clang-format on
+}
+
+template<class Archive>
+void serdes(Archive& ar, Request& r)
+{
+    // clang-format off
+    ar & r.id;
+    ar & r.unique_id;
+    ar & r.session;
+    ar & r.gen_cfg;
+    ar & r.stream_output;
+    ar & r.inputs;
+    if constexpr(Archive::is_loading) {
+        load_req_output(ar, r.outputs);
+        r.output_ids      = r.outputs.at("output_ids");
+        r.sequence_length = r.outputs.at("sequence_length");
+    } else {
+        save_req_output(ar, r.outputs);
+    }
+    ar & r.ec;
+    // clang-format on
 }
 
 }  // namespace turbomind

@@ -186,12 +186,17 @@ class EngineInstance(EngineInstanceBase):
                 output_offset = len(token_ids)
             elif resp.type in (ResponseType.FINISH, ResponseType.CANCEL):
                 resp_data = resp.data
-                token_ids = resp_data['token_ids']
-                logits = resp_data['logits']
+                if resp_data is None:
+                    # request might be cancelled before any output
+                    token_ids = []
+                    logits = None
+                else:
+                    token_ids = resp_data['token_ids'][output_offset:].tolist()
+                    logits = resp_data.get('logits', None)
                 num_ids = len(token_ids) - output_offset
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type,
-                                   token_ids[output_offset:].tolist(),
+                                   token_ids,
                                    logits=logits,
                                    cache_block_ids=cache_block_ids,
                                    req_metrics=req_metrics,

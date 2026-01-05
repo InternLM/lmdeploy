@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import functools
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
@@ -15,6 +14,7 @@ import torch.distributed as dist
 from torch.profiler import ProfilerActivity, profile, record_function
 
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger
@@ -326,12 +326,15 @@ class BaseModelAgent:
         monkey_patch_hf_modules_cache()
         self.tokenizer = Tokenizer(model_path).model.model
 
+        # asyncio
         self._pre_in_que = None
         self._in_que = None
         self._out_que = None
         self._background_task = None
         self._preprocess_task = None
+        self.tasks = set()
 
+        # cuda stream
         self.stream = torch.cuda.Stream()
         self.out_stream = torch.cuda.Stream()
         self.cache_stream = torch.cuda.Stream()
@@ -886,22 +889,6 @@ class BaseModelAgent:
             if forward_event is not None:
                 forward_event.clear()
 
-    @staticmethod
-    def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
-        """Raise exception on finish."""
-        task_name = task.get_name()
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            logger.debug(f'Task <{task_name}> cancelled.')
-            return
-        except BaseException:
-            logger.exception(f'Task <{task_name}> failed')
-        finally:
-            for ptask in ptasks:
-                if not ptask.done():
-                    ptask.cancel()
-
     def start(self, forward_event: asyncio.Event = None):
         """Start event loop."""
         event_loop = asyncio.get_event_loop()
@@ -909,30 +896,40 @@ class BaseModelAgent:
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
 
-        tasks_to_cancel = [asyncio.current_task()]
-
         # forward task
         logger.debug('Create task ModelAgentLoop.')
         self._background_task = event_loop.create_task(self._async_loop_background(forward_event),
                                                        name='ModelAgentLoop')
-        tasks_to_cancel.append(self._background_task)
+        self.tasks.add(self._background_task)
+        self._background_task.add_done_callback(self.tasks.discard)
 
         # preprocess inputs task
         logger.debug('Create task ModelAgentPreprocess.')
         self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(forward_event),
                                                        name='ModelAgentPreprocess')
-        tasks_to_cancel.append(self._preprocess_task)
+        self.tasks.add(self._preprocess_task)
+        self._preprocess_task.add_done_callback(self.tasks.discard)
 
         # profiler
         self.profiler = AgentProfiler(self.dist_ctx, self.stream)
         self.profiler.create_task()
 
-        # binding done task
-        logger.debug('binding done callback.')
-        backgroup_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
-        self._background_task.add_done_callback(backgroup_done_callback)
-        preprocess_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
-        self._preprocess_task.add_done_callback(preprocess_done_callback)
+    async def wait_tasks(self):
+        """Wait tasks."""
+        if len(self.tasks) == 0:
+            return
+        try:
+            await wait_for_async_tasks(self.tasks)
+        except asyncio.CancelledError:
+            logger.debug(f'ModelAgent rank[{self.rank}] wait_tasks cancelled.')
+            raise
+        except BaseException as e:
+            # we want to keep logs in both ray logs and engine logs
+            msg = f'ModelAgent rank[{self.rank}] wait_tasks failed'
+            logger.exception(msg)
+            raise e from None
+        finally:
+            logger.debug(f'ModelAgent rank[{self.rank}] wait_tasks cleanup.')
 
     def stop(self):
         """Stop task."""
@@ -942,13 +939,9 @@ class BaseModelAgent:
         if self.profiler is not None:
             self.profiler.dump()
 
-        if self._background_task is not None:
-            if not self._background_task.done():
-                self._background_task.cancel()
-
-        if self._preprocess_task is not None:
-            if not self._preprocess_task.done():
-                self._preprocess_task.cancel()
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
 
         if self.guided_decoding_manager:
             self.guided_decoding_manager.clear()
@@ -965,21 +958,13 @@ class BaseModelAgent:
                 await asyncio.sleep(1)
             self.profiler.dump()
 
-        if self._background_task is not None:
-            if not self._background_task.done():
-                self._background_task.cancel()
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
                 try:
-                    await self._background_task
+                    await task
                 except asyncio.CancelledError:
-                    logger.debug('ModelAgent background task cancelled.')
-
-        if self._preprocess_task is not None:
-            if not self._preprocess_task.done():
-                self._preprocess_task.cancel()
-                try:
-                    await self._preprocess_task
-                except asyncio.CancelledError:
-                    logger.debug('ModelAgent preprocess task cancelled.')
+                    logger.debug(f'ModelAgent {task.get_name()} task cancelled.')
 
         if self.guided_decoding_manager:
             self.guided_decoding_manager.clear()

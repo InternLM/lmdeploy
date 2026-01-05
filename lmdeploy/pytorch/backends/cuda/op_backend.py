@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 
@@ -10,46 +10,6 @@ from ..base import OpType
 from ..default import DefaultOpsBackend
 
 logger = get_logger('lmdeploy')
-
-
-def _get_meta_flashattn(
-        batch_size: int,
-        max_seqlen_q: int,
-        max_seqlen_k: int,
-        num_heads_q: int,
-        num_heads_kv: int,
-        headdim: int,
-        cache_seqlens: torch.Tensor,
-        qkv_dtype=torch.bfloat16,
-        headdim_v=None,
-        cu_seqlens_q: Optional[torch.Tensor] = None,
-        cu_seqlens_k_new: Optional[torch.Tensor] = None,
-        page_size: Optional[int] = None,
-        causal=True,
-        window_size=(-1, -1),  # -1 means infinite context window
-        num_splits=0,
-):
-    """Get scheduler metadata for flash attn."""
-    from flash_attn_interface import get_scheduler_metadata
-
-    metadata = get_scheduler_metadata(
-        batch_size,
-        max_seqlen_q,
-        max_seqlen_k,
-        num_heads_q,
-        num_heads_kv,
-        headdim,
-        cache_seqlens,
-        qkv_dtype=qkv_dtype,
-        headdim_v=headdim_v,
-        cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_k_new=cu_seqlens_k_new,
-        page_size=page_size,
-        causal=causal,
-        window_size=window_size,
-        num_splits=num_splits,
-    )
-    return metadata
 
 
 class CudaOpsBackend(DefaultOpsBackend):
@@ -168,6 +128,7 @@ class CudaOpsBackend(DefaultOpsBackend):
 
     @classmethod
     def update_meta_flashattn(cls, attn_metadata, step_context):
+        from lmdeploy.pytorch.models.utils.cudagraph import _get_meta_flashattn
         batch_size = attn_metadata.q_seqlens.size(0)
         max_seqlen_q = step_context.input_ids.size(1) // batch_size
         block_size = step_context.kv_caches[0][0].size(1)
@@ -220,6 +181,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             quant_policy=step_context.kv_quant_policy,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
+            max_kv_seqlen=step_context.max_kv_seqlen,
         )
         if step_context.is_decoding:
             if use_flash_mla:
@@ -251,6 +213,7 @@ class CudaOpsBackend(DefaultOpsBackend):
                 kv_flatten_size=cross_kv_flatten_size,
                 fill_seqlens=fill_seqlens,
                 quant_policy=step_context.kv_quant_policy,
+                max_kv_seqlen=step_context.max_kv_seqlen,
             )
 
         step_context.attn_metadata = attn_metadata
