@@ -30,12 +30,7 @@
   ],
   "httpHeaders": [
     {
-      "urls": [
-        "https://github.com/",
-        "https://guides.github.com/",
-        "https://help.github.com/",
-        "https://docs.github.com/"
-      ],
+      "urls": ["https://github.com/", "https://guides.github.com/", "https://help.github.com/", "https://docs.github.com/"],
       "headers": {
         "Accept-Encoding": "zstd, br, gzip, deflate"
       }
@@ -45,9 +40,5 @@
   "retryOn429": true,
   "retryCount": 5,
   "fallbackRetryDelay": "30s",
-  "aliveStatusCodes": [
-    200,
-    206,
-    429
-  ]
+  "aliveStatusCodes": [200, 206, 429]
 }
