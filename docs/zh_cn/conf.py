@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import Response
 from yaml import safe_dump
 
 sys.path.insert(0, os.path.abspath('../..'))
@@ -43,6 +44,25 @@ release = __version__
 
 openai_server = FastAPI()
 openai_server.include_router(router)
+
+
+@openai_server.get('/metrics',
+                   response_class=Response,
+                   responses={
+                       200: {
+                           'content': {
+                               'text/plain': {}
+                           },
+                           'description': 'Prometheus metrics data'
+                       },
+                       404: {
+                           'description': 'Metrics Endpoint not enabled'
+                       }
+                   })
+def metrics():
+    """**[Optional]** Prometheus metrics endpoint."""
+    pass
+
 
 spec_dir = Path('_static')
 spec_dir.mkdir(exist_ok=True)
