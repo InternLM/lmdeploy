@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import numpy as np
 import torch
-from datasets import Dataset, load_dataset
-from transformers import ProcessorMixin
+from datasets import load_dataset
+
+NUM_LOADED_SAMPLES = 30000
 
 
 def set_seed(seed):
@@ -11,23 +12,23 @@ def set_seed(seed):
 
 
 # adapted from https://github.com/vllm-project/llm-compressor/blob/main/tests/testing_utils.py
-def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int) -> Dataset:
+def process_dataset(ds, tokenizer, max_seq_length):
     """Helper function to preprocess and tokenize a dataset according to
     presets.
 
     Args:
         ds: Language dataset to preprocess and tokenize.
-        processor: Processor to be used for apply chat template encoding and encode text.
+        tokenizer: Tokenizer to encode text.
         max_seq_length: Maximum sequence length of samples.
 
     Returns:
-        ds: Dataset processed by 'processor'.
+        ds: Tokenized dataset.
     """
     ds_name = ds.info.dataset_name.lower()
     if ds_name == 'gsm8k':
 
-        def process(sample):
-            return processor(
+        def tokenize(sample):
+            return tokenizer(
                 sample['question'],
                 padding=False,
                 max_length=max_seq_length,
@@ -37,9 +38,10 @@ def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int)
 
     elif ds_name == 'ultrachat_200k':
 
-        def process(sample):
-            return processor(
-                processor.apply_chat_template(
+        def tokenize(sample):
+
+            return tokenizer(
+                tokenizer.apply_chat_template(
                     sample['messages'],
                     tokenize=False,
                 ),
@@ -51,7 +53,7 @@ def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int)
 
     elif ds_name == 'open-platypus':
         # use the output rather than the instruction
-        def process(sample):
+        def tokenize(sample):
             messages = [{
                 'role': 'user',
                 'content': sample['instruction'] + ' ' + sample['input']
@@ -59,8 +61,8 @@ def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int)
                 'role': 'assistant',
                 'content': sample['output']
             }]
-            return processor(
-                processor.apply_chat_template(
+            return tokenizer(
+                tokenizer.apply_chat_template(
                     messages,
                     tokenize=False,
                 ),
@@ -73,16 +75,16 @@ def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int)
     # "neuralmagic/calibration"
     elif ds_name == 'calibration':
 
-        def process(example):
+        def tokenize(sample):
             messages = []
-            for message in example['messages']:
+            for message in sample['messages']:
                 if message['role'] == 'user':
                     messages.append({'role': 'user', 'content': message['content']})
                 elif message['role'] == 'assistant':
                     messages.append({'role': 'assistant', 'content': message['content']})
 
-            return processor(
-                processor.apply_chat_template(
+            return tokenizer(
+                tokenizer.apply_chat_template(
                     messages,
                     tokenize=False,
                 ),
@@ -94,8 +96,8 @@ def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int)
 
     elif ds_name == 'openwebtext':
 
-        def process(sample):
-            return processor(
+        def tokenize(sample):
+            return tokenizer(
                 sample['text'],
                 padding=False,
                 max_length=max_seq_length,
@@ -108,7 +110,7 @@ def process_dataset(ds: Dataset, processor: ProcessorMixin, max_seq_length: int)
                                   f'Only `gsm8k`, `ultrachat_200k`, `open-platypus` '
                                   f'`calibration`, `openwebtext` are supported by preprocess. ')
 
-    ds = ds.map(process, remove_columns=ds.column_names)
+    ds = ds.map(tokenize, remove_columns=ds.column_names)
 
     return ds
 
@@ -126,8 +128,8 @@ def get_wikitext2(tokenizer, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized Wikitext-2 test set.
     """
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train', trust_remote_code=True)
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', trust_remote_code=True)
+    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
     trainenc = tokenizer('\n\n'.join(traindata['text']), return_tensors='pt')
     testenc = tokenizer('\n\n'.join(testdata['text']), return_tensors='pt')
@@ -225,7 +227,7 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
     """
     from datasets.builder import DatasetGenerationError
     try:
-        dataset = load_dataset('mit-han-lab/pile-val-backup', split='validation', trust_remote_code=True)
+        dataset = load_dataset('mit-han-lab/pile-val-backup', split=f'validation[:{NUM_LOADED_SAMPLES}]')
     except DatasetGenerationError:
         raise InterruptedError('There have been some issues when generating '
                                'the dataset, you could try to download it '
@@ -235,7 +237,6 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
 
     # pileval samples have far fewer tokens than seqlen; recompute how many
     # train items to select so it can still yield enough samples after concatenation.
-    max_keep = 20000
     samples_encode = []
     lengths = []
     for data in dataset:
@@ -244,7 +245,7 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
             continue
         samples_encode.append(torch.tensor([ids]))
         lengths.append(len(ids))
-        if len(samples_encode) >= max_keep:
+        if len(samples_encode) >= len(dataset):
             break
 
     avg_tokens = sum(lengths) / len(lengths)
@@ -273,11 +274,11 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
     return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
 
 
-def get_ultrachat_200k(processor, nsamples, seed, seqlen):
+def get_ultrachat_200k(tokenizer, nsamples, seed, seqlen):
     """Load ultrachat_200k train and test datasets and tokenize.
 
     Args:
-        processor: Processor to apply chat template encoding and encode text.
+        tokenizer: Tokenizer to encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -289,10 +290,10 @@ def get_ultrachat_200k(processor, nsamples, seed, seqlen):
     from datasets import VerificationMode
     train_data = load_dataset('HuggingFaceH4/ultrachat_200k',
                               data_files={'train_sft': 'data/train_sft-00000-of-00003-a3ecf92756993583.parquet'},
-                              split='train_sft',
+                              split=f'train_sft[:{NUM_LOADED_SAMPLES}]',
                               verification_mode=VerificationMode.NO_CHECKS)
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, processor, seqlen)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     import random
     random.seed(seed)
@@ -312,11 +313,11 @@ def get_ultrachat_200k(processor, nsamples, seed, seqlen):
     return trainloader, None
 
 
-def get_gsm8k(processor, nsamples, seed, seqlen):
+def get_gsm8k(tokenizer, nsamples, seed, seqlen):
     """Load GSM8K train and test datasets and tokenize.
 
     Args:
-        processor: Processor to apply chat template encoding and encode text.
+        tokenizer: Tokenizer to encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -327,7 +328,7 @@ def get_gsm8k(processor, nsamples, seed, seqlen):
     """
     train_data = load_dataset('openai/gsm8k', 'main', split='train')
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, processor, seqlen)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     # GSM8K samples have far fewer tokens than seqlen; recompute how many
     # train items to select so it can still yield enough samples after concatenation.
@@ -352,11 +353,11 @@ def get_gsm8k(processor, nsamples, seed, seqlen):
     return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
 
 
-def get_neuralmagic_calibration(processor, nsamples, seed, seqlen):
+def get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen):
     """Load neuralmagic_calibration train and test datasets and tokenize.
 
     Args:
-        processor: Processor to encode text.
+        tokenizer: Tokenizer to encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -367,7 +368,7 @@ def get_neuralmagic_calibration(processor, nsamples, seed, seqlen):
     """
     train_data = load_dataset('neuralmagic/calibration', 'LLM', split='train')
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, processor, seqlen)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     # neuralmagic_calibration samples have far fewer tokens than seqlen; recompute how many
     # train items to select so it can still yield enough samples after concatenation.
@@ -392,11 +393,11 @@ def get_neuralmagic_calibration(processor, nsamples, seed, seqlen):
     return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
 
 
-def get_open_platypus(processor, nsamples, seed, seqlen):
+def get_open_platypus(tokenizer, nsamples, seed, seqlen):
     """Load open-platypus train and test datasets and tokenize.
 
     Args:
-        processor: Processor to apply chat plate encoding and encode text.
+        tokenizer: Tokenizer to encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -407,7 +408,7 @@ def get_open_platypus(processor, nsamples, seed, seqlen):
     """
     train_data = load_dataset('garage-bAInd/Open-Platypus', split='train')
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, processor, seqlen)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     # open-platypus samples have far fewer tokens than seqlen; recompute how many
     # train items to select so it can still yield enough samples after concatenation.
@@ -432,11 +433,11 @@ def get_open_platypus(processor, nsamples, seed, seqlen):
     return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
 
 
-def get_openwebtext(processor, nsamples, seed, seqlen):
+def get_openwebtext(tokenizer, nsamples, seed, seqlen):
     """Load openwebtext train and test datasets and tokenize.
 
     Args:
-        processor: Processor to apply chat template encoding and encode text.
+        tokenizer: Tokenizer to encode text.
         nsamples: Number of samples to take from train set.
         seed: Random seed for sampling.
         seqlen: Maximum sequence length.
@@ -448,10 +449,10 @@ def get_openwebtext(processor, nsamples, seed, seqlen):
     from datasets import VerificationMode
     train_data = load_dataset('Skylion007/openwebtext',
                               data_files={'train': 'plain_text/train-00000-of-00080.parquet'},
-                              split='train',
+                              split=f'train[:{NUM_LOADED_SAMPLES}]',
                               verification_mode=VerificationMode.NO_CHECKS)
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, processor, seqlen)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     import random
     random.seed(seed)
@@ -471,14 +472,13 @@ def get_openwebtext(processor, nsamples, seed, seqlen):
     return trainloader, None
 
 
-def get_calib_loaders(name, tokenizer, processor, nsamples=128, seed=0, seqlen=2048):
+def get_calib_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
     """Get calibration data loaders for a dataset.
 
     Args:
       name: Dataset name ('wikitext2', 'c4', 'pileval', 'ultrachat_200k', 'gsm8k',
             'neuralmagic_calibration', 'open-platypus', 'openwebtext').
       tokenizer: Tokenizer to encode text.
-      processor: Processor to apply chat template encoding and encode text.
       nsamples: Number of samples to take from train set.
       seed: Random seed for sampling.
       seqlen: Maximum sequence length.
@@ -497,16 +497,16 @@ def get_calib_loaders(name, tokenizer, processor, nsamples=128, seed=0, seqlen=2
         return get_pileval(tokenizer, nsamples, seed, seqlen)
 
     if 'ultrachat_200k' in name:
-        return get_ultrachat_200k(processor, nsamples, seed, seqlen)
+        return get_ultrachat_200k(tokenizer, nsamples, seed, seqlen)
 
     if 'gsm8k' in name:
-        return get_gsm8k(processor, nsamples, seed, seqlen)
+        return get_gsm8k(tokenizer, nsamples, seed, seqlen)
 
     if 'neuralmagic_calibration' in name:
-        return get_neuralmagic_calibration(processor, nsamples, seed, seqlen)
+        return get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen)
 
     if 'open-platypus' in name:
-        return get_open_platypus(processor, nsamples, seed, seqlen)
+        return get_open_platypus(tokenizer, nsamples, seed, seqlen)
 
     if 'openwebtext' in name:
-        return get_openwebtext(processor, nsamples, seed, seqlen)
+        return get_openwebtext(tokenizer, nsamples, seed, seqlen)

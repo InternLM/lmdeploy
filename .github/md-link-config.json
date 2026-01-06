@@ -26,12 +26,6 @@
     },
     {
       "pattern": "^http://0.0.0.0"
-    },
-    {
-      "pattern": "^https://kexue.fm/archives/8823"
-    },
-    {
-      "pattern": "^https://kexue.fm/archives/9675"
     }
   ],
   "httpHeaders": [

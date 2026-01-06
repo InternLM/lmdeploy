@@ -3,7 +3,7 @@ import logging
 from typing import Literal
 
 import torch
-from transformers import AutoConfig, AutoProcessor, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 from lmdeploy.lite.utils.calib_dataloader import get_calib_loaders
 
@@ -62,18 +62,8 @@ def auto_gptq(model: str,
     quantized_model_dir = work_dir
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=True)
-    try:
-        processor = AutoProcessor.from_pretrained(pretrained_model_dir, trust_remote_code=True)
-    except Exception as e:
-        logging.warning(f'Failed to load AutoProcessor for model {pretrained_model_dir}; '
-                        f'falling back to tokenizer only. Error: {e}')
-        processor = None
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset,
-                                        tokenizer,
-                                        processor,
-                                        nsamples=calib_samples,
-                                        seqlen=calib_seqlen)
+    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
     all_data = [data if isinstance(data, torch.Tensor) else data[0] for data in calib_loader]
     attention_mask = [1] * calib_seqlen
     examples = [dict(input_ids=data.flatten().tolist(), attention_mask=attention_mask) for data in all_data]

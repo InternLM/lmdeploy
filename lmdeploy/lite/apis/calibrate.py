@@ -1,11 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import logging
 from pathlib import Path
 from typing import Literal, Union
 
 import torch
 from torch import nn
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoTokenizer
 
 from lmdeploy.archs import get_task
 from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
@@ -245,14 +244,8 @@ def calibrate(model: str,
     model_type, _ = get_task(model)
     make_compatible_internvl_config(model)
 
-    # Load tokenizer, processor and configuration
+    # Load tokenizer and configuration
     tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
-    try:
-        processor = AutoProcessor.from_pretrained(model, trust_remote_code=True)
-    except Exception as e:
-        logging.warning(f'Failed to load AutoProcessor for model {model}; '
-                        f'falling back to tokenizer only. Error: {e}')
-        processor = None
 
     if model_type == 'llm':
         model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
@@ -300,11 +293,7 @@ def calibrate(model: str,
     _prepare_for_calibrate(model, layer_type, HEAD_NAME_MAP[type(model).__name__], device)
 
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset,
-                                        tokenizer,
-                                        processor,
-                                        nsamples=calib_samples,
-                                        seqlen=calib_seqlen)
+    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
 
     # Initialize calibration context
     if search_scale:
