@@ -1,4 +1,4 @@
 aiohttp
 prometheus_client
 protobuf
-timm
+timm<=1.0.22
