@@ -58,9 +58,9 @@ fi
 pip install -U pip wheel setuptools
 
 if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
-    pip install nvidia-nvshmem-cu13
+    pip install nvidia-nvshmem-cu13==3.4.5
 elif [[ "${CUDA_VERSION_SHORT}" != "cu118" ]]; then
-    pip install nvidia-nvshmem-cu12
+    pip install nvidia-nvshmem-cu12==3.4.5
 fi
 
 pip install torch${TORCH_VERSION} --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT}
