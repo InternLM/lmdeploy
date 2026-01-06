@@ -1,7 +1,9 @@
 import pytest
+from tools.common_case_config import (TURBOMIND_FALLBACK_TEST_LLM_GPU1, TURBOMIND_FALLBACK_TEST_LLM_GPU2,
+                                      TURBOMIND_MODELSCOPE_CONFIG, TURBOMIND_PR_TEST_LLM_GPU1,
+                                      TURBOMIND_PR_TEST_LLM_GPU2)
 from utils.config_utils import get_func_config_list
 from utils.run_client_chat import run_tests
-from tools.common_testcase_config import TURBOMIND_PR_TEST_LLM_GPU2, TURBOMIND_PR_TEST_LLM_GPU1, TURBOMIND_FALLBACK_TEST_LLM_GPU1, TURBOMIND_FALLBACK_TEST_LLM_GPU2, TURBOMIND_MODELSCOPE_CONFIG
 
 BACKEND = 'turbomind'
 

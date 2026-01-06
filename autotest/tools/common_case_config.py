@@ -50,7 +50,6 @@ TURBOMIND_PR_TEST_LLM_GPU1 = [{
     'extra_params': {}
 }]
 
-
 TURBOMIND_FALLBACK_TEST_LLM_GPU1 = [{
     'model': 'microsoft/Phi-4-mini-instruct',
     'backend': TURBOMIND,
@@ -80,7 +79,6 @@ TURBOMIND_FALLBACK_TEST_LLM_GPU1 = [{
     'extra_params': {}
 }]
 
-
 TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{
     'model': 'google/gemma-2-27b-it',
     'backend': TURBOMIND,
@@ -101,7 +99,6 @@ TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{
     'extra_params': {}
 }]
 
-
 TURBOMIND_LOGPROBS_TEST_LLM_GPU2 = [{
     'model': 'internlm/internlm2_5-20b-chat',
     'backend': TURBOMIND,
@@ -121,7 +118,6 @@ TURBOMIND_LOGPROBS_TEST_LLM_GPU2 = [{
     },
     'extra_params': {}
 }]
-
 
 BASE_MODELSCOPE_CONFIG = [{
     'model': 'Qwen/Qwen2.5-7B-Instruct',
@@ -147,13 +143,9 @@ BASE_MODELSCOPE_CONFIG = [{
     }
 }]
 
-TURBOMIND_MODELSCOPE_CONFIG = [
-    {**item, "backend": TURBOMIND} for item in BASE_MODELSCOPE_CONFIG
-]
+TURBOMIND_MODELSCOPE_CONFIG = [{**item, 'backend': TURBOMIND} for item in BASE_MODELSCOPE_CONFIG]
 
-PYTORCH_MODELSCOPE_CONFIG = [
-    {**item, "backend": PYTORCH} for item in BASE_MODELSCOPE_CONFIG
-]
+PYTORCH_MODELSCOPE_CONFIG = [{**item, 'backend': PYTORCH} for item in BASE_MODELSCOPE_CONFIG]
 
 PYTORCH_LORA_TEST_LLM_GPU1 = [{
     'model': 'meta-llama/Llama-2-7b-chat-hf',
@@ -168,7 +160,6 @@ PYTORCH_LORA_TEST_LLM_GPU1 = [{
     }
 }]
 
-
 PYTORCH_LORA_TEST_LLM_GPU2 = [{
     'model': 'baichuan-inc/Baichuan2-13B-Chat',
     'backend': PYTORCH,
@@ -181,7 +172,6 @@ PYTORCH_LORA_TEST_LLM_GPU2 = [{
         'adapters': 'a=lora/2024-01-25_self_dup b=lora/2024-01-25_self'
     }
 }]
-
 
 PYTORCH_PR_TEST_LLM_GPU2 = [{
     'model': 'internlm/internlm2_5-20b-chat',
@@ -222,3 +212,85 @@ PYTORCH_PR_TEST_LLM_GPU1 = [{
     },
     'extra_params': {}
 }]
+
+BASE_TOOLCALL_TEST_LLM = [{
+    'model': 'internlm/internlm2_5-7b-chat',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'tool-call-parser': 'internlm'
+    }
+}, {
+    'model': 'Qwen/Qwen2.5-7B-Instruct',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'tool-call-parser': 'qwen'
+    }
+}, {
+    'model': 'internlm/internlm2_5-20b-chat',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'tool-call-parser': 'internlm'
+    }
+}, {
+    'model': 'meta-llama/Meta-Llama-3-1-70B-Instruct',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 4
+    },
+    'extra_params': {
+        'tool-call-parser': 'llama3'
+    }
+}, {
+    'model': 'Qwen/Qwen2.5-72B-Instruct',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 4
+    },
+    'extra_params': {
+        'tool-call-parser': 'qwen'
+    }
+}]
+
+BASE_REASONING_TEST_LLM = [{
+    'model': 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {
+        'reasoning-parser': 'deepseek-r1'
+    }
+}, {
+    'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'reasoning-parser': 'deepseek-r1'
+    }
+}]
+
+TURBOMIND_TOOLCALL_TEST_LLM = [{**item, 'backend': TURBOMIND} for item in BASE_TOOLCALL_TEST_LLM]
+
+PYTORCH_TOOLCALL_TEST_LLM = [{**item, 'backend': PYTORCH} for item in BASE_TOOLCALL_TEST_LLM]
+
+TURBOMIND_REASONING_TEST_LLM = [{**item, 'backend': TURBOMIND} for item in BASE_REASONING_TEST_LLM]
+
+PYTORCH_REASONING_TEST_LLM = [{**item, 'backend': PYTORCH} for item in BASE_REASONING_TEST_LLM]
