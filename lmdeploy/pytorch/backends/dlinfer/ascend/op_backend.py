@@ -149,21 +149,24 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         def get_cpu_seqlens(is_decoding, is_unpaged_prefill):
             if is_decoding:
-                q_seqlens_cpu, kv_seqlens_cpu = None, step_context.kv_seqlens.cpu()
+                q_seqlens_cpu = None
+                kv_seqlens_cpu_raw = kv_seqlens_cpu = step_context.kv_seqlens.cpu()
             elif is_unpaged_prefill:
-                q_seqlens_cpu = kv_seqlens_cpu = step_context.q_seqlens.cpu()
+                q_seqlens_cpu = step_context.q_seqlens.cpu()
+                kv_seqlens_cpu_raw = kv_seqlens_cpu = q_seqlens_cpu
             else:
                 q_seqlens_cpu = step_context.q_seqlens.cpu()
-                kv_seqlens_cpu = step_context.kv_seqlens.cpu()
-            return q_seqlens_cpu, kv_seqlens_cpu
+                kv_seqlens_cpu_raw = step_context.kv_seqlens.cpu()
+                kv_seqlens_cpu = kv_seqlens_cpu_raw.repeat_interleave(q_seqlens_cpu, 0)
+            return q_seqlens_cpu, kv_seqlens_cpu_raw, kv_seqlens_cpu
 
-        def get_list_seqlens(is_decoding, is_unpaged_prefill, q_seqlens_cpu=None, kv_seqlens_cpu=None):
+        def get_list_seqlens(is_decoding, is_unpaged_prefill, q_seqlens_cpu=None, kv_seqlens_cpu_raw=None):
             if is_decoding:
                 q_seqlens_list, kv_seqlens_list = None, None
             elif is_unpaged_prefill:
                 q_seqlens_list = kv_seqlens_list = q_seqlens_cpu.tolist()
             else:
-                q_seqlens_list, kv_seqlens_list = q_seqlens_cpu.tolist(), kv_seqlens_cpu.tolist()
+                q_seqlens_list, kv_seqlens_list = q_seqlens_cpu.tolist(), kv_seqlens_cpu_raw.tolist()
             return q_seqlens_list, kv_seqlens_list
 
         def get_max_seqlens(is_decoding, is_unpaged_prefill, q_seqlens_list=None, kv_seqlens_list=None):
@@ -219,9 +222,10 @@ class AscendOpsBackend(DlinferOpsBackend):
 
             return kv_start_indices, attention_mask
 
-        q_seqlens_cpu, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding, is_unpaged_prefill)
+        q_seqlens_cpu, kv_seqlens_cpu_raw, kv_seqlens_cpu = get_cpu_seqlens(step_context.is_decoding,
+                                                                            is_unpaged_prefill)
         q_seqlens_list, kv_seqlens_list = get_list_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_cpu,
-                                                           kv_seqlens_cpu)
+                                                           kv_seqlens_cpu_raw)
         max_q_seq_len, max_kv_seq_len = get_max_seqlens(step_context.is_decoding, is_unpaged_prefill, q_seqlens_list,
                                                         kv_seqlens_list)
         kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(step_context.is_decoding,
@@ -241,9 +245,6 @@ class AscendOpsBackend(DlinferOpsBackend):
                 total_layers = len(step_context.kv_caches)
                 AscendKVQuantMeta.set_value(step_context.block_offsets.device, step_context.model_config.dtype,
                                             record_file, total_layers)
-
-        if not step_context.is_decoding and not is_unpaged_prefill:
-            kv_seqlens_cpu = kv_seqlens_cpu.repeat_interleave(q_seqlens_cpu, 0)
 
         attn_meta_cls = cls.get_attention_metadata_cls()
         attn_metadata = attn_meta_cls(
