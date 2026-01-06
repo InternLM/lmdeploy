@@ -16,9 +16,9 @@ def parrall_emb(rank: int, world_size: int, vocab_size: int, feat_size: int, pad
     dist.init_process_group('nccl', rank=rank, world_size=world_size)
     gpu_group = dist.new_group(ranks=list(range(world_size)), backend='nccl')
 
-    DefaultContext.mlp_tp_group.rank = rank
-    DefaultContext.dist_config.mlp_tp = world_size
-    DefaultContext.mlp_tp_group.gpu_group = gpu_group
+    DefaultContext.attn_tp_group.rank = rank
+    DefaultContext.dist_config.attn_tp = world_size
+    DefaultContext.attn_tp_group.gpu_group = gpu_group
 
     model = ParallelEmbedding(vocab_size=vocab_size,
                               hidden_size=feat_size,

@@ -25,11 +25,9 @@ class DefaultEmbeddingImpl(EmbeddingImpl):
             mask_input, vocab_mask = get_masked_input_and_mask(x, self.start_index, self.end_index)
             out = F.embedding(mask_input, weight)
             out.masked_fill_((~vocab_mask).unsqueeze(-1), 0)
+            dist.all_reduce(out, group=group)
         else:
             out = F.embedding(x, weight)
-
-        if all_reduce:
-            dist.all_reduce(out, group=group)
 
         return out
 
