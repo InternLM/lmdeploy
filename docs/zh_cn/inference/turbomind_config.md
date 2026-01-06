@@ -10,7 +10,7 @@ TurboMind 是 LMDeploy 的推理引擎，在用它推理 LLM 模型时，需要�
 
 ```toml
 [llama]
-model_name = llama2
+model_name = "llama2"
 tensor_para_size = 1
 head_num = 32
 kv_head_num = 32
@@ -22,7 +22,7 @@ attn_bias = 0
 start_id = 1
 end_id = 2
 session_len = 4104
-weight_type = fp16
+weight_type = "fp16"
 rotary_embedding = 128
 rope_theta = 10000.0
 size_per_head = 128
@@ -33,7 +33,7 @@ step_length = 1
 cache_max_entry_count = 0.5
 cache_block_seq_len = 128
 cache_chunk_size = 1
-enable_prefix_caching = False
+enable_prefix_caching = false
 quant_policy = 0
 max_position_embeddings = 2048
 rope_scaling_factor = 0.0
@@ -43,7 +43,7 @@ use_logn_attn = 0
 这些参数由模型属性和推理参数组成。模型属性包括层数、head个数、维度等等，它们**不可修改**
 
 ```toml
-model_name = llama2
+model_name = "llama2"
 head_num = 32
 kv_head_num = 32
 vocab_size = 32000
@@ -133,7 +133,7 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 
 ```toml
 [llama]
-model_name = llama2
+model_name = "llama2"
 tensor_para_size = 1
 head_num = 32
 kv_head_num = 32
@@ -145,7 +145,7 @@ attn_bias = 0
 start_id = 1
 end_id = 2
 session_len = 4104
-weight_type = fp16
+weight_type = "fp16"
 rotary_embedding = 128
 rope_theta = 10000.0
 size_per_head = 128
@@ -165,7 +165,7 @@ use_logn_attn = 0
 这些参数由模型属性和推理参数组成。模型属性包括层数、head个数、维度等等，它们**不可修改**
 
 ```toml
-model_name = llama2
+model_name = "llama2"
 head_num = 32
 kv_head_num = 32
 vocab_size = 32000
