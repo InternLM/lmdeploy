@@ -226,6 +226,14 @@ class AscendOpsBackend(DlinferOpsBackend):
             dist_ctx = get_dist_manager().current_context()
             if dist_ctx.dist_config.dp > 1:
                 total_token_current_rank = torch.sum(step_context.q_seqlens).to(step_context.q_seqlens.dtype)
+                if cls.enable_graph and step_context.is_decoding:
+                    from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
+                    total_token_current_rank_item = total_token_current_rank.item()
+                    total_token_current_rank = torch.tensor(
+                        [get_ascend_compatible_size(total_token_current_rank_item)],
+                        dtype=total_token_current_rank.dtype,
+                        device=total_token_current_rank.device,
+                    )
                 world_size = dist_ctx.dist_config.world_size
                 total_token_buffer = torch.zeros(world_size,
                                                  dtype=step_context.q_seqlens.dtype,
