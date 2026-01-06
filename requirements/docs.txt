@@ -5,3 +5,4 @@ sphinx-book-theme
 sphinx-copybutton
 sphinx-tabs
 sphinxcontrib-mermaid
+sphinxcontrib-openapi

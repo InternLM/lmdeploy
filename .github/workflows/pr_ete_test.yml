@@ -67,7 +67,7 @@ jobs:
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
           # We need to pin transformers version (<4.52.0) to avoid test failures due to breaking changes.
-          python3 -m pip install transformers==4.51.3 timm
+          python3 -m pip install transformers==4.51.3
           python3 -m pip install -r requirements/lite.txt
           python3 -m pip install -r requirements/test.txt
           python3 -m pip install -e .
