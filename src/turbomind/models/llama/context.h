@@ -41,6 +41,7 @@ struct Context {
         core_stream{core::Stream::create()},
         allocator{core::Allocator(core_stream, false)},
         stream{core_stream.handle()},
+        comm{},  // value initialize
         is_warm_up{std::make_unique<int>()}
     {
         core::ContextGuard guard{core_stream};

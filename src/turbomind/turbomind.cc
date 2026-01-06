@@ -560,14 +560,13 @@ void TurboMind::Impl::CreateEngine(int index)
 {
     CudaDeviceGuard dev_guard(engine_param_.devices[index]);
 
-    // create context
-    auto& ctx = contexts_[index];
+    auto& ctx = *TM_CHECK_NOTNULL(contexts_[index]);
 
-    core::ContextGuard guard{ctx->core_stream, ctx->allocator, Allocator{kCPUpinned}};
+    core::ContextGuard guard{ctx.core_stream, ctx.allocator, Allocator{kCPUpinned}};
 
     const auto& param = engine_params_.at(index);
 
-    ctx->comm.h_comm->Sync();
+    ctx.comm.h_comm->Sync();
 
     constexpr int phases = 2;
 
@@ -577,7 +576,7 @@ void TurboMind::Impl::CreateEngine(int index)
                         param,
                         attn_param_,
                         moe_param_,
-                        *ctx,
+                        ctx,
                         *weights_[index],
                         phases};
 
@@ -585,7 +584,7 @@ void TurboMind::Impl::CreateEngine(int index)
     engines_[index] = Engine{data_type_,  //
                              param,
                              std::move(model),
-                             *ctx,
+                             ctx,
                              *gateway_,
                              engine_param_.devices[index],
                              queue_id_[index],
@@ -593,7 +592,7 @@ void TurboMind::Impl::CreateEngine(int index)
 
     core::Context::stream().Sync();
 
-    ctx->comm.h_comm->Sync();
+    ctx.comm.h_comm->Sync();
 
     engines_[index].Start();
 

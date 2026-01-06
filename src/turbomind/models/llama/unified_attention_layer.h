@@ -59,7 +59,8 @@ public:
                           const LoraParam&      lora,
                           int                   tp_size,
                           const Context&        context,
-                          int                   phases);
+                          int                   phases,
+                          bool                  init);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -110,6 +111,7 @@ private:
     Tensor_<float> partial_O_;
     Tensor_<float> partial_ML_;
     Tensor_<int>   split_cnt_;
+    Tensor         tmp_attn_;
 
     Buffer_<float> rope_base_buf_;
     Buffer_<int>   mrope_position_delta_buf_;

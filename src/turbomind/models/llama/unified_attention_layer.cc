@@ -75,8 +75,8 @@ struct AttentionData {
     Buffer_<int>  q_offsets;
     Buffer_<int>  k_offsets;
 
-    int dbg_offset;
-    int dbg_size;
+    // int dbg_offset;
+    // int dbg_size;
 };
 
 UnifiedAttentionLayer::~UnifiedAttentionLayer()
@@ -96,7 +96,8 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
                                              const LoraParam&      lora,
                                              int                   tp_size,
                                              const Context&        ctx,
-                                             int                   phases):
+                                             int                   phases,
+                                             bool                  init):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),
     size_per_head_(model.head_dim),
@@ -134,6 +135,10 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     partial_O_  = Tensor_<float>({workspace_tokens, local_head_num_, size_per_head_}, kDEVICE);
     partial_ML_ = Tensor_<float>({engine_param_.attn_cp_size, workspace_tokens, local_head_num_, 2}, alloc);
     split_cnt_  = Tensor_<int>({workspace_tokens}, kDEVICE);
+    if (init) {
+        const int dim = (int)local_head_num_ * (int)size_per_head_;
+        tmp_attn_     = Tensor{{engine_param_.max_forward_token_num, dim}, model.data_type, kDEVICE};
+    }
 
     Clear(split_cnt_.buffer());
 
@@ -199,6 +204,15 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
         data_.at(phase)->finished  = env.at("finished").buffer().borrow();
         data_.at(phase)->q_offsets = env.at("q_offsets").buffer().borrow();
         data_.at(phase)->k_offsets = env.at("k_offsets").buffer().borrow();
+
+        // This is needed in async mode to clear the `attn` buffer for the finished sequences. Ohterwise random NaNs
+        // will crash the MoE router later
+        /// TODO: use better solution, this increase memory usage and heterogenous attention layers may still break it
+        if (tmp_attn_) {
+            auto& d = data_.at(phase);
+            Clear(tmp_attn_.slice(0, d->decode.n + d->prefill.q_sum));
+            Clear(split_cnt_);
+        }
     }
 }
 
@@ -213,7 +227,6 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     {  /// Upload KV cache ptrs
         const Buffer_<int> offsets = env.at("block_ptrs_offsets").buffer();
         copy(env.at("block_ptrs").buffer(), offsets[bsz], d.block_ptrs);
-        // dbg(offsets[bsz], d.block_ptrs.size());
         copy(offsets, bsz + 1, d.block_ptrs_offsets);
     }
 
@@ -223,7 +236,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     d.decode.n  = std::find_if(rc.begin(), rc.end(), [](auto r) { return r->input_len > 1; }) - rc.begin();
     d.prefill.n = bsz - d.decode.n;
 
-    d.dbg_offset = d.dbg_size = 0;
+    // d.dbg_offset = d.dbg_size = 0;
 
     for (int i = 0; i < bsz; ++i) {
         const auto& c = *rc[i];
@@ -240,21 +253,15 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         s.k_max = std::max(s.k_max, c.history_len + c.alpha + c.input_len);
     }
 
-    // dbg(d.decode.n,
-    //     d.decode.k_sum,
-    //     d.decode.k_max,
-    //     d.prefill.n,
-    //     d.prefill.q_sum,
-    //     d.prefill.q_max,
-    //     d.prefill.k_sum,
-    //     d.prefill.k_max);
+    // auto &D = d.decode, &P = d.prefill;
+    // dbg(D.n, D.k_sum, D.k_max, P.n, P.q_sum, P.q_max, P.k_sum, P.k_max);
 
     /// handling different RoPE types
     if (rope_param_.type == RopeType::kDynamic) {
         for (int i = 0; i < bsz; ++i) {
             rope_base_buf_[i] = rc[i]->rope_base;
         }
-        Copy_(rope_base_buf_, bsz, d.rope_base);
+        copy(rope_base_buf_, bsz, d.rope_base);
     }
     else if (rope_param_.type == RopeType::kMrope) {
         const auto stride = d.mrope_position_ids.stride(0);
@@ -284,27 +291,6 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    /**
-     * input_tensors:
-     *   \param input_query [token_num, hidden_dim]
-     *   \param cu_q_len [batch_size+1], int
-     *   \param cu_k_len [batch_size+1], int
-     *   \param cu_block_counts [batch_size+1], int
-     *   \param finished [batch_size], bool
-     *   \param rope_theta [batch_size], float
-     *   \param h_q_len [batch_size], int on cpu
-     *   \param h_k_len [batch_size], int on cpu
-     *   \param h_cu_q_len [batch_size+1], int on cpu
-     *   \param h_cu_k_len [batch_size+1], int on cpu
-     *   \param dc_batch_size [1], int on cpu
-     *   \param pf_batch_size [1], int on cpu
-     *   \param layer_id [1], int on cpu
-     *
-     * output_tensors:
-     *   \param hidden_features [token_num, hidden_dim], float
-     *   \param block_ptrs [total_block_counts], void*
-     */
-
     /////////////////////////////////////////////
     /// parse inputs
     const int token_num = p.input.shape(0);
@@ -324,9 +310,9 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     auto& d = *data_.at(p.phase);
 
-    if (d.dbg_size) {
-        DebugTensor(p.input.slice(d.dbg_offset, d.dbg_size), Concat("attn_in", p.layer_id), 0);
-    }
+    // if (d.dbg_size) {
+    //     DebugTensor(p.input.slice(d.dbg_offset, d.dbg_size), Concat("attn_in", p.layer_id), 0);
+    // }
 
     if (weights.qkv.output_dim) {
         // [token_num, hidden_dim] -> [token_num, local_q_kv_head_num, head_dim]
@@ -352,9 +338,9 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     TM_DEBUG_TENSOR(attn, Concat("attn", layer_id), 3);
 
-    if (d.dbg_size) {
-        DebugTensor(attn.slice(d.dbg_offset, d.dbg_size), Concat("attn_out", p.layer_id), 0);
-    }
+    // if (d.dbg_size) {
+    //     DebugTensor(attn.slice(d.dbg_offset, d.dbg_size), Concat("attn_out", p.layer_id), 0);
+    // }
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
@@ -373,9 +359,17 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const int batch_size = d.decode.n + d.prefill.n;
     const int q_count    = qkv.shape(0);
 
+    TM_CHECK_EQ(d.prefill.q_sum + d.decode.n, q_count);
+
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    Tensor attn{{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
+    Tensor attn;
+    if (tmp_attn_) {
+        attn = tmp_attn_.slice(0, q_count);
+    }
+    else {
+        attn = {{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
+    }
     Tensor tmp_kv{{(int)local_kv_head_num_, 2, d.prefill.k_sum + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
     auto CreateParams = [&](int offset, AttentionData::Stat stat, int max_kv_splits, cudaStream_t stream) {
@@ -419,6 +413,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
         params.size_per_head = size_per_head_;
+        params.layer_id      = p.layer_id;
 
         double scaling = 1.;
         if (param_.softmax_scale) {  // model predefined softmax scale
