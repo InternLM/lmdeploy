@@ -121,3 +121,4 @@ LMDeploy 工具箱提供以下核心功能：
 
 * :ref:`genindex`
 * :ref:`search`
+* :ref:`routingtable`
