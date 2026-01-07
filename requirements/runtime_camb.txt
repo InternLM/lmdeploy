@@ -1,7 +1,7 @@
 accelerate==1.2.0
 aiohttp
 cloudpickle
-dlinfer-ascend>=0.1.3
+dlinfer-camb
 einops
 fastapi
 fire
