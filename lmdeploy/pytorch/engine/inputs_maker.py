@@ -1,18 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Union
 
 import numpy as np
 import torch
 from torch.profiler import record_function
 
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.pytorch.model_inputs import ModelInputs, VisionModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, VisionModelInputs
 from lmdeploy.utils import get_logger
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.adapter.adapter import AdapterManager
+    from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.paging import Scheduler
     from lmdeploy.pytorch.strategies.base.engine import EngineStrategy
     from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
@@ -49,6 +50,7 @@ class InputsMakerConfig:
     is_ssm: bool = False
     dp: int = 1
     spec_decoding: bool = False
+    enable_chunked_prefill: bool = False
 
     @staticmethod
     def from_engine(engine: 'Engine'):
@@ -60,7 +62,61 @@ class InputsMakerConfig:
             role=cache_config.role,
             is_ssm=len(cache_config.states_shapes) > 0,
             dp=engine.dist_config.dp,
+            enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
         )
+
+
+class LongContextChunker:
+    """Long context chunker."""
+
+    def __init__(self, max_prefill_token_num: int):
+        # long prefill seq
+        self.seq: 'SchedulerSequence' = None
+        self.next_step: int = 0
+
+        self.max_prefill_token_num = max_prefill_token_num
+
+    def enabled(self):
+        """Is enabled."""
+        return self.seq is not None
+
+    def is_long_context(self, seq: 'SchedulerSequence'):
+        """Is long context."""
+        return seq.num_token_ids > self.max_prefill_token_num
+
+    def set_seq(self, seq: 'SchedulerSequence'):
+        """Set seq."""
+        self.seq = seq
+        self.next_step = seq.num_history_ids
+
+    def next_chunk_size(self):
+        """Get chunk size."""
+        if self.seq is None:
+            return 0
+        return min(self.seq.num_token_ids, self.max_prefill_token_num)
+
+    def is_last_chunk(self):
+        """Is last chunk."""
+        if self.seq is None:
+            return True
+        return self.seq.num_token_ids <= self.max_prefill_token_num
+
+    def clear(self):
+        """Clear."""
+        self.seq = None
+        self.next_step = 0
+
+    def update_step(self, inputs: ModelInputs):
+        """Step chunker."""
+        if self.seq is None:
+            return
+        if self.is_last_chunk():
+            # last chunk should be treated as normal prefill
+            return
+        assert inputs.is_chunk
+        chunk_size = inputs.max_q_seqlen
+        self.next_step += chunk_size
+        self.seq.set_step(self.next_step)
 
 
 class InputsMakerAsync:
@@ -92,9 +148,19 @@ class InputsMakerAsync:
         self.next_is_prefill = True
         self.forward_inputs = None
 
+        # running seqs
+        # mark the seqs that have been sent to executor
+        self.running_seqs: List['SchedulerSequence'] = []
+        self.to_evict_seqs: List['SchedulerSequence'] = []
+
+        # long context chunker
+        self.long_context_chunker = LongContextChunker(config.max_prefill_token_num)
+
     def _init_do_prefill(self, config: InputsMakerConfig):
         if config.role == EngineRole.Prefill:
             self.do_prefill = self.do_prefill_pnode
+        elif config.enable_chunked_prefill:
+            self.do_prefill = self.do_prefill_chunked
         elif config.dp == 1:
             self.do_prefill = self.do_prefill_default
         else:
@@ -171,6 +237,15 @@ class InputsMakerAsync:
             return torch.int32
         return torch.int64
 
+    def _set_adapter_ids(self, model_inputs: ModelInputs, messages: 'SeqList'):
+        """Set adapter ids to model inputs."""
+        if self.adapter_manager.num_adapters() <= 1:
+            return
+        adapter_names = [msg.adapter_name for msg in messages]
+        local_adapter_ids = self.adapter_manager.get_adapter_ids(adapter_names)
+        local_adapter_ids = model_inputs.seq_length.new_tensor(local_adapter_ids)
+        model_inputs.local_adapter_ids = local_adapter_ids
+
     @torch.inference_mode()
     @record_function('create_model_inputs')
     def create_model_inputs(self, messages: 'SeqList', is_prefill: bool):
@@ -226,12 +301,7 @@ class InputsMakerAsync:
         )
 
         # adapters
-        local_adapter_ids = None
-        if self.adapter_manager.num_adapters() > 1:
-            adapter_names = [msg.adapter_name for msg in messages]
-            local_adapter_ids = self.adapter_manager.get_adapter_ids(adapter_names)
-            local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
-            model_inputs.local_adapter_ids = local_adapter_ids
+        self._set_adapter_ids(model_inputs, messages)
 
         # vision inputs
         vision_model_inputs = self._create_vision_model_inputs(messages, model_inputs)
@@ -243,6 +313,115 @@ class InputsMakerAsync:
             model_inputs.state_offsets = state_offsets
 
         return model_inputs
+
+    def create_model_inputs_long_context(self, seq: 'SchedulerSequence', chunk_size: int):
+        """Create model inputs for long context messages."""
+        token_ids = seq.token_ids[:chunk_size]
+        input_ids = torch.as_tensor(token_ids)[None]
+        q_seqlens = torch.tensor([chunk_size])
+        history_lens = torch.tensor([seq.num_history_ids])
+
+        # block offsets
+        block_offsets = self.scheduler.get_block_tables([seq])
+        block_offsets = torch.as_tensor(block_offsets[0], dtype=self.torch_int_dtype)[None]
+
+        # num_ignored_history
+        num_ignored_history = torch.tensor([seq.num_ignored_history])
+
+        # model_metas
+        model_metas = [seq.model_meta]
+
+        kv_seqlens = q_seqlens + history_lens
+        max_kv_seqlen = kv_seqlens.item()
+        sum_kv_seqlen = max_kv_seqlen
+
+        model_inputs = ModelInputs(
+            input_ids=input_ids,
+            seq_length=q_seqlens,
+            history_lengths=history_lens,
+            block_offsets=block_offsets,
+            is_decoding=False,
+            num_ignored_history=num_ignored_history,
+            max_q_seqlen=q_seqlens.item(),
+            max_kv_seqlen=max_kv_seqlen,
+            sum_kv_seqlen=sum_kv_seqlen,
+            model_metas=model_metas,
+            is_chunk=True,
+        )
+
+        # adapters
+        self._set_adapter_ids(model_inputs, [seq])
+
+        # vision inputs
+        vision_model_inputs = self._create_vision_model_inputs([seq], model_inputs)
+        model_inputs.vision_inputs = vision_model_inputs
+
+        # ssm
+        if self.config.is_ssm:
+            state_offsets = torch.tensor([seq.logical_state])
+            model_inputs.state_offsets = state_offsets
+
+        return model_inputs
+
+    @torch.inference_mode()
+    @record_function('create_model_inputs_delta')
+    def create_model_inputs_delta(self):
+        """Create model inputs delta from messages."""
+        batch_size = len(self.running_seqs)
+        assert batch_size > 0
+        # TODO: dllm
+        num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
+        prealloc_size = self.engine_strategy.get_prealloc_size(True)
+        valid_mask = self.scheduler.schedule_running(self.running_seqs,
+                                                     num_decode_tokens=num_decode_tokens,
+                                                     prealloc_size=prealloc_size)
+
+        valid_mask = np.array(valid_mask)
+        indices_cpu = np.arange(0, batch_size)[valid_mask]
+        valid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in indices_cpu]
+        invalid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
+        if len(valid_seqs) == 0:
+            return None, valid_seqs, invalid_seqs
+
+        # block offsets
+        block_offsets = self.scheduler.get_block_tables(valid_seqs)
+        block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
+
+        # sliding window
+        if self.scheduler.cache_config.window_size > 0:
+            num_ignored_history = torch.tensor([msg.num_ignored_history for msg in valid_seqs])
+        else:
+            num_ignored_history = None
+
+        max_q_seqlen = num_decode_tokens
+        kv_seqlens = [seq.num_all_ids + max_q_seqlen for seq in valid_seqs]
+        sum_kv_seqlen = sum(kv_seqlens) + batch_size
+        max_kv_seqlen = max(kv_seqlens) + max_q_seqlen
+
+        output = ModelInputsDelta(
+            indices=None,
+            block_offsets=block_offsets,
+            indice_cpu=indices_cpu,
+            max_q_seqlen=max_q_seqlen,
+            max_kv_seqlen=max_kv_seqlen,
+            sum_kv_seqlen=sum_kv_seqlen,
+            num_ignored_history=num_ignored_history,
+        )
+
+        return output, valid_seqs, invalid_seqs
+
+    def update_running_seqs(self, running: 'SeqList', inputs: Union[ModelInputs, ModelInputsDelta]):
+        """Update running seqs."""
+        is_decoding = isinstance(inputs, ModelInputsDelta)
+        if self.long_context_chunker.enabled() and not is_decoding:
+            # long context chunk does not need to update running seqs
+            self.long_context_chunker.update_step(inputs)
+            return
+
+        if is_decoding:
+            self.running_seqs = running
+        else:
+            self.running_seqs += running
 
     @torch.inference_mode()
     @record_function('make_forward_inputs')
@@ -259,66 +438,69 @@ class InputsMakerAsync:
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
 
-        def __need_schedule_again(prefill: bool, scheduler_output):
-            """Need schedule again."""
-            # only reschedule when prefill
-            if not prefill:
-                return False
-            # schedule decoding if no valid prefill reqs.
-            if len(scheduler_output.running) > 0:
-                return False
-            # disable decoding for prefill role
-            if (self.config.role == EngineRole.Prefill):
-                return False
-            # disable decoding if no running reqs.
-            if not self.scheduler.has_ready():
-                logger.warning('No running sequences for decoding scheduling after prefill scheduling.')
-                return False
-            return True
-
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
-        prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
-        scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
+        prealloc_size = self.engine_strategy.get_prealloc_size(True)
 
-        if enable_empty and len(scheduler_output.running) == 0:
-            return None
+        inputs = None
+        swap_in_map = {}
+        swap_out_map = {}
 
-        if __need_schedule_again(prefill, scheduler_output):
-            prefill = False
-            prealloc_size = self.engine_strategy.get_prealloc_size(not prefill)
+        if self.long_context_chunker.enabled():
+            # long context chunking
+            seq = self.long_context_chunker.seq
+            running = [seq]
+            extra_inputs = None
+            if self.long_context_chunker.is_last_chunk():
+                inputs = self.create_model_inputs([seq], True)
+                self.long_context_chunker.clear()
+            else:
+                chunk_size = self.long_context_chunker.next_chunk_size()
+                inputs = self.create_model_inputs_long_context(seq, chunk_size)
+        elif prefill:
+            # prefill
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
+            running = scheduler_output.running
+            swap_in_map = scheduler_output.swap_in_map
+            swap_out_map = scheduler_output.swap_out_map
 
-        num_loops = self.engine_strategy.get_num_loops(not prefill)
-        running = scheduler_output.running
-        swap_in_map = scheduler_output.swap_in_map
-        swap_out_map = scheduler_output.swap_out_map
+            if len(running) == 1 and self.long_context_chunker.is_long_context(running[0]):
+                # set long context chunker
+                self.long_context_chunker.set_seq(running[0])
+                chunk_size = self.long_context_chunker.next_chunk_size()
+                inputs = self.create_model_inputs_long_context(running[0], chunk_size)
+                extra_inputs = None
+            elif len(running) > 0:
+                # create inputs
+                inputs = self.create_model_inputs(running, prefill)
+                extra_inputs = self.model_agent_strategy.make_extra_inputs(running)
 
-        if len(running) == 0:
+        # try decoding
+        if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:
+            prefill = False
+            inputs, running, invalid_seqs = self.create_model_inputs_delta()
+            self.to_evict_seqs = invalid_seqs
+            extra_inputs = None
+
+        # skip if enable empty
+        if inputs is None:
             return None
 
-        # create inputs
-        inputs = self.create_model_inputs(running, prefill)
         sampling_inputs = self.sampling_strategy.make_sampling_inputs(running)
+        stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
         return_logits = __need_logits(running)
         return_routed_experts = __need_routed_experts(running)
-        extra_inputs = self.model_agent_strategy.make_extra_inputs(running)
-        stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
-
-        sync_long_context = inputs.input_ids.numel() > self.config.max_prefill_token_num
 
         return dict(
             running=running,
             inputs=inputs,
             swap_in_map=swap_in_map,
             swap_out_map=swap_out_map,
-            loop_count=num_loops,
             sampling_inputs=sampling_inputs,
             stopping_criteria=stopping_criteria,
             return_logits=return_logits,
             is_dummy=False,
-            sync_long_context=sync_long_context,
             extra_inputs=extra_inputs,
             return_routed_experts=return_routed_experts,
         )
@@ -338,20 +520,36 @@ class InputsMakerAsync:
     def do_prefill_default(self):
         # decoding if no waiting
         scheduler = self.scheduler
+
+        # do decoding if not waiting
         if not scheduler.has_waiting():
             return False
-        num_ready = scheduler.num_ready()
-        num_waiting = scheduler.num_waiting()
-        max_batches = self.config.max_batches
-        # prefill if too much waiting
-        permitted_waiting = 4 if (self.config.role != EngineRole.Prefill) else 1
-        if num_waiting >= permitted_waiting:
-            return True
+
+        # do prefill if too much tokens
+        waiting = scheduler.waiting
+        token_count = 0
+        for seq in waiting:
+            token_count += seq.num_token_ids
+            if token_count >= self.config.max_prefill_token_num:
+                return True
+
         # prefill if no enough running
-        if num_ready < max_batches * 0.5:
+        num_ready = scheduler.num_ready()
+        num_running = scheduler.num_running()
+        max_batches = self.config.max_batches
+        if num_ready + num_running < max_batches * 0.5:
             return True
+
         # decoding
         return False
+
+    def do_prefill_chunked(self):
+        """Chunked prefill strategy.
+
+        both dp=1 and dp>1 are supported.
+        """
+        scheduler = self.scheduler
+        return not scheduler.has_ready()
 
     async def _send_next_inputs_impl(self, prefill: bool = None, enable_empty: bool = False):
         forward_inputs = self._make_forward_inputs(prefill, enable_empty)
@@ -359,8 +557,8 @@ class InputsMakerAsync:
             return None, None
         next_running = forward_inputs.pop('running')
         inputs = forward_inputs['inputs']
-        logger.debug(f'Sending forward inputs: {inputs.log_info()}')
         if logger.level <= logging.DEBUG:
+            logger.debug(f'Sending forward inputs: {inputs.log_info()}')
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
         self.next_is_prefill = inputs.is_decoding
@@ -373,25 +571,10 @@ class InputsMakerAsync:
         return await self._send_next_inputs_impl(prefill)
 
     async def prefetch_next_inputs(self):
-        enable = False
-        scheduler = self.scheduler
         prefill = self.do_prefill()
-        if prefill:
-            enable = True
-        else:
-            num_ready = scheduler.num_ready()
-            is_decoding = self.forward_inputs['inputs'].is_decoding
-            running_threshold = (self.config.max_batches // 4) if is_decoding or self.spec_decoding else 0
-
-            if num_ready > running_threshold:
-                enable = True
-
-        if enable:
-            # send next forward
-            logger.debug('Prefetching next forward inputs.')
-            return await self._send_next_inputs_impl(prefill, True)
-        else:
-            return None, None
+        # send next forward
+        logger.debug('Prefetching next forward inputs.')
+        return await self._send_next_inputs_impl(prefill, True)
 
 
 def build_inputs_maker(engine: 'Engine'):

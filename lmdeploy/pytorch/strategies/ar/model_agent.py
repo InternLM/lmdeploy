@@ -84,6 +84,11 @@ class ARModelAgentStrategy(ModelAgentStrategy):
 
         return sampling_inputs
 
+    @record_function('step_sampling_inputs')
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
+        """step."""
+        return self._step_sampling_inputs(sampling_inputs, next_token_ids)
+
     def make_stopping_criteria(self, seqs: SeqList) -> ARStoppingCriteria:
         """Create stopping criteria."""
         num_appendable = [seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
@@ -105,7 +110,7 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length
         model_inputs.step(next_token_ids, step_seqlens)
-        self._step_sampling_inputs(sampling_inputs, next_token_ids)
+        # self._step_sampling_inputs(sampling_inputs, next_token_ids)
         return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,

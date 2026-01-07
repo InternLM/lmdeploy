@@ -129,6 +129,10 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
 
         return sampling_inputs
 
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
+        """step."""
+        return self._step_sampling_inputs(sampling_inputs, next_token_ids)
+
     def make_stopping_criteria(self, seqs: SeqList) -> ARSpecStoppingCriteria:
         """Create stopping criteria."""
         num_appendable = [seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]

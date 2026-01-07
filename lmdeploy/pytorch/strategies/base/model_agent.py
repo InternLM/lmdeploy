@@ -126,6 +126,11 @@ class ModelAgentStrategy(ABC):
         pass
 
     @abstractmethod
+    def step_sampling_inputs(self, sampling_inputs: 'SamplingInputs', next_token_ids: torch.Tensor):
+        """step."""
+        pass
+
+    @abstractmethod
     def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
                                     next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ExtraInputs,
                                     **kwargs):

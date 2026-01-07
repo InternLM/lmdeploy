@@ -14,3 +14,8 @@ class EngineStrategy(ABC):
     def get_num_loops(self, is_decoding: bool) -> int:
         """Get num_loops."""
         pass
+
+    @abstractmethod
+    def get_num_decode_tokens(self) -> int:
+        """Get num_decode_tokens."""
+        pass

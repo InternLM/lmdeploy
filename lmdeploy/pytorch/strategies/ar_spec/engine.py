@@ -20,3 +20,7 @@ class ARSpecEngineStrategy(EngineStrategy):
     def get_num_loops(self, is_decoding: bool) -> int:
         """Get num_loops."""
         return self.scheduler_config.prefill_interval if is_decoding else 1
+
+    def get_num_decode_tokens(self) -> int:
+        """Get num_decode_tokens."""
+        return 1

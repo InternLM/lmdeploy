@@ -137,7 +137,6 @@ class EngineLoop:
     async def preprocess_loop(self):
         """Preprocess request."""
         while not self.stop_event.is_set():
-            await self.forward_event.wait()
             await self.req_manager.step()
             self.has_runable_event.set()
 
@@ -205,7 +204,6 @@ class EngineLoop:
                     resps += que.get_nowait().values()
             else:
                 resps = (await que.get()).values()
-            await self.forward_event.wait()
             self._send_resps(resps)
 
     @record_function('make_infer_outputs')
@@ -216,6 +214,9 @@ class EngineLoop:
         model_inputs: 'ModelInputs',
     ):
         """Make infer output."""
+        if model_inputs.is_chunk:
+            return dict()
+
         new_token_timestamp = batched_outputs.new_token_timestamp
         logits = batched_outputs.logits
         logprobs = batched_outputs.logprobs
@@ -277,9 +278,7 @@ class EngineLoop:
         """Try send next inputs."""
         scheduler = self.scheduler
         if not scheduler.has_unfinished():
-            self.forward_event.set()
             await self.has_runable_event.wait()
-            self.forward_event.clear()
 
         scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
@@ -290,26 +289,19 @@ class EngineLoop:
         forward_inputs: Dict[str, Any],
     ):
         """Get outputs and prefetch."""
-        self.forward_event.set()
-        num_loops = forward_inputs['loop_count']
         model_inputs = forward_inputs['inputs']
-        for idx in range(num_loops):
-            # pre-forward before get last token
-            if idx == num_loops - 1:
-                self.scheduler.collect_migration_done()
-                forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
+        self.inputs_maker.update_running_seqs(running, model_inputs)
 
-            # send output
-            out = await self.executor.get_output_async()
-            if out is not None:
-                step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs)
-                self.resp_queue.put_nowait(step_outputs)
+        # try prefetch inputs
+        self.scheduler.collect_migration_done()
+        forward_inputs, next_running = await self.inputs_maker.prefetch_next_inputs()
 
-            # lock forward event
-            # make sure that prefetch forward would not wait for detokenize
-            # WARNING: this might have side effect on the performance
-            if idx == num_loops // 2:
-                self.forward_event.clear()
+        # send output
+        out = await self.executor.get_output_async()
+        if out is not None:
+            step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs)
+            self.resp_queue.put_nowait(step_outputs)
+
         return forward_inputs, next_running
 
     async def main_loop(self):
@@ -317,7 +309,6 @@ class EngineLoop:
 
         Each engine instance would communicate with the engine by queue.
         """
-        forward_event = self.forward_event
         has_runable_event = self.has_runable_event
         scheduler = self.scheduler
         forward_inputs = None
@@ -329,9 +320,9 @@ class EngineLoop:
             logger.warning(f'no next prefill running request, Maybe cache is full, '
                            f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
                            f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
-            forward_event.set()
+            # forward_event.set()
             await asyncio.sleep(0.1)
-            forward_event.clear()
+            # forward_event.clear()
 
         while not self.stop_event.is_set():
             if next_running is None:
@@ -340,11 +331,15 @@ class EngineLoop:
                     await __no_running_warning()
                     continue
 
-            with scheduler.seqs_activation(next_running):
-                forward_inputs, next_running = await self._main_loop_get_outputs(
-                    running=next_running,
-                    forward_inputs=forward_inputs,
-                )
+            scheduler.activate_seqs(next_running)
+            forward_inputs, next_running = await self._main_loop_get_outputs(
+                running=next_running,
+                forward_inputs=forward_inputs,
+            )
+            to_evict_seqs = self.inputs_maker.to_evict_seqs
+            self.scheduler.deactivate_seqs(to_evict_seqs)
+            self.scheduler.evict_seqs(to_evict_seqs)
+            self.inputs_maker.to_evict_seqs.clear()
             has_runable_event.set()
 
     def update_running_migration(self, running: 'SeqList', next_token_ids: np.ndarray, stopped: torch.Tensor,

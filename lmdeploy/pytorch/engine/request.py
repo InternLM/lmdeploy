@@ -128,8 +128,10 @@ class RequestSender:
         """Send request asynchronize."""
         return self.batched_send_async(req_types=[req_type], data=[data])[0]
 
-    async def async_recv(self, resp: Response) -> Response:
+    async def async_recv(self, resp: Response, wait_main: bool = False) -> Response:
         """Receive response of given request id async."""
+        if wait_main:
+            await self.manager.prepare_send()
         event = resp.event
         while not event.is_set():
             try:
@@ -174,6 +176,44 @@ class RequestManager:
         self._loop_coro: Callable = None
         self._next_sender_id = 0
 
+        # sender speed limiter
+        self._condition: asyncio.Condition = None
+        self._sender_wait_task: asyncio.Task = None
+        self._send_count = 0
+        self._send_event = None
+
+    async def prepare_send(self):
+        if self._condition is None:
+            return
+
+        self._send_count += 1
+        self._send_event.set()
+        async with self._condition:
+            await self._condition.wait()
+        self._send_count -= 1
+        if self._send_count == 0:
+            self._send_event.clear()
+
+    async def sender_wait_loop(self):
+        """Wait for loop to be created."""
+        self._condition = asyncio.Condition()
+        self._send_count = 0
+        self._send_event = asyncio.Event()
+
+        try:
+            while True:
+                await self._send_event.wait()
+                # notify one sender to control send speed
+                async with self._condition:
+                    self._condition.notify()
+                await asyncio.sleep(0.0001)
+        finally:
+            # notify all senders to exit
+            async with self._condition:
+                self._condition.notify_all()
+            self._condition = None
+            self._send_event = None
+
     def create_loop_task(self):
         """Create coro task."""
         if self._loop_task is not None:
@@ -184,6 +224,7 @@ class RequestManager:
         assert self._loop_coro is not None, ('Please set loop task with manager.start_loop')
         loop_unshielded = event_loop.create_task(self._loop_coro(), name='EngineMainLoop')
         self._loop_task = loop_unshielded
+        self._sender_wait_task = event_loop.create_task(self.sender_wait_loop(), name='SenderWaitLoop')
         self.requests = asyncio.Queue()
         return self._loop_task
 
@@ -203,6 +244,9 @@ class RequestManager:
         if self.is_loop_alive():
             self._loop_task.cancel()
         self._loop_task = None
+        if self._sender_wait_task is not None:
+            self._sender_wait_task.cancel()
+            self._sender_wait_task = None
 
     def is_loop_alive(self):
         """Check if main loop is alive."""

@@ -447,6 +447,7 @@ class MiscConfig:
     logprobs_mode: str = None
     dllm_config: DLLMConfig = None
     enable_return_routed_experts: bool = False
+    enable_chunked_prefill: bool = False
 
     @classmethod
     def from_engine_config(cls, engine_config: PytorchEngineConfig):
@@ -466,6 +467,7 @@ class MiscConfig:
             logprobs_mode=engine_config.logprobs_mode,
             dllm_config=dllm_config,
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
+            enable_chunked_prefill=engine_config.enable_chunked_prefill,
         )
         return misc_config
 

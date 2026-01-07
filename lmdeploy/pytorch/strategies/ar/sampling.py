@@ -12,9 +12,9 @@ from ..base.sampling import SamplingStrategy
 SeqList = List[SchedulerSequence]
 
 
-def _gather_all_ids(pad_id: int, seqs: SeqList, sampling_inputs: SamplingInputs):
+def _gather_all_ids(pad_id: int, seqs: SeqList, samp_inputs: SamplingInputs):
     """Gather history."""
-    if sampling_inputs.repetition_penalty is None and not any(sampling_inputs.logits_processors):
+    if samp_inputs.repetition_penalty is None and not any(samp_inputs.logits_processors):
         return None
     batch = len(seqs)
     max_len = max(seq.num_valid_ids for seq in seqs)
