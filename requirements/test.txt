@@ -13,4 +13,4 @@ pytest-sugar
 pytest-xdist
 pyyaml
 qwen_vl_utils
-timm<=1.0.22
+timm!=1.0.23
