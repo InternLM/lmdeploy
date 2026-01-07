@@ -293,7 +293,7 @@ def calibrate(model: str,
     _prepare_for_calibrate(model, layer_type, HEAD_NAME_MAP[type(model).__name__], device)
 
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
+    calib_loader = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
 
     # Initialize calibration context
     if search_scale:
@@ -315,7 +315,7 @@ def calibrate(model: str,
                                        device=device)
 
     with calib_ctx:
-        all_data = torch.cat([data if isinstance(data, torch.Tensor) else data[0] for data in calib_loader]).to(device)
+        all_data = torch.cat([data for data in calib_loader]).to(device)
         calib_ctx.calibrate(all_data)
 
     # Create work directory if not exists

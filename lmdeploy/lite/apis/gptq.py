@@ -63,10 +63,9 @@ def auto_gptq(model: str,
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=True)
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
-    all_data = [data if isinstance(data, torch.Tensor) else data[0] for data in calib_loader]
+    calib_loader = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
     attention_mask = [1] * calib_seqlen
-    examples = [dict(input_ids=data.flatten().tolist(), attention_mask=attention_mask) for data in all_data]
+    examples = [dict(input_ids=data.flatten().tolist(), attention_mask=attention_mask) for data in calib_loader]
 
     quantize_config = BaseQuantizeConfig(
         bits=w_bits,  # quantize model to 4-bit
