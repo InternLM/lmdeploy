@@ -164,8 +164,6 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: Optional[torch.Tensor] = None
-    # other
-    is_chunk: bool = False
 
     @property
     def seq_length(self):

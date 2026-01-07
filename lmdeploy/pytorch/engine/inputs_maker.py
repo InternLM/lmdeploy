@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Union
+from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
 import torch
@@ -395,7 +395,7 @@ class InputsMakerAsync:
 
         max_q_seqlen = num_decode_tokens
         kv_seqlens = [seq.num_all_ids + max_q_seqlen for seq in valid_seqs]
-        sum_kv_seqlen = sum(kv_seqlens) + batch_size
+        sum_kv_seqlen = sum(kv_seqlens) + batch_size * max_q_seqlen
         max_kv_seqlen = max(kv_seqlens) + max_q_seqlen
 
         output = ModelInputsDelta(
@@ -410,9 +410,45 @@ class InputsMakerAsync:
 
         return output, valid_seqs, invalid_seqs
 
-    def update_running_seqs(self, running: 'SeqList', inputs: Union[ModelInputs, ModelInputsDelta]):
+    def create_model_inputs_detla_valid_only(self):
+        """Create model inputs delta for valid running seqs only."""
+        from lmdeploy.pytorch.messages import MessageStatus
+        batch_size = len(self.running_seqs)
+
+        valid_mask = [seq.status == MessageStatus.RUNNING for seq in self.running_seqs]
+        if all(valid_mask):
+            return None, self.running_seqs, []
+
+        valid_mask = np.array(valid_mask, dtype=bool)
+        indices_cpu = np.arange(0, batch_size)[valid_mask]
+        valid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in indices_cpu]
+        invalid_seqs: List['SchedulerSequence'] = [self.running_seqs[i] for i in range(batch_size) if not valid_mask[i]]
+
+        num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
+        max_q_seqlen = num_decode_tokens
+        kv_seqlens = [seq.num_all_ids + max_q_seqlen for seq in valid_seqs]
+        if len(kv_seqlens) == 0:
+            sum_kv_seqlen = 0
+            max_kv_seqlen = 0
+        else:
+            sum_kv_seqlen = sum(kv_seqlens) + batch_size * max_q_seqlen
+            max_kv_seqlen = max(kv_seqlens) + max_q_seqlen
+
+        output = ModelInputsDelta(
+            indices=None,
+            block_offsets=None,
+            indice_cpu=indices_cpu,
+            max_q_seqlen=max_q_seqlen,
+            max_kv_seqlen=max_kv_seqlen,
+            sum_kv_seqlen=sum_kv_seqlen,
+            num_ignored_history=None,
+        )
+
+        return output, valid_seqs, invalid_seqs
+
+    def update_running_seqs(self, running: 'SeqList', inputs: Optional[ModelInputs]):
         """Update running seqs."""
-        is_decoding = isinstance(inputs, ModelInputsDelta)
+        is_decoding = inputs is None
         if self.long_context_chunker.enabled() and not is_decoding:
             # long context chunk does not need to update running seqs
             self.long_context_chunker.update_step(inputs)
@@ -438,12 +474,20 @@ class InputsMakerAsync:
             """Need routed experts."""
             return any(seq.return_routed_experts for seq in seqs)
 
+        def __create_model_inputs(seqs):
+            """Createe model inputs."""
+            inputs = self.create_model_inputs(seqs, True)
+            delta, valid_seqs, _ = self.create_model_inputs_detla_valid_only()
+            self.running_seqs = valid_seqs
+            return inputs, delta
+
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
         prealloc_size = self.engine_strategy.get_prealloc_size(True)
 
         inputs = None
+        delta = None
         swap_in_map = {}
         swap_out_map = {}
 
@@ -453,7 +497,7 @@ class InputsMakerAsync:
             running = [seq]
             extra_inputs = None
             if self.long_context_chunker.is_last_chunk():
-                inputs = self.create_model_inputs([seq], True)
+                inputs, delta = __create_model_inputs(running)
                 self.long_context_chunker.clear()
             else:
                 chunk_size = self.long_context_chunker.next_chunk_size()
@@ -473,18 +517,18 @@ class InputsMakerAsync:
                 extra_inputs = None
             elif len(running) > 0:
                 # create inputs
-                inputs = self.create_model_inputs(running, prefill)
+                inputs, delta = __create_model_inputs(running)
                 extra_inputs = self.model_agent_strategy.make_extra_inputs(running)
 
         # try decoding
         if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:
             prefill = False
-            inputs, running, invalid_seqs = self.create_model_inputs_delta()
+            delta, running, invalid_seqs = self.create_model_inputs_delta()
             self.to_evict_seqs = invalid_seqs
             extra_inputs = None
 
         # skip if enable empty
-        if inputs is None:
+        if inputs is None and delta is None:
             return None
 
         sampling_inputs = self.sampling_strategy.make_sampling_inputs(running)
@@ -495,6 +539,7 @@ class InputsMakerAsync:
         return dict(
             running=running,
             inputs=inputs,
+            delta=delta,
             swap_in_map=swap_in_map,
             swap_out_map=swap_out_map,
             sampling_inputs=sampling_inputs,
@@ -557,11 +602,10 @@ class InputsMakerAsync:
             return None, None
         next_running = forward_inputs.pop('running')
         inputs = forward_inputs['inputs']
-        if logger.level <= logging.DEBUG:
+        if logger.level <= logging.DEBUG and inputs is not None:
             logger.debug(f'Sending forward inputs: {inputs.log_info()}')
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
-        self.next_is_prefill = inputs.is_decoding
         await self.executor.forward_async(forward_inputs)
         self.forward_inputs = forward_inputs
         return forward_inputs, next_running

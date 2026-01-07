@@ -218,7 +218,8 @@ class DLLMSequenceStrategy(SequenceStrategy):
                                      resp_cache=resp_cache,
                                      preserve_cache=preserve_cache)
 
-    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs') -> None:
+    def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs',
+                       **kwargs) -> None:
         """Update running sequences."""
         next_token_ids = batched_outputs.next_token_ids
         stopped = batched_outputs.stopped

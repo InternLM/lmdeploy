@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pybase64
@@ -775,7 +775,8 @@ class BaseModelAgent:
 
     async def _async_step(
         self,
-        inputs: Union[ModelInputs, ModelInputsDelta],
+        inputs: ModelInputs,
+        delta: ModelInputsDelta = None,
         swap_in_map: Dict = None,
         swap_out_map: Dict = None,
         sampling_inputs: SamplingInputs = None,
@@ -810,9 +811,8 @@ class BaseModelAgent:
         tp = dist_config.attn_tp
         need_broadcast_next = (tp > 1)
 
-        delta = None
-        if isinstance(inputs, ModelInputsDelta):
-            delta = inputs
+        if inputs is None:
+            assert delta is not None
             inputs = self.decoding_inputs
             inputs = inputs.update_delta(delta)
             next_token_ids = inputs.input_ids[0]
@@ -821,6 +821,8 @@ class BaseModelAgent:
                                    inputs=inputs,
                                    extra_inputs=extra_inputs)
             self.agent_strategy.step_sampling_inputs(sampling_inputs, next_token_ids)
+        elif delta is not None:
+            self.decoding_inputs = self.decoding_inputs.update_delta(delta)
 
         is_decoding = inputs.is_decoding
 
@@ -928,7 +930,7 @@ class BaseModelAgent:
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
         non_blocking = True
-        keys = ['inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
+        keys = ['inputs', 'delta', 'sampling_inputs', 'stopping_criteria', 'extra_inputs']
         while True:
             forward_inputs = await self._pre_in_que.get()
             forward_inputs_cuda = {}

@@ -21,7 +21,7 @@ from .engine import InferOutput, ResponseType, response_reqs
 if TYPE_CHECKING:
     from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
     from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
-    from lmdeploy.pytorch.model_inputs import ModelInputs
+    from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     from lmdeploy.pytorch.paging import Scheduler
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
@@ -212,9 +212,10 @@ class EngineLoop:
         batched_outputs: 'BatchedOutputs',
         running: 'SeqList',
         model_inputs: 'ModelInputs',
+        delta: 'ModelInputsDelta',
     ):
         """Make infer output."""
-        if model_inputs.is_chunk:
+        if model_inputs is not None and model_inputs.is_chunk:
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -227,7 +228,10 @@ class EngineLoop:
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
-        self.seq_strategy.update_running(running=running, batched_outputs=batched_outputs, model_inputs=model_inputs)
+        self.seq_strategy.update_running(running=running,
+                                         batched_outputs=batched_outputs,
+                                         model_inputs=model_inputs,
+                                         delta=delta)
 
         # generate output
         outputs: Dict[int, InferOutput] = dict()
@@ -290,6 +294,7 @@ class EngineLoop:
     ):
         """Get outputs and prefetch."""
         model_inputs = forward_inputs['inputs']
+        delta = forward_inputs['delta']
         self.inputs_maker.update_running_seqs(running, model_inputs)
 
         # try prefetch inputs
@@ -299,7 +304,7 @@ class EngineLoop:
         # send output
         out = await self.executor.get_output_async()
         if out is not None:
-            step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs)
+            step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
             self.resp_queue.put_nowait(step_outputs)
 
         return forward_inputs, next_running
