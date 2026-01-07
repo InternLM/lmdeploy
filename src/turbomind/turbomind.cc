@@ -197,6 +197,7 @@ struct TurboMind::Impl {
     int         n_queues_{0};
 
     int need_warm_up_{1};
+    int phases_{1};
 
     ~Impl();
 
@@ -415,6 +416,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.num_tokens_per_iter = engine["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine["max_prefill_iters"].as<int>(1);
 
+    phases_ = engine["async_"].as<int>() ? 2 : 1;
+
     engine_param_.outer_dp_size = engine["outer_dp_size"].as<int>();
 
     engine_param_.attn_dp_size = engine["attn_dp_size"].as<int>();
@@ -566,8 +569,6 @@ void TurboMind::Impl::CreateEngine(int index)
 
     ctx.comm.h_comm->Sync();
 
-    constexpr int phases = 2;
-
     // create model
     LanguageModel model{data_type_,  //
                         model_param_,
@@ -576,7 +577,7 @@ void TurboMind::Impl::CreateEngine(int index)
                         moe_param_,
                         ctx,
                         *weights_[index],
-                        phases};
+                        phases_};
 
     // create engine
     engines_[index] = Engine{data_type_,  //
@@ -586,7 +587,7 @@ void TurboMind::Impl::CreateEngine(int index)
                              *gateway_,
                              engine_param_.devices[index],
                              queue_id_[index],
-                             phases};
+                             phases_};
 
     core::Context::stream().Sync();
 
