@@ -13,12 +13,14 @@ namespace turbomind::core {
 
 // picked from "cudaTypedefs.h" / "cuda.h"
 
-typedef enum CUmemcpyFlags_enum {
+typedef enum CUmemcpyFlags_enum
+{
     CU_MEMCPY_FLAG_DEFAULT                     = 0x0,
     CU_MEMCPY_FLAG_PREFER_OVERLAP_WITH_COMPUTE = 0x1
 } CUmemcpyFlags;
 
-typedef enum CUmemcpySrcAccessOrder_enum {
+typedef enum CUmemcpySrcAccessOrder_enum
+{
     CU_MEMCPY_SRC_ACCESS_ORDER_INVALID         = 0x0,
     CU_MEMCPY_SRC_ACCESS_ORDER_STREAM          = 0x1,
     CU_MEMCPY_SRC_ACCESS_ORDER_DURING_API_CALL = 0x2,

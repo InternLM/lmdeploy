@@ -13,9 +13,9 @@ public:
 
     BatchCopy();
 
-    BatchCopy(const BatchCopy&)                = delete;
-    BatchCopy& operator=(const BatchCopy&)     = delete;
-    BatchCopy(BatchCopy&&) noexcept            = delete;
+    BatchCopy(const BatchCopy&) = delete;
+    BatchCopy& operator=(const BatchCopy&) = delete;
+    BatchCopy(BatchCopy&&) noexcept        = delete;
     BatchCopy& operator=(BatchCopy&&) noexcept = delete;
 
     // clang-format off

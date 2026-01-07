@@ -99,8 +99,8 @@ struct ModelExecutor::Impl {
 
 ModelExecutor::~ModelExecutor() = default;
 
-ModelExecutor::ModelExecutor()                                    = default;
-ModelExecutor::ModelExecutor(ModelExecutor&&) noexcept            = default;
+ModelExecutor::ModelExecutor()                         = default;
+ModelExecutor::ModelExecutor(ModelExecutor&&) noexcept = default;
 ModelExecutor& ModelExecutor::operator=(ModelExecutor&&) noexcept = default;
 
 ModelExecutor::ModelExecutor(LanguageModel&                model,

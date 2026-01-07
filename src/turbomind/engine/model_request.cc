@@ -6,8 +6,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "xgrammar/matcher.h"
 #include "xgrammar/compiler.h"
+#include "xgrammar/matcher.h"
 
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/request.h"

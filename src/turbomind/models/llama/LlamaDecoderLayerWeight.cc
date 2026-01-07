@@ -56,7 +56,6 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
                                                  int                layer_id,
                                                  const ModelParam&  model,
                                                  const EngineParam& engine,
-                                                 const LoraParam&   lora_param,
                                                  const MoeParam&    moe_param):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),

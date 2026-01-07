@@ -8,7 +8,8 @@
 
 namespace turbomind {
 
-enum class BatchOp {
+enum class BatchOp
+{
     kAdd,      //  Se ->  Rc         H
     kSetup,    //  Rc -> (B  -> D)   H2D
     kPrepare,  // (D  ->  St)        D
@@ -42,9 +43,9 @@ struct BatchData {
         next  = Event::create();
     }
 
-    BatchData(const BatchData&)                = delete;
-    BatchData(BatchData&&) noexcept            = delete;
-    BatchData& operator=(const BatchData&)     = delete;
+    BatchData(const BatchData&)     = delete;
+    BatchData(BatchData&&) noexcept = delete;
+    BatchData& operator=(const BatchData&) = delete;
     BatchData& operator=(BatchData&&) noexcept = delete;
 
     BatchData* self;

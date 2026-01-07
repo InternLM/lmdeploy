@@ -18,7 +18,6 @@ public:
                    const EngineParam&    engine,
                    const AttentionParam& attn,
                    const MoeParam&       moe,
-                   const LoraParam&      lora,
                    const Context&        ctx,
                    int                   phases);
 

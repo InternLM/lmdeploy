@@ -163,7 +163,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
 
     input_processor_.emplace(engine, param_, phases);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, LoraParam{}, ctx, phases);
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, ctx, phases);
 
     generation_ = std::make_unique<Generation>(kFloat32,
                                                engine.max_batch_size,

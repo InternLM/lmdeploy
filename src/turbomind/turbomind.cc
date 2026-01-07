@@ -170,7 +170,6 @@ struct TurboMind::Impl {
     ModelParam     model_param_;
     AttentionParam attn_param_;
     MoeParam       moe_param_;
-    LoraParam      lora_param_;
     EngineParam    engine_param_;
     size_t         comm_size_;
 
@@ -221,7 +220,6 @@ struct TurboMind::Impl {
         weights_[index] = std::make_shared<LlamaWeight>(data_type_,  //
                                                         model_param_,
                                                         engine_params_.at(index),
-                                                        lora_param_,
                                                         moe_param_);
     }
 

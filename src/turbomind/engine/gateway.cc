@@ -2,8 +2,8 @@
 
 #include <memory>
 
-#include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/request_queue.h"
 
 namespace turbomind {

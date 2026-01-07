@@ -42,10 +42,10 @@ struct RequestData {
 template<class Archive>
 void serdes(Archive& ar, RequestData& r)
 {
-    ar & r.infer;
-    ar & r.kill;
-    ar & r.cancel;
-    ar & r.abort;
+    ar& r.infer;
+    ar& r.kill;
+    ar& r.cancel;
+    ar& r.abort;
 }
 
 struct Engine::Impl {
@@ -152,7 +152,8 @@ struct Engine::Impl {
 
     vector<State> states_;
 
-    struct Data {};
+    struct Data {
+    };
     vector<Data> data_;
 
     // staging buffers
@@ -830,8 +831,8 @@ void Engine::Impl::InternalThreadEntry()
 
 Engine::~Engine() = default;
 
-Engine::Engine()                             = default;
-Engine::Engine(Engine&&) noexcept            = default;
+Engine::Engine()                  = default;
+Engine::Engine(Engine&&) noexcept = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
 Engine::Engine(DataType      dtype,

@@ -56,7 +56,6 @@ public:
     UnifiedAttentionLayer(const ModelParam&     model,
                           const AttentionParam& attn,
                           const EngineParam&    engine,
-                          const LoraParam&      lora,
                           int                   tp_size,
                           const Context&        context,
                           int                   phases,
@@ -88,7 +87,6 @@ private:
     const AttentionParam param_;
     const EngineParam    engine_param_;
     const ModelParam     model_param_;
-    const LoraParam      lora_param_;
     const Context&       context_;
 
     int& is_warm_up_;

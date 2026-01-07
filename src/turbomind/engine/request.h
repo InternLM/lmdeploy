@@ -40,7 +40,8 @@ struct GenerationConfig {
 
     int output_logprobs = 0;
 
-    enum OutType {
+    enum OutType
+    {
         kNone       = 0,
         kAll        = 1,
         kGeneration = 2
@@ -111,7 +112,8 @@ struct Request {
 
     int ec = 0;  // set when disabling conflicting requests
 
-    enum {
+    enum
+    {
         kOk            = 0,
         kInvalid       = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict      = 2,  // Concurrent requests to the same sequence
@@ -121,8 +123,8 @@ struct Request {
         kTooLong       = 6,  // history + prompt > session_len,
         kFinish        = 7,
         kCancel        = 8,
-        kInconsistency = 9,  // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
-        kNoQueue       = 10, // No queue available for submitting the request (in current process)
+        kInconsistency = 9,   // Inconsistent request parameters, e.g. prefix caching is not allowed in interactive mode
+        kNoQueue       = 10,  // No queue available for submitting the request (in current process)
     };
 
     std::shared_ptr<xgrammar::CompiledGrammar> grammer;
