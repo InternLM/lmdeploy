@@ -49,8 +49,8 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(model, moe, engine, ctx);
     }
 
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(
-        model, attn, engine, attn_tp_size_, ctx, phases, (bool)moe_ffn_layer_);
+    attn_layer_ =
+        std::make_unique<UnifiedAttentionLayer>(model, attn, engine, attn_tp_size_, ctx, phases, (bool)moe_ffn_layer_);
 
     if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
         ffn_layer_ = std::make_unique<LlamaFfnLayer>(model, ctx);
