@@ -406,7 +406,7 @@ class CacheEngine:
                 continue
             register_mr_request = DistServeRegisterMRMessage(protocol=migration_init_request.protocol,
                                                              remote_engine_id=migration_init_request.remote_engine_id,
-                                                             mr_key=str(i),
+                                                             mr_key=i,
                                                              addr=t.data_ptr(),
                                                              offset=t.storage_offset(),
                                                              length=t.numel() * t.itemsize)
@@ -445,8 +445,7 @@ class CacheEngine:
                 if t.numel() == 0:
                     continue
                 assignment_batch.extend(
-                    get_assignment_batch(str(i), blocks_to_migration, assignment_len, layer_stride,
-                                         remote_layer_stride))
+                    get_assignment_batch(i, blocks_to_migration, assignment_len, layer_stride, remote_layer_stride))
         await self.migration_backend_impl.p2p_migrate(
             MigrationAssignment(
                 protocol=migration_execution_inputs.protocol,
