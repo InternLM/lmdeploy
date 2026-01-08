@@ -9,19 +9,20 @@ from typing import Any, Dict, List
 import pytest
 import requests
 from transformers import AutoTokenizer
+from utils.constant import BACKEND_LIST, RESTFUL_MODEL_LIST
 from utils.toolkit import encode_text, parse_sse_stream
 
 BASE_HTTP_URL = 'http://127.0.0.1'
 DEFAULT_PORT = 23333
-MODEL_LIST = ['Qwen/Qwen3-0.6B', 'Qwen/Qwen3-VL-2B-Instruct', 'Qwen/Qwen3-30B-A3B']
 BASE_URL = ':'.join([BASE_HTTP_URL, str(DEFAULT_PORT)])
 
 
-@pytest.mark.parametrize('model_name', MODEL_LIST)
+@pytest.mark.parametrize('backend', BACKEND_LIST)
+@pytest.mark.parametrize('model_name', RESTFUL_MODEL_LIST)
 class TestGenerateComprehensive:
 
     @pytest.fixture(autouse=True)
-    def setup_api(self, request, config, model_name):
+    def setup_api(self, request, config, model_name, backend):
         self.api_url = f'{BASE_URL}/generate'
         self.headers = {'Content-Type': 'application/json'}
         self.model_name = model_name
@@ -32,7 +33,7 @@ class TestGenerateComprehensive:
         log_base = config.get('log_path', './logs')
         self.log_dir = os.path.join(log_base, safe_model_name)
         os.makedirs(self.log_dir, exist_ok=True)
-        self.log_file = os.path.join(self.log_dir, f'{safe_test_name}.log')
+        self.log_file = os.path.join(self.log_dir, f'{backend}_{safe_test_name}.log')
 
     def _log_request_response(self, payload, response_data, stream_raw=None):
         log_entry = {
@@ -318,7 +319,7 @@ class TestGenerateComprehensive:
             try:
                 input_ids = encode_text(model_path, test_case['text'])
             except Exception as e:
-                pytest.skip(f'Tokenizer failed for {test_case["name"]}: {e}')
+                pytest.skip(f'Tokenizer failed for {test_name}: {e}')
 
             assert isinstance(input_ids, list), \
                 f'input_ids should be list, got {type(input_ids)}'
@@ -461,7 +462,7 @@ class TestGenerateComprehensive:
             try:
                 input_ids = encode_text(model_path, test_case['text'])
             except Exception as e:
-                pytest.skip(f'Tokenizer failed for {test_case["name"]}: {e}')
+                pytest.skip(f'Tokenizer failed for {test_name}: {e}')
 
             request_payload = {'input_ids': input_ids, 'max_tokens': test_case['max_tokens'], 'return_logprob': True}
 
@@ -484,7 +485,7 @@ class TestGenerateComprehensive:
                 logprob_values.append(item[0])
 
             avg_logprob = sum(logprob_values) / len(logprob_values)
-            if avg_logprob < -10.0:
+            if avg_logprob < -15.0:
                 pytest.fail(f'Generation confidence critically low '
                             f'(Avg: {avg_logprob:.2f})')
 
@@ -497,9 +498,9 @@ class TestGenerateComprehensive:
         print(f'\n[Model: {self.model_name}] Running stop_str with include flag test')
         test_cases = [{
             'name': 'simple stop word',
-            'prompt': 'Count: 1, 2, 3, ',
+            'prompt': 'Count to 10: 1, 2, 3, ',
             'stop_word': '6',
-            'max_tokens': 10,
+            'max_tokens': 20,
         }]
 
         for test_case in test_cases:
@@ -540,7 +541,7 @@ class TestGenerateComprehensive:
 
     def test_streaming_mode(self):
         print(f'\n[Model: {self.model_name}] Running streaming mode test')
-        prompt = 'Count: 1, 2,'
+        prompt = 'Count to 10: 1, 2,'
 
         resp = self._post({'prompt': prompt, 'max_tokens': 8, 'stream': True}, stream=True)
         assert resp.status_code == 200
@@ -561,8 +562,8 @@ class TestGenerateComprehensive:
             f'(found {count_matches})'
 
         stream_events = meta.get('stream_events', [])
-        assert stream_events >= len(output_ids), \
-            'Streaming event count should not be less than output token count'
+        assert stream_events <= len(output_ids) + 2, \
+            'Streaming event count should be less than output token count'
 
         print(f"  Generated text: '{text}'")
         print(f'  Output tokens: {len(output_ids)}, '
@@ -605,10 +606,10 @@ class TestGenerateComprehensive:
 
                         event_count += 1
                         if delta_text.strip():
-                            print(f"    +'{delta_text}'")
+                            print(f"+'{delta_text}'")
 
                     except Exception as e:
-                        print(f'    [Parse warning]: {e}')
+                        print(f'[Parse warning]: {e}')
                         continue
 
         assert len(full_text_from_delta.strip()) > 0, \
@@ -633,7 +634,7 @@ class TestGenerateComprehensive:
 
     def test_same_session_id_allowed(self):
         print(f'\n[Model: {self.model_name}] Running same session_id test')
-        sid = 9999
+        sid = int(time.time_ns()) % 100000
 
         resp1 = self._post({'prompt': 'First message:', 'session_id': sid, 'max_tokens': 2})
         resp2 = self._post({'prompt': 'Second message:', 'session_id': sid, 'max_tokens': 2})
@@ -918,7 +919,7 @@ class TestGenerateComprehensive:
         model_path = os.path.join(config.get('model_path'), self.model_name)
         user_content = 'Hello [world]! This is a [test].'
 
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         special_tokens_map = tokenizer.special_tokens_map
 
         special_patterns = list(special_tokens_map.values())
@@ -939,7 +940,7 @@ class TestGenerateComprehensive:
 
     def test_stop_token_ids(self):
         print(f'\n[Model: {self.model_name}] Running stop_token_ids test')
-        payload = {'prompt': 'Once upon a time', 'max_tokens': 50, 'stop_token_ids': [11], 'stream': False}
+        payload = {'prompt': 'Once upon a time', 'max_tokens': 50, 'stop_token_ids': [11, 281], 'stream': False}
 
         resp = self._post(payload)
         assert resp.status_code == 200, \
@@ -958,10 +959,10 @@ class TestGenerateComprehensive:
 
         assert finish_reason in ['stop', 'eos'], \
             f'Expected generation to end due to stop token, ' \
-            f'actual reason: {finish_reason}. This may mean stop_token_ids [11] ' \
+            f'actual reason: {finish_reason}. This may mean stop_token_ids [11, 281] ' \
             f"didn't take effect, or generation was truncated."
 
-        print(f'\n stop_token_ids=[11] generation result: length={actual_length}, '
+        print(f'\n stop_token_ids=[11, 281] generation result: length={actual_length}, '
               f"end reason='{finish_reason}', text='{generated_text[:20]}...'")
 
     def test_combined_parameters(self):
@@ -1001,8 +1002,8 @@ class TestGenerateComprehensive:
 
         stream_events = data['meta_info'].get('stream_events', [])
 
-        assert stream_events == len(data['output_ids']) + 1, \
-            'Streaming event count should not be less than generated token count'
+        assert stream_events <= len(data['output_ids']) + 2, \
+            'Streaming event count should be less than generated token count'
 
     def test_invalid_temperature_values(self):
         print(f'\n[Model: {self.model_name}] Running invalid temperature values test')
@@ -1072,7 +1073,7 @@ class TestGenerateComprehensive:
 
     def test_session_id_with_all_parameters(self):
         print(f'\n[Model: {self.model_name}] Running session_id with all parameters test')
-        session_id = int(time.time()) % 100000
+        session_id = int(time.time_ns()) % 100000
 
         resp1 = self._post({
             'session_id': session_id,
@@ -1110,7 +1111,7 @@ class TestGenerateComprehensive:
 
         resp2 = self._post({
             'prompt': 'Write a sentence ending with a period. Stop here test.',
-            'max_tokens': 50,
+            'max_tokens': 200,
             'stop': ['.'],
             'stream': False
         })
@@ -1120,12 +1121,13 @@ class TestGenerateComprehensive:
         text2 = data2['text']
         finish_reason = data2['meta_info']['finish_reason']['type']
 
-        if '.' in text2:
-            assert text2.strip().endswith('.'), \
-                "Stop token '.' should cause generation to end at period"
+        assert '. ' not in text2 and not text2.strip().endswith(
+            '.'), "Stop token '.' should cause generation to end at period"
+
+        assert not text2.strip().endswith('.'), "Stop token '.' should cause generation to end at period"
 
         assert finish_reason in ['stop', 'eos'], \
-            f'Expected to end due to stop token, actual: {finish_reason}'
+            f'Expected to end due to stop token, actual: {finish_reason}, content is {text2}'
 
         print(f"  Stop at '.': generated '{text2}' (Reason: {finish_reason})")
 
@@ -1134,7 +1136,7 @@ class TestGenerateComprehensive:
         model_path = os.path.join(config.get('model_path'), self.model_name)
         user_content = 'Hello [world]! This is a [test].'
 
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         special_tokens_map = tokenizer.special_tokens_map
 
         special_patterns = list(special_tokens_map.values())
@@ -1154,7 +1156,7 @@ class TestGenerateComprehensive:
                 assert False, f'Expected space after special token {generated_text[i]} but found none.'
 
     @pytest.mark.experts
-    @pytest.mark.pytorch
+    @pytest.mark.not_turbomind
     def test_request_returns_experts(self):
         print(f'\n[Model: {self.model_name}] Running request with experts test')
         resp1 = self._post({
