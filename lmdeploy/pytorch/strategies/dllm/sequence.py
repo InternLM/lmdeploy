@@ -46,7 +46,7 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
     def dllm_mask(self):
         start = self.num_history_ids
         end = start + self._num_token_ids
-        return self.history_dllm_mask._token_ids[start:end]
+        return self.history_dllm_mask[start:end]
 
     @property
     def num_valid_ids(self):
@@ -56,11 +56,11 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
     def generated_ids(self) -> np.ndarray:
         end = self.num_valid_ids
         start = end - self.num_new_tokens
-        return self.history_cache._token_ids[start:end]
+        return self.history_cache[start:end]
 
     @property
     def all_dllm_mask(self):
-        return self.history_dllm_mask._token_ids[:self.num_all_ids]
+        return self.history_dllm_mask[:self.num_all_ids]
 
     @property
     def dllm_block_length(self):

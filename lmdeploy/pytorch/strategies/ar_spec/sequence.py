@@ -40,7 +40,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def generated_ids(self) -> np.ndarray:
         end = self.num_valid_ids
         start = end - self.num_new_tokens
-        return self.history_cache._token_ids[start:end]
+        return self.history_cache[start:end]
 
     def set_stop_pos(self, pos: int):
         val = self._num_new_valid - pos - 1

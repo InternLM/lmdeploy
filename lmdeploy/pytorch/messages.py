@@ -2,9 +2,10 @@
 import enum
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import numpy as np
+import torch
 from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
@@ -362,35 +363,72 @@ class HistoryEmbeddings:
         return self._embeddings.__getitem__(*args, **kwargs)
 
 
-class HistoryTokenIds:
-    """History token ids."""
+class _HistoryDataBase:
+    """Base class for history data storage."""
     ALLOC_SIZE = 512
+    COPY_ON_RESIZE = False
 
-    def __init__(self, token_ids: np.ndarray = None, dtype: np.dtype = np.int64):
-        if token_ids is None:
-            self._token_ids = np.empty((self.ALLOC_SIZE, ), dtype=dtype)
-            self._num_real = 0
+    def __init__(self, data: np.ndarray = None, dtype: np.dtype = np.int64):
+        self.dtype = dtype
+        self._data = None
+        self._num_real = 0
+
+        if data is None:
+            self._data = self._create_empty_array(dtype)
         else:
-            self._token_ids = token_ids
-            self._num_real = len(token_ids)
+            self._data = data.astype(dtype) if hasattr(data, 'astype') else data
+            self._num_real = len(data)
+
+    def _create_empty_array(self, dtype):
+        """Create empty array.
+
+        Override in subclass for different shapes.
+        """
+        return np.empty((self.ALLOC_SIZE, ), dtype=dtype)
+
+    def _get_pad_width(self, reserve_size: int):
+        """Get pad width for np.pad.
+
+        Override for multi-dimensional arrays.
+        """
+        return (0, reserve_size)
 
     def reserve(self, size: int):
         """Reserve cache."""
-        num_tokens = len(self._token_ids)
+        if self._data is None:
+            return
+        num_tokens = len(self._data)
         if num_tokens >= size:
             return
         reserve_size = _round_up(size - num_tokens, self.ALLOC_SIZE)
-        new_token_ids = np.pad(self._token_ids, (0, reserve_size))
-        self._token_ids = new_token_ids
+        pad_width = self._get_pad_width(reserve_size)
+        self._data = np.pad(self._data, pad_width)
 
     def get_real(self):
-        """Get logical blocks."""
-        return self._token_ids[:self._num_real]
+        """Get real data."""
+        if self._data is None:
+            return None
+        return self._data[:self._num_real]
 
     def resize(self, size: int):
         """Set size."""
         assert size <= self._num_real
         self._num_real = size
+        if self.COPY_ON_RESIZE and self._data is not None:
+            self._data = self._data[:size].copy()
+
+    def append(self, new_data: np.ndarray):
+        """Append data."""
+        if self._data is None:
+            self._data = new_data.astype(self.dtype)
+            self._num_real = len(new_data)
+            return
+        num_tokens = len(new_data)
+        self.reserve(num_tokens + self._num_real)
+        slice_start = self._num_real
+        slice_end = slice_start + num_tokens
+        self._num_real += num_tokens
+        self._data[slice_start:slice_end] = new_data
 
     def __setitem__(self, *args, **kwargs):
         """Set values."""
@@ -400,23 +438,14 @@ class HistoryTokenIds:
         """Get values."""
         return self.get_real().__getitem__(*args, **kwargs)
 
-    def append(self, token_ids: np.ndarray):
-        """Append token ids."""
-        num_tokens = len(token_ids)
-        self.reserve(num_tokens + self._num_real)
-        slice_start = self._num_real
-        slice_end = slice_start + num_tokens
-        self._num_real += num_tokens
-        self._token_ids[slice_start:slice_end] = token_ids
-
     def __len__(self):
         """Get length."""
         return self._num_real
 
     def clone(self):
         """clone."""
-        ret = HistoryTokenIds()
-        ret.append(self.get_real())
+        data = None if self._data is None else self.get_real().copy()
+        ret = type(self)(data, dtype=self.dtype)
         return ret
 
     def copy(self):
@@ -424,69 +453,83 @@ class HistoryTokenIds:
         return self.clone()
 
 
-class HistoryRouterExperts:
+class HistoryTokenIds(_HistoryDataBase):
+    """History token ids."""
+    ALLOC_SIZE = 512
+
+    def __init__(self, token_ids: np.ndarray = None, dtype: np.dtype = np.int64):
+        super().__init__(token_ids, dtype)
+
+    @property
+    def _token_ids(self):
+        """For backward compatibility."""
+        return self._data
+
+    @_token_ids.setter
+    def _token_ids(self, value):
+        """For backward compatibility."""
+        self._data = value
+
+
+class HistoryRouterExperts(_HistoryDataBase):
     """History router experts."""
     ALLOC_SIZE = 64
+    COPY_ON_RESIZE = True
 
     def __init__(self, expert_ids: np.ndarray = None, dtype: np.dtype = np.uint16):
-        self.dtype = dtype
-        if expert_ids is None:
-            self._expert_ids = None
-            self._num_real = 0
-        else:
-            self._expert_ids = expert_ids.astype(dtype)
-            self._num_real = len(expert_ids)
+        super().__init__(expert_ids, dtype)
 
-    def reserve(self, size: int):
-        """Reserve cache."""
-        if self._expert_ids is None:
-            return
-        num_tokens = len(self._expert_ids)
-        if num_tokens >= size:
-            return
-        reserve_size = _round_up(size - num_tokens, self.ALLOC_SIZE)
-        new_expert_ids = np.pad(self._expert_ids, ((0, reserve_size), (0, 0), (0, 0)))
-        self._expert_ids = new_expert_ids
+    def _create_empty_array(self, dtype):
+        """Create empty array.
 
-    def get_real(self):
-        """Get real data."""
-        if self._expert_ids is None:
+        Override in subclass for different shapes.
+        """
+        return None
+
+    def _get_pad_width(self, reserve_size: int):
+        """Get pad width for multi-dimensional array."""
+        return ((0, reserve_size), (0, 0), (0, 0))
+
+
+class HistoryLogits(_HistoryDataBase):
+    """History logits."""
+    ALLOC_SIZE = 64
+    COPY_ON_RESIZE = True
+
+    def __init__(self, logits: np.ndarray = None, dtype: np.dtype = np.int16):
+        super().__init__(logits, dtype)
+        self._torch_dtype = None
+
+    def _create_empty_array(self, dtype):
+        """Create empty array.
+
+        Override in subclass for different shapes.
+        """
+        return None
+
+    def _get_pad_width(self, reserve_size: int):
+        """Get pad width for multi-dimensional array."""
+        return ((0, reserve_size), (0, 0))
+
+    def set_torch_dtype(self, torch_dtype):
+        """Set torch dtype."""
+        self._torch_dtype = torch_dtype
+
+    def get_logits(self):
+        """Get logits as torch tensor."""
+        if self._data is None:
             return None
-        return self._expert_ids[:self._num_real]
+        if self._torch_dtype is None:
+            return None
 
-    def resize(self, size: int):
-        """Set size."""
-        assert size <= self._num_real
-        self._num_real = size
-        if self._expert_ids is not None:
-            self._expert_ids = self._expert_ids[:size].copy()
-
-    def append(self, expert_ids: np.ndarray):
-        """Append token ids."""
-        if self._expert_ids is None:
-            self._expert_ids = expert_ids.astype(self.dtype)
-            self._num_real = len(expert_ids)
-            return
-        num_tokens = len(expert_ids)
-        self.reserve(num_tokens + self._num_real)
-        slice_start = self._num_real
-        slice_end = slice_start + num_tokens
-        self._num_real += num_tokens
-        self._expert_ids[slice_start:slice_end] = expert_ids
-
-    def __len__(self):
-        """Get length."""
-        return self._num_real
+        logits_np = self.get_real()
+        return torch.frombuffer(logits_np, dtype=self._torch_dtype).view(logits_np.shape)
 
     def clone(self):
         """clone."""
-        expert_ids = None if self._expert_ids is None else self.get_real().copy()
-        ret = HistoryRouterExperts(expert_ids=expert_ids, dtype=self.dtype)
+        ret = super().clone()
+        ret.set_torch_dtype(self._torch_dtype)
         return ret
-
-    def copy(self):
-        """copy."""
-        return self.clone()
 
 
 class HistoryMultiModals:
@@ -571,6 +614,9 @@ class SchedulerSequence:
     # for router replay
     all_routed_experts: HistoryRouterExperts = field(default_factory=HistoryRouterExperts)
 
+    # logits
+    all_logits: HistoryLogits = field(default_factory=HistoryLogits)
+
     def __post_init__(self):
         """Post init."""
         self._seq_meta: SequenceMeta = self.session.seq_meta
@@ -607,7 +653,7 @@ class SchedulerSequence:
         """Token ids."""
         start = self.num_history_ids
         end = start + self._num_token_ids
-        return self.history_cache._token_ids[start:end]
+        return self.history_cache[start:end]
 
     @property
     def input_embeddings(self) -> List[InputEmbeddings]:
@@ -619,23 +665,23 @@ class SchedulerSequence:
     @property
     def history_ids(self) -> np.ndarray:
         """History ids."""
-        return self.history_cache._token_ids[:self.num_history_ids]
+        return self.history_cache[:self.num_history_ids]
 
     @property
     def all_ids(self) -> np.ndarray:
         """Full token ids."""
-        return self.history_cache._token_ids[:self.num_all_ids]
+        return self.history_cache[:self.num_all_ids]
 
     @property
     def valid_ids(self) -> np.ndarray:
         """Valid token ids."""
-        return self.history_cache._token_ids[:self.num_valid_ids]
+        return self.history_cache[:self.num_valid_ids]
 
     @property
     def generated_ids(self) -> np.ndarray:
         end = self.num_valid_ids
         start = end - self.num_new_tokens
-        return self.history_cache._token_ids[start:end]
+        return self.history_cache[start:end]
 
     @property
     def return_routed_experts(self) -> bool:
@@ -651,6 +697,16 @@ class SchedulerSequence:
             return self.all_routed_experts.get_real()[:end]
         else:
             return None
+
+    def append_routed_experts(self, routed_experts: Union[Tensor, np.ndarray]):
+        """Append routed experts."""
+        if not self.return_routed_experts:
+            return
+        if routed_experts is None:
+            return
+        if isinstance(routed_experts, Tensor):
+            routed_experts = routed_experts.cpu().numpy()
+        self.all_routed_experts.append(routed_experts)
 
     @property
     def num_history_ids(self):
@@ -694,6 +750,22 @@ class SchedulerSequence:
     @property
     def return_logits(self):
         return self.sampling_param.out_logits
+
+    @property
+    def logits(self):
+        """Get logits."""
+        return self.all_logits.get_logits()
+
+    def append_logits(self, logits: Union[Tensor, np.ndarray]):
+        """Append logits."""
+        if not self.return_logits:
+            return
+        if logits is None:
+            return
+        if isinstance(logits, Tensor):
+            self.all_logits.set_torch_dtype(logits.dtype)
+            logits = logits.view(torch.int16).numpy()
+        self.all_logits.append(logits)
 
     def get_input_multimodals(self):
         """Get input multimodals."""

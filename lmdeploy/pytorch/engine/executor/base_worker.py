@@ -164,6 +164,7 @@ class WorkerWrapperBase:
     async def get_output_async(self):
         """Get output async."""
         ret = await self.model_agent.get_output_async()
+        ret = self.pack_output(ret)
         return ret
 
     def release(self):

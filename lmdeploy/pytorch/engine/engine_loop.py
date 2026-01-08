@@ -215,11 +215,17 @@ class EngineLoop:
         delta: 'ModelInputsDelta',
     ):
         """Make infer output."""
+        logits = batched_outputs.logits
+        all_routed_experts = batched_outputs.all_routed_experts
+
         if model_inputs is not None and model_inputs.is_chunk:
+            # chunk long context does not need to update seqs and outputs
+            seq = running[0]
+            seq.append_routed_experts(all_routed_experts)
+            seq.append_logits(logits)
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
-        logits = batched_outputs.logits
         logprobs = batched_outputs.logprobs
 
         if logprobs is not None:
@@ -275,7 +281,12 @@ class EngineLoop:
             outputs[session_id] = out
 
             if msg.return_logits:
-                outputs[session_id].logits = logits.split(seq_length)[idx]
+                logit = logits.split(seq_length)[idx]
+                if len(msg.all_logits) > 0:
+                    msg.append_logits(logit)
+                    logit = msg.logits
+                    msg.all_logits.resize(0)
+                outputs[session_id].logits = logit
         return outputs
 
     async def _main_loop_try_send_next_inputs(self):

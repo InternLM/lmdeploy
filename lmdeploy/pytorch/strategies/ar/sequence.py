@@ -39,9 +39,7 @@ class SchedulerSequenceDefault(SchedulerSequence):
 
         num_valid = len(token_ids)
         # record cached expert ids
-        if self.return_routed_experts:
-            if routed_experts is not None:
-                self.all_routed_experts.append(routed_experts)
+        self.append_routed_experts(routed_experts)
 
         if mode == UpdateTokenMode.INPUTS:
             self.arrive_time = time.perf_counter()
@@ -75,7 +73,9 @@ class SchedulerSequenceDefault(SchedulerSequence):
         self.model_meta = None
 
         if self.return_routed_experts:
-            self.all_routed_experts.resize(step)
+            # chunk long context might not have all routed experts
+            if len(self.all_routed_experts) > step:
+                self.all_routed_experts.resize(step)
 
 
 class ARSequenceStrategy(SequenceStrategy):

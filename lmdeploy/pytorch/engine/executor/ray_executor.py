@@ -513,7 +513,9 @@ class RayExecutor(ExecutorBase):
 
     async def get_output_async(self):
         """Get output async."""
-        return await self.workers[0].get_outputs.remote()
+        ret = await self.workers[0].get_outputs.remote()
+        ret = ret.to_tensor()
+        return ret
 
     @contextlib.contextmanager
     def remote_log(self, msg: str):
