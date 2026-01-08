@@ -312,64 +312,82 @@ def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, fl
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
-    Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
+    Refer to https://platform.openai.com/docs/api-reference/chat/create
     for the API specification.
 
     The request should be a JSON object with the following fields:
-    - model: model name. Available from /v1/models.
-    - messages: string prompt or chat history in OpenAI format. Chat history
-        example: `[{"role": "user", "content": "hi"}]`.
-    - temperature (float): to modulate the next token probability
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - n (int): How many chat completion choices to generate for each input
-        message. **Only support one here**.
-    - stream: whether to stream the results or not. Default to false.
-    - stream_options: Options for streaming response. Only set this when you
-        set stream: true.
-    - max_completion_tokens (int | None): output token nums. Default to None.
-    - max_tokens (int | None): output token nums. Default to None.
-        Deprecated: Use max_completion_tokens instead.
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
-    - stop (str | List[str] | None): To stop generating further
-        tokens. Only accept stop words that's encoded to one token idex.
-    - response_format (Dict | None): To generate response according to given
-        schema. Examples: `{"type": "json_schema", "json_schema": {"name":
-        "test","schema": {"properties": {"name": {"type": "string"}},
-        "required": ["name"], "type": "object"}}}`
-        or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
-    - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
-    - tools (List): A list of tools the model may call. Currently, only
-        internlm2 functions are supported as a tool. Use this to specify a
-        list of functions for which the model can generate JSON inputs.
-    - tool_choice (str | object): Controls which (if any) tool is called by
-        the model. `none` means the model will not call any tool and instead
-        generates a message. Specifying a particular tool via {"type":
-        "function", "function": {"name": "my_function"}} forces the model to
-        call that tool. `auto` or `required` will put all the tools information
-        to the model.
+
+    - **model**: model name. Available from /v1/models.
+    - **messages**: string prompt or chat history in OpenAI format. Chat history example:
+      ``[{"role": "user", "content": "hi"}]``.
+    - **temperature** (float): to modulate the next token probability
+    - **top_p** (float): If set to float < 1, only the smallest set of most
+      probable tokens with probabilities that add up to top_p or higher
+      are kept for generation.
+    - **n** (int): How many chat completion choices to generate for each input
+      message. **Only support one here**.
+    - **stream**: whether to stream the results or not. Default to false.
+    - **stream_options**: Options for streaming response. Only set this when you
+      set stream: true.
+    - **max_completion_tokens** (int | None): output token nums. Default to None.
+    - **max_tokens** (int | None): output token nums. Default to None.
+      Deprecated: Use max_completion_tokens instead.
+    - **repetition_penalty** (float): The parameter for repetition penalty.
+      1.0 means no penalty
+    - **stop** (str | List[str] | None): To stop generating further
+      tokens. Only accept stop words that's encoded to one token idex.
+    - **response_format** (Dict | None): To generate response according to given
+      schema. Examples:
+
+      .. code-block:: json
+
+        {
+          "type": "json_schema",
+          "json_schema":{
+            "name": "test",
+            "schema":{
+              "properties":{
+                "name":{"type":"string"}
+              },
+              "required":["name"],
+              "type":"object"
+            }
+          }
+        }
+
+      or ``{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}``
+    - **logit_bias** (Dict): Bias to logits. Only supported in pytorch engine.
+    - **tools** (List): A list of tools the model may call. Currently, only
+      internlm2 functions are supported as a tool. Use this to specify a
+      list of functions for which the model can generate JSON inputs.
+    - **tool_choice** (str | object): Controls which (if any) tool is called by
+      the model. `none` means the model will not call any tool and instead
+      generates a message. Specifying a particular tool via
+      ``{"type": "function", "function": {"name": "my_function"}}``
+      forces the model to call that tool. `auto` or `required` will put all
+      the tools informationto the model.
 
     Additional arguments supported by LMDeploy:
-    - top_k (int): The number of the highest probability vocabulary
-        tokens to keep for top-k-filtering
-    - ignore_eos (bool): indicator for ignoring eos
-    - skip_special_tokens (bool): Whether or not to remove special tokens
-        in the decoding. Default to be True.
-    - spaces_between_special_tokens (bool): Whether or not to add spaces
-        around special tokens. The behavior of Fast tokenizers is to have
-        this to False. This is setup to True in slow tokenizers.
-    - min_new_tokens (int): To generate at least numbers of tokens.
-    - min_p (float): Minimum token probability, which will be scaled by the
-        probability of the most likely token. It must be a value between
-        0 and 1. Typical values are in the 0.01-0.2 range, comparably
-        selective as setting `top_p` in the 0.99-0.8 range (use the
-        opposite of normal `top_p` values)
+
+    - **top_k** (int): The number of the highest probability vocabulary
+      tokens to keep for top-k-filtering
+    - **ignore_eos** (bool): indicator for ignoring eos
+    - **skip_special_tokens** (bool): Whether or not to remove special tokens
+      in the decoding. Default to be True.
+    - **spaces_between_special_tokens** (bool): Whether or not to add spaces
+      around special tokens. The behavior of Fast tokenizers is to have
+      this to False. This is setup to True in slow tokenizers.
+    - **min_new_tokens** (int): To generate at least numbers of tokens.
+    - **min_p** (float): Minimum token probability, which will be scaled by the
+      probability of the most likely token. It must be a value between
+      0 and 1. Typical values are in the 0.01-0.2 range, comparably
+      selective as setting `top_p` in the 0.99-0.8 range (use the
+      opposite of normal `top_p` values)
 
     Currently we do not support the following features:
-    - presence_penalty (replaced with repetition_penalty)
-    - frequency_penalty (replaced with repetition_penalty)
+
+    - **presence_penalty** (replaced with repetition_penalty)
+    - **frequency_penalty** (replaced with repetition_penalty)
     """
     error_check_ret = check_request(request)
     if error_check_ret is not None:
@@ -680,50 +698,53 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
-    Go to `https://platform.openai.com/docs/api-reference/completions/create`
+    Go to https://platform.openai.com/docs/api-reference/completions/create
     for the API specification.
 
     The request should be a JSON object with the following fields:
-    - model (str): model name. Available from /v1/models.
-    - prompt (str): the input prompt.
-    - suffix (str): The suffix that comes after a completion of inserted text.
-    - max_completion_tokens (int | None): output token nums. Default to None.
-    - max_tokens (int | None): output token nums. Default to 16.
-        Deprecated: Use max_completion_tokens instead.
-    - temperature (float): to modulate the next token probability
-    - top_p (float): If set to float < 1, only the smallest set of most
-        probable tokens with probabilities that add up to top_p or higher
-        are kept for generation.
-    - n (int): How many chat completion choices to generate for each input
-        message. **Only support one here**.
-    - stream: whether to stream the results or not. Default to false.
-    - stream_options: Options for streaming response. Only set this when you
-        set stream: true.
-    - repetition_penalty (float): The parameter for repetition penalty.
-        1.0 means no penalty
-    - user (str): A unique identifier representing your end-user.
-    - stop (str | List[str] | None): To stop generating further
-        tokens. Only accept stop words that's encoded to one token idex.
+
+    - **model** (str): model name. Available from /v1/models.
+    - **prompt** (str): the input prompt.
+    - **suffix** (str): The suffix that comes after a completion of inserted text.
+    - **max_completion_tokens** (int | None): output token nums. Default to None.
+    - **max_tokens** (int | None): output token nums. Default to 16.
+      Deprecated: Use max_completion_tokens instead.
+    - **temperature** (float): to modulate the next token probability
+    - **top_p** (float): If set to float < 1, only the smallest set of most
+      probable tokens with probabilities that add up to top_p or higher
+      are kept for generation.
+    - **n** (int): How many chat completion choices to generate for each input
+      message. **Only support one here**.
+    - **stream**: whether to stream the results or not. Default to false.
+    - **stream_options**: Options for streaming response. Only set this when you
+      set stream: true.
+    - **repetition_penalty** (float): The parameter for repetition penalty.
+      1.0 means no penalty
+    - **user** (str): A unique identifier representing your end-user.
+    - **stop** (str | List[str] | None): To stop generating further
+      tokens. Only accept stop words that's encoded to one token idex.
 
     Additional arguments supported by LMDeploy:
-    - ignore_eos (bool): indicator for ignoring eos
-    - skip_special_tokens (bool): Whether or not to remove special tokens
-        in the decoding. Default to be True.
-    - spaces_between_special_tokens (bool): Whether or not to add spaces
-        around special tokens. The behavior of Fast tokenizers is to have
-        this to False. This is setup to True in slow tokenizers.
-    - top_k (int): The number of the highest probability vocabulary
-        tokens to keep for top-k-filtering
-    - min_p (float): Minimum token probability, which will be scaled by the
-        probability of the most likely token. It must be a value between
-        0 and 1. Typical values are in the 0.01-0.2 range, comparably
-        selective as setting `top_p` in the 0.99-0.8 range (use the
-        opposite of normal `top_p` values)
+
+    - **ignore_eos** (bool): indicator for ignoring eos
+    - **skip_special_tokens** (bool): Whether or not to remove special tokens
+      in the decoding. Default to be True.
+    - **spaces_between_special_tokens** (bool): Whether or not to add spaces
+      around special tokens. The behavior of Fast tokenizers is to have
+      this to False. This is setup to True in slow tokenizers.
+    - **top_k** (int): The number of the highest probability vocabulary
+      tokens to keep for top-k-filtering
+    - **min_p** (float): Minimum token probability, which will be scaled by the
+      probability of the most likely token. It must be a value between
+      0 and 1. Typical values are in the 0.01-0.2 range, comparably
+      selective as setting `top_p` in the 0.99-0.8 range (use the
+      opposite of normal `top_p` values)
 
     Currently we do not support the following features:
-    - logprobs (not supported yet)
-    - presence_penalty (replaced with repetition_penalty)
-    - frequency_penalty (replaced with repetition_penalty)
+
+    - **logprobs** (not supported yet)
+    - **presence_penalty** (replaced with repetition_penalty)
+    - **frequency_penalty** (replaced with repetition_penalty)
     """
     error_check_ret = check_request(request)
     if error_check_ret is not None:
@@ -1038,10 +1059,11 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
     """Encode prompts.
 
     The request should be a JSON object with the following fields:
-    - input: the prompt to be encoded. In str or List[str] format.
-    - do_preprocess: whether do preprocess or not. Default to False.
-    - add_bos: True when it is the beginning of a conversation. False when it
-        is not. Default to True.
+
+    - **input**: the prompt to be encoded. In str or List[str] format.
+    - **do_preprocess**: whether do preprocess or not. Default to False.
+    - **add_bos**: True when it is the beginning of a conversation. False when it
+      is not. Default to True.
     """
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
@@ -1073,8 +1095,9 @@ async def pooling(request: PoolingRequest, raw_request: Request = None):
     for the Embeddings API specification.
 
     The request should be a JSON object with the following fields:
-    - model (str): model name. Available from /v1/models.
-    - input (List[int] | List[List[int]] | str | List[str]): input text to be embed
+
+    - **model** (str): model name. Available from /v1/models.
+    - **input** (List[int] | List[List[int]] | str | List[str]): input text to be embed
     """
 
     async_engine = VariableInterface.async_engine
@@ -1202,7 +1225,7 @@ async def abort_request(request: AbortRequest, raw_request: Request = None):
     return Response(status_code=200)
 
 
-@router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
+@router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)], include_in_schema=False)
 async def chat_interactive_v1(request, raw_request: Request = None):
     return create_error_response(
         HTTPStatus.BAD_REQUEST, 'v1/chat/interactive is deprecated, please launch server with --enable-prefix-cache '
@@ -1494,7 +1517,8 @@ def serve(model_path: str,
                 port=server_port,
                 log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
                 ssl_keyfile=ssl_keyfile,
-                ssl_certfile=ssl_certfile)
+                ssl_certfile=ssl_certfile,
+                timeout_keep_alive=int(os.environ.get('UVICORN_TIMEOUT_KEEP_ALIVE', 5)))
 
 
 if __name__ == '__main__':

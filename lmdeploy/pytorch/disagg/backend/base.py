@@ -17,7 +17,7 @@ class MigrationBackendImpl:
         raise NotImplementedError
 
     @abstractmethod
-    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
+    def endpoint_info(self, remote_engine_id: str, protocol: MigrationProtocol):
         return NotImplementedError
 
     @abstractmethod
