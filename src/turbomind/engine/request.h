@@ -127,7 +127,7 @@ struct Request {
         kNoQueue       = 10,  // No queue available for submitting the request (in current process)
     };
 
-    std::shared_ptr<xgrammar::CompiledGrammar> grammer;
+    std::shared_ptr<xgrammar::CompiledGrammar> grammar;
     std::shared_ptr<xgrammar::GrammarMatcher>  matcher;
 };
 

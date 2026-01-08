@@ -131,8 +131,8 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->sequence_length = outputs_->at("sequence_length");
 
     if (grammar_) {
-        r->grammer = std::move(grammar_);
-        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*r->grammer);
+        r->grammar = std::move(grammar_);
+        r->matcher = std::make_shared<xgrammar::GrammarMatcher>(*r->grammar);
     }
 
     // Keep a WEAK reference for canceling the request

@@ -43,7 +43,7 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
                            kMaxStopBadWordsLen,
                            trunc_offset_size);
             if (trunc_offset_size > 0) {
-                int trunc_token_size = offsets[trunc_token_size - 1];
+                int trunc_token_size = offsets[trunc_offset_size - 1];
                 copy_tokens[i]       = std::make_pair(token_ids.data(), trunc_token_size);
                 copy_offsets[i]      = std::make_pair(offsets.data(), trunc_offset_size);
                 max_length           = std::max(max_length, trunc_token_size);
