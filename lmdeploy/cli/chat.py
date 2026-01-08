@@ -77,27 +77,31 @@ def main(model_path, backend, **kwargs):
 
     quit = False
     while not quit:
-        with pipe.session() as sess:
-            while True:
-                try:
-                    prompt = input_prompt()
-                except KeyboardInterrupt:
-                    quit = True
-                    break
-                if prompt == 'end':
-                    sess.close()
-                    break
-                if prompt == 'exit':
-                    quit = True
-                    break
-                if prompt.strip() == '':
-                    continue
-                resps = sess(prompt, gen_config=gen_config, adapter_name=adapter_name)
-                try:
-                    for resp in resps:
-                        print(resp.text, end='', flush=True)
-                except KeyboardInterrupt:
-                    sess.stop()
+        sess = pipe.session()
+        while True:
+            try:
+                prompt = input_prompt()
+            except KeyboardInterrupt:
+                quit = True
+                break
+            if prompt == 'end':
+                pipe.end_session()
+                break
+            if prompt == 'exit':
+                quit = True
+                break
+            if prompt.strip() == '':
+                continue
+            resps = pipe.chat(prompt,
+                              session=sess,
+                              gen_config=gen_config,
+                              adapter_name=adapter_name,
+                              stream_response=True)
+            try:
+                for resp in resps:
+                    print(resp.text, end='', flush=True)
+            except KeyboardInterrupt:
+                sess.stop()
     else:
         print('exiting...')
 

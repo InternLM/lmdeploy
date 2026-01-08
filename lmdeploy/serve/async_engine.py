@@ -5,14 +5,12 @@ import atexit
 import concurrent.futures
 import dataclasses
 import random
-from contextlib import asynccontextmanager, closing
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from functools import partial
 from queue import Queue
 from threading import Thread
-from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Union
-
-import tqdm
+from typing import Any, Dict, Iterator, List, Literal, Optional, Union
 
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
@@ -26,12 +24,20 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, D
                                                    DistServeInitRequest)
 from lmdeploy.serve.inst_manager import InferInstManager
 from lmdeploy.serve.multimodal_processor import MultimodalProcessor
-from lmdeploy.serve.session_manager import Session, SessionManager
+from lmdeploy.serve.session_manager import SessionManager
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 logger = get_logger('lmdeploy')
+
+
+class SafeRunException(Exception):
+    """Exception raised by safe_run to avoid upper layer handling the original
+    exception again.
+
+    This exception wraps the original exception that occurred during safe_run execution.
+    """
 
 
 @dataclasses.dataclass
@@ -213,7 +219,6 @@ class AsyncEngine(LogitsMixin):
 
         # build stat loggers
         self._build_stat_loggers()
-        self.epoch = 0
 
     def close(self):
         self.internal_thread.close()
@@ -261,37 +266,6 @@ class AsyncEngine(LogitsMixin):
     def get_schedule_metrics(self):
         return self.engine.get_schedule_metrics()
 
-    def __call__(self,
-                 prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-                 gen_config: Optional[GenerationConfig] = None,
-                 do_preprocess: bool = True,
-                 adapter_name: Optional[str] = None,
-                 use_tqdm: bool = False,
-                 **kwargs):
-        """Inference a batch of prompts.
-
-        Args:
-            prompts (List[str] | str | List[Dict] | List[List[Dict]]]): a
-            batch of prompts. It accepts: string prompt, a list of string
-            prompts, a chat history in OpenAI format or a list of chat
-            history.
-            gen_config (GenerationConfig | None): a instance of
-                GenerationConfig. Default to None.
-            do_preprocess (bool): whether pre-process the messages. Default to
-                True, which means chat_template will be applied.
-            adapter_name (str): the adapter name of slora for pytorch backend.
-                Pick one from adapters. Default to None, using the base model.
-            use_tqdm (bool): Whether use the progress bar. Default to False
-        """
-        if gen_config is None:
-            gen_config = GenerationConfig()
-        return self.batch_infer(prompts,
-                                gen_config=gen_config,
-                                do_preprocess=do_preprocess,
-                                adapter_name=adapter_name,
-                                use_tqdm=use_tqdm,
-                                **kwargs)
-
     async def do_log_stats(self):
         """Loop through CLI logger and Prometheus logger and output the
         metrics."""
@@ -301,7 +275,6 @@ class AsyncEngine(LogitsMixin):
     async def stop_all_session(self):
         """Stop all running sessions."""
         logger.info('stop all sessions')
-        self.epoch += 1
         await self.session_mgr.abort_all()
 
     async def stop_session(self, session_id: int):
@@ -343,7 +316,7 @@ class AsyncEngine(LogitsMixin):
         self.engine.wakeup(tags)
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instances
         if self.backend == 'turbomind' and 'kv_cache' in tags:
-            self.generator_manager.rebuild(self.engine)
+            self.inst_mgr.rebuild(self.engine)
         self.sleeping_tags = self.sleeping_tags - set(tags)
         self.is_sleeping = bool(self.sleeping_tags)
 
@@ -351,11 +324,6 @@ class AsyncEngine(LogitsMixin):
         if not self.limiter:
             self.limiter = asyncio.Semaphore(self.backend_config.max_batch_size)
         return self.limiter
-
-    async def _async_infer(self, requests: AsyncIterator[Dict], **kwargs) -> AsyncIterator[AsyncIterator[Response]]:
-        async for req in requests:
-            gen = self.generate(**req, **kwargs)
-            yield gen
 
     def _infer(self, requests: Iterator[Dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
 
@@ -395,110 +363,6 @@ class AsyncEngine(LogitsMixin):
 
         return iter(que.get, None)
 
-    @staticmethod
-    def _is_single(prompts):
-        return isinstance(prompts, str) or isinstance(prompts[0], Dict)
-
-    def infer(self,
-              prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-              gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
-              do_preprocess: bool = True,
-              adapter_name: Optional[str] = None,
-              stream_response: bool = False,
-              multiplex: bool = False,
-              pbar: Optional[tqdm.tqdm] = None,
-              **kwargs):
-
-        prompts = [prompts] if AsyncEngine._is_single(prompts) else prompts
-        assert isinstance(prompts, List), 'prompts should be a list'
-        gen_config = gen_config or GenerationConfig()
-        if not isinstance(gen_config, List):
-            gen_config = [gen_config] * len(prompts)
-        assert len(prompts) == len(gen_config), \
-                'input gen_confg length differs from the length of prompts'  # noqa
-
-        def requests():
-            for prompt, gen_cfg in zip(prompts, gen_config):
-                r = dict(messages=prompt,
-                         gen_config=gen_cfg,
-                         do_preprocess=do_preprocess,
-                         adapter_name=adapter_name,
-                         stream_response=stream_response,
-                         **kwargs)
-                r.setdefault('sequence_start', True)
-                r.setdefault('sequence_end', True)
-                if 'session_id' not in r:
-                    r['session_id'] = next(self._session_id)
-                yield r
-
-        return self._infer(requests(), multiplex, pbar)
-
-    def batch_infer(self,
-                    prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-                    gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
-                    do_preprocess: bool = True,
-                    adapter_name: Optional[str] = None,
-                    use_tqdm: bool = False,
-                    **kwargs):
-        """Inference a batch of prompts.
-
-        Args:
-            prompts (List[str] | str | List[Dict] | List[List[Dict]]]): a
-            batch of prompts. It accepts: string prompt, a list of string
-            prompts, a chat history in OpenAI format or a list of chat
-            history.
-            gen_config (GenerationConfig | None): a instance of or a list of
-                GenerationConfig. Default to None.
-            do_preprocess (bool): whether pre-process the messages. Default to
-                True, which means chat_template will be applied.
-            adapter_name (str): the adapter name of slora for pytorch backend.
-                Pick one from adapters. Default to None, using the base model.
-            use_tqdm (bool): Whether use the progress bar. Default to False
-        """
-        is_single = AsyncEngine._is_single(prompts)
-        outputs = []
-        pbar = tqdm.tqdm(total=1 if is_single else len(prompts)) if use_tqdm else None
-        try:
-            for g in self.infer(prompts,
-                                gen_config,
-                                do_preprocess,
-                                adapter_name,
-                                stream_response=False,
-                                pbar=pbar,
-                                **kwargs):
-                res = None
-                for out in g:
-                    res = res.extend(out) if res else out
-                outputs.append(res)
-        finally:
-            if pbar: pbar.close()  # noqa
-        if is_single:
-            return outputs[0]
-        return outputs
-
-    def stream_infer(self,
-                     prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-                     gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
-                     do_preprocess: bool = True,
-                     adapter_name: Optional[str] = None,
-                     stream_response: bool = True,
-                     **kwargs):
-        """Inference a batch of prompts with stream mode.
-
-        Args:
-            prompts (List[str] | str | List[Dict] | List[List[Dict]]]):a
-            batch of prompts. It accepts: string prompt, a list of string
-            prompts, a chat history in OpenAI format or a list of chat
-            history.
-            gen_config (GenerationConfig | None): a instance of or a list of
-                GenerationConfig. Default to None.
-            do_preprocess (bool): whether pre-process the messages. Default to
-                True, which means chat_template will be applied.
-            adapter_name (str): the adapter name of slora for pytorch backend.
-                Pick one from adapters. Default to None, using the base model.
-        """
-        return self.infer(prompts, gen_config, do_preprocess, adapter_name, stream_response, multiplex=True, **kwargs)
-
     def _determine_gen_config(self,
                               session,
                               input_ids,
@@ -533,7 +397,7 @@ class AsyncEngine(LogitsMixin):
             logger.error(f'[safe_run] session {session_id} exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
             await inst.async_cancel(session_id)
-            raise e
+            raise SafeRunException(f'Safe run exception for session {session_id}') from e
         finally:
             await generator.aclose()
 
@@ -570,10 +434,9 @@ class AsyncEngine(LogitsMixin):
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
-        epoch = self.epoch
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
-        session = self.session_mgr.create(session_id, self.engine, step=step)
+        session = self.session_mgr.create(session_id, step=step)
         chat_template_kwargs = chat_template_kwargs or {}
         if enable_thinking is not None:
             logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
@@ -592,6 +455,7 @@ class AsyncEngine(LogitsMixin):
                                                                         tools=tools,
                                                                         reasoning_effort=reasoning_effort,
                                                                         chat_template_kwargs=chat_template_kwargs,
+                                                                        mm_processor_kwargs=mm_processor_kwargs,
                                                                         **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
@@ -644,8 +508,8 @@ class AsyncEngine(LogitsMixin):
 
         metrics_processor.increment_total_requests()
 
-        async with session.acquire_inst() as inst:
-            if epoch != self.epoch:
+        async with session.acquire_inst(self.inst_mgr) as inst:
+            if inst is None:
                 logger.debug(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
                 metrics_processor.increment_finished_requests()
@@ -779,10 +643,9 @@ class AsyncEngine(LogitsMixin):
                                  token_ids=[])
             # update step
             if sequence_end:
-                self.id2step[session_id] = 0
                 if self.backend == 'pytorch':
                     # manually end pytorch session
-                    await inst.async_end(session_id)
+                    await session.async_end()
 
     def _run(self, fn=None, coro=None, loop=None):
         assert (fn or coro) and not (fn and coro)
@@ -794,70 +657,6 @@ class AsyncEngine(LogitsMixin):
 
             coro = _coro()
         return asyncio.run_coroutine_threadsafe(coro, loop)
-
-    def session(self):
-        return self.session_mgr.create(engine=self)
-
-    def chat(self,
-             prompt: str,
-             session=None,
-             gen_config: Optional[GenerationConfig] = None,
-             stream_response=False,
-             adapter_name=None,
-             **kwargs) -> Union['Session', Iterator]:
-        """Chat.
-
-        Args:
-            prompt (str): prompt
-            session (Session): the chat session
-            gen_config (GenerationConfig | None): a instance of
-                GenerationConfig. Default to None.
-            do_preprocess (bool): whether pre-process the messages. Default to
-                True, which means chat_template will be applied.
-            **kwargs (dict): ad hoc parametrization of `gen_config
-        """
-        if session is None:
-            session = self.session_mgr.create(engine=self)
-
-        # sync & init
-        session.update(prompt=prompt, response=None)
-
-        sequence_start = session.step == 0
-
-        generator = self.infer(prompt,
-                               gen_config,
-                               adapter_name=adapter_name,
-                               sequence_start=sequence_start,
-                               sequence_end=False,
-                               session_id=session.session_id,
-                               stream_response=stream_response,
-                               multiplex=True,
-                               step=session.step)
-
-        def _gen():
-            resp = None
-            try:
-                for out in generator:
-                    resp = resp.extend(out) if resp else out
-                    yield out
-            except:  # noqa
-                self._run(coro=self.stop_session(session.session_id)).result()
-                raise
-            else:
-                session._response = resp
-                session.step += resp.generate_token_len + resp.input_token_len
-                session.history.append((session.prompt, resp.text))
-
-        if stream_response:
-            session.generator = _gen()
-        else:
-            # run the generator until finish
-            with closing(_gen()) as gen:
-                for _ in gen:
-                    pass
-            session.generator = None
-
-        return session
 
     def start_loop(self, use_async_api=False):
         """Start engine loop.

@@ -69,6 +69,11 @@ class VariableInterface:
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
 
+    def apply_session_id(session_id: int) -> int:
+        if session_id == -1:
+            return VariableInterface.session_mgr.reserve()
+        return session_id
+
 
 router = APIRouter()
 get_bearer_token = HTTPBearer(auto_error=False)
@@ -366,18 +371,17 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    error_check_ret = check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
+    request.session_id = VariableInterface.apply_session_id(request.session_id)
+
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
     preserve_cache = json_request.pop('preserve_cache', False)
     if migration_request:
         migration_request = MigrationRequest.model_validate(migration_request)
-
-    error_check_ret = check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-
-    request.session_id = VariableInterface.session_mgr.reserve()
 
     model_name = request.model
     adapter_name = None
@@ -721,6 +725,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    error_check_ret = check_request(request)
+    if error_check_ret is not None:
+        return error_check_ret
+    request.session_id = VariableInterface.apply_session_id(request.session_id)
+
     json_request = await raw_request.json()
     migration_request = json_request.pop('migration_request', None)
     with_cache = json_request.pop('with_cache', False)
@@ -728,10 +737,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if migration_request:
         migration_request = MigrationRequest.model_validate(migration_request)
 
-    error_check_ret = check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-    request.session_id = VariableInterface.session_mgr.reserve()
     model_name = request.model
     adapter_name = None
     if model_name != VariableInterface.async_engine.model_name:
@@ -910,14 +915,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
 @router.post('/generate', dependencies=[Depends(check_api_key)])
 async def generate(request: GenerateReqInput, raw_request: Request = None):
-    if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
     error_check_ret = check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The session_id {request.session_id!r} is occupied.')
+    request.session_id = VariableInterface.apply_session_id(request.session_id)
 
     prompt = request.prompt
     input_ids = request.input_ids

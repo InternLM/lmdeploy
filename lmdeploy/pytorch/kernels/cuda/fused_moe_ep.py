@@ -249,12 +249,14 @@ def fused_moe_v3(
     del hidden_states
     gateup_output = gather_out.new_empty((all_tokens, N))
     _deepgemm_grouped_bf16_nt_contiguous(input_tensor, w13_weight, gateup_output, m_indices)
-    down_input = gateup_output.new_empty((
-        all_tokens,
-        N // 2,
-    ))
+    # down_input = gateup_output.new_empty((
+    #     all_tokens,
+    #     N // 2,
+    # ))
+    down_input = gateup_output[:, :N // 2]
     down_input = silu_and_mul(gateup_output.view(-1, N), down_input)
-    down_output = gather_out.new_empty((all_tokens, K))
+    # down_output = gather_out.new_empty((all_tokens, K))
+    down_output = input_tensor
     _deepgemm_grouped_bf16_nt_contiguous(
         down_input,
         w2_weight,

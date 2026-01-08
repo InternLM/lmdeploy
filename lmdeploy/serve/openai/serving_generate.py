@@ -6,11 +6,12 @@ from .protocol import GenerateReqInput
 if TYPE_CHECKING:
     from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 
+from lmdeploy.serve.session_manager import SessionManager
+
+session_manager: SessionManager = SessionManager()
+
 
 def check_request(request: GenerateReqInput, engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
-    if not isinstance(request, GenerateReqInput):
-        raise TypeError(f'Invalid request type, expected GenerateReqInput, got {type(request)}')
-
     # Check logprobs settings
     try:
         logprobs_mode = engine_config.logprobs_mode
@@ -31,6 +32,9 @@ def check_request(request: GenerateReqInput, engine_config: 'TurbomindEngineConf
 
     if request.max_tokens is not None and request.max_tokens <= 0:
         return f'The max_tokens {request.max_tokens!r} must be a positive integer.'
+
+    if session_manager.has(request.session_id):
+        return f'The session_id {request.session_id!r} is occupied.'
 
     # check sampling settings
     if not (0 < request.top_p <= 1):

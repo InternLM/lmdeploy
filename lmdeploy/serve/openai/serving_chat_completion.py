@@ -12,9 +12,6 @@ session_manager: SessionManager = SessionManager()
 
 
 def check_request(request: ChatCompletionRequest, engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
-    if not isinstance(request, ChatCompletionRequest):
-        raise TypeError(f'Invalid request type, expected ChatCompletionRequest, got {type(request)}')
-
     # Check logprobs settings
     try:
         logprobs_mode = engine_config.logprobs_mode

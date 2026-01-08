@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from transformers import AutoConfig
 
@@ -58,7 +58,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
 def autoget_backend_config(
     model_path: str,
     backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None
-) -> Union[PytorchEngineConfig, TurbomindEngineConfig]:
+) -> Tuple[Literal['turbomind', 'pytorch'], Union[PytorchEngineConfig, TurbomindEngineConfig]]:
     """Get backend config automatically.
 
     Args:
@@ -79,7 +79,7 @@ def autoget_backend_config(
         config = TurbomindEngineConfig()
     if backend_config is not None:
         if type(backend_config) == type(config):
-            return backend_config
+            config = backend_config
         else:
             data = asdict(backend_config)
             for k, v in data.items():
@@ -90,7 +90,7 @@ def autoget_backend_config(
                 config.block_size = backend_config.cache_block_seq_len
             else:
                 config.cache_block_seq_len = backend_config.block_size
-    return config
+    return backend, config
 
 
 def check_vl_llm(config: dict) -> bool:

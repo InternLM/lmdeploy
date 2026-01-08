@@ -1,8 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import enum
 import itertools
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Iterator, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from lmdeploy.messages import GenerationConfig, Response
 from lmdeploy.utils import get_logger
@@ -11,51 +12,42 @@ from .inst_manager import InferInstManager
 from .utils import singleton
 
 if TYPE_CHECKING:
-    from lmdeploy.serve.async_engine import AsyncEngine
+    from lmdeploy.serve.async_engine import SafeRunException
 
 logger = get_logger('lmdeploy')
+
+
+class SessionState(enum.Enum):
+    """Session state enumeration."""
+    IDLE = 'idle'  # Initial state, no active inference
+    ACQUIRING = 'acquiring'  # Acquiring an inference instance
+    ACTIVE = 'active'  # Has an inference instance and is active
 
 
 class Session:
     """Session for the engine."""
 
-    def __init__(self, session_id: int, engine: 'AsyncEngine', inst_mgr: InferInstManager, **kwargs):
+    def __init__(self, session_id: int, **kwargs):
         self.session_id = session_id
-        self.engine = engine
         self.prompt: Any = None
-        self.inst_mgr = inst_mgr
-        self._response: Response = None
-        self.gen_config: GenerationConfig = None
-        self.step: int = 0
-        self.abort_event = asyncio.Event()  # event to signal the session is aborted
-        self.active_event = asyncio.Event(
-        )  # event to signal the session is active, from getting an inference instance to finishing the inference
-        self.inst = None  # inference instance
-        self.generator = None  # generator for streaming response
+        self.response: Optional[Response] = None
         self.history: List[Tuple[Any, str]] = []
+        self.gen_config: Optional[GenerationConfig] = None
+        self.step: int = 0
+        self._state = SessionState.IDLE
+        self._abort_event: Optional[asyncio.Event] = None  # cancellation signal for abort
+        self._inst = None  # inference instance
         self.update(**kwargs)
+
+    @property
+    def state(self) -> SessionState:
+        """Get the current session state."""
+        return self._state
 
     def update(self, **kwargs):
         """Update the session."""
         self.gen_config = kwargs.get('gen_config', self.gen_config)
         self.step = kwargs.get('step', self.step)
-        if 'response' in kwargs:
-            self._response = kwargs['response']
-
-    @property
-    def response(self) -> Response:
-        """Return response."""
-        return self._response
-
-    def close_chat(self):
-        """Close the chat session."""
-        if self.engine and self.prompt and self.inst:
-            self.engine._run(coro=self.inst.end_session(self.session_id)).result()
-            self.engine = None
-
-    def stop(self):
-        if self.engine and self.prompt:
-            self.engine._run(coro=self.engine.stop_session(self.session_id)).result()
 
     def __repr__(self) -> str:
         res = ''
@@ -65,56 +57,42 @@ class Session:
             res += f'USER: \n{user}\nASSISTANT: \n{assistant}\n'
         return res
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close_chat()
-
-    def __call__(self,
-                 prompt: str,
-                 gen_config: Optional[GenerationConfig] = None,
-                 stream_response: bool = True,
-                 do_preprocess: bool = True,
-                 adapter_name: str = None,
-                 **kwargs) -> Union[Response, Iterator[Response]]:
-        self.engine.chat(prompt,
-                         gen_config=gen_config or self.gen_config,
-                         stream_response=stream_response,
-                         do_preprocess=do_preprocess,
-                         session=self,
-                         adapter_name=adapter_name,
-                         **kwargs)
-        if stream_response:
-            # self.generator is assigned in self.engine.chat
-            return self.generator
-        else:
-            return self.response
-
     @asynccontextmanager
-    async def acquire_inst(self):
-        """Acquire an inference instance for the session."""
-        if self.inst is not None:
+    async def acquire_inst(self, inst_mgr: InferInstManager):
+        """Acquire an inference instance for an session."""
+        if self._inst is not None:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
 
-        get_free_inst = self.inst_mgr.get()
+        if self._state != SessionState.IDLE:
+            raise RuntimeError(f'Session {self.session_id} is not in IDLE state.')
+
+        self._state = SessionState.ACQUIRING
+        get_free_inst = inst_mgr.get()
         get_task = asyncio.create_task(get_free_inst)
-        wait_task = asyncio.create_task(self.abort_event.wait())
+
+        # Create or reuse abort event for cancellation
+        self._abort_event = self._abort_event or asyncio.Event()
+        self._abort_event.clear()  # Reset event to ensure it's not set
+
+        pending = set()
 
         try:
             logger.info(f'Session {self.session_id} acquiring an inference instance...')
-            done, pending = await asyncio.wait([get_task, wait_task], return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait([get_task, self._abort_event.wait()],
+                                               return_when=asyncio.FIRST_COMPLETED)
 
             inst = None
             if get_task in done:
                 try:
                     inst = get_task.result()
-                    self.inst = inst
-                    self.active_event = asyncio.Event()
+                    self._inst = inst
+                    self._state = SessionState.ACTIVE
                     logger.info(f'Session {self.session_id} acquired an inference instance.')
                 except Exception as e:
                     logger.error(f'Session {self.session_id} failed to get an inference instance: {e}')
+                    self._state = SessionState.IDLE
             else:
+                # Abort was triggered
                 logger.info(f'Session {self.session_id} aborted before acquiring an inference instance.')
                 # Cancel get_task if it's still pending
                 if get_task in pending:
@@ -131,33 +109,49 @@ class Session:
                         if inst is not None:
                             self.inst_mgr.ret(inst)
                             inst = None
+                    # Remove get_task from pending since it's already been handled
+                    pending.discard(get_task)
 
-            yield self.inst
+            yield self._inst
+        except SafeRunException:
+            # SafeRunException is raised by AsyncEngine.safe_run. We don't need to handle it here.
+            pass
+        except Exception as e:
+            logger.error(f'Session {self.session_id} failed to acquire an inference instance: {e}')
+            raise e
         finally:
             # Cancel pending tasks
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             # Return inference instance if it was acquired
-            if self.inst is not None:
-                self.inst_mgr.ret(self.inst)
-                self.inst = None
-            if self.active_event is not None:
-                self.active_event.clear()
+            if self._inst is not None:
+                self.inst_mgr.ret(self._inst)
+                self._inst = None
+            # Reset state to IDLE
+            self._state = SessionState.IDLE
 
-    async def abort(self):
+    async def async_abort(self):
         """Abort the session."""
+        if self._state == SessionState.IDLE:
+            return
+
         logger.info(f'Aborting session {self.session_id}')
-        self.abort_event.set()
-        if self.generator is not None:
-            try:
-                await self.generator.async_cancel(self.session_id)
-            except Exception as e:
-                logger.error(f'Error cancelling generator for session {self.session_id}: {e}')
-            finally:
-                # Return generator to pool
-                self.inst_mgr.ret(self.generator)
-                self.generator = None
+        if self._state == SessionState.ACTIVE:
+            await self._inst.async_cancel(self.session_id)
+        elif self._state == SessionState.ACQUIRING:
+            # Signal abort by setting the event
+            self._abort_event.set()
+        else:
+            raise RuntimeError(f'Session {self.session_id} is not in ACTIVE or ACQUIRING state.')
+        self._state = SessionState.IDLE
+
+    async def async_end(self):
+        """End the session."""
+        if self._state != SessionState.ACTIVE:
+            raise RuntimeError(f'Session {self.session_id} is not in ACTIVE state.')
+        logger.debug(f'Ending session {self.session_id}')
+        await self._inst.async_end(self.session_id)
 
 
 @singleton
@@ -173,20 +167,13 @@ class SessionManager:
 
         self.sessions = {}
         self.session_id_generator = itertools.count()
-        self.inst_mgr = None
-
-    def attach(self, inst_mgr: InferInstManager):
-        """Attach a generator manager to the session manager."""
-        self.inst_mgr = inst_mgr
 
     def reserve(self) -> int:
         """Reserve a new session id."""
         return next(self.session_id_generator)
 
-    def create(self, engine: 'AsyncEngine', session_id: Optional[int] = None, **kwargs) -> Session:
+    def create(self, session_id: Optional[int] = None, **kwargs) -> Session:
         """Create a new session."""
-        if self.inst_mgr is None:
-            raise ValueError('InferInstance manager is not attached to the session manager.')
         session_id = session_id or next(self.session_id_generator)
         if session_id in self.sessions:
             logger.info(f'[SessionManager] session {session_id} already exists. Updating...')
@@ -195,27 +182,27 @@ class SessionManager:
             return session
         else:
             logger.info(f'[SessionManager] session {session_id} not found. Creating...')
-            session = Session(session_id, engine, self.inst_mgr, **kwargs)
+            session = Session(session_id, **kwargs)
             self.sessions[session_id] = session
             return session
 
-    async def abort(self, session: Session):
+    async def async_abort(self, session: Session):
         """Abort a session."""
         logger.info(f'Aborting session {session.session_id}')
-        await session.abort()
+        await session.async_abort()
 
-    async def abort_all(self):
+    async def async_abort_all(self):
         """Abort all sessions."""
         tasks = []
         for session in list(self.sessions.values()):
-            tasks.append(session.abort())
+            tasks.append(session.async_abort())
         await asyncio.gather(*tasks, return_exceptions=True)
         self.sessions.clear()
 
-    async def end(self, session: Session):
+    async def async_end(self, session: Session):
         """End a session."""
         logger.info(f'Ending session {session.session_id}')
-        await session.end()
+        await session.async_end()
 
     def has(self, session_id: int) -> bool:
         """Check if a session exists."""
