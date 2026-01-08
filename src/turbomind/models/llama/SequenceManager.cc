@@ -120,7 +120,7 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
             std::tie(block_ids, block_unique_ids) = block_trie_->Cache(seq, seq.prompt);
             if (rank_ == 0) {
                 // clang-format off
-                TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, tokens %d", seq.id, 
+                TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, tokens %d", seq.id,
                             (int)block_ids.size(), (int)seq.prompt.size());
                 TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
                              vector2string(block_ids).c_str(), vector2string(block_unique_ids).c_str());
