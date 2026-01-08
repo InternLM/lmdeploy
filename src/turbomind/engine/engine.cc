@@ -851,8 +851,8 @@ void Engine::Impl::InternalThreadEntry()
 
 Engine::~Engine() = default;
 
-Engine::Engine()                             = default;
-Engine::Engine(Engine&&) noexcept            = default;
+Engine::Engine()                  = default;
+Engine::Engine(Engine&&) noexcept = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
 Engine::Engine(DataType      dtype,
