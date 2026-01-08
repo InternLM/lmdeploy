@@ -358,14 +358,6 @@ class RayExecutor(ExecutorBase):
         """Build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
 
-    async def _prefetch_outputs(self):
-        while True:
-            outs = await self.workers[0].get_outputs.remote()
-            logger.debug(f'Receive {len(outs)} outputs from worker[0].')
-            for out in outs:
-                out = out.to_tensor()
-                self.remote_outs.put_nowait(out)
-
     def _prefetch_task_callback(self, task: asyncio.Task):
         try:
             task.result()
@@ -495,21 +487,6 @@ class RayExecutor(ExecutorBase):
         self._prev_inputs = ray.put(inputs)
         # make sure in order
         self._prev_out = self.dag.execute(self._prev_inputs)
-
-        # try:
-        #     inputs = ray.put(inputs)
-        #     # make sure in order
-        #     outs = self.dag.execute(inputs)
-        #     ray.get(outs)
-        # except SystemExit:
-        #     logger.error('Ray worker exited.')
-        #     raise
-        # finally:
-        #     # free ray.put inputs
-        #     try:
-        #         ray._private.internal_api.free(inputs)
-        #     except Exception as e:
-        #         logger.warning(f'Free input ref failed: {e}')
 
     async def get_output_async(self):
         """Get output async."""
