@@ -110,7 +110,7 @@ def get_wikitext2(tokenizer, nsamples, seed, seqlen):
         seqlen: Maximum sequence length.
 
     Returns:
-        train_loader: List of sampled and tokenized training examples.
+        List of sampled and tokenized training examples.
     """
     traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
 
@@ -137,7 +137,7 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
         seqlen: Maximum sequence length.
 
     Returns:
-        train_loader: List of sampled and tokenized training examples.
+        List of sampled and tokenized training examples.
     """
     traindata = load_dataset('allenai/c4',
                              'en',
@@ -172,7 +172,7 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
         seqlen: Maximum sequence length.
 
     Returns:
-        train_loader: List of sampled and tokenized training examples.
+        List of sampled and tokenized training examples.
     """
     from datasets.builder import DatasetGenerationError
     try:
@@ -233,7 +233,7 @@ def get_gsm8k(tokenizer, nsamples, seed, seqlen):
         seqlen: Maximum sequence length.
 
     Returns:
-        train_loader: List of sampled and tokenized training examples.
+        List of sampled and tokenized training examples.
     """
     train_data = load_dataset('openai/gsm8k', 'main', split='train')
     train_data = train_data.shuffle(seed=seed)
@@ -272,7 +272,7 @@ def get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen):
         seqlen: Maximum sequence length.
 
     Returns:
-        train_loader: List of sampled and tokenized training examples.
+        List of sampled and tokenized training examples.
     """
     train_data = load_dataset('neuralmagic/calibration', 'LLM', split='train')
     train_data = train_data.shuffle(seed=seed)
@@ -311,7 +311,7 @@ def get_open_platypus(tokenizer, nsamples, seed, seqlen):
         seqlen: Maximum sequence length.
 
     Returns:
-        train_loader: List of sampled and tokenized training examples.
+        List of sampled and tokenized training examples.
     """
     train_data = load_dataset('garage-bAInd/Open-Platypus', split='train')
     train_data = train_data.shuffle(seed=seed)
@@ -350,7 +350,7 @@ def get_openwebtext(tokenizer, nsamples, seed, seqlen):
         seqlen: Maximum sequence length.
 
     Returns:
-        train_loader: List of sampled and tokenized training examples.
+        List of sampled and tokenized training examples.
     """
     train_data = load_dataset('Skylion007/openwebtext',
                               data_files={'train': 'plain_text/train-00000-of-00080.parquet'},
@@ -381,15 +381,15 @@ def get_calib_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
     """Get calibration data loaders for a dataset.
 
     Args:
-      name: Dataset name ('wikitext2', 'c4', 'pileval', 'gsm8k',
-            'neuralmagic_calibration', 'open-platypus', 'openwebtext').
-      tokenizer: Tokenizer to encode text.
-      nsamples: Number of samples to take from train set.
-      seed: Random seed for sampling.
-      seqlen: Maximum sequence length.
+        name: Dataset name ('wikitext2', 'c4', 'pileval', 'gsm8k',
+                'neuralmagic_calibration', 'open-platypus', 'openwebtext').
+        tokenizer: Tokenizer to encode text.
+        nsamples: Number of samples to take from train set.
+        seed: Random seed for sampling.
+        seqlen: Maximum sequence length.
 
     Returns:
-      train_loader: List of sampled and tokenized training examples.
+        List of sampled and tokenized training examples.
     """
     if 'wikitext2' in name:
         return get_wikitext2(tokenizer, nsamples, seed, seqlen)
