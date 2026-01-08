@@ -22,6 +22,7 @@ from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDeco
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
+from lmdeploy.serve.exceptions import SafeRunException
 from lmdeploy.serve.inst_manager import InferInstManager
 from lmdeploy.serve.multimodal_processor import MultimodalProcessor
 from lmdeploy.serve.session_manager import SessionManager
@@ -30,14 +31,6 @@ from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 logger = get_logger('lmdeploy')
-
-
-class SafeRunException(Exception):
-    """Exception raised by safe_run to avoid upper layer handling the original
-    exception again.
-
-    This exception wraps the original exception that occurred during safe_run execution.
-    """
 
 
 @dataclasses.dataclass
@@ -215,7 +208,6 @@ class AsyncEngine(LogitsMixin):
         # Initialize inference instance manager to handle instance lifecycle
         self.inst_mgr = InferInstManager(self, self.backend_config.max_batch_size)
         self.session_mgr = SessionManager()
-        self.session_mgr.attach(self.inst_mgr)
 
         # build stat loggers
         self._build_stat_loggers()

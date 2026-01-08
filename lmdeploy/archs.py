@@ -72,11 +72,11 @@ def autoget_backend_config(
     """
     from dataclasses import asdict
 
+    if isinstance(backend_config, PytorchEngineConfig):
+        return 'pytorch', backend_config
+
     backend = autoget_backend(model_path)
-    if backend == 'pytorch':
-        config = PytorchEngineConfig()
-    else:
-        config = TurbomindEngineConfig()
+    config = PytorchEngineConfig() if backend == 'pytorch' else TurbomindEngineConfig()
     if backend_config is not None:
         if type(backend_config) == type(config):
             config = backend_config

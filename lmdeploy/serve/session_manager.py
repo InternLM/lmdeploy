@@ -3,16 +3,14 @@ import asyncio
 import enum
 import itertools
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from lmdeploy.messages import GenerationConfig, Response
 from lmdeploy.utils import get_logger
 
+from .exceptions import SafeRunException
 from .inst_manager import InferInstManager
 from .utils import singleton
-
-if TYPE_CHECKING:
-    from lmdeploy.serve.async_engine import SafeRunException
 
 logger = get_logger('lmdeploy')
 
@@ -78,8 +76,8 @@ class Session:
 
         try:
             logger.info(f'Session {self.session_id} acquiring an inference instance...')
-            done, pending = await asyncio.wait([get_task, self._abort_event.wait()],
-                                               return_when=asyncio.FIRST_COMPLETED)
+            abort_task = asyncio.create_task(self._abort_event.wait())
+            done, pending = await asyncio.wait([get_task, abort_task], return_when=asyncio.FIRST_COMPLETED)
 
             inst = None
             if get_task in done:
@@ -92,7 +90,7 @@ class Session:
                     logger.error(f'Session {self.session_id} failed to get an inference instance: {e}')
                     self._state = SessionState.IDLE
             else:
-                # Abort was triggered
+                # Abort was triggered (abort_task completed)
                 logger.info(f'Session {self.session_id} aborted before acquiring an inference instance.')
                 # Cancel get_task if it's still pending
                 if get_task in pending:
@@ -111,6 +109,7 @@ class Session:
                             inst = None
                     # Remove get_task from pending since it's already been handled
                     pending.discard(get_task)
+                # abort_task is in done, so it will be cleaned up in finally block
 
             yield self._inst
         except SafeRunException:
@@ -126,7 +125,7 @@ class Session:
             await asyncio.gather(*pending, return_exceptions=True)
             # Return inference instance if it was acquired
             if self._inst is not None:
-                self.inst_mgr.ret(self._inst)
+                inst_mgr.ret(self._inst)
                 self._inst = None
             # Reset state to IDLE
             self._state = SessionState.IDLE

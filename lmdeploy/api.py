@@ -10,11 +10,11 @@ if TYPE_CHECKING:
 
 
 def pipeline(model_path: str,
-             backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-             chat_template_config: Optional[ChatTemplateConfig] = None,
+             backend_config: Optional[Union['TurbomindEngineConfig', 'PytorchEngineConfig']] = None,
+             chat_template_config: Optional['ChatTemplateConfig'] = None,
              log_level: str = 'WARNING',
              max_log_len: int = None,
-             speculative_config: SpeculativeConfig = None,
+             speculative_config: 'SpeculativeConfig' = None,
              **kwargs):
     """
     Args:
@@ -70,8 +70,8 @@ def pipeline(model_path: str,
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-          chat_template_config: Optional[ChatTemplateConfig] = None,
+          backend_config: Optional[Union['TurbomindEngineConfig', 'PytorchEngineConfig']] = None,
+          chat_template_config: Optional['ChatTemplateConfig'] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
           log_level: str = 'ERROR',

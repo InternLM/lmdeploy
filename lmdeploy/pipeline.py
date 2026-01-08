@@ -55,10 +55,7 @@ class Pipeline:
 
         # Create inference engine
         _, pipeline_class = get_task(model_path)
-        if not isinstance(backend_config, PytorchEngineConfig):
-            backend_config = autoget_backend_config(model_path, backend_config)
-        backend = 'pytorch' if isinstance(backend_config, PytorchEngineConfig) else 'turbomind'
-
+        backend, backend_config = autoget_backend_config(model_path, backend_config)
         self.async_engine = pipeline_class(model_path,
                                            backend=backend,
                                            backend_config=backend_config,
@@ -66,6 +63,7 @@ class Pipeline:
                                            max_log_len=max_log_len,
                                            speculative_config=speculative_config,
                                            **kwargs)
+        self.session_mgr = self.async_engine.session_mgr
 
     def infer(self,
               prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
@@ -87,13 +85,24 @@ class Pipeline:
             pbar: Progress bar.
         """
         pbar = tqdm.tqdm(total=len(prompts)) if use_tqdm else None
-        requests = self._request_generator(prompts,
-                                           gen_config,
-                                           do_preprocess=do_preprocess,
-                                           adapter_name=adapter_name,
-                                           stream_response=stream_response,
-                                           **kwargs)
-        return self.async_engine._infer(requests, multiplex=False, pbar=pbar)
+        outputs = []
+        try:
+            requests = self._request_generator(prompts,
+                                               gen_config,
+                                               do_preprocess=do_preprocess,
+                                               adapter_name=adapter_name,
+                                               stream_response=stream_response,
+                                               **kwargs)
+            for g in self.async_engine._infer(requests, multiplex=False, pbar=pbar):
+                res = None
+                for out in g:
+                    res = res.extend(out) if res else out
+                outputs.append(res)
+        finally:
+            if pbar: pbar.close()  # noqa
+        if self._is_single(prompts):
+            return outputs[0]
+        return outputs
 
     def stream_infer(self,
                      prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
@@ -242,5 +251,5 @@ class Pipeline:
             gen_config = [gen_config] * len(prompts)
         assert len(prompts) == len(gen_config), 'input gen_config length differs from the length of prompts'
         for prompt, gen_cfg in zip(prompts, gen_config):
-            session = self.session()
-            yield dict(session_id=session.session_id, messages=prompt, gen_config=gen_cfg, **kwargs)
+            session_id = self.session_mgr.reserve()
+            yield dict(session_id=session_id, messages=prompt, gen_config=gen_cfg, **kwargs)
