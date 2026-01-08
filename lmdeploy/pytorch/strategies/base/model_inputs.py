@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 
 @record_function('make_dummy_input')
@@ -54,4 +54,19 @@ class ModelInputsStrategy(ABC):
                    dummy_block_id: int = 0,
                    vocab_size: int = 1) -> ModelInputs:
         """Create dummy model inputs."""
+        pass
+
+    @abstractmethod
+    def next_decoding(self, inputs: ModelInputs, input_ids: torch.Tensor) -> ModelInputs:
+        """Next decoding step."""
+        pass
+
+    @abstractmethod
+    def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
+        """Merge model inputs."""
+        pass
+
+    @abstractmethod
+    def update_inputs(self, inputs: ModelInputs, delta: 'ModelInputsDelta') -> ModelInputs:
+        """Update model inputs with delta."""
         pass

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.distributed import DistContext
     from lmdeploy.pytorch.engine.logits_process import SamplingInputs
     from lmdeploy.pytorch.messages import SchedulerSequence
-    from lmdeploy.pytorch.model_inputs import ModelInputs
+    from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     SeqList = List[SchedulerSequence]
 
 
@@ -38,6 +38,14 @@ class ExtraInputs(ABC):
     def broadcast(self, src: int, group, async_op=False):
         """Broadcast extra inputs."""
         pass
+
+    def next_decoding(self, extra_outputs: 'ExtraOutputs'):
+        """Next decoding step."""
+        return self
+
+    def merge(self, other: 'ExtraInputs'):
+        """Merge extra inputs."""
+        return self
 
 
 @dataclass
@@ -116,9 +124,13 @@ class ModelAgentStrategy(ABC):
         pass
 
     @abstractmethod
-    def make_extra_inputs(self, seqs: 'SeqList') -> ExtraInputs:
+    def make_extra_inputs(self, seqs: 'SeqList', model_inputs: 'ModelInputs') -> ExtraInputs:
         """Create extra inputs."""
         pass
+
+    def update_extra_inputs(self, extra_inputs: ExtraInputs, delta: 'ModelInputsDelta') -> ExtraInputs:
+        """Update extra inputs with model inputs delta."""
+        return extra_inputs
 
     @abstractmethod
     def make_extra_outputs(self, extra_inputs: ExtraInputs, **kwargs) -> ExtraOutputs:
@@ -126,7 +138,12 @@ class ModelAgentStrategy(ABC):
         pass
 
     @abstractmethod
-    def step_sampling_inputs(self, sampling_inputs: 'SamplingInputs', next_token_ids: torch.Tensor):
+    def step_sampling_inputs(
+        self,
+        sampling_inputs: 'SamplingInputs',
+        next_token_ids: torch.Tensor,
+        extra_inputs: ExtraInputs,
+    ):
         """step."""
         pass
 

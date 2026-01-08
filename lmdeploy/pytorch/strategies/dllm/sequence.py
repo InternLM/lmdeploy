@@ -11,7 +11,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
 from lmdeploy.pytorch.messages import (HistoryTokenIds, InputEmbeddings, MessageStatus, MultiModalInputs, SamplingParam,
                                        SchedulerSession, UpdateTokenMode, _to_ndarray)
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.sequence import SchedulerSequenceDefault
 from ..base.sequence import SequenceStrategy
@@ -219,7 +219,7 @@ class DLLMSequenceStrategy(SequenceStrategy):
                                      preserve_cache=preserve_cache)
 
     def update_running(self, running: SeqList, batched_outputs: BatchedOutputs, model_inputs: 'ModelInputs',
-                       **kwargs) -> None:
+                       delta: 'ModelInputsDelta', **kwargs) -> None:
         """Update running sequences."""
         next_token_ids = batched_outputs.next_token_ids
         stopped = batched_outputs.stopped
@@ -230,11 +230,16 @@ class DLLMSequenceStrategy(SequenceStrategy):
         dllm_mask = batched_outputs.extra_outputs.dllm_mask
         stop_pos = batched_outputs.stop_pos
 
+        if model_inputs is None:
+            is_decoding = delta.is_decoding
+        else:
+            is_decoding = model_inputs.is_decoding
+
         batch_size = len(running)
         next_token_ids = next_token_ids.view(batch_size, -1).numpy()
         dllm_mask = dllm_mask.view(batch_size, -1).numpy()
         stop_pos = stop_pos.tolist()
-        update_mode = UpdateTokenMode.DECODE if model_inputs.is_decoding else UpdateTokenMode.PREFILL
+        update_mode = UpdateTokenMode.DECODE if is_decoding else UpdateTokenMode.PREFILL
         for idx, token in enumerate(next_token_ids):
             msg = running[idx]
             stop = stopped[idx]

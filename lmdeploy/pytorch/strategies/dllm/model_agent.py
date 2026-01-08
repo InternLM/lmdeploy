@@ -13,7 +13,7 @@ from lmdeploy.pytorch.config import DLLMConfig
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 from .unmasking import UnmaskingProcessor
@@ -28,6 +28,15 @@ class DLLMExtraInputs(ExtraInputs):
 
     def broadcast(self, src: int, group, async_op=False):
         return dist.broadcast(self.dllm_mask, src=src, group=group, async_op=async_op)
+
+    def next_decoding(self, extra_outputs: 'DLLMExtraOutputs'):
+        """Next decoding step."""
+        return DLLMExtraInputs(dllm_mask=extra_outputs.dllm_mask)
+
+    def merge(self, other: 'DLLMExtraInputs'):
+        """Merge extra inputs."""
+        dllm_mask = torch.cat([self.dllm_mask, other.dllm_mask], dim=0)
+        return DLLMExtraInputs(dllm_mask=dllm_mask)
 
 
 @dataclass
@@ -176,6 +185,12 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
             sampling_inputs.random_offsets += 1
         return sampling_inputs
 
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
+                             extra_inputs: DLLMExtraInputs, **kwargs):
+        """Step sampling inputs."""
+        dllm_mask = extra_inputs.dllm_mask
+        return self._step_sampling_inputs(sampling_inputs, next_token_ids, dllm_mask=dllm_mask)
+
     def make_stopping_criteria(self, seqs: SeqList) -> DLLMStoppingCriteria:
         """Create stopping criteria."""
         # num_appendable
@@ -191,11 +206,27 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
 
         return DLLMStoppingCriteria(num_appendable_ids=num_appendable, output_start_pos=output_start_pos)
 
-    def make_extra_inputs(self, seqs: 'SeqList') -> ExtraInputs:
+    def make_extra_inputs(self, seqs: 'SeqList', model_inputs: 'ModelInputs') -> ExtraInputs:
         """Create extra inputs."""
         dllm_masks = [seq.dllm_mask for seq in seqs]
+
+        # chunked prefill only require part of the dllm masks
+        if model_inputs.is_chunk:
+            seqlens = model_inputs.seq_length.tolist()
+            dllm_masks = [mask[:length] for mask, length in zip(dllm_masks, seqlens)]
+
         dllm_masks = torch.as_tensor(np.concatenate(dllm_masks))
         return DLLMExtraInputs(dllm_mask=dllm_masks)
+
+    def update_extra_inputs(self, extra_inputs: DLLMExtraInputs, delta: 'ModelInputsDelta') -> DLLMExtraInputs:
+        """Update extra inputs with model inputs delta."""
+        dllm_mask = extra_inputs.dllm_mask
+        dllm_mask = dllm_mask.reshape(-1, self.block_size)
+
+        indices = delta.indices
+        dllm_mask = dllm_mask[indices].flatten()
+
+        return DLLMExtraInputs(dllm_mask=dllm_mask)
 
     def make_extra_outputs(self, extra_inputs: DLLMExtraInputs, **kwargs) -> DLLMExtraOutputs:
         """Create extra outputs."""
@@ -211,7 +242,6 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
 
         next_token_ids, dllm_mask, step_seqlens = self._update_dllm(next_token_ids, dllm_mask, model_inputs.seq_length)
         model_inputs.step(next_token_ids, step_seqlens)
-        self._step_sampling_inputs(sampling_inputs, next_token_ids, dllm_mask=dllm_mask)
 
         extra_inputs = DLLMExtraInputs(dllm_mask=dllm_mask)
         return model_inputs, extra_inputs

@@ -314,6 +314,7 @@ class BaseModelAgent:
 
         # decoding inputs
         self.decoding_inputs: ModelInputs = None
+        self.decoding_ex_inputs: ExtraInputs = None
 
         # long context
         self._prev_chunk_output: Dict = None
@@ -763,7 +764,7 @@ class BaseModelAgent:
         @record_function('update_inputs_for_next_step')
         def __update_inputs(inputs, next_token_ids, model_metas, extra_inputs):
             """Update inputs."""
-            return self.agent_strategy.update_inputs_for_next_step(
+            self.decoding_inputs, self.decoding_ex_inputs = self.agent_strategy.update_inputs_for_next_step(
                 inputs,
                 sampling_inputs,
                 next_token_ids=next_token_ids,
@@ -771,11 +772,16 @@ class BaseModelAgent:
                 extra_inputs=extra_inputs,
             )
 
-        def __merge_decoding_inputs(inputs):
+        def __merge_prefill_inputs(inputs: ModelInputs, next_token_ids: torch.Tensor, extra_outputs: ExtraOutputs):
+
+            next_decoding_inputs = self.inputs_strategy.next_decoding(inputs, next_token_ids)
+            next_decoding_ex_inputs = extra_inputs.next_decoding(extra_outputs)
             if self.decoding_inputs is None:
-                self.decoding_inputs = inputs
+                self.decoding_inputs = next_decoding_inputs
+                self.decoding_ex_inputs = next_decoding_ex_inputs
             else:
-                self.decoding_inputs = self.decoding_inputs.merge(inputs)
+                self.decoding_inputs = self.inputs_strategy.merge(self.decoding_inputs, next_decoding_inputs)
+                self.decoding_ex_inputs = self.decoding_ex_inputs.merge(next_decoding_ex_inputs)
 
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
@@ -787,20 +793,23 @@ class BaseModelAgent:
             # decoding step, update prev_inputs with delta
             assert delta is not None
             inputs = self.decoding_inputs
-            inputs = inputs.update_delta(delta)
+            extra_inputs = self.decoding_ex_inputs
+            inputs = self.inputs_strategy.update_inputs(inputs, delta)
+            extra_inputs = self.agent_strategy.update_extra_inputs(extra_inputs, delta)
             next_token_ids = inputs.input_ids[0]
             stopping_criteria.step(next_token_ids,
                                    stop_words=sampling_inputs.stop_words,
                                    inputs=inputs,
                                    extra_inputs=extra_inputs)
-            self.agent_strategy.step_sampling_inputs(sampling_inputs, next_token_ids)
+            self.agent_strategy.step_sampling_inputs(sampling_inputs, next_token_ids, extra_inputs=extra_inputs)
         else:
             # prefill step
 
             if delta is not None:
                 # update decoding inputs with delta
                 # for second round chat
-                self.decoding_inputs = self.decoding_inputs.update_delta(delta)
+                self.decoding_inputs = self.inputs_strategy.update_inputs(self.decoding_inputs, delta)
+                self.decoding_ex_inputs = self.agent_strategy.update_extra_inputs(self.decoding_ex_inputs, delta)
 
             # check long context
             if self._prev_chunk_output is not None:
@@ -892,13 +901,15 @@ class BaseModelAgent:
             with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
                 logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
+            extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs, last_loop_step=True)
+
         if is_decoding:
-            self.decoding_inputs, extra_inputs = __update_inputs(inputs, next_token_ids, model_metas, extra_inputs)
+            __update_inputs(inputs, next_token_ids, model_metas, extra_inputs)
         elif inputs.is_chunk:
+            # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
         else:
-            next_decoding_inputs = inputs.next_decoding(next_token_ids)
-            __merge_decoding_inputs(next_decoding_inputs)
+            __merge_prefill_inputs(inputs, next_token_ids, extra_outputs)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""

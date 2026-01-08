@@ -129,7 +129,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
 
         return sampling_inputs
 
-    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
         """step."""
         return self._step_sampling_inputs(sampling_inputs, next_token_ids)
 
@@ -139,7 +139,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         num_appendable = torch.tensor(num_appendable)
         return ARSpecStoppingCriteria(num_appendable_ids=num_appendable)
 
-    def make_extra_inputs(self, seqs: 'SeqList') -> ExtraInputs:
+    def make_extra_inputs(self, seqs: 'SeqList', model_inputs: 'ModelInputs') -> ExtraInputs:
         """Create extra inputs."""
         return ARSpecExtraInputs()
 

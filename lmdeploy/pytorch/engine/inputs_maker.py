@@ -437,7 +437,6 @@ class InputsMakerAsync:
         """Create model inputs delta from messages."""
         batch_size = len(self.running_seqs)
         assert batch_size > 0
-        # TODO: dllm
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
         prealloc_size = self.engine_strategy.get_prealloc_size(True)
         valid_mask = self.scheduler.schedule_running(self.running_seqs,
@@ -563,13 +562,13 @@ class InputsMakerAsync:
             # long context chunking
             seq = self.long_context_chunker.seq
             running = [seq]
-            extra_inputs = None
             if self.long_context_chunker.is_last_chunk():
                 inputs, delta = __create_model_inputs(running)
                 self.long_context_chunker.clear()
             else:
                 chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
                 inputs = self.create_model_inputs_long_context(seq, chunk_size, multimodals)
+            extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
         elif prefill:
             # prefill
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
@@ -582,11 +581,11 @@ class InputsMakerAsync:
                 self.long_context_chunker.set_seq(running[0])
                 chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
                 inputs = self.create_model_inputs_long_context(running[0], chunk_size, multimodals)
-                extra_inputs = None
+                extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
             elif len(running) > 0:
                 # create inputs
                 inputs, delta = __create_model_inputs(running)
-                extra_inputs = self.model_agent_strategy.make_extra_inputs(running)
+                extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
 
         # try decoding
         if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:
