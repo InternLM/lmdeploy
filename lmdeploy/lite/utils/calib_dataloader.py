@@ -1,9 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
-
 import numpy as np
 import torch
-from datasets import VerificationMode, load_dataset
+from datasets import load_dataset
 
 NUM_LOADED_SAMPLES = 30000
 
@@ -13,107 +11,8 @@ def set_seed(seed):
     torch.random.manual_seed(seed)
 
 
-def find_first_files(root_dir: str, filename: str):
-    for item in os.listdir(root_dir):
-        full_path = os.path.join(root_dir, item)
-        if os.path.isdir(full_path):
-            result = find_first_files(full_path, filename)
-            if result:
-                return result
-        else:
-            if item == filename:
-                return full_path
-    return None
-
-
-def find_full_path_name(root_dir: str, target_subdir: str):
-    for item in os.listdir(root_dir):
-        full_path = os.path.join(root_dir, item)
-        if os.path.isdir(full_path) and target_subdir in item:
-            return full_path, item
-    return None, None
-
-
-def bool_load_from_disk(dataset_name: str):
-    from pathlib import Path
-    cache_root = Path(os.environ.get('HF_DATASETS_CACHE', Path.home() / '.cache/huggingface/datasets'))
-    dataset_fullpath, _ = find_full_path_name(str(cache_root), dataset_name)
-    if dataset_fullpath is None:
-        return False, None
-    dataset_info_path = find_first_files(dataset_fullpath, 'dataset_info.json')
-    if dataset_info_path is None:
-        return False, None
-    return True, dataset_info_path
-
-
-def load_dataset_from_disk(dataset_info_path: str):
-    import glob
-    import json
-    from pathlib import Path
-
-    with open(dataset_info_path, 'r') as f:
-        dataset_info = json.load(f)
-
-    num_examples = 0
-    for split in dataset_info.get('splits').values():
-        if num_examples < split.get('num_examples', 0):
-            num_examples = split.get('num_examples', 0)
-            split_name = split['name']
-            dataset_name = split.get('dataset_name', '')
-
-    if num_examples == 0:
-        return None, None
-
-    if dataset_name:
-        dataset_fullname = f'*{dataset_name}-{split_name}*.arrow'
-    else:
-        dataset_fullname = f'*{split_name}*.arrow'
-
-    dataset_info_subpath = Path(dataset_info_path).parent
-    dataset_fullpath = os.path.join(dataset_info_subpath, dataset_fullname)
-    files = sorted(glob.glob(dataset_fullpath))
-
-    if not files:
-        return None, None
-
-    print('Loading files matching:' + '\n'.join(files))
-
-    dataset = load_dataset('arrow',
-                           data_files={'train': files},
-                           split=f'train[:{NUM_LOADED_SAMPLES}]',
-                           verification_mode=VerificationMode.NO_CHECKS)
-
-    return dataset, dataset_name.lower()
-
-
-def load_dataset_(is_load_from_disk: str,
-                  dataset_info_path: str,
-                  path: str,
-                  name=None,
-                  data_files=None,
-                  split=None,
-                  verification_mode=None):
-    if is_load_from_disk:
-        train_data, dataset_name = load_dataset_from_disk(dataset_info_path)
-        # Dataset_info.json is exists, but can't find dataset file locally，Forcing redownload
-        if train_data is None:
-            print('Dataset cache miss. Forcing redownload...')
-            train_data = load_dataset(path,
-                                      name,
-                                      data_files=data_files,
-                                      split=split,
-                                      download_mode='force_redownload',
-                                      verification_mode=verification_mode)
-            dataset_name = train_data.info.dataset_name.lower()
-    else:
-        train_data = load_dataset(path, name, data_files=data_files, split=split, verification_mode=verification_mode)
-        dataset_name = train_data.info.dataset_name.lower()
-
-    return train_data, dataset_name
-
-
 # adapted from https://github.com/vllm-project/llm-compressor/blob/main/tests/testing_utils.py
-def process_dataset(ds, tokenizer, max_seq_length, ds_name):
+def process_dataset(ds, tokenizer, max_seq_length):
     """Helper function to preprocess and tokenize a dataset according to
     presets.
 
@@ -125,6 +24,7 @@ def process_dataset(ds, tokenizer, max_seq_length, ds_name):
     Returns:
         ds: Tokenized dataset.
     """
+    ds_name = ds.info.dataset_name.lower()
     if ds_name == 'gsm8k':
 
         def tokenize(sample):
@@ -228,14 +128,12 @@ def get_wikitext2(tokenizer, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized Wikitext-2 test set.
     """
-    is_load_from_disk, dataset_info_path = bool_load_from_disk('wikitext')
-    traindata, _ = load_dataset_(is_load_from_disk,
-                                 dataset_info_path,
-                                 path='wikitext',
-                                 name='wikitext-2-raw-v1',
-                                 split=f'train[:{NUM_LOADED_SAMPLES}]')
+    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
     trainenc = tokenizer('\n\n'.join(traindata['text']), return_tensors='pt')
+    testenc = tokenizer('\n\n'.join(testdata['text']), return_tensors='pt')
+
     import random
     random.seed(seed)
     trainloader = []
@@ -243,8 +141,10 @@ def get_wikitext2(tokenizer, nsamples, seed, seqlen):
         i = random.randint(0, trainenc.input_ids.shape[1] - seqlen)
         j = i + seqlen
         inp = trainenc.input_ids[:, i:j]
-        trainloader.append(inp)
-    return trainloader
+        tar = inp.clone()
+        tar[:, :-1] = -100
+        trainloader.append((inp, tar))
+    return trainloader, testenc
 
 
 def get_c4(tokenizer, nsamples, seed, seqlen):
@@ -260,14 +160,17 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized PTB validation set.
     """
-    is_load_from_disk, dataset_info_path = bool_load_from_disk('c4')
-    traindata, _ = load_dataset_(is_load_from_disk,
-                                 dataset_info_path,
-                                 path='allenai/c4',
-                                 name='en',
-                                 data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
-                                 split=f'train[:{NUM_LOADED_SAMPLES}]',
-                                 verification_mode=VerificationMode.NO_CHECKS)
+    from datasets import VerificationMode
+    traindata = load_dataset('allenai/c4',
+                             'en',
+                             data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
+                             split='train',
+                             verification_mode=VerificationMode.NO_CHECKS)
+    valdata = load_dataset('allenai/c4',
+                           'en',
+                           data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
+                           split='validation',
+                           verification_mode=VerificationMode.NO_CHECKS)
 
     import random
     random.seed(seed)
@@ -281,9 +184,32 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
         i = random.randint(0, trainenc.input_ids.shape[1] - seqlen)
         j = i + seqlen
         inp = trainenc.input_ids[:, i:j]
-        trainloader.append(inp)
+        tar = inp.clone()
+        tar[:, :-1] = -100
+        trainloader.append((inp, tar))
 
-    return trainloader
+    import random
+    random.seed(0)
+    valenc = []
+    for _ in range(256):
+        while True:
+            i = random.randint(0, len(valdata) - 1)
+            tmp = tokenizer(valdata[i]['text'], return_tensors='pt')
+            if tmp.input_ids.shape[1] >= seqlen:
+                break
+        i = random.randint(0, tmp.input_ids.shape[1] - seqlen)
+        j = i + seqlen
+        valenc.append(tmp.input_ids[:, i:j])
+    valenc = torch.hstack(valenc)
+
+    class TokenizerWrapper:
+
+        def __init__(self, input_ids):
+            self.input_ids = input_ids
+
+    valenc = TokenizerWrapper(valenc)
+
+    return trainloader, valenc
 
 
 def get_pileval(tokenizer, nsamples, seed, seqlen=512):
@@ -299,11 +225,15 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
         train_loader: List of sampled and tokenized training examples.
         test_enc: Full tokenized PTB validation set.
     """
-    is_load_from_disk, dataset_info_path = bool_load_from_disk('pile-val-backup')
-    dataset, _ = load_dataset_(is_load_from_disk,
-                               dataset_info_path,
-                               path='mit-han-lab/pile-val-backup',
-                               split=f'validation[:{NUM_LOADED_SAMPLES}]')
+    from datasets.builder import DatasetGenerationError
+    try:
+        dataset = load_dataset('mit-han-lab/pile-val-backup', split=f'validation[:{NUM_LOADED_SAMPLES}]')
+    except DatasetGenerationError:
+        raise InterruptedError('There have been some issues when generating '
+                               'the dataset, you could try to download it '
+                               'locally first, and replace the `data_files`'
+                               'with local addresses or use other datasets '
+                               '(c4, wiki, ptb).')
 
     # pileval samples have far fewer tokens than seqlen; recompute how many
     # train items to select so it can still yield enough samples after concatenation.
@@ -341,7 +271,7 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
     cat_samples = torch.cat(samples, dim=1)
     n_split = cat_samples.shape[1] // seqlen
     print(f' * Split into {n_split} blocks')
-    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)]
+    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
 
 
 def get_ultrachat_200k(tokenizer, nsamples, seed, seqlen):
@@ -357,17 +287,13 @@ def get_ultrachat_200k(tokenizer, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: None.
     """
-    is_load_from_disk, dataset_info_path = bool_load_from_disk('ultrachat_200k')
-    train_data, dataset_name = load_dataset_(
-        is_load_from_disk,
-        dataset_info_path,
-        path='HuggingFaceH4/ultrachat_200k',
-        data_files={'train_sft': 'data/train_sft-00000-of-00003-a3ecf92756993583.parquet'},
-        split=f'train_sft[:{NUM_LOADED_SAMPLES}]',
-        verification_mode=VerificationMode.NO_CHECKS)
-
+    from datasets import VerificationMode
+    train_data = load_dataset('HuggingFaceH4/ultrachat_200k',
+                              data_files={'train_sft': 'data/train_sft-00000-of-00003-a3ecf92756993583.parquet'},
+                              split=f'train_sft[:{NUM_LOADED_SAMPLES}]',
+                              verification_mode=VerificationMode.NO_CHECKS)
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, tokenizer, seqlen, dataset_name)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     import random
     random.seed(seed)
@@ -384,7 +310,7 @@ def get_ultrachat_200k(tokenizer, nsamples, seed, seqlen):
         inp = torch.tensor([inp])
         trainloader.append(inp)
 
-    return trainloader
+    return trainloader, None
 
 
 def get_gsm8k(tokenizer, nsamples, seed, seqlen):
@@ -400,15 +326,9 @@ def get_gsm8k(tokenizer, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: None.
     """
-    is_load_from_disk, dataset_info_path = bool_load_from_disk('gsm8k')
-    train_data, dataset_name = load_dataset_(is_load_from_disk,
-                                             dataset_info_path,
-                                             path='openai/gsm8k',
-                                             name='main',
-                                             split=f'train[:{NUM_LOADED_SAMPLES}]')
-
+    train_data = load_dataset('openai/gsm8k', 'main', split='train')
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, tokenizer, seqlen, dataset_name)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     # GSM8K samples have far fewer tokens than seqlen; recompute how many
     # train items to select so it can still yield enough samples after concatenation.
@@ -430,7 +350,7 @@ def get_gsm8k(tokenizer, nsamples, seed, seqlen):
     cat_samples = torch.cat(samples, dim=1)
     n_split = cat_samples.shape[1] // seqlen
     print(f' * Split into {n_split} blocks')
-    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)]
+    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
 
 
 def get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen):
@@ -446,15 +366,9 @@ def get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: None.
     """
-    is_load_from_disk, dataset_info_path = bool_load_from_disk('calibration')
-    train_data, dataset_name = load_dataset_(is_load_from_disk,
-                                             dataset_info_path,
-                                             path='neuralmagic/calibration',
-                                             name='LLM',
-                                             split=f'train[:{NUM_LOADED_SAMPLES}]')
-
+    train_data = load_dataset('neuralmagic/calibration', 'LLM', split='train')
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, tokenizer, seqlen, dataset_name)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     # neuralmagic_calibration samples have far fewer tokens than seqlen; recompute how many
     # train items to select so it can still yield enough samples after concatenation.
@@ -476,7 +390,7 @@ def get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen):
     cat_samples = torch.cat(samples, dim=1)
     n_split = cat_samples.shape[1] // seqlen
     print(f' * Split into {n_split} blocks')
-    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)]
+    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
 
 
 def get_open_platypus(tokenizer, nsamples, seed, seqlen):
@@ -492,14 +406,9 @@ def get_open_platypus(tokenizer, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: None.
     """
-    is_load_from_disk, dataset_info_path = bool_load_from_disk('open-platypus')
-    train_data, dataset_name = load_dataset_(is_load_from_disk,
-                                             dataset_info_path,
-                                             path='garage-bAInd/Open-Platypus',
-                                             split=f'train[:{NUM_LOADED_SAMPLES}]')
-
+    train_data = load_dataset('garage-bAInd/Open-Platypus', split='train')
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, tokenizer, seqlen, dataset_name)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     # open-platypus samples have far fewer tokens than seqlen; recompute how many
     # train items to select so it can still yield enough samples after concatenation.
@@ -521,7 +430,7 @@ def get_open_platypus(tokenizer, nsamples, seed, seqlen):
     cat_samples = torch.cat(samples, dim=1)
     n_split = cat_samples.shape[1] // seqlen
     print(f' * Split into {n_split} blocks')
-    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)]
+    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
 
 
 def get_openwebtext(tokenizer, nsamples, seed, seqlen):
@@ -537,16 +446,13 @@ def get_openwebtext(tokenizer, nsamples, seed, seqlen):
         train_loader: List of sampled and tokenized training examples.
         test_enc: None.
     """
-    is_load_from_disk, dataset_info_path = bool_load_from_disk('openwebtext')
-    train_data, dataset_name = load_dataset_(is_load_from_disk,
-                                             dataset_info_path,
-                                             path='Skylion007/openwebtext',
-                                             data_files={'train': 'plain_text/train-00000-of-00080.parquet'},
-                                             split=f'train[:{NUM_LOADED_SAMPLES}]',
-                                             verification_mode=VerificationMode.NO_CHECKS)
-
+    from datasets import VerificationMode
+    train_data = load_dataset('Skylion007/openwebtext',
+                              data_files={'train': 'plain_text/train-00000-of-00080.parquet'},
+                              split=f'train[:{NUM_LOADED_SAMPLES}]',
+                              verification_mode=VerificationMode.NO_CHECKS)
     train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, tokenizer, seqlen, dataset_name)
+    train_data = process_dataset(train_data, tokenizer, seqlen)
 
     import random
     random.seed(seed)
@@ -563,7 +469,7 @@ def get_openwebtext(tokenizer, nsamples, seed, seqlen):
         inp = torch.tensor([inp])
         trainloader.append(inp)
 
-    return trainloader
+    return trainloader, None
 
 
 def get_calib_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
