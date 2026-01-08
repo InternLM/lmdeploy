@@ -173,9 +173,10 @@ class SessionManager:
 
     def create(self, session_id: Optional[int] = None, **kwargs) -> Session:
         """Create a new session."""
-        session_id = session_id or next(self.session_id_generator)
+        if session_id is None:
+            session_id = self.reserve()
         if session_id in self.sessions:
-            logger.info(f'[SessionManager] session {session_id} already exists. Updating...')
+            logger.debug(f'[SessionManager] session {session_id} already exists. Updating...')
             session = self.sessions[session_id]
             session.update(**kwargs)
             return session

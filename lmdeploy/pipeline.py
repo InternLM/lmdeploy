@@ -67,6 +67,7 @@ class Pipeline:
 
     def infer(self,
               prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+              session_id: Optional[Union[List[int], int]] = None,
               gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
               do_preprocess: bool = True,
               adapter_name: Optional[str] = None,
@@ -88,7 +89,8 @@ class Pipeline:
         outputs = []
         try:
             requests = self._request_generator(prompts,
-                                               gen_config,
+                                               session_id=session_id,
+                                               gen_config=gen_config,
                                                do_preprocess=do_preprocess,
                                                adapter_name=adapter_name,
                                                stream_response=stream_response,
@@ -105,15 +107,17 @@ class Pipeline:
         return outputs
 
     def stream_infer(self,
-                     prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-                     gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
+                     prompt: Union[str, List[Dict]],
+                     session_id: Optional[int] = None,
+                     gen_config: Optional[GenerationConfig] = None,
                      do_preprocess: bool = True,
                      adapter_name: Optional[str] = None,
                      stream_response: bool = True,
                      **kwargs):
         """Stream inference."""
-        requests = self._request_generator(prompts,
-                                           gen_config,
+        requests = self._request_generator(prompt,
+                                           session_id=session_id,
+                                           gen_config=gen_config,
                                            do_preprocess=do_preprocess,
                                            adapter_name=adapter_name,
                                            stream_response=stream_response,
@@ -149,16 +153,15 @@ class Pipeline:
         session.update(prompt=prompt, response=None)
 
         sequence_start = session.step == 0
-
-        generator = self.infer(prompt,
-                               gen_config,
-                               adapter_name=adapter_name,
-                               sequence_start=sequence_start,
-                               sequence_end=False,
-                               session_id=session.session_id,
-                               stream_response=stream_response,
-                               multiplex=True,
-                               step=session.step)
+        generator = self.stream_infer(prompt,
+                                      session_id=session.session_id,
+                                      gen_config=gen_config,
+                                      stream_response=stream_response,
+                                      adapter_name=adapter_name,
+                                      multiplex=True,
+                                      sequence_start=sequence_start,
+                                      sequence_end=False,
+                                      step=session.step)
 
         def _gen():
             resp = None
@@ -167,7 +170,7 @@ class Pipeline:
                     resp = resp.extend(out) if resp else out
                     yield out
             except:  # noqa
-                self._run(coro=self.stop_session(session.session_id)).result()
+                self.async_engine._run(coro=self.stop_session(session.session_id)).result()
                 raise
             else:
                 session._response = resp
@@ -241,15 +244,34 @@ class Pipeline:
 
     def _request_generator(self,
                            prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+                           session_id: Optional[Union[List[int], int]] = None,
                            gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
                            **kwargs):
         """Generate requests."""
-        prompts = [prompts] if self._is_single(prompts) else prompts
-        assert isinstance(prompts, List), 'prompts should be a list'
-        gen_config = gen_config or GenerationConfig()
-        if not isinstance(gen_config, List):
-            gen_config = [gen_config] * len(prompts)
-        assert len(prompts) == len(gen_config), 'input gen_config length differs from the length of prompts'
-        for prompt, gen_cfg in zip(prompts, gen_config):
-            session_id = self.session_mgr.reserve()
-            yield dict(session_id=session_id, messages=prompt, gen_config=gen_cfg, **kwargs)
+        is_single = self._is_single(prompts)
+        prompts = [prompts] if is_single else prompts
+
+        if session_id is None:
+            session_ids = [self.session_mgr.reserve() for _ in prompts]
+        elif isinstance(session_id, list):
+            session_ids = session_id
+        else:
+            session_ids = [session_id]
+
+        if len(prompts) != len(session_ids):
+            raise ValueError(f'prompts and session_ids should have the same length. '
+                             f'Got {len(prompts)} prompts and {len(session_ids)} session_ids')
+
+        if gen_config is None:
+            gen_configs = [GenerationConfig()] * len(prompts)
+        elif isinstance(gen_config, list):
+            gen_configs = gen_config
+        else:
+            gen_configs = [gen_config] * len(prompts)
+
+        if len(prompts) != len(gen_configs):
+            raise ValueError(f'input gen_config length differs from the length of prompts. '
+                             f'Got {len(prompts)} prompts and {len(gen_configs)} gen_configs')
+
+        for prompt, gen_cfg, sid in zip(prompts, gen_configs, session_ids):
+            yield dict(session_id=sid, messages=prompt, gen_config=gen_cfg, **kwargs)
