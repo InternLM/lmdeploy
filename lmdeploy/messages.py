@@ -26,66 +26,75 @@ class GenerationConfig:
     """Generation parameters used by inference engines.
 
     Args:
-        n (int): Define how many chat completion choices to generate for each
+        n: Define how many chat completion choices to generate for each
             input message. **Only 1** is supported now.
-        max_new_tokens (int): The maximum number of tokens that can be
+        max_new_tokens: The maximum number of tokens that can be
             generated in the chat completion
-        do_sample (bool):  Whether or not to use sampling, use greedy
+        do_sample:  Whether or not to use sampling, use greedy
             decoding otherwise. Default to be False.
-        top_p (float): An alternative to sampling with temperature, called
+        top_p: An alternative to sampling with temperature, called
             nucleus sampling, where the model considers the results of the
             tokens with top_p probability mass
-        top_k (int): An alternative to sampling with temperature, where
+        top_k: An alternative to sampling with temperature, where
             the model considers the top_k tokens with the highest probability
-        min_p (float): Minimum token probability, which will be scaled by the
+        min_p: Minimum token probability, which will be scaled by the
             probability of the most likely token. It must be a value between
             0 and 1. Typical values are in the 0.01-0.2 range, comparably
             selective as setting `top_p` in the 0.99-0.8 range (use the
             opposite of normal `top_p` values)
-        temperature (float): Sampling temperature
-        repetition_penalty (float): Penalty to prevent the model from
+        temperature: Sampling temperature
+        repetition_penalty: Penalty to prevent the model from
             generating repeated words or phrases. A value larger than
             1 discourages repetition
-        ignore_eos (bool): Indicator to ignore the eos_token_id or not
-        random_seed (int): Seed used when sampling a token
-        stop_words (List[str]): Words that stop generating further tokens
-        bad_words (List[str]): Words that the engine will never generate
-        stop_token_ids (List[int]): List of tokens that stop the generation
+        ignore_eos: Indicator to ignore the eos_token_id or not
+        random_seed: Seed used when sampling a token
+        stop_words: Words that stop generating further tokens
+        bad_words: Words that the engine will never generate
+        stop_token_ids: List of tokens that stop the generation
             when they are generated. The returned output will not contain
             the stop tokens.
-        bad_token_ids (List[str]): List of tokens that the engine will never
+        bad_token_ids: List of tokens that the engine will never
             generate.
-        min_new_tokens (int): The minimum numbers of tokens to generate,
+        min_new_tokens: The minimum numbers of tokens to generate,
             ignoring the number of tokens in the prompt.
-        skip_special_tokens (bool): Whether or not to remove special tokens
+        skip_special_tokens: Whether or not to remove special tokens
             in the decoding. Default to be True.
-        spaces_between_special_tokens (bool): Whether or not to add spaces
+        spaces_between_special_tokens: Whether or not to add spaces
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
-        logprobs (int): Number of log probabilities to return per output token.
-        response_format (Dict): Generate responses according to given formatting.
-        response. Examples:
-            {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "test",
-                    "schema": {
-                    "properties": {
-                        "name": {
-                        "type": "string"
+        logprobs: Number of log probabilities to return per output token.
+        response_format: Generate responses according to given formatting.
+            Examples:
+
+            .. code-block:: json
+
+                {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "test",
+                        "schema": {
+                        "properties": {
+                            "name": {
+                            "type": "string"
+                            }
+                        },
+                        "required": ["name"],
+                        "type": "object"
                         }
-                    },
-                    "required": ["name"],
-                    "type": "object"
                     }
                 }
-            }
-        or,
-            {
-                "type": "regex_schema",
-                "regex_schema": "call me [A-Za-z]{1,10}"
-            }
-        logits_processors (List[Callable]): Custom logit processors.
+
+
+            or,
+
+            .. code-block:: json
+
+                {
+                    "type": "regex_schema",
+                    "regex_schema": "call me [A-Za-z]{1,10}"
+                }
+
+        logits_processors: Custom logit processors.
     """
 
     n: int = 1
@@ -176,23 +185,23 @@ class TurbomindEngineConfig:
     """TurboMind Engine config.
 
     Args:
-        dtype (str): data type for model weights and activations. It can be
+        dtype: data type for model weights and activations. It can be
             one of the following values, ['auto', 'float16', 'bfloat16']
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
-        model_format (str): the layout of the deployed model. It can be one
+        model_format: the layout of the deployed model. It can be one
             of the following values [hf, awq, gptq],`hf` meaning
             huggingface model(.bin, .safetensors), `awq` and `gptq` meaning
             the quantized model by AWQ and GPTQ, respectively. If it is not
             specified, i.e. None, it will be extracted from the input model
-        tp (int): the number of GPU cards used in tensor parallelism,
+        tp: the number of GPU cards used in tensor parallelism,
             default to 1
-        session_len (int): the max session length of a sequence, default to
+        session_len: the max session length of a sequence, default to
             None
-        max_batch_size (int): the max batch size during inference. If it is
+        max_batch_size: the max batch size during inference. If it is
             not specified, the engine will automatically set it according to
             the device
-        cache_max_entry_count (float): the percentage of gpu memory occupied
+        cache_max_entry_count: the percentage of gpu memory occupied
             by the k/v cache.
             For versions of lmdeploy between `v0.2.0` and `v0.2.1`, it
             defaults to 0.5, depicting the percentage of TOTAL GPU memory to
@@ -202,36 +211,36 @@ class TurbomindEngineConfig:
             the k/v cache.
             When it's an integer > 0, it represents the total number of k/v
             blocks.
-        cache_chunk_size (int): The policy to apply for KV block from
+        cache_chunk_size: The policy to apply for KV block from
             the block manager, default to -1.
-        cache_block_seq_len (int): the length of the token sequence in
+        cache_block_seq_len: the length of the token sequence in
             a k/v block, default to 64
-        enable_prefix_caching (bool): enable cache prompts for block reuse,
+        enable_prefix_caching: enable cache prompts for block reuse,
             default to False
-        quant_policy (int): default to 0. When k/v is quantized into 4 or 8
+        quant_policy: default to 0. When k/v is quantized into 4 or 8
             bit, set it to 4 or 8, respectively
-        rope_scaling_factor (float): scaling factor used for dynamic ntk,
+        rope_scaling_factor: scaling factor used for dynamic ntk,
             default to 0. TurboMind follows the implementation of transformer
             LlamaAttention
-        use_logn_attn (bool): whether or not to use log attn: default to False
-        download_dir (str): Directory to download and load the weights,
+        use_logn_attn: whether or not to use log attn: default to False
+        download_dir: Directory to download and load the weights,
             default to the default cache directory of huggingface.
-        revision (str): The specific model version to use. It can be a branch
+        revision: The specific model version to use. It can be a branch
             name, a tag name, or a commit id. If unspecified, will use the
             default version.
-        max_prefill_token_num(int): the number of tokens each iteration during
+        max_prefill_token_num: the number of tokens each iteration during
             prefill, default to 8192
-        num_tokens_per_iter(int): the number of tokens processed in each
+        num_tokens_per_iter: the number of tokens processed in each
             forward pass. Working with `max_prefill_iters` enables the
             "Dynamic SplitFuse"-like scheduling
-        max_prefill_iters(int): the max number of forward pass during prefill
+        max_prefill_iters: the max number of forward pass during prefill
             stage
-        devices(List[int]): the used devices
-        empty_init (bool): Whether to load the model weights, you should set
+        devices: the used devices
+        empty_init: Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
-        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+        hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model
-        enable_metrics (bool): enable metrics system
+        enable_metrics: enable metrics system
     """
 
     dtype: str = 'auto'
@@ -287,72 +296,72 @@ class PytorchEngineConfig:
     """PyTorch Engine Config.
 
     Args:
-        dtype (str): data type for model weights and activations. It can be
+        dtype: data type for model weights and activations. It can be
             one of the following values, ['auto', 'float16', 'bfloat16']
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
-        tp (int): Tensor Parallelism. default 1.
-        dp (int): Data Parallelism. default 1.
-        dp_rank (int): rank of dp.
-        ep (int): Expert Parallelism. default 1.
-        session_len (int): Max session length. Default None.
-        max_batch_size (int): Max batch size. If it is not specified,
+        tp: Tensor Parallelism. default 1.
+        dp: Data Parallelism. default 1.
+        dp_rank: rank of dp.
+        ep: Expert Parallelism. default 1.
+        session_len: Max session length. Default None.
+        max_batch_size: Max batch size. If it is not specified,
             the engine will automatically set it according to the device
-        attn_tp_size (int): tp size for attention, only works for dp>1
-        mlp_tp_size (int): tp size for mlp, only works for dp>1
-        moe_tp_size (int): tp size for moe, only works for dp>1
-        cache_max_entry_count (float): the percentage of gpu memory occupied
+        attn_tp_size: tp size for attention, only works for dp>1
+        mlp_tp_size: tp size for mlp, only works for dp>1
+        moe_tp_size: tp size for moe, only works for dp>1
+        cache_max_entry_count: the percentage of gpu memory occupied
             by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
             it defaults to 0.8, signifying the percentage of FREE GPU memory
             to be reserved for the k/v cache
-        prefill_interval (int): Interval to perform prefill,
+        prefill_interval: Interval to perform prefill,
             Default 16.
-        block_size (int): paging cache block size, default 64.
-        num_cpu_blocks (int): Num cpu blocks. If num is 0, cache
+        block_size: paging cache block size, default 64.
+        num_cpu_blocks: Num cpu blocks. If num is 0, cache
             would be allocate according to current environment.
-        num_gpu_blocks (int): Num gpu blocks. If num is 0, cache
+        num_gpu_blocks: Num gpu blocks. If num is 0, cache
             would be allocate according to current environment.
-        adapters (dict): The path configs to lora adapters.
-        max_prefill_token_num (int): tokens per iteration.
-        thread_safe (bool): thread safe engine instance.
-        enable_prefix_caching (bool): Enable token match and sharing caches.
-        device_type (str): The inference device type, options ['cuda']
-        eager_mode (bool): Enable "eager" mode or not
-        custom_module_map (Dict): nn module map customized by users. Once
+        adapters: The path configs to lora adapters.
+        max_prefill_token_num: tokens per iteration.
+        thread_safe: thread safe engine instance.
+        enable_prefix_caching: Enable token match and sharing caches.
+        device_type: The inference device type, options ['cuda']
+        eager_mode: Enable "eager" mode or not
+        custom_module_map: nn module map customized by users. Once
             provided, the original nn modules of the model will be
             substituted by the mapping ones
-        download_dir (str): Directory to download and load the weights,
+        download_dir: Directory to download and load the weights,
             default to the default cache directory of huggingface.
-        revision (str): The specific model version to use.
+        revision: The specific model version to use.
             It can be a branch name, a tag name, or a commit id.
             If unspecified, will use the default version.
-        quant_policy (int): default to 0. When k/v is quantized into 4 or 8
+        quant_policy: default to 0. When k/v is quantized into 4 or 8
             bit, set it to 4 or 8, respectively
-        distributed_executor_backend (str): backend of distributed backend,
+        distributed_executor_backend: backend of distributed backend,
             options: ['uni', 'mp', 'ray']
-        empty_init (bool): Whether to load the model weights, you should set
+        empty_init: Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
-        enable_microbatch (bool): enable microbatch for specified model
-        enable_eplb (bool): enable eplb for specified model
-        enable_metrics (bool): enable metrics system
-        role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
+        enable_microbatch: enable microbatch for specified model
+        enable_eplb: enable eplb for specified model
+        enable_metrics: enable metrics system
+        role: role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
-        enable_mp_engine (bool): run engine in multi-process mode.
-        mp_engine_backend (str): backend of mp engine, options:
+        enable_mp_engine: run engine in multi-process mode.
+        mp_engine_backend: backend of mp engine, options:
             ['mp', 'ray']. Default to `mp`.
-        model_format (str): weight quantization policy, options: ['fp8'].
-        hf_overrides (Dict[str, Any]): Huggingface overrides for the model.
+        model_format: weight quantization policy, options: ['fp8'].
+        hf_overrides: Huggingface overrides for the model.
             It can be used to override the default config of the model,
-        disable_vision_encoder (bool): Whether to disable loading vision
+        disable_vision_encoder: Whether to disable loading vision
             encoder. Default to False.
-        logprobs_mode (str): The mode of logprob, options: ['raw_logits', 'raw_logprobs']
-        dllm_block_length (int): Block size of block diffusion model.
-        dllm_unmasking_strategy (str): Dllm unmasking strategy, options:
+        logprobs_mode: The mode of logprob, options: ['raw_logits', 'raw_logprobs']
+        dllm_block_length: Block size of block diffusion model.
+        dllm_unmasking_strategy: Dllm unmasking strategy, options:
             ['low_confidence_dynamic', 'low_confidence_static', 'sequential'].
-        dllm_denoising_steps (int): Dllm denoising steps.
-        dllm_confidence_threshold (float): dllm unmasking threshold for
+        dllm_denoising_steps: Dllm denoising steps.
+        dllm_confidence_threshold: dllm unmasking threshold for
             dynamic unmasking.
     """
     dtype: str = 'auto'
@@ -449,21 +458,21 @@ class Response:
     """Pack all response information together.
 
     Args:
-        text (str): the response text from the server. If the output text is
+        text: the response text from the server. If the output text is
             an empty str and the finish_reason is length, it means the session
             length is reached.
-        generate_token_len (int): the response token length.
-        input_token_len (int): the input prompt token length. Note that it may
+        generate_token_len: the response token length.
+        input_token_len: the input prompt token length. Note that it may
             contains chat template part.
-        session_id (int): the id for running the session.
-        finish_reason ('stop' | 'length' | None): the reason the model stopped
+        session_id: the id for running the session.
+        finish_reason: the reason the model stopped
             generating tokens. This will be 'stop' if the model hit a natural
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
-        token_ids: (List[int]): the output token ids.
-        logprobs: (List[Dict[int, float]]): the top logprobs for each output
+        token_ids:: the output token ids.
+        logprobs:: the top logprobs for each output
             position.
-        index (int): it refers to the position index of the input request
+        index: it refers to the position index of the input request
             batch
     """
     text: str
@@ -597,13 +606,13 @@ class EngineOutput:
     """Engine output from turbomind/pytorch engine.
 
     Args:
-        status (ResponseType): the response type.
-        token_ids (List[int]): the newly generated token ids in each iteration.
-        logprobs (List[Dict[int, float]]): the top logprobs for each output
+        status: the response type.
+        token_ids: the newly generated token ids in each iteration.
+        logprobs: the top logprobs for each output
             position.
-        cache_block_ids (List[int]): send cache blocks back for migration in
+        cache_block_ids: send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
-        req_metrics (RequestMetrics): request metrics information
+        req_metrics: request metrics information
     """
     status: ResponseType
     token_ids: List[int]
@@ -620,10 +629,10 @@ class VisionConfig:
     """Vision model configs.
 
     Args:
-        max_batch_size (int): the max image size passed to the model, since
+        max_batch_size: the max image size passed to the model, since
             some models will use image patch, the actual running batch could
             be larger than this value.
-        thread_safe (bool): Specifies whether the engine instance is
+        thread_safe: Specifies whether the engine instance is
             thread-safe. Please set it to True when using the pipeline
             in a multi-threaded environment.
     """
@@ -636,9 +645,9 @@ class SpeculativeConfig:
     """Speculative decoding config.
 
     Args:
-        method (str): the speculative decoding method.
-        model (str): the path of speculative model.
-        num_speculative_tokens (int): number of generated token of draft model per step
+        method: the speculative decoding method.
+        model: the path of speculative model.
+        num_speculative_tokens: number of generated token of draft model per step
     """
     method: str
     model: str = ''
