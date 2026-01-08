@@ -315,6 +315,9 @@ class BaseModelAgent:
         # decoding inputs
         self.decoding_inputs: ModelInputs = None
 
+        # long context
+        self._prev_chunk_output: Dict = None
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
@@ -508,37 +511,6 @@ class BaseModelAgent:
         origin_inputs = inputs
 
         ret = await __forward(inputs)
-
-        # make long context inputs
-        # is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
-        # max_seqlen = 0
-        # if is_long_context:
-        #     seq_len = inputs.seq_length
-        #     batch_size = seq_len.size(0)
-        #     assert batch_size == 1, 'Do not support batched long context.'
-        #     max_seqlen = inputs.seq_length[0]
-        #     inputs = inputs.split(max_prefill_token_num)
-
-        # # get num dummy loop
-        # dummy_loop = 0
-        # if sync_long_context:
-        #     forward_loop = 1
-        #     if is_long_context:
-        #         forward_loop = len(inputs)
-        #     max_loop = torch.tensor(forward_loop, device='cuda')
-        #     dist.all_reduce(max_loop, op=dist.ReduceOp.MAX)
-        #     dummy_loop = max_loop - forward_loop
-
-        # if not is_long_context:
-        #     ret = await __forward(inputs)
-        # else:
-        #     ret = await __long_context_single_forward(inputs, max_seqlen)
-
-        # # compute dummy loop
-        # if dummy_loop > 0:
-        #     dummy_inputs = self.inputs_strategy.make_dummy(1, False, 'cuda', vocab_size=self.model_config.vocab_size)
-        # for _ in range(dummy_loop):
-        #     await __forward(dummy_inputs)
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, origin_inputs)
@@ -812,6 +784,7 @@ class BaseModelAgent:
         need_broadcast_next = (tp > 1)
 
         if inputs is None:
+            # decoding step, update prev_inputs with delta
             assert delta is not None
             inputs = self.decoding_inputs
             inputs = inputs.update_delta(delta)
@@ -821,8 +794,23 @@ class BaseModelAgent:
                                    inputs=inputs,
                                    extra_inputs=extra_inputs)
             self.agent_strategy.step_sampling_inputs(sampling_inputs, next_token_ids)
-        elif delta is not None:
-            self.decoding_inputs = self.decoding_inputs.update_delta(delta)
+        else:
+            # prefill step
+
+            if delta is not None:
+                # update decoding inputs with delta
+                # for second round chat
+                self.decoding_inputs = self.decoding_inputs.update_delta(delta)
+
+            # check long context
+            if self._prev_chunk_output is not None:
+                # update model metas
+                model_metas = self._prev_chunk_output.get('model_metas')
+                inputs.model_metas = model_metas
+
+                if not inputs.is_chunk:
+                    # remove _prev_chunk_output
+                    self._prev_chunk_output = None
 
         is_decoding = inputs.is_decoding
 
@@ -906,7 +894,9 @@ class BaseModelAgent:
 
         if is_decoding:
             self.decoding_inputs, extra_inputs = __update_inputs(inputs, next_token_ids, model_metas, extra_inputs)
-        elif not inputs.is_chunk:
+        elif inputs.is_chunk:
+            self._prev_chunk_output = output
+        else:
             next_decoding_inputs = inputs.next_decoding(next_token_ids)
             __merge_decoding_inputs(next_decoding_inputs)
 
@@ -1019,10 +1009,11 @@ class BaseModelAgent:
         for task in self.tasks:
             if not task.done():
                 task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    logger.debug(f'ModelAgent {task.get_name()} task cancelled.')
+
+        try:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            logger.debug(f'ModelAgent {task.get_name()} task cancelled.')
 
         if self.guided_decoding_manager:
             self.guided_decoding_manager.clear()

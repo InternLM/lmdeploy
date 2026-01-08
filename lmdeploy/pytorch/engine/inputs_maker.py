@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
@@ -14,6 +15,7 @@ from lmdeploy.utils import get_logger
 if TYPE_CHECKING:
     from lmdeploy.pytorch.adapter.adapter import AdapterManager
     from lmdeploy.pytorch.messages import SchedulerSequence
+    from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
     from lmdeploy.pytorch.paging import Scheduler
     from lmdeploy.pytorch.strategies.base.engine import EngineStrategy
     from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
@@ -70,11 +72,10 @@ class LongContextChunker:
     """Long context chunker."""
 
     def __init__(self, max_prefill_token_num: int):
-        # long prefill seq
-        self.seq: 'SchedulerSequence' = None
-        self.next_step: int = 0
-
         self.max_prefill_token_num = max_prefill_token_num
+
+        # long prefill seq
+        self.clear()
 
     def enabled(self):
         """Is enabled."""
@@ -89,22 +90,77 @@ class LongContextChunker:
         self.seq = seq
         self.next_step = seq.num_history_ids
 
+        # fill multimodals
+        # if image size exceeds max_prefill_token_num, enlarge it
+        max_prefill_num = self.max_prefill_token_num
+        mm = seq.get_input_multimodals()
+        self.multimodals = defaultdict(list)
+        for key, value in mm.items():
+            # sorted by start
+            value = sorted(value, key=lambda x: x.start)
+            self.multimodals[key] = value
+            max_mm_size = max([v.end - v.start for v in value], default=0)
+            max_prefill_num = max(max_prefill_num, max_mm_size)
+
+        self.max_prefill_num = max_prefill_num
+
+    def multimodal_iter(self):
+        """Multimodal iterator."""
+        multimodal_data = []
+        for modal_type, modal_datas in self.multimodals.items():
+            if len(modal_datas) == 0:
+                continue
+            multimodal_data += [(modal_type, data) for data in modal_datas]
+
+        multimodal_data = sorted(multimodal_data, key=lambda x: x[1].start)
+        for modal_type, data in multimodal_data:
+            yield modal_type, data
+
     def next_chunk_size(self):
         """Get chunk size."""
-        if self.seq is None:
-            return 0
-        return min(self.seq.num_token_ids, self.max_prefill_token_num)
+        seq = self.seq
+        if seq is None:
+            return 0, None
+
+        llm_chunk_size = min(seq.num_token_ids, self.max_prefill_num)
+
+        if len(self.multimodals) == 0:
+            # no vlm inputs found
+            return llm_chunk_size, None
+
+        start = seq.num_history_ids
+        end = start + llm_chunk_size
+        out_multimodals: 'MultiModalInputs' = defaultdict(list)
+        for modal_type, mm in self.multimodal_iter():
+            assert mm.start >= start, 'multimodal data should be sorted by start'
+            if mm.start >= end:
+                # | start ... end ... mm.start ... mm.end |
+                # if start is beyond threshold, stop
+                break
+
+            if mm.end > end:
+                # | start ... mm.start ... end ... mm.end |
+                # assume multimodals not overlap
+                end = mm.start
+                break
+
+            # | start ... mm.start ... mm.end ... end |
+            out_multimodals[modal_type].append(mm)
+
+        return end - start, out_multimodals
 
     def is_last_chunk(self):
         """Is last chunk."""
         if self.seq is None:
             return True
-        return self.seq.num_token_ids <= self.max_prefill_token_num
+        return self.seq.num_token_ids <= self.max_prefill_num
 
     def clear(self):
         """Clear."""
-        self.seq = None
-        self.next_step = 0
+        self.seq: 'SchedulerSequence' = None
+        self.multimodals: MultiModalInputs = defaultdict(list)
+        self.next_step: int = 0
+        self.max_prefill_num: int = self.max_prefill_token_num
 
     def update_step(self, inputs: ModelInputs):
         """Step chunker."""
@@ -117,6 +173,12 @@ class LongContextChunker:
         chunk_size = inputs.max_q_seqlen
         self.next_step += chunk_size
         self.seq.set_step(self.next_step)
+
+        # remove used multimodals
+        for mms in self.multimodals.values():
+            while len(mms) > 0 and mms[0].end <= self.next_step:
+                mms.pop(0)
+        self.multimodals = dict((k, v) for k, v in self.multimodals.items() if len(v) > 0)
 
 
 class InputsMakerAsync:
@@ -314,7 +376,10 @@ class InputsMakerAsync:
 
         return model_inputs
 
-    def create_model_inputs_long_context(self, seq: 'SchedulerSequence', chunk_size: int):
+    def create_model_inputs_long_context(self,
+                                         seq: 'SchedulerSequence',
+                                         chunk_size: int,
+                                         multimodals: Optional['MultiModalInputs'] = None):
         """Create model inputs for long context messages."""
         token_ids = seq.token_ids[:chunk_size]
         input_ids = torch.as_tensor(token_ids)[None]
@@ -353,13 +418,16 @@ class InputsMakerAsync:
         self._set_adapter_ids(model_inputs, [seq])
 
         # vision inputs
-        vision_model_inputs = self._create_vision_model_inputs([seq], model_inputs)
-        model_inputs.vision_inputs = vision_model_inputs
+        if multimodals is not None and len(multimodals) > 0:
+            vision_model_inputs = VisionModelInputs(
+                history_lengths=model_inputs.history_lengths,
+                input_multimodals=[multimodals],
+            )
+            model_inputs.vision_inputs = vision_model_inputs
 
         # ssm
         if self.config.is_ssm:
-            state_offsets = torch.tensor([seq.logical_state])
-            model_inputs.state_offsets = state_offsets
+            model_inputs.state_offsets = torch.tensor([seq.logical_state])
 
         return model_inputs
 
@@ -500,8 +568,8 @@ class InputsMakerAsync:
                 inputs, delta = __create_model_inputs(running)
                 self.long_context_chunker.clear()
             else:
-                chunk_size = self.long_context_chunker.next_chunk_size()
-                inputs = self.create_model_inputs_long_context(seq, chunk_size)
+                chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+                inputs = self.create_model_inputs_long_context(seq, chunk_size, multimodals)
         elif prefill:
             # prefill
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
@@ -512,8 +580,8 @@ class InputsMakerAsync:
             if len(running) == 1 and self.long_context_chunker.is_long_context(running[0]):
                 # set long context chunker
                 self.long_context_chunker.set_seq(running[0])
-                chunk_size = self.long_context_chunker.next_chunk_size()
-                inputs = self.create_model_inputs_long_context(running[0], chunk_size)
+                chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+                inputs = self.create_model_inputs_long_context(running[0], chunk_size, multimodals)
                 extra_inputs = None
             elif len(running) > 0:
                 # create inputs

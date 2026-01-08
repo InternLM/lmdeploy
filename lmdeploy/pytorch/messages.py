@@ -498,12 +498,12 @@ class HistoryMultiModals:
 
     def get_datas(self, start=0, end=-1):
         """Get multimodals from prompts position [start, end)."""
-        outs = dict()
+        outs: MultiModalInputs = dict()
         test_range = range(start, end)
         for modal_type, modal_datas in self.multimodals.items():
             data = []
             for modal_data in modal_datas:
-                if (modal_data.start not in test_range and modal_data.end not in test_range):
+                if (modal_data.start not in test_range and modal_data.end - 1 not in test_range):
                     continue
                 data.append(modal_data)
             if len(data) > 0:
@@ -532,19 +532,6 @@ class HistoryMultiModals:
                 val.start += prev_len
                 val.end += prev_len
         return input_mms
-
-    def get_encoder_len(self, start=0, end=-1):
-        """Get lens of encoder."""
-        test_range = range(start, end)
-        out_len = 0
-        for _, modal_datas in self.multimodals.items():
-            for modal_data in modal_datas:
-                if modal_data.encoder_len is None:
-                    continue
-                if (modal_data.start not in test_range and modal_data.end not in test_range):
-                    continue
-                out_len += modal_data.encoder_len
-        return out_len
 
 
 class UpdateTokenMode(enum.Enum):

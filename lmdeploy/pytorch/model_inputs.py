@@ -65,8 +65,6 @@ class DPMeta:
 class VisionModelInputs:
     """Vision model inputs."""
     history_lengths: torch.LongTensor = None
-    history_image_nums: torch.LongTensor = None
-    history_image_token_lengths: torch.LongTensor = None
     input_embeddings: List[List[torch.Tensor]] = None
     input_embedding_ranges: List[torch.LongTensor] = None
     input_embedding_indexing: torch.BoolTensor = None
@@ -123,30 +121,6 @@ class VisionModelInputs:
                 index_ranges = torch.arange(input_embedding_indexing.numel(), device=device)
                 input_embedding_indexing = index_ranges[input_embedding_indexing]
         return input_embeddings, input_embedding_indexing
-
-
-def get_flatten_multimodals(vision_inputs: VisionModelInputs):
-    """Get flatten multimodals."""
-    # ignore if vision inputs is None
-    if vision_inputs is None:
-        return []
-
-    # ignore if input_multimodals is not valid
-    input_multimodals = vision_inputs.input_multimodals
-    if input_multimodals is None or len(input_multimodals) == 0:
-        return []
-
-    # inputs_mms is a dict with type/data_list
-    # flatten it to a list of (type, data)
-    input_mms = vision_inputs.input_multimodals[0]
-    flatten_mms = []
-    for k, mms in input_mms.items():
-        mms = [(k, mm) for mm in mms]
-        flatten_mms += mms
-
-    # sort by start time
-    flatten_mms = sorted(flatten_mms, key=lambda mm: mm[1].start)
-    return flatten_mms
 
 
 @dataclass
@@ -233,106 +207,6 @@ class ModelInputs:
             input_ids = input_ids[None, :]
         self.input_ids = input_ids
         return self
-
-    def split(self, split_size: int):
-        """Split inputs."""
-
-        def __add_overlapped_multimodal(flatten_mms: List, input_mms: Dict, end: int, mm_end: int):
-            """Add overlapped multimodal data."""
-            while len(flatten_mms) > 0:
-                next_mm = flatten_mms[0]
-                next_start = next_mm[1].start
-                next_end = next_mm[1].end
-
-                # if next multimodal data is not in the current split, break
-                if next_start >= mm_end:
-                    break
-
-                key = next_mm[0]
-                input_mms.setdefault(key, [])
-                input_mms[key].append(next_mm[1])
-                end += max(0, next_end - mm_end)
-                flatten_mms.pop(0)
-
-            return input_mms, end
-
-        def __make_next_vision_inputs(flatten_mms: List, start: int):
-            """Make vision inputs."""
-            assert len(flatten_mms) > 0
-
-            # start/end of first multimodal data
-            mm_start = flatten_mms[0][1].start
-            mm_end = flatten_mms[0][1].end
-
-            # when split vision inputs, we require multimodal data should be
-            # the start of the split
-            # tttvvv... would be split to ttt|vvv...
-            if mm_start > self.history_lengths + start:
-                end = min(mm_start - self.history_lengths, start + split_size)
-                return None, end
-
-            # split by first multimodal data
-            key, mm = flatten_mms.pop(0)
-            input_mms = {key: [mm]}
-            end = start + mm.end - mm.start
-
-            # try add multimodal data between mm_start and mm_end
-            # we have not found any model with this pattern yet
-            # so basically, nothing would changed
-            input_mms, end = __add_overlapped_multimodal(flatten_mms, input_mms, end, mm_end)
-            vision_inputs = VisionModelInputs(input_multimodals=[input_mms], )
-            return vision_inputs, end
-
-        assert len(self.seq_length) == 1, ('Can not perform split on batched input.')
-
-        input_ids = self.input_ids
-        if input_ids.numel() < split_size:
-            return self
-
-        flatten_mms = get_flatten_multimodals(self.vision_inputs)
-
-        max_seq_len = self.seq_length[0].item()
-        ret = []
-        start = 0
-        max_kv_seqlen = self.max_kv_seqlen - self.max_q_seqlen
-
-        while start < max_seq_len:
-            if len(flatten_mms) > 0:
-                vision_inputs, end = __make_next_vision_inputs(flatten_mms, start)
-            else:
-                vision_inputs = None
-                end = min(max_seq_len, start + split_size)
-
-            max_q_seqlen = end - start
-            if isinstance(max_q_seqlen, torch.Tensor):
-                max_q_seqlen = max_q_seqlen.item()
-            max_kv_seqlen += max_q_seqlen
-            target_hidden_states = self.target_hidden_states[:, start:
-                                                             end] if self.target_hidden_states is not None else None
-            target_position_ids = self.target_position_ids[:,
-                                                           start:end] if self.target_position_ids is not None else None
-            inp = ModelInputs(
-                input_ids=self.input_ids[:, start:end],
-                seq_length=input_ids.new_tensor([end - start]),
-                block_offsets=self.block_offsets,
-                history_lengths=self.history_lengths + start,
-                is_decoding=self.is_decoding,
-                num_ignored_history=self.num_ignored_history,
-                max_q_seqlen=max_q_seqlen,
-                max_kv_seqlen=max_kv_seqlen,
-                sum_kv_seqlen=max_kv_seqlen,
-                local_adapter_ids=self.local_adapter_ids,
-                vision_inputs=vision_inputs,
-                model_metas=self.model_metas,
-                state_offsets=self.state_offsets,
-                target_hidden_states=target_hidden_states,
-                target_position_ids=target_position_ids,
-            )
-            ret.append(inp)
-
-            start = end
-
-        return ret
 
     @record_function('ModelInputs.next_decoding')
     def next_decoding(self, input_ids: torch.Tensor, max_q_seqlen: int = 1):
