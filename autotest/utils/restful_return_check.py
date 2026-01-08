@@ -1,3 +1,6 @@
+import re
+
+
 def assert_chat_completions_batch_return(output, model_name, check_logprobs: bool = False, logprobs_num: int = 5):
     assert_usage(output.get('usage'))
     assert output.get('id') is not None
@@ -111,6 +114,11 @@ def assert_completions_stream_return(output,
                 assert message.get('logprobs') is None
 
 
-def get_repeat_times(input, sub_input):
-    time = input.count(sub_input)
-    return time
+def has_repeated_fragment(text, repeat_count=5):
+    pattern = r'(.+?)\1{' + str(repeat_count - 1) + ',}'
+    match = re.search(pattern, text)
+    if match:
+        repeated_fragment = match.group(1)
+        start_pos = match.start()
+        return True, {'repeated_fragment': repeated_fragment, 'position': start_pos}
+    return False, f'{text} does not contain repeated fragments'

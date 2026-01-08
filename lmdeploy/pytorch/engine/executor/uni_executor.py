@@ -86,6 +86,10 @@ class UniExecutor(ExecutorBase):
         """Start engine loop."""
         self.model_agent.start(forward_event)
 
+    async def wait_tasks(self):
+        """Wait tasks."""
+        await self.model_agent.wait_tasks()
+
     def stop(self):
         """Stop engine loop."""
         self.model_agent.stop()

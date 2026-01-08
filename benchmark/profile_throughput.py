@@ -222,18 +222,14 @@ class Engine:
             tasks.append(task)
 
         async def _gather_tasks(tasks):
-            return await asyncio.gather(*tasks)
+            profiler.start()
+            ret = await asyncio.gather(*tasks)
+            profiler.finish()
+            return ret
 
         self.pbar = tqdm(total=len(requests))
 
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(event_loop)
-
-        profiler.start()
-
         asyncio.run(_gather_tasks(tasks))
-
-        profiler.finish()
 
         self.pbar.close()
 

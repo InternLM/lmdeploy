@@ -58,4 +58,8 @@ class TestRequestHander:
         resp = sender.recv(resp)
         assert resp.data == 'test success'
 
+        # cleanup, cancel main task
+        task_to_cancel = manager._loop_task
         manager.stop_loop()
+        asyncio.run
+        event_loop.run_until_complete(asyncio.gather(task_to_cancel, return_exceptions=True))

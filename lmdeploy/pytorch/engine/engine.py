@@ -416,20 +416,19 @@ class Engine(EngineBase):
         """Model config."""
         return self.executor.model_config
 
-    async def p2p_initialize(self, init_request: DistServeInitRequest):
-        return await self.engine_conn.p2p_initialize(init_request)
+    def p2p_initialize(self, init_request: DistServeInitRequest):
+        return self.engine_conn.p2p_initialize(init_request)
 
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         return self.engine_conn.p2p_connect(conn_request)
 
-    async def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
+    def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
         return self.engine_conn.p2p_drop_connect(drop_conn_request)
 
     def _loop_finally(self):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
-        self.executor.stop()
         self.executor.release()
 
     def update_params(self, request: Any):
@@ -454,21 +453,22 @@ class Engine(EngineBase):
             # create engine loop
             engine_loop = build_engine_loop(self)
             self.migration_event = engine_loop.migration_event
-            forward_event = engine_loop.forward_event
-
-            # start executor
-            logger.info('Starting executor.')
-            self.executor.start(forward_event)
 
             # start engine loop
-            engine_loop.create_tasks(event_loop)
+            engine_loop.start(event_loop)
             await engine_loop.wait_tasks()
         except asyncio.CancelledError:
             logger.info('Engine main loop cancelled.')
             raise
         except BaseException:
+            # since AsyncEngine will not wait for engine loop
+            # we have to log it here.
             logger.exception('Engine main loop failed.')
+            raise
         finally:
+            logger.debug('Engine main loop finally cleanup.')
+            if engine_loop is not None:
+                engine_loop.stop()
             self._loop_finally()
 
     def close(self):
@@ -482,6 +482,30 @@ class Engine(EngineBase):
         else:
             self._loop_finally()
 
+    def start(self):
+        """Start engine loop tasks."""
+        if self.req_manager.is_loop_alive():
+            return True
+        self.req_manager.create_loop_task()
+        return True
+
+    def stop(self):
+        """Stop engine loop tasks."""
+        if self._loop_main is not None:
+            self._loop_main.cancel()
+
+    async def wait_tasks(self):
+        """Wait async tasks to finish."""
+        if self._loop_main is None:
+            logger.warning('No engine main loop to wait for.')
+            return
+
+        try:
+            await self._loop_main
+        except asyncio.CancelledError:
+            logger.info('Engine main loop cancelled in wait_tasks.')
+            raise
+
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.
 
@@ -494,11 +518,8 @@ class Engine(EngineBase):
         return EngineInstance(self)
 
     def start_loop(self):
-        """Start engine loop."""
-        if self.req_manager.is_loop_alive():
-            return True
-        self.req_manager.create_loop_task()
-        return True
+        """Alias of start, API for AsyncEngine."""
+        return self.start()
 
     def end_session(self, session_id: int):
         """End session."""

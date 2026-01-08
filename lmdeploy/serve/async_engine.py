@@ -22,65 +22,15 @@ from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, 
                                TurbomindEngineConfig)
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
-from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
+from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
+from lmdeploy.serve.multimodal_processor import MultimodalProcessor
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 logger = get_logger('lmdeploy')
-
-
-def _merge_message_content(msg: Dict) -> Dict:
-    """Merge multimodal content blocks and ensure content field exists.
-
-    This function normalizes message content to match vLLM's behavior:
-    1. Missing content field -> add content='' (empty string)
-    2. None content -> convert to content='' (empty string)
-    3. String content -> return as-is
-    4. List content (multimodal) -> merge all text blocks with newline separator
-
-    Args:
-        msg: A message dict with 'role' and optionally 'content' field
-
-    Returns:
-        A message dict with 'content' field guaranteed to exist
-
-    Note:
-        This implementation is based on vLLM's content processing logic.
-        vLLM uses "\n".join() to merge multiple text blocks from multimodal content.
-
-    References:
-        - vLLM content normalization:
-          https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/chat_utils.py
-          See _parse_chat_message_content() and _parse_chat_message_content_parts()
-        - vLLM text merging logic:
-          text_prompt = "\n".join(texts)
-    """
-    # If content is missing or None, convert to empty string (matches vLLM behavior)
-    # This prevents Jinja2 template errors when rendering chat templates
-    if 'content' not in msg or msg['content'] is None:
-        result = dict(msg)
-        result['content'] = ''
-        return result
-
-    # If content is already a string, return as-is
-    if isinstance(msg['content'], str):
-        return msg
-
-    # If content is a list, merge all text blocks into a single string
-    # This matches vLLM's behavior: text_prompt = "\n".join(texts)
-    content_parts = []
-    for block in msg['content']:
-        if isinstance(block, dict) and block.get('type') == 'text':
-            content_parts.append(block.get('text', ''))
-    merged_content = '\n'.join(content_parts)
-
-    # Preserve all other fields in the message (e.g., tool_calls)
-    result = dict(msg)
-    result['content'] = merged_content
-    return result
 
 
 @dataclasses.dataclass
@@ -95,42 +45,25 @@ class GenOut:
     logprobs: List[Dict[int, float]] = None
     logits: Any = None
     last_hidden_state: Any = None
+    cache_block_ids: List[int] = None  # for disaggregation
+    routed_experts: Any = None  # for RL router replay
 
-    # for disaggregation
-    cache_block_ids: List[int] = None
+    def to_response(self, index: int = 0) -> Response:
+        """Convert GenOut to Response object.
 
-    routed_experts: Any = None
-
-
-def _gen_out_to_response(out: GenOut, index) -> Response:
-    return Response(text=out.response,
-                    generate_token_len=out.generate_token_len,
-                    input_token_len=out.input_token_len,
-                    finish_reason=out.finish_reason,
-                    token_ids=out.token_ids or [],
-                    logprobs=out.logprobs,
-                    last_hidden_state=out.last_hidden_state,
-                    logits=out.logits,
-                    routed_experts=out.routed_experts,
-                    index=index)
-
-
-def _append_response(dst: Response, src: Response):
-    """Dst += src."""
-    if not dst:
-        return src
-    dst.text += src.text
-    dst.generate_token_len = src.generate_token_len
-    dst.input_token_len = src.input_token_len
-    dst.finish_reason = src.finish_reason
-    dst.index = src.index
-    if src.token_ids:
-        dst.token_ids += src.token_ids
-    if src.logprobs:
-        dst.logprobs = dst.logprobs or []
-        dst.logprobs += src.logprobs
-    dst.routed_experts = src.routed_experts
-    return dst
+        Args:
+            index: The index position in the batch. Default to 0.
+        """
+        return Response(text=self.response,
+                        generate_token_len=self.generate_token_len,
+                        input_token_len=self.input_token_len,
+                        finish_reason=self.finish_reason,
+                        token_ids=self.token_ids or [],
+                        logprobs=self.logprobs,
+                        last_hidden_state=self.last_hidden_state,
+                        logits=self.logits,
+                        routed_experts=self.routed_experts,
+                        index=index)
 
 
 class Session:
@@ -310,21 +243,13 @@ class AsyncEngine(LogitsMixin):
                  speculative_config: SpeculativeConfig = None,
                  **kwargs) -> None:
         logger.info(f'input backend={backend}, backend_config={backend_config}')
-        logger.info(f'input chat_template_config={chat_template_config}')
         logger.info(f'speculative_config={speculative_config}')
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
         self.model_name = model_name if model_name else model_path
-        chat_template_name = best_match_model(model_path)
-        if chat_template_config is None:
-            chat_template_config = ChatTemplateConfig(chat_template_name, model_path=model_path)
-        elif chat_template_config.model_name is None:
-            chat_template_config.model_name = chat_template_name
-        self.chat_template = chat_template_config.chat_template
-
-        logger.info(f'updated chat_template_onfig={chat_template_config}')
-
+        self.chat_template = get_chat_template(model_path, chat_template_config)
         self.tokenizer = Tokenizer(model_path)
+        self.prompt_processor = MultimodalProcessor(self.tokenizer, self.chat_template)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
         self.arch, self.hf_cfg = get_model_arch(model_path)
         self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
@@ -366,6 +291,7 @@ class AsyncEngine(LogitsMixin):
 
         # build stat loggers
         self._build_stat_loggers()
+        self.epoch = 0
 
     def close(self):
         self.internal_thread.close()
@@ -387,20 +313,17 @@ class AsyncEngine(LogitsMixin):
                 self.free_insts.put_nowait(inst)
         return self.free_insts
 
-    def _build_turbomind(self,
-                         model_path: str,
-                         backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
-                         **kwargs):
-        """Innter build method for turbomind backend."""
+    def _build_turbomind(self, model_path: str, backend_config: TurbomindEngineConfig = None, **kwargs):
+        """Inner build method for turbomind backend."""
         from lmdeploy import turbomind as tm
         return tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
 
     def _build_pytorch(self,
                        model_path: str,
-                       backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+                       backend_config: PytorchEngineConfig = None,
                        speculative_config: SpeculativeConfig = None,
                        **kwargs):
-        """Innter build method for pytorch backend."""
+        """Inner build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
         return Engine.from_pretrained(model_path, engine_config=backend_config, speculative_config=speculative_config)
 
@@ -465,12 +388,14 @@ class AsyncEngine(LogitsMixin):
     async def stop_all_session(self):
         """Stop all running sessions."""
         logger.info('stop all sessions')
+        self.epoch += 1
         tasks = []
         session_ids = []
         for session_id in list(self.id2inst.keys()):
             generator = self.id2inst.get(session_id)
             if generator:
                 session_ids.append(session_id)
+                logger.debug(f'stop session {session_id}')
                 tasks.append(generator.async_cancel(session_id))
         await asyncio.gather(*tasks)
         logger.info(f'all {len(session_ids)} sessions stopped')
@@ -548,7 +473,7 @@ class AsyncEngine(LogitsMixin):
 
         async def _sync_resp(g, que: Queue, idx: int, sem: asyncio.Semaphore):
             async for out in g:
-                que.put(_gen_out_to_response(out, idx))
+                que.put(out.to_response(idx))
             sem.release()
             if not multiplex:
                 que.put(None)  # sentinel of inner generator
@@ -655,7 +580,7 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs):
                 res = None
                 for out in g:
-                    res = _append_response(res, out)
+                    res = res.extend(out) if res else out
                 outputs.append(res)
         finally:
             if pbar: pbar.close()  # noqa
@@ -686,58 +611,26 @@ class AsyncEngine(LogitsMixin):
         """
         return self.infer(prompts, gen_config, do_preprocess, adapter_name, stream_response, multiplex=True, **kwargs)
 
-    async def _get_prompt_input(self,
-                                prompt: str,
-                                do_preprocess: bool,
-                                sequence_start: bool,
-                                adapter_name: str,
-                                tools: Optional[List[object]] = None,
-                                reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None,
-                                chat_template_kwargs: Optional[Dict] = None,
-                                **kwargs):
-        # Change multimodal data to openai text messages, i.e.,
-        # [{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}] ->
-        # [{'role': 'user', 'content': 'hi']
-        # Also ensure all messages have 'content' field (set to None if missing, e.g., assistant with tool_calls)
-        if isinstance(prompt, list):
-            prompt = [_merge_message_content(msg) for msg in prompt]
-        if do_preprocess:
-            # use adapter's chat template if possible
-            chat_template = self.chat_template
-            if adapter_name in MODELS.module_dict:
-                chat_template = MODELS.module_dict[adapter_name]()
-        else:
-            chat_template = BaseChatTemplate()
-        chat_template_kwargs = chat_template_kwargs or {}
-        prompt = chat_template.messages2prompt(prompt,
-                                               sequence_start,
-                                               tools=tools,
-                                               reasoning_effort=reasoning_effort,
-                                               **chat_template_kwargs)
-        if prompt is None:
-            raise ValueError(
-                f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
-            )
-        input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
-        return {'prompt': prompt, 'input_ids': input_ids}
-
     @asynccontextmanager
     async def model_inst(self, session_id: int):
         """A context manager to make sure server's safe running."""
+        logger.debug(f'[model_inst] session {session_id} applying for a model instance')
         assert session_id not in self.id2inst
         free_insts = self._get_free_insts()
         inst = await free_insts.get()
         inst._active = asyncio.Event()
         self.id2inst[session_id] = inst
+        logger.debug(f'[model_inst] session {session_id} acquired an instance')
         try:
             yield inst
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:
-            logger.error(f'[model_inst] exception caught: {e}')
+            logger.error(f'[model_inst] session {session_id} exception caught: {e}')
             if self.backend == 'pytorch':
                 # manually end pytorch session
                 await inst.async_end(session_id)
         finally:
-            self.id2inst.pop(session_id)
+            logger.debug(f'[model_inst] session {session_id} releasing the instance')
+            self.id2inst.pop(session_id, None)
             inst._active.set()
             free_insts.put_nowait(inst)
 
@@ -747,7 +640,7 @@ class AsyncEngine(LogitsMixin):
         try:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
+            logger.error(f'[safe_run] session {session_id} exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
             await inst.async_cancel(session_id)
             raise e
@@ -787,6 +680,7 @@ class AsyncEngine(LogitsMixin):
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
+        epoch = self.epoch
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
         if session_id not in self.id2step:
@@ -824,15 +718,14 @@ class AsyncEngine(LogitsMixin):
         if messages:
             prompt = messages
             self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
-            prompt_input = await self._get_prompt_input(prompt,
-                                                        do_preprocess,
-                                                        sequence_start,
-                                                        adapter_name,
-                                                        tools=tools,
-                                                        reasoning_effort=reasoning_effort,
-                                                        mm_processor_kwargs=mm_processor_kwargs,
-                                                        chat_template_kwargs=chat_template_kwargs,
-                                                        **kwargs)
+            prompt_input = await self.prompt_processor.get_prompt_input(prompt=prompt,
+                                                                        do_preprocess=do_preprocess,
+                                                                        sequence_start=sequence_start,
+                                                                        adapter_name=adapter_name,
+                                                                        tools=tools,
+                                                                        reasoning_effort=reasoning_effort,
+                                                                        chat_template_kwargs=chat_template_kwargs,
+                                                                        **kwargs)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,
@@ -885,6 +778,17 @@ class AsyncEngine(LogitsMixin):
 
         metrics_processor.increment_total_requests()
         async with self.model_inst(session_id) as inst:
+            if epoch != self.epoch:
+                logger.debug(f'[generate] session {session_id} got aborted before starting inference')
+                # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
+                metrics_processor.increment_finished_requests()
+                yield GenOut(response='',
+                             history_token_len=0,
+                             input_token_len=len(input_ids),
+                             generate_token_len=0,
+                             finish_reason='abort',
+                             token_ids=[])
+                return
             token_ids = input_ids.copy()
             history_len = self.id2step[session_id]
             input_len = len(input_ids)
@@ -901,6 +805,7 @@ class AsyncEngine(LogitsMixin):
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
                                      step=history_len) as gen:
+                logger.debug(f'[generate] session {session_id} started')
                 hit_stop_token = 0
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
                 async for outputs in gen:
@@ -965,7 +870,7 @@ class AsyncEngine(LogitsMixin):
                         # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
                         token_ids = outputs.token_ids[-1:]
                         response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
-                        logits = outputs.logits[-1:] if outputs.logits else None
+                        logits = outputs.logits[-1:] if outputs.logits is not None else None
                         last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
                         logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
                         gen_len += 1
@@ -1067,7 +972,7 @@ class AsyncEngine(LogitsMixin):
             resp = None
             try:
                 for out in generator:
-                    resp = _append_response(resp, out)
+                    resp = resp.extend(out) if resp else out
                     yield out
             except:  # noqa
                 self._run(coro=self.stop_session(session._id)).result()

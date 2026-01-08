@@ -138,6 +138,7 @@ class RequestSender:
                 if self.is_loop_alive():
                     continue
                 logger.debug('Engine main loop failed.')
+                resp.type = ResponseType.ENGINE_STOP_ERROR
                 break
         event.clear()
         return resp
@@ -175,6 +176,9 @@ class RequestManager:
 
     def create_loop_task(self):
         """Create coro task."""
+        if self._loop_task is not None:
+            logger.debug('loop task has been created.')
+            return self._loop_task
         logger.debug('creating engine loop task.')
         event_loop = asyncio.get_event_loop()
         assert self._loop_coro is not None, ('Please set loop task with manager.start_loop')
@@ -198,6 +202,7 @@ class RequestManager:
     def stop_loop(self):
         if self.is_loop_alive():
             self._loop_task.cancel()
+        self._loop_task = None
 
     def is_loop_alive(self):
         """Check if main loop is alive."""

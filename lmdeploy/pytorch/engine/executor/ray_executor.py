@@ -18,6 +18,7 @@ from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.ray import RayContext, get_device_str
+from lmdeploy.pytorch.utils import wait_for_async_tasks
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -384,12 +385,60 @@ class RayExecutor(ExecutorBase):
         event_loop = asyncio.get_event_loop()
         logger.info('Starting async task RayPrefetchOutput loop.')
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs(), name='RayExecutorPrefetchOutput')
-        self._prefetch_task.add_done_callback(self._prefetch_task_callback)
+
+    async def wait_tasks(self):
+        """Wait tasks."""
+        dp_rank = self.dist_config.dp_rank
+        tasks_to_cancel = set()
+        event_loop = asyncio.get_event_loop()
+
+        async def _wait_single_worker(worker):
+            try:
+                task = worker.wait_tasks.remote()
+                tasks_to_cancel.add(task)
+                await task
+            except ray.exceptions.ActorDiedError:
+                # It is safe to ignore wait tasks on died actor
+                logger.info('RayExecutor worker has been killed before finish wait_tasks.')
+
+        tasks = [
+            event_loop.create_task(_wait_single_worker(worker), name=f'WorkerWaitTasks_{idx}')
+            for idx, worker in enumerate(self.workers)
+        ]
+        if self._prefetch_task is not None:
+            tasks.append(self._prefetch_task)
+        try:
+            await wait_for_async_tasks(tasks)
+        except asyncio.CancelledError:
+            logger.info(f'RayExecutor DP[{dp_rank}] wait_tasks cancelled.')
+            raise
+        except BaseException:
+            logger.error(f'RayExecutor DP[{dp_rank}] wait_tasks failed.')
+            raise
+        finally:
+            logger.debug(f'RayExecutor DP[{dp_rank}] wait_tasks cleanup.')
+            for task in tasks_to_cancel:
+                try:
+                    ray.cancel(task)
+                except ray.exceptions.ActorDiedError:
+                    logger.debug('RayExecutor worker has been killed before finish cancel task.')
+                except Exception as e:
+                    logger.error(f'RayExecutor DP[{dp_rank}] Cancel wait_tasks failed: {e}')
 
     def stop(self):
         """Stop engine loop."""
+        # TODO: For dp > 1 we currently rely on external teardown (e.g. Ray actor
+        # destruction) instead of explicitly stopping worker loops here. Implementing
+        # coordinated shutdown across multiple dp ranks is non-trivial, especially
+        # when some ranks may have already failed. The explicit stop_async RPC is
+        # therefore only issued when dp == 1.
         if self.dp == 1:
-            self.collective_rpc('stop_async')
+            try:
+                # add timeout might disable dump profile
+                # hope this will not lead to hanging
+                self.collective_rpc('stop_async')
+            except ray.exceptions.ActorDiedError:
+                logger.info('RayExecutor worker has been killed before finish stop_async.')
             logger.debug('RayExecutor workers stopped.')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
@@ -403,6 +452,9 @@ class RayExecutor(ExecutorBase):
             try:
                 self.collective_rpc('release', timeout=5.0)
                 logger.debug('RayExecutor workers released.')
+            except ray.exceptions.ActorDiedError:
+                logger.info('RayExecutor worker has been killed before finish release.')
+                [ray.kill(worker) for worker in self.workers]
             except ray.exceptions.GetTimeoutError:
                 logger.info('Ray release timeout, killing workers')
                 [ray.kill(worker) for worker in self.workers]
@@ -426,16 +478,21 @@ class RayExecutor(ExecutorBase):
         # we don't need return of forward async
         if self.dag is None:
             self.dag = self._compile_dag()
-        inputs = ray.put(inputs)
-        # make sure in order
-        outs = self.dag.execute(inputs)
-        ray.get(outs)
 
-        # free ray.put inputs
         try:
-            ray._private.internal_api.free(inputs)
-        except Exception as e:
-            logger.warning(f'Free input ref failed: {e}')
+            inputs = ray.put(inputs)
+            # make sure in order
+            outs = self.dag.execute(inputs)
+            ray.get(outs)
+        except SystemExit:
+            logger.error('Ray worker exited.')
+            raise
+        finally:
+            # free ray.put inputs
+            try:
+                ray._private.internal_api.free(inputs)
+            except Exception as e:
+                logger.warning(f'Free input ref failed: {e}')
 
     async def get_output_async(self):
         """Get output async."""
