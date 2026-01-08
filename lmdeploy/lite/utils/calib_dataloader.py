@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import numpy as np
 import torch
-from datasets import load_dataset
+from datasets import VerificationMode, load_dataset
 
 NUM_LOADED_SAMPLES = 30000
 
@@ -30,21 +30,6 @@ def process_dataset(ds, tokenizer, max_seq_length):
         def tokenize(sample):
             return tokenizer(
                 sample['question'],
-                padding=False,
-                max_length=max_seq_length,
-                truncation=True,
-                add_special_tokens=False,
-            )
-
-    elif ds_name == 'ultrachat_200k':
-
-        def tokenize(sample):
-
-            return tokenizer(
-                tokenizer.apply_chat_template(
-                    sample['messages'],
-                    tokenize=False,
-                ),
                 padding=False,
                 max_length=max_seq_length,
                 truncation=True,
@@ -107,8 +92,8 @@ def process_dataset(ds, tokenizer, max_seq_length):
 
     else:
         raise NotImplementedError(f'Cannot preprocess dataset {ds.info.dataset_name} '
-                                  f'Only `gsm8k`, `ultrachat_200k`, `open-platypus` '
-                                  f'`calibration`, `openwebtext` are supported by preprocess. ')
+                                  f'Only `gsm8k`, `open-platypus`, `calibration`, `openwebtext` '
+                                  f'are supported by preprocess. ')
 
     ds = ds.map(tokenize, remove_columns=ds.column_names)
 
@@ -126,13 +111,10 @@ def get_wikitext2(tokenizer, nsamples, seed, seqlen):
 
     Returns:
         train_loader: List of sampled and tokenized training examples.
-        test_enc: Full tokenized Wikitext-2 test set.
     """
     traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
     trainenc = tokenizer('\n\n'.join(traindata['text']), return_tensors='pt')
-    testenc = tokenizer('\n\n'.join(testdata['text']), return_tensors='pt')
 
     import random
     random.seed(seed)
@@ -141,10 +123,8 @@ def get_wikitext2(tokenizer, nsamples, seed, seqlen):
         i = random.randint(0, trainenc.input_ids.shape[1] - seqlen)
         j = i + seqlen
         inp = trainenc.input_ids[:, i:j]
-        tar = inp.clone()
-        tar[:, :-1] = -100
-        trainloader.append((inp, tar))
-    return trainloader, testenc
+        trainloader.append(inp)
+    return trainloader
 
 
 def get_c4(tokenizer, nsamples, seed, seqlen):
@@ -158,19 +138,12 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
 
     Returns:
         train_loader: List of sampled and tokenized training examples.
-        test_enc: Full tokenized PTB validation set.
     """
-    from datasets import VerificationMode
     traindata = load_dataset('allenai/c4',
                              'en',
                              data_files={'train': 'en/c4-train.00000-of-01024.json.gz'},
                              split='train',
                              verification_mode=VerificationMode.NO_CHECKS)
-    valdata = load_dataset('allenai/c4',
-                           'en',
-                           data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'},
-                           split='validation',
-                           verification_mode=VerificationMode.NO_CHECKS)
 
     import random
     random.seed(seed)
@@ -184,32 +157,9 @@ def get_c4(tokenizer, nsamples, seed, seqlen):
         i = random.randint(0, trainenc.input_ids.shape[1] - seqlen)
         j = i + seqlen
         inp = trainenc.input_ids[:, i:j]
-        tar = inp.clone()
-        tar[:, :-1] = -100
-        trainloader.append((inp, tar))
+        trainloader.append(inp)
 
-    import random
-    random.seed(0)
-    valenc = []
-    for _ in range(256):
-        while True:
-            i = random.randint(0, len(valdata) - 1)
-            tmp = tokenizer(valdata[i]['text'], return_tensors='pt')
-            if tmp.input_ids.shape[1] >= seqlen:
-                break
-        i = random.randint(0, tmp.input_ids.shape[1] - seqlen)
-        j = i + seqlen
-        valenc.append(tmp.input_ids[:, i:j])
-    valenc = torch.hstack(valenc)
-
-    class TokenizerWrapper:
-
-        def __init__(self, input_ids):
-            self.input_ids = input_ids
-
-    valenc = TokenizerWrapper(valenc)
-
-    return trainloader, valenc
+    return trainloader
 
 
 def get_pileval(tokenizer, nsamples, seed, seqlen=512):
@@ -223,7 +173,6 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
 
     Returns:
         train_loader: List of sampled and tokenized training examples.
-        test_enc: Full tokenized PTB validation set.
     """
     from datasets.builder import DatasetGenerationError
     try:
@@ -271,46 +220,7 @@ def get_pileval(tokenizer, nsamples, seed, seqlen=512):
     cat_samples = torch.cat(samples, dim=1)
     n_split = cat_samples.shape[1] // seqlen
     print(f' * Split into {n_split} blocks')
-    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
-
-
-def get_ultrachat_200k(tokenizer, nsamples, seed, seqlen):
-    """Load ultrachat_200k train and test datasets and tokenize.
-
-    Args:
-        tokenizer: Tokenizer to encode text.
-        nsamples: Number of samples to take from train set.
-        seed: Random seed for sampling.
-        seqlen: Maximum sequence length.
-
-    Returns:
-        train_loader: List of sampled and tokenized training examples.
-        test_enc: None.
-    """
-    from datasets import VerificationMode
-    train_data = load_dataset('HuggingFaceH4/ultrachat_200k',
-                              data_files={'train_sft': 'data/train_sft-00000-of-00003-a3ecf92756993583.parquet'},
-                              split=f'train_sft[:{NUM_LOADED_SAMPLES}]',
-                              verification_mode=VerificationMode.NO_CHECKS)
-    train_data = train_data.shuffle(seed=seed)
-    train_data = process_dataset(train_data, tokenizer, seqlen)
-
-    import random
-    random.seed(seed)
-    trainloader = []
-    for _ in range(nsamples):
-        while True:
-            i = random.randint(0, len(train_data) - 1)
-            trainenc = train_data[i]
-            if len(trainenc['input_ids']) >= seqlen:
-                break
-        i = random.randint(0, len(trainenc['input_ids']) - seqlen)
-        j = i + seqlen
-        inp = trainenc['input_ids'][i:j]
-        inp = torch.tensor([inp])
-        trainloader.append(inp)
-
-    return trainloader, None
+    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)]
 
 
 def get_gsm8k(tokenizer, nsamples, seed, seqlen):
@@ -324,7 +234,6 @@ def get_gsm8k(tokenizer, nsamples, seed, seqlen):
 
     Returns:
         train_loader: List of sampled and tokenized training examples.
-        test_enc: None.
     """
     train_data = load_dataset('openai/gsm8k', 'main', split='train')
     train_data = train_data.shuffle(seed=seed)
@@ -350,7 +259,7 @@ def get_gsm8k(tokenizer, nsamples, seed, seqlen):
     cat_samples = torch.cat(samples, dim=1)
     n_split = cat_samples.shape[1] // seqlen
     print(f' * Split into {n_split} blocks')
-    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
+    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)]
 
 
 def get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen):
@@ -364,7 +273,6 @@ def get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen):
 
     Returns:
         train_loader: List of sampled and tokenized training examples.
-        test_enc: None.
     """
     train_data = load_dataset('neuralmagic/calibration', 'LLM', split='train')
     train_data = train_data.shuffle(seed=seed)
@@ -390,7 +298,7 @@ def get_neuralmagic_calibration(tokenizer, nsamples, seed, seqlen):
     cat_samples = torch.cat(samples, dim=1)
     n_split = cat_samples.shape[1] // seqlen
     print(f' * Split into {n_split} blocks')
-    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
+    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)]
 
 
 def get_open_platypus(tokenizer, nsamples, seed, seqlen):
@@ -404,7 +312,6 @@ def get_open_platypus(tokenizer, nsamples, seed, seqlen):
 
     Returns:
         train_loader: List of sampled and tokenized training examples.
-        test_enc: None.
     """
     train_data = load_dataset('garage-bAInd/Open-Platypus', split='train')
     train_data = train_data.shuffle(seed=seed)
@@ -430,7 +337,7 @@ def get_open_platypus(tokenizer, nsamples, seed, seqlen):
     cat_samples = torch.cat(samples, dim=1)
     n_split = cat_samples.shape[1] // seqlen
     print(f' * Split into {n_split} blocks')
-    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)], None
+    return [cat_samples[:, i * seqlen:(i + 1) * seqlen] for i in range(n_split)]
 
 
 def get_openwebtext(tokenizer, nsamples, seed, seqlen):
@@ -444,9 +351,7 @@ def get_openwebtext(tokenizer, nsamples, seed, seqlen):
 
     Returns:
         train_loader: List of sampled and tokenized training examples.
-        test_enc: None.
     """
-    from datasets import VerificationMode
     train_data = load_dataset('Skylion007/openwebtext',
                               data_files={'train': 'plain_text/train-00000-of-00080.parquet'},
                               split=f'train[:{NUM_LOADED_SAMPLES}]',
@@ -469,14 +374,14 @@ def get_openwebtext(tokenizer, nsamples, seed, seqlen):
         inp = torch.tensor([inp])
         trainloader.append(inp)
 
-    return trainloader, None
+    return trainloader
 
 
 def get_calib_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
     """Get calibration data loaders for a dataset.
 
     Args:
-      name: Dataset name ('wikitext2', 'c4', 'pileval', 'ultrachat_200k', 'gsm8k',
+      name: Dataset name ('wikitext2', 'c4', 'pileval', 'gsm8k',
             'neuralmagic_calibration', 'open-platypus', 'openwebtext').
       tokenizer: Tokenizer to encode text.
       nsamples: Number of samples to take from train set.
@@ -485,7 +390,6 @@ def get_calib_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
 
     Returns:
       train_loader: List of sampled and tokenized training examples.
-      test_data: Full tokenized validation set.
     """
     if 'wikitext2' in name:
         return get_wikitext2(tokenizer, nsamples, seed, seqlen)
@@ -495,9 +399,6 @@ def get_calib_loaders(name, tokenizer, nsamples=128, seed=0, seqlen=2048):
 
     if 'pileval' in name:
         return get_pileval(tokenizer, nsamples, seed, seqlen)
-
-    if 'ultrachat_200k' in name:
-        return get_ultrachat_200k(tokenizer, nsamples, seed, seqlen)
 
     if 'gsm8k' in name:
         return get_gsm8k(tokenizer, nsamples, seed, seqlen)
