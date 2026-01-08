@@ -344,7 +344,9 @@ void Engine::Impl::Interrupt(RequestCache& c)
 {
     auto& s = *TM_CHECK_NOTNULL(c.seq);
     if (c.req->session.end_flag) {
-        seq_mgr_->CacheGeneration(s);
+        if (!is_warm_up_) {
+            seq_mgr_->CacheGeneration(s);
+        }
         TM_CHECK(seq_mgr_->Erase(c.req->id));
     }
     else {
@@ -417,6 +419,12 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             continue;
         }
 
+        if (step && param_.enable_prefix_caching) {
+            // step not supported in prefix-caching mode
+            signals.push_back([r] { UpdateState(*r, Request::kInconsistency, 0); });
+            continue;
+        }
+
         auto& seq = *ptr;
 
         auto c = std::make_unique<RequestCache>(r, seq);
@@ -438,6 +446,11 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         token_ids = std::copy_n(input_ids.data<int>(), input_len, token_ids);
 
         c->prompt_len = c->seq_len = token_ids - c->token_ids;  // all known tokens
+
+        // Only prefix cache needs prompt data
+        if (param_.enable_prefix_caching && input_len && r->session.start_flag) {
+            seq.prompt.insert(seq.prompt.end(), input_ids.data<int>(), input_ids.data<int>() + input_len);
+        }
 
         // dbg(seq.cache_len, seq.tokens.size(), input_len, c->seq_len);
 
@@ -678,6 +691,8 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 
     env = {};
 
+    vector<const Sequence*> sequences_to_cache;
+
     for (int i = 0; i < b.rc.size(); ++i) {
         if (auto& c = *b.rc[i]; c.seq) {
             if (auto& s = *c.seq; generating[i]) {
@@ -702,8 +717,13 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
                 s.cache_len = sequence_length[i];
             }
             c.done |= finished[i];
+            sequences_to_cache.push_back(c.seq);
             // dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
         }
+    }
+
+    if (!is_warm_up_) {
+        seq_mgr_->CachePrompt(sequences_to_cache, sequences_to_cache.size());
     }
 
     b.rc.clear();
@@ -831,8 +851,8 @@ void Engine::Impl::InternalThreadEntry()
 
 Engine::~Engine() = default;
 
-Engine::Engine()                  = default;
-Engine::Engine(Engine&&) noexcept = default;
+Engine::Engine()                             = default;
+Engine::Engine(Engine&&) noexcept            = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
 Engine::Engine(DataType      dtype,

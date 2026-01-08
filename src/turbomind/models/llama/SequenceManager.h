@@ -187,7 +187,7 @@ private:
                                   const BlockIds&         blocks,
                                   const UniqueIds&        unique_ids);
 
-    void PrefixMatch(Sequences& sequences);
+    void PrefixMatch(Sequences& sequences, const std::vector<int>& alpha);
 
 private:
     int block_seq_len_;
