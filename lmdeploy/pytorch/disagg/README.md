@@ -12,12 +12,12 @@
 pip install lmdeploy[all] >= 0.7.0
 
 # Transfer Engine
-pip install dlslime>=0.0.1.post7
+pip install dlslime>=0.0.2
 ```
 
 ## Quick Start
 
-A PD disaggregated deployment of DeepSeekV3 is shown below:
+A PD disaggregated deployment of internlm2_5-7b-chat is shown below:
 
 ### 1. Launch Router Service
 

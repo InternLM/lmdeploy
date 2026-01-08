@@ -508,6 +508,32 @@ class Response:
         fields.extend(_format_tensor('routed_experts', self.routed_experts))
         return '\n'.join(fields)
 
+    def extend(self, other: 'Response') -> 'Response':
+        """Extend this response with another response.
+
+        This method merges the content of another Response into this one,
+        similar to list.extend(). The text, token_ids, and logprobs are
+        concatenated, while other fields are updated from the other response.
+
+        Args:
+            other: Another Response to append to this one.
+
+        Returns:
+            Self (for method chaining).
+        """
+        self.text += other.text
+        self.generate_token_len = other.generate_token_len
+        self.input_token_len = other.input_token_len
+        self.finish_reason = other.finish_reason
+        self.index = other.index
+        if other.token_ids:
+            self.token_ids += other.token_ids
+        if other.logprobs:
+            self.logprobs = self.logprobs or []
+            self.logprobs += other.logprobs
+        self.routed_experts = other.routed_experts
+        return self
+
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
 class EventType(enum.IntEnum):
