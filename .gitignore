@@ -53,6 +53,7 @@ examples/cpp/llama/*.csv
 *.npy
 *.weight
 install/
+/docs/*/_static/*.yaml
 
 # LMDeploy
 workspace/
