@@ -23,15 +23,15 @@ class InferInstManager:
         # `asyncio.Queue` must be created in an async context, refer to `get` method
         self.pool: asyncio.Queue = None
 
-    async def get(self):
-        """Get a free generator from the pool."""
+    def get(self):
+        """Get the instance pool."""
         # Lazy initialization: create pool on first use
         if self.pool is None:
             self.pool = asyncio.Queue()
             for inst in self.insts:
                 self.pool.put_nowait(inst)
 
-        return await self.pool.get()
+        return self.pool
 
     def ret(self, inst):
         """Return a generator to the pool."""

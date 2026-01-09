@@ -20,6 +20,7 @@ class SessionState(enum.Enum):
     IDLE = 'idle'  # Initial state, no active inference
     ACQUIRING = 'acquiring'  # Acquiring an inference instance
     ACTIVE = 'active'  # Has an inference instance and is active
+    ABORTING = 'aborting'  # Aborting the session
 
 
 class Session:
@@ -33,7 +34,6 @@ class Session:
         self.gen_config: Optional[GenerationConfig] = None
         self.step: int = 0
         self._state = SessionState.IDLE
-        self._abort_event: Optional[asyncio.Event] = None  # cancellation signal for abort
         self._inst = None  # inference instance
         self.update(**kwargs)
 
@@ -68,81 +68,27 @@ class Session:
     def reset(self):
         """Reset the session to initial state.
 
-        This method resets all session data (prompt, response, history, etc.) but keeps the session_id. The session must
-        be in IDLE state before calling reset. If the session is active, call async_abort() first.
+        This method resets all session data (prompt, response, history, etc.) but keeps the session_id.
         """
-        if self._state != SessionState.IDLE:
-            raise RuntimeError(f'Session {self.session_id} is not in IDLE state. '
-                               f'Current state: {self._state.value}. '
-                               f'Call async_abort() first if needed.')
-
         self.prompt = None
         self.response = None
         self.history = []
         self.gen_config = None
         self.step = 0
-        self._abort_event = None
-        # Note: _inst should already be None if state is IDLE
-        # but we reset it for safety
+        self._state = SessionState.IDLE
         self._inst = None
         logger.debug(f'Session {self.session_id} has been reset.')
 
     @asynccontextmanager
     async def acquire_inst(self, inst_mgr: InferInstManager):
-        """Acquire an inference instance for an session."""
         if self._inst is not None:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
 
-        if self._state != SessionState.IDLE:
-            raise RuntimeError(f'Session {self.session_id} is not in IDLE state.')
-
-        self._state = SessionState.ACQUIRING
-        get_free_inst = inst_mgr.get()
-        get_task = asyncio.create_task(get_free_inst)
-
-        # Create or reuse abort event for cancellation
-        self._abort_event = self._abort_event or asyncio.Event()
-        self._abort_event.clear()  # Reset event to ensure it's not set
-
-        pending = set()
-
+        free_insts = inst_mgr.get()
+        self._inst = await free_insts.get()
+        self._state = SessionState.ACTIVE
+        logger.debug(f'[model_inst] session {self.session_id} acquired an instance')
         try:
-            logger.info(f'Session {self.session_id} acquiring an inference instance...')
-            abort_task = asyncio.create_task(self._abort_event.wait())
-            done, pending = await asyncio.wait([get_task, abort_task], return_when=asyncio.FIRST_COMPLETED)
-
-            inst = None
-            if get_task in done:
-                try:
-                    inst = get_task.result()
-                    self._inst = inst
-                    self._state = SessionState.ACTIVE
-                    logger.info(f'Session {self.session_id} acquired an inference instance.')
-                except Exception as e:
-                    logger.error(f'Session {self.session_id} failed to get an inference instance: {e}')
-                    self._state = SessionState.IDLE
-            else:
-                # Abort was triggered (abort_task completed)
-                logger.info(f'Session {self.session_id} aborted before acquiring an inference instance.')
-                # Cancel get_task if it's still pending
-                if get_task in pending:
-                    get_task.cancel()
-                    # Try to get the inference instance if it was already retrieved before cancellation
-                    try:
-                        await get_task
-                    except asyncio.CancelledError:
-                        pass
-                    # Edge case: Task might have retrieved an inference instance before being cancelled
-                    if not get_task.cancelled() and get_task.exception() is None:
-                        inst = get_task.result()
-                        # Return it immediately if we got it
-                        if inst is not None:
-                            self.inst_mgr.ret(inst)
-                            inst = None
-                    # Remove get_task from pending since it's already been handled
-                    pending.discard(get_task)
-                # abort_task is in done, so it will be cleaned up in finally block
-
             yield self._inst
         except SafeRunException:
             # SafeRunException is raised by AsyncEngine.safe_run. We don't need to handle it here.
@@ -151,31 +97,19 @@ class Session:
             logger.error(f'Session {self.session_id} failed to acquire an inference instance: {e}')
             raise e
         finally:
-            # Cancel pending tasks
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            logger.debug(f'[model_inst] session {self.session_id} releasing the instance')
             # Return inference instance if it was acquired
             if self._inst is not None:
                 inst_mgr.ret(self._inst)
                 self._inst = None
-            # Reset state to IDLE
             self._state = SessionState.IDLE
 
     async def async_abort(self):
         """Abort the session."""
-        if self._state == SessionState.IDLE:
-            return
-
         logger.info(f'Aborting session {self.session_id}')
-        if self._state == SessionState.ACTIVE:
+        self._state = SessionState.ABORTING
+        if self._inst is not None:
             await self._inst.async_cancel(self.session_id)
-        elif self._state == SessionState.ACQUIRING:
-            # Signal abort by setting the event
-            self._abort_event.set()
-        else:
-            raise RuntimeError(f'Session {self.session_id} is not in ACTIVE or ACQUIRING state.')
-        self._state = SessionState.IDLE
         # DO NOT reset the session here because it might be used by other components.
         # Leave the cleanup to the caller.
 
