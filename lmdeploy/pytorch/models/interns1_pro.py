@@ -13,7 +13,7 @@ from .qwen3_moe import Qwen3MoeModel
 from .qwen3_vl import Qwen3VLForConditionalGeneration
 
 
-class InternS1_1_ForConditionalGeneration(Qwen3VLForConditionalGeneration):
+class InternS1ProForConditionalGeneration(Qwen3VLForConditionalGeneration):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {

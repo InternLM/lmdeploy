@@ -3,12 +3,12 @@ from .builder import AutoModelConfigBuilder
 from .default import DefaultModelConfigBuilder
 
 
-class InterS1_1_ModelConfigBuilder(AutoModelConfigBuilder):
+class InterS1ProModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type == 'interns1_1'
+        return hf_config.model_type == 'interns1_pro'
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):

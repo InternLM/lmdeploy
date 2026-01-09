@@ -192,10 +192,10 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl3_hf.InternVLForConditionalGeneration'
 })
 
-# interns1_1
+# interns1-pro
 MODULE_MAP.update({
-    'InternS1_1_ForConditionalGeneration':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns1_1.InternS1_1_ForConditionalGeneration',
+    'InternS1ProForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.interns1_pro.InternS1ProForConditionalGeneration',
 })
 
 # mono-internvl

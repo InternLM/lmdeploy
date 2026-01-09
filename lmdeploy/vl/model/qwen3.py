@@ -23,7 +23,7 @@ class Qwen3VLModel(VisionModel):
     """Qwen3VL model."""
 
     _arch = [
-        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'InternS1_1_ForConditionalGeneration'
+        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'InternS1ProForConditionalGeneration'
     ]
 
     def build_preprocessor(self):
