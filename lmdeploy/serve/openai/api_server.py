@@ -1393,7 +1393,6 @@ def serve(model_path: str,
           ssl: bool = False,
           proxy_url: Optional[str] = None,
           max_log_len: int = None,
-          disable_fastapi_docs: bool = False,
           max_concurrent_requests: Optional[int] = None,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
@@ -1489,7 +1488,7 @@ def serve(model_path: str,
 
     # create FastAPI lifespan events
     lifespan = create_lifespan_handler(backend_config, VariableInterface.async_engine)
-
+    disable_fastapi_docs = os.getenv('DISABLE_FASTAPI_DOCS', 'False').lower() == 'true'
     if disable_fastapi_docs:
         app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     else:
