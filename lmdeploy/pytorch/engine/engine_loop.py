@@ -391,7 +391,7 @@ class EngineLoop:
             assert len(prefill_block_ids) == len(decode_block_ids), (
                 f'#prefill block ids ({len(prefill_block_ids)}) must equal to '
                 f'#decode block ids ({len(decode_block_ids)})'
-                f'all id length: {len(msg.num_token_ids)}')
+                f'all id length: {msg.num_token_ids}')
             migration_execution_requests.append((
                 migration_request.remote_engine_id,
                 list(zip(prefill_block_ids, decode_block_ids)),

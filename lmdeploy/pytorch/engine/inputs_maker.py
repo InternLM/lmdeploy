@@ -553,8 +553,6 @@ class InputsMakerAsync:
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
-        prealloc_size = self.engine_strategy.get_prealloc_size(True)
-
         inputs = None
         delta = None
         swap_in_map = {}
@@ -573,6 +571,10 @@ class InputsMakerAsync:
             extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
         elif prefill:
             # prefill
+            if self.config.role == EngineRole.Prefill:
+                prealloc_size = 0
+            else:
+                prealloc_size = self.engine_strategy.get_prealloc_size(True)
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
             running = scheduler_output.running
             swap_in_map = scheduler_output.swap_in_map

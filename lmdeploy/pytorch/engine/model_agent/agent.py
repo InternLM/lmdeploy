@@ -577,6 +577,7 @@ class BaseModelAgent:
             # for second round chat
             self.decoding_inputs = self.inputs_strategy.update_inputs(self.decoding_inputs, delta)
             self.decoding_ex_inputs = self.agent_strategy.update_extra_inputs(self.decoding_ex_inputs, delta)
+            self.decoding_stopping_criteria = self.decoding_stopping_criteria.update(delta)
 
         # check long context
         if self._prev_chunk_output is not None:
@@ -681,7 +682,7 @@ class BaseModelAgent:
         """Asyc forward task."""
 
         @record_function('update_inputs_for_next_step')
-        def __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs):
+        def __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs, stopping_criteria):
             """Update inputs."""
             # dp might change is_decoding of decoding inputs
             self.decoding_inputs.is_decoding = True
@@ -695,6 +696,7 @@ class BaseModelAgent:
                 extra_inputs=extra_inputs,
                 extra_outputs=extra_outputs,
             )
+            self.decoding_stopping_criteria = stopping_criteria
 
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
@@ -702,9 +704,11 @@ class BaseModelAgent:
         tp = dist_config.attn_tp
         need_broadcast_next = (tp > 1)
         dp = dist_config.dp
+        need_update_inputs = False
 
         if inputs is None:
             # decoding step, update prev_inputs with delta
+            need_update_inputs = True
             assert delta is not None
             (
                 inputs,
@@ -801,8 +805,8 @@ class BaseModelAgent:
                 need_broadcast_next,
             )
 
-        if is_decoding:
-            __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs)
+        if need_update_inputs:
+            __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs, stopping_criteria)
         elif inputs.is_chunk:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output

@@ -156,10 +156,10 @@ class MigrationDoneState(StateBase):
     status = MessageStatus.MIGRATION_DONE
 
     def activate(self):
-        self.to_state(ReadyState)
+        self.to_state(WaitingState)
 
     def finish(self):
-        self.to_state(ReadyState)
+        self.to_state(WaitingState)
 
 
 class MigrationRunningState(StateBase):
