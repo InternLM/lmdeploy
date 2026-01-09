@@ -84,7 +84,7 @@ public:
 
     void set_threshold(int value)
     {
-        TM_LOG_ERROR("set threashold %d -> %d", dp_thr_, value);
+        TM_LOG_INFO("set threshold %d -> %d", dp_thr_, value);
         dp_thr_ = value;
     }
 
