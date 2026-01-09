@@ -61,7 +61,7 @@ class ParallelEmbedding(nn.Module):
         builder = backend.get_layer_impl_builder(OpType.Embedding)
         self.impl = builder.build(self.start_index, self.end_index)
 
-        self.all_reduce = self.tp > 1
+        self.all_reduce = self.is_tp and self.tp > 1
 
     @staticmethod
     def create_weight(vocab_size: int, hidden_size: int, dtype: torch.dtype = None, device: torch.device = None):
