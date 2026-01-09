@@ -601,7 +601,11 @@ class InputsMakerAsync:
             return None
 
         sampling_inputs = self.sampling_strategy.make_sampling_inputs(running)
-        stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
+        if inputs is not None:
+            stopping_criteria = self.model_agent_strategy.make_stopping_criteria(running)
+        else:
+            stopping_criteria = None
+
         return_logits = __need_logits(running)
         return_routed_experts = __need_routed_experts(running)
 

@@ -10,7 +10,7 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 
@@ -30,6 +30,21 @@ class ARExtraOutputs(ExtraOutputs):
 @dataclass
 class ARStoppingCriteria(StoppingCriteria):
     num_appendable_ids: torch.Tensor
+
+    def next_decoding(self):
+        """Step decoding."""
+        return ARStoppingCriteria(num_appendable_ids=self.num_appendable_ids)
+
+    def merge(self, other: 'ARStoppingCriteria'):
+        """Merge two stopping criteria."""
+        new_num_appendable = torch.cat([self.num_appendable_ids, other.num_appendable_ids], dim=0)
+        return ARStoppingCriteria(num_appendable_ids=new_num_appendable)
+
+    def update(self, delta: ModelInputsDelta):
+        """Update stopping criteria."""
+        indices = delta.indices
+        new_num_appendable = self.num_appendable_ids[indices]
+        return ARStoppingCriteria(num_appendable_ids=new_num_appendable)
 
     @record_function('stopping_criteria')
     def step(self,
@@ -99,13 +114,12 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         """Create extra inputs."""
         return ARExtraInputs()
 
-    def make_extra_outputs(self, extra_inputs: ARExtraInputs, **kwargs) -> ARExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: ARExtraInputs) -> ARExtraOutputs:
         """Create extra outputs."""
         return ARExtraOutputs()
 
-    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
-                                    next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ARExtraInputs,
-                                    **kwargs):
+    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
+                                    extra_inputs: ARExtraInputs, **kwargs):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length

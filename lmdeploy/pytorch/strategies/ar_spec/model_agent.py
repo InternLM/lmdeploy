@@ -158,17 +158,14 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         output_token_ids = extra_inputs.output_token_ids[indices]
         return ARSpecExtraInputs(output_token_ids=output_token_ids)
 
-    def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs, last_loop_step: bool = False) -> ARSpecExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs) -> ARSpecExtraOutputs:
         """Create extra outputs."""
         output = ARSpecExtraOutputs()
-        # only output draft tokens to seq for last loop step
-        if last_loop_step:
-            output.draft_token_ids = extra_inputs.output_draft_token_ids
+        output.draft_token_ids = extra_inputs.output_draft_token_ids
         return output
 
-    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
-                                    next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ARSpecExtraInputs,
-                                    extra_outputs: ARSpecExtraOutputs):
+    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
+                                    extra_inputs: ARSpecExtraInputs, extra_outputs: ARSpecExtraOutputs):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length

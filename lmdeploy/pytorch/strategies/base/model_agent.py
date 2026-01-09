@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -91,6 +91,18 @@ class StoppingCriteria(ABC):
     """Base class for stopping criteria."""
 
     @abstractmethod
+    def next_decoding(self) -> 'StoppingCriteria':
+        """Step decoding."""
+
+    @abstractmethod
+    def merge(self, other: 'StoppingCriteria') -> 'StoppingCriteria':
+        """Merge two stopping criteria."""
+
+    @abstractmethod
+    def update(self, delta: 'ModelInputsDelta') -> 'StoppingCriteria':
+        """Update stopping criteria."""
+
+    @abstractmethod
     def step(self,
              token_ids: torch.Tensor,
              stop_words: torch.Tensor,
@@ -133,7 +145,7 @@ class ModelAgentStrategy(ABC):
         return extra_inputs
 
     @abstractmethod
-    def make_extra_outputs(self, extra_inputs: ExtraInputs, **kwargs) -> ExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: ExtraInputs) -> ExtraOutputs:
         """Create extra outputs."""
         pass
 
@@ -148,9 +160,9 @@ class ModelAgentStrategy(ABC):
         pass
 
     @abstractmethod
-    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
-                                    next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ExtraInputs,
-                                    extra_outputs: ExtraOutputs):
+    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
+                                    extra_inputs: ExtraInputs,
+                                    extra_outputs: ExtraOutputs) -> Tuple['ModelInputs', ExtraInputs]:
         """Step next inputs."""
         pass
 

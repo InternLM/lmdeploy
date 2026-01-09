@@ -83,6 +83,22 @@ class DLLMStoppingCriteria(StoppingCriteria):
     num_appendable_ids: torch.Tensor
     output_start_pos: torch.Tensor
 
+    def next_decoding(self) -> 'DLLMStoppingCriteria':
+        """Step decoding."""
+        return DLLMStoppingCriteria(num_appendable_ids=self.num_appendable_ids, output_start_pos=self.output_start_pos)
+
+    def merge(self, other: 'DLLMStoppingCriteria') -> 'DLLMStoppingCriteria':
+        """Merge two stopping criteria."""
+        return DLLMStoppingCriteria(num_appendable_ids=torch.cat([self.num_appendable_ids, other.num_appendable_ids],
+                                                                 dim=0),
+                                    output_start_pos=torch.cat([self.output_start_pos, other.output_start_pos], dim=0))
+
+    def update(self, delta: 'ModelInputsDelta') -> 'DLLMStoppingCriteria':
+        """Update stopping criteria."""
+        indices = delta.indices
+        return DLLMStoppingCriteria(num_appendable_ids=self.num_appendable_ids[indices],
+                                    output_start_pos=self.output_start_pos[indices])
+
     @record_function('stopping_criteria')
     def step(self,
              token_ids: torch.Tensor,
@@ -228,14 +244,13 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
 
         return DLLMExtraInputs(dllm_mask=dllm_mask)
 
-    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs, **kwargs) -> DLLMExtraOutputs:
+    def make_extra_outputs(self, extra_inputs: DLLMExtraInputs) -> DLLMExtraOutputs:
         """Create extra outputs."""
         dllm_mask = extra_inputs.dllm_mask
         return DLLMExtraOutputs(dllm_mask=dllm_mask)
 
-    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
-                                    next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: DLLMExtraInputs,
-                                    **kwargs):
+    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
+                                    extra_inputs: DLLMExtraInputs, **kwargs):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         dllm_mask = extra_inputs.dllm_mask

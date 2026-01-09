@@ -315,6 +315,7 @@ class BaseModelAgent:
         # decoding inputs
         self.decoding_inputs: ModelInputs = None
         self.decoding_ex_inputs: ExtraInputs = None
+        self.decoding_stopping_criteria: StoppingCriteria = None
 
         # long context
         self._prev_chunk_output: Dict = None
@@ -528,17 +529,142 @@ class BaseModelAgent:
         inputs = self.patched_model.update_inputs(inputs)
         return inputs
 
-    def _merge_prefill_inputs(self, inputs: ModelInputs, extra_inputs: ExtraInputs, next_token_ids: torch.Tensor,
-                              extra_outputs: ExtraOutputs):
+    def _merge_prefill_inputs(
+        self,
+        inputs: ModelInputs,
+        extra_inputs: ExtraInputs,
+        stopping_criteria: StoppingCriteria,
+        next_token_ids: torch.Tensor,
+        extra_outputs: ExtraOutputs,
+    ):
 
         next_decoding_inputs = self.inputs_strategy.next_decoding(inputs, next_token_ids, extra_outputs=extra_outputs)
         next_decoding_ex_inputs = extra_inputs.next_decoding(extra_outputs)
+        next_stopping_criteria = stopping_criteria.next_decoding()
         if self.decoding_inputs is None:
             self.decoding_inputs = next_decoding_inputs
             self.decoding_ex_inputs = next_decoding_ex_inputs
+            self.decoding_stopping_criteria = next_stopping_criteria
         else:
             self.decoding_inputs = self.inputs_strategy.merge(self.decoding_inputs, next_decoding_inputs)
             self.decoding_ex_inputs = self.decoding_ex_inputs.merge(next_decoding_ex_inputs)
+            self.decoding_stopping_criteria = self.decoding_stopping_criteria.merge(next_stopping_criteria)
+
+    def _get_inputs_from_delta(
+        self,
+        delta: ModelInputsDelta,
+        sampling_inputs: SamplingInputs,
+    ):
+        """Get inputs from delta."""
+        inputs = self.decoding_inputs
+        extra_inputs = self.decoding_ex_inputs
+        inputs = self.inputs_strategy.update_inputs(inputs, delta)
+        extra_inputs = self.agent_strategy.update_extra_inputs(extra_inputs, delta)
+        stopping_criteria = self.decoding_stopping_criteria.update(delta)
+        next_token_ids = inputs.input_ids[0]
+        self.agent_strategy.step_sampling_inputs(sampling_inputs, next_token_ids, extra_inputs=extra_inputs)
+        return inputs, extra_inputs, stopping_criteria, sampling_inputs
+
+    def _prepare_inputs_prefill(
+        self,
+        inputs: ModelInputs,
+        delta: ModelInputsDelta,
+    ):
+        """Prepare prefill inputs."""
+
+        if delta is not None:
+            # update decoding inputs with delta
+            # for second round chat
+            self.decoding_inputs = self.inputs_strategy.update_inputs(self.decoding_inputs, delta)
+            self.decoding_ex_inputs = self.agent_strategy.update_extra_inputs(self.decoding_ex_inputs, delta)
+
+        # check long context
+        if self._prev_chunk_output is not None:
+            # update model metas
+            model_metas = self._prev_chunk_output.get('model_metas')
+            inputs.model_metas = model_metas
+
+            if not inputs.is_chunk:
+                # remove _prev_chunk_output
+                self._prev_chunk_output = None
+
+        return inputs
+
+    async def _step_postprocess_with_output(self,
+                                            last_logits: torch.Tensor,
+                                            logits: torch.Tensor,
+                                            inputs: ModelInputs,
+                                            sampling_inputs: SamplingInputs,
+                                            stopping_criteria: StoppingCriteria,
+                                            model_metas: Any,
+                                            need_broadcast_next: bool,
+                                            return_logits: bool = False,
+                                            all_routed_experts: Any = None,
+                                            extra_inputs: ExtraInputs = None):
+        """Step postprocess with output."""
+        rank = self.rank
+        logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
+        # sampling
+        next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
+
+        # post sampling
+        next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
+                                                                         extra_inputs)
+
+        # spec decoding
+        output_token_ids = next_token_ids
+        extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs, sampling_inputs)
+        if self.spec_agent.is_enabled():
+            next_token_ids = extra_inputs.next_token_ids
+            output_token_ids = extra_inputs.output_token_ids
+            logits = None
+
+        with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
+            logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
+
+            # stopping criteria
+            stopped, stop_pos, stopping_criteria = stopping_criteria.step(
+                next_token_ids,
+                sampling_inputs.stop_words,
+                inputs=inputs,
+                extra_inputs=extra_inputs,
+            )
+
+            # send output
+            logger.debug(f'<ForwardTask> rank[{rank}]: Output')
+            extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+
+        self._push_output(
+            BatchedOutputs(next_token_ids=output_token_ids,
+                           logits=logits if return_logits else None,
+                           stopped=stopped,
+                           stop_pos=stop_pos,
+                           model_metas=model_metas,
+                           logprobs=logprobs,
+                           all_routed_experts=all_routed_experts,
+                           extra_outputs=extra_outputs))
+
+        return inputs, extra_inputs, stopping_criteria, extra_outputs, next_token_ids
+
+    async def _step_postprocess_without_output(
+        self,
+        inputs: ModelInputs,
+        last_logits: torch.Tensor,
+        extra_inputs: ExtraInputs,
+        need_broadcast_next: bool,
+    ):
+        rank = self.rank
+        # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
+        # as it can trigger recompilation on different ranks when using torch.compile.
+        next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(inputs, last_logits, extra_inputs)
+
+        # broadcast next token for TP > 1
+        with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
+            logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
+
+        extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
+
+        return inputs, next_token_ids, extra_inputs, extra_outputs
 
     async def _async_step(
         self,
@@ -559,9 +685,11 @@ class BaseModelAgent:
             """Update inputs."""
             # dp might change is_decoding of decoding inputs
             self.decoding_inputs.is_decoding = True
-            self.decoding_inputs, self.decoding_ex_inputs = self.agent_strategy.update_inputs_for_next_step(
+            (
+                self.decoding_inputs,
+                self.decoding_ex_inputs,
+            ) = self.agent_strategy.update_inputs_for_next_step(
                 inputs,
-                sampling_inputs,
                 next_token_ids=next_token_ids,
                 model_metas=model_metas,
                 extra_inputs=extra_inputs,
@@ -578,34 +706,21 @@ class BaseModelAgent:
         if inputs is None:
             # decoding step, update prev_inputs with delta
             assert delta is not None
-            inputs = self.decoding_inputs
-            extra_inputs = self.decoding_ex_inputs
-            inputs = self.inputs_strategy.update_inputs(inputs, delta)
-            extra_inputs = self.agent_strategy.update_extra_inputs(extra_inputs, delta)
-            next_token_ids = inputs.input_ids[0]
-            stopping_criteria.step(next_token_ids,
-                                   stop_words=sampling_inputs.stop_words,
-                                   inputs=inputs,
-                                   extra_inputs=extra_inputs)
-            self.agent_strategy.step_sampling_inputs(sampling_inputs, next_token_ids, extra_inputs=extra_inputs)
+            (
+                inputs,
+                extra_inputs,
+                stopping_criteria,
+                sampling_inputs,
+            ) = self._get_inputs_from_delta(
+                delta,
+                sampling_inputs,
+            )
         elif not inputs.is_dummy:
             # prefill step
-
-            if delta is not None:
-                # update decoding inputs with delta
-                # for second round chat
-                self.decoding_inputs = self.inputs_strategy.update_inputs(self.decoding_inputs, delta)
-                self.decoding_ex_inputs = self.agent_strategy.update_extra_inputs(self.decoding_ex_inputs, delta)
-
-            # check long context
-            if self._prev_chunk_output is not None:
-                # update model metas
-                model_metas = self._prev_chunk_output.get('model_metas')
-                inputs.model_metas = model_metas
-
-                if not inputs.is_chunk:
-                    # remove _prev_chunk_output
-                    self._prev_chunk_output = None
+            inputs = self._prepare_inputs_prefill(
+                inputs,
+                delta,
+            )
 
         # dp might change is_decoding in inputs
         is_decoding = inputs.is_decoding
@@ -649,61 +764,42 @@ class BaseModelAgent:
 
         if self.need_output:
             logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
-            # sampling
-            next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
-
-            # post sampling
-            next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
-                                                                             extra_inputs)
-
-            # spec decoding
-            output_token_ids = next_token_ids
-            extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
-                                                                     sampling_inputs)
-            if self.spec_agent.is_enabled():
-                next_token_ids = extra_inputs.next_token_ids
-                output_token_ids = extra_inputs.output_token_ids
-                logits = None
-
-            with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
-                logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
-
-                # stopping criteria
-                stopped, stop_pos, stopping_criteria = stopping_criteria.step(
-                    next_token_ids,
-                    sampling_inputs.stop_words,
-                    inputs=inputs,
-                    extra_inputs=extra_inputs,
-                )
-
-                # send output
-                logger.debug(f'<ForwardTask> rank[{rank}]: Output')
-                extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs, last_loop_step=True)
-
             # for router replay
             if return_routed_experts:
                 all_routed_experts = output.get('all_routed_experts', None)
             else:
                 all_routed_experts = None
-            self._push_output(
-                BatchedOutputs(next_token_ids=output_token_ids,
-                               logits=logits if return_logits else None,
-                               stopped=stopped,
-                               stop_pos=stop_pos,
-                               model_metas=model_metas,
-                               logprobs=logprobs,
-                               all_routed_experts=all_routed_experts,
-                               extra_outputs=extra_outputs))
+
+            (
+                inputs,
+                extra_inputs,
+                stopping_criteria,
+                extra_outputs,
+                next_token_ids,
+            ) = await self._step_postprocess_with_output(
+                last_logits,
+                logits,
+                inputs,
+                sampling_inputs,
+                stopping_criteria,
+                model_metas,
+                need_broadcast_next,
+                return_logits=return_logits,
+                all_routed_experts=all_routed_experts,
+                extra_inputs=extra_inputs,
+            )
         else:
-            # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
-            # as it can trigger recompilation on different ranks when using torch.compile.
-            next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(inputs, last_logits, extra_inputs)
-
-            # broadcast next token for TP > 1
-            with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
-                logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
-
-            extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs, last_loop_step=True)
+            (
+                inputs,
+                next_token_ids,
+                extra_inputs,
+                extra_outputs,
+            ) = await self._step_postprocess_without_output(
+                inputs,
+                last_logits,
+                extra_inputs,
+                need_broadcast_next,
+            )
 
         if is_decoding:
             __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs)
@@ -711,7 +807,7 @@ class BaseModelAgent:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
         elif self.cache_config.role != EngineRole.Prefill:
-            self._merge_prefill_inputs(inputs, extra_inputs, next_token_ids, extra_outputs)
+            self._merge_prefill_inputs(inputs, extra_inputs, stopping_criteria, next_token_ids, extra_outputs)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
