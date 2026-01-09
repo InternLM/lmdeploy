@@ -150,7 +150,7 @@ class ModelAgentStrategy(ABC):
     @abstractmethod
     def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
                                     next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ExtraInputs,
-                                    **kwargs):
+                                    extra_outputs: ExtraOutputs):
         """Step next inputs."""
         pass
 

@@ -168,12 +168,16 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
 
     def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', sampling_inputs: 'SamplingInputs',
                                     next_token_ids: torch.Tensor, model_metas: Any, extra_inputs: ARSpecExtraInputs,
-                                    **kwargs):
+                                    extra_outputs: ARSpecExtraOutputs):
         """Step next inputs."""
         model_inputs.model_metas = model_metas
         step_seqlens = model_inputs.seq_length
         batch_size = step_seqlens.size(0)
 
+        # update extra inputs
+        extra_inputs.output_token_ids = extra_outputs.draft_token_ids
+
+        # update inputs
         step_seqlens = model_inputs.seq_length - extra_inputs.num_rejected_tokens
         input_ids = next_token_ids.new_empty((batch_size, self.num_spec_tokens + 1))
         input_ids[:, 0] = next_token_ids

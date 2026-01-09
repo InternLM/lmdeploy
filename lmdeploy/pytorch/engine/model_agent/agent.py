@@ -555,7 +555,7 @@ class BaseModelAgent:
         """Asyc forward task."""
 
         @record_function('update_inputs_for_next_step')
-        def __update_inputs(inputs, next_token_ids, model_metas, extra_inputs):
+        def __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs):
             """Update inputs."""
             # dp might change is_decoding of decoding inputs
             self.decoding_inputs.is_decoding = True
@@ -565,6 +565,7 @@ class BaseModelAgent:
                 next_token_ids=next_token_ids,
                 model_metas=model_metas,
                 extra_inputs=extra_inputs,
+                extra_outputs=extra_outputs,
             )
 
         dist_ctx = get_dist_manager().current_context()
@@ -655,8 +656,8 @@ class BaseModelAgent:
             next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
                                                                              extra_inputs)
 
-            output_token_ids = next_token_ids
             # spec decoding
+            output_token_ids = next_token_ids
             extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
                                                                      sampling_inputs)
             if self.spec_agent.is_enabled():
@@ -680,7 +681,10 @@ class BaseModelAgent:
                 extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs, last_loop_step=True)
 
             # for router replay
-            all_routed_experts = output.get('all_routed_experts', None)
+            if return_routed_experts:
+                all_routed_experts = output.get('all_routed_experts', None)
+            else:
+                all_routed_experts = None
             self._push_output(
                 BatchedOutputs(next_token_ids=output_token_ids,
                                logits=logits if return_logits else None,
@@ -702,12 +706,12 @@ class BaseModelAgent:
             extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs, last_loop_step=True)
 
         if is_decoding:
-            __update_inputs(inputs, next_token_ids, model_metas, extra_inputs)
+            __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs)
         elif inputs.is_chunk:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
         elif self.cache_config.role != EngineRole.Prefill:
-            self._merge_prefill_inputs(inputs, extra_inputs, output_token_ids, extra_outputs)
+            self._merge_prefill_inputs(inputs, extra_inputs, next_token_ids, extra_outputs)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""

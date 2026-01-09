@@ -42,6 +42,7 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
     def next_decoding(self, inputs: ModelInputs, input_ids: torch.Tensor,
                       extra_outputs: 'ARSpecExtraOutputs') -> ModelInputs:
         """Next decoding step."""
+        input_ids = input_ids[:, None]
         input_ids = torch.cat([input_ids, extra_outputs.draft_token_ids], dim=-1)
         return get_model_inputs_next_decoding(inputs, input_ids, max_q_seqlen=input_ids.size(-1))
 

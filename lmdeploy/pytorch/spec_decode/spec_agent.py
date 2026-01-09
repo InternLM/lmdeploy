@@ -81,7 +81,7 @@ class SpecModelAgent(BaseSpecModelAgent):
 
     def _rejection_sampling(self, next_token_ids, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs):
         """Do rejection sampling."""
-        num_rejected_tokens = None
+        num_rejected_tokens = torch.zeros_like(model_inputs.seq_length)
         bonus_token_ids = output_token_ids = next_token_ids.unsqueeze(-1)
         last_token_indices = model_inputs.seq_length.cumsum(0) - 1
         if model_inputs.is_decoding:
@@ -149,7 +149,7 @@ class SpecModelAgent(BaseSpecModelAgent):
         """
         outputs = await self._async_forward(inputs)
         if inputs.is_chunk:
-            return None
+            return torch.zeros_like(inputs.input_ids)
 
         loop_count = self.num_spec_tokens - 1
         draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs, extra_inputs)
