@@ -11,8 +11,8 @@ from lmdeploy.pytorch.distributed import DefaultContext
 from lmdeploy.pytorch.nn import ParallelEmbedding
 
 
-def parrall_emb(rank: int, world_size: int, vocab_size: int, feat_size: int, padding_idx: int, dtype: torch.dtype,
-                x: torch.Tensor, weight: torch.Tensor, result_queue: mp.Queue):
+def parallel_emb(rank: int, world_size: int, vocab_size: int, feat_size: int, padding_idx: int, dtype: torch.dtype,
+                 x: torch.Tensor, weight: torch.Tensor, result_queue: mp.Queue):
     dist.init_process_group('nccl', rank=rank, world_size=world_size)
     gpu_group = dist.new_group(ranks=list(range(world_size)), backend='nccl')
 
@@ -109,7 +109,7 @@ class TestEmbedding:
                            args=(rank, world_size, vocab_size, feat_size, padding_idx, dtype, x, weight, result_queue))
             processes.append(p)
             p.start()
-            time.sleep((0.5))
+            time.sleep(0.5)
 
         func, args = result_queue.get()
         out = func(*args)
