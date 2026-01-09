@@ -170,10 +170,10 @@ class Pipeline:
                     resp = resp.extend(out) if resp else out
                     yield out
             except:  # noqa
-                self.async_engine._run(coro=self.stop_session(session.session_id)).result()
+                self.async_engine._run(coro=self.session_mgr.async_abort(session)).result()
                 raise
             else:
-                session._response = resp
+                session.response = resp
                 session.step += resp.generate_token_len + resp.input_token_len
                 session.history.append((session.prompt, resp.text))
 
@@ -188,24 +188,17 @@ class Pipeline:
 
         return session
 
-    def session(self):
-        """Create a new session."""
-        return self.session_mgr.create()
-
     def open_session(self):
         """Open a new session."""
         return self.session_mgr.create()
 
-    def close_session(self, session: 'Session'):
-        """Close a session."""
-        self.async_engine.run(coro=self.async_engine.end_session(session.session_id))
-        self.session_mgr.end(session)
-        self.session_mgr.sessions.pop(session.session_id)
+    def stop_session(self, session: 'Session'):
+        """Stop a session."""
+        self.async_engine._run(coro=self.session_mgr.async_abort(session)).result()
 
     def end_session(self, session: 'Session'):
         """End a session."""
-        self.session_mgr.end(session)
-        self.session_mgr.sessions.pop(session.session_id)
+        self.async_engine._run(coro=self.session_mgr.async_end(session)).result()
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],

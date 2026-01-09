@@ -77,7 +77,7 @@ def main(model_path, backend, **kwargs):
 
     quit = False
     while not quit:
-        sess = pipe.session()
+        sess = pipe.open_session()
         while True:
             try:
                 prompt = input_prompt()
@@ -85,7 +85,7 @@ def main(model_path, backend, **kwargs):
                 quit = True
                 break
             if prompt == 'end':
-                pipe.end_session()
+                pipe.end_session(sess)
                 break
             if prompt == 'exit':
                 quit = True
@@ -101,7 +101,7 @@ def main(model_path, backend, **kwargs):
                 for resp in resps:
                     print(resp.text, end='', flush=True)
             except KeyboardInterrupt:
-                sess.stop()
+                pipe.stop_session(sess)
     else:
         print('exiting...')
 

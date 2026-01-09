@@ -267,17 +267,17 @@ class AsyncEngine(LogitsMixin):
     async def stop_all_session(self):
         """Stop all running sessions."""
         logger.info('stop all sessions')
-        await self.session_mgr.abort_all()
+        await self.session_mgr.async_abort_all()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         logger.info(f'stop session {session_id}')
-        await self.session_mgr.abort(session_id)
+        await self.session_mgr.async_abort(session_id)
 
     async def end_session(self, session_id: int):
         """For ending a session that is not running."""
         logger.info(f'end session {session_id}')
-        await self.session_mgr.end(session_id)
+        await self.session_mgr.async_end(session_id)
 
     def sleep(self, level: int = 1):
         """Sleep the model.

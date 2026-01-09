@@ -48,12 +48,44 @@ class Session:
         self.step = kwargs.get('step', self.step)
 
     def __repr__(self) -> str:
-        res = ''
-        for user, assistant in self.history:
-            if isinstance(user, list):
-                user = str(user)
-            res += f'USER: \n{user}\nASSISTANT: \n{assistant}\n'
+        """Return a string representation of the Session object."""
+        return (f'Session(session_id={self.session_id}, state={self._state.value}, '
+                f'step={self.step}, history_len={len(self.history)}, '
+                f'has_response={self.response is not None}, '
+                f'has_gen_config={self.gen_config is not None})')
+
+    def __str__(self) -> str:
+        """Return a human-readable string representation of the Session."""
+        res = f'Session(id={self.session_id}, state={self._state.value}, step={self.step})'
+        if self.history:
+            res += '\nHistory:\n'
+            for user, assistant in self.history:
+                if isinstance(user, list):
+                    user = str(user)
+                res += f'USER: \n{user}\nASSISTANT: \n{assistant}\n'
         return res
+
+    def reset(self):
+        """Reset the session to initial state.
+
+        This method resets all session data (prompt, response, history, etc.) but keeps the session_id. The session must
+        be in IDLE state before calling reset. If the session is active, call async_abort() first.
+        """
+        if self._state != SessionState.IDLE:
+            raise RuntimeError(f'Session {self.session_id} is not in IDLE state. '
+                               f'Current state: {self._state.value}. '
+                               f'Call async_abort() first if needed.')
+
+        self.prompt = None
+        self.response = None
+        self.history = []
+        self.gen_config = None
+        self.step = 0
+        self._abort_event = None
+        # Note: _inst should already be None if state is IDLE
+        # but we reset it for safety
+        self._inst = None
+        logger.debug(f'Session {self.session_id} has been reset.')
 
     @asynccontextmanager
     async def acquire_inst(self, inst_mgr: InferInstManager):
@@ -144,13 +176,15 @@ class Session:
         else:
             raise RuntimeError(f'Session {self.session_id} is not in ACTIVE or ACQUIRING state.')
         self._state = SessionState.IDLE
+        # DO NOT reset the session here because it might be used by other components.
+        # Leave the cleanup to the caller.
 
     async def async_end(self):
         """End the session."""
-        if self._state != SessionState.ACTIVE:
-            raise RuntimeError(f'Session {self.session_id} is not in ACTIVE state.')
         logger.debug(f'Ending session {self.session_id}')
-        await self._inst.async_end(self.session_id)
+        if self._inst is not None:
+            await self._inst.async_end(self.session_id)
+        self.reset()
 
 
 @singleton
@@ -190,6 +224,7 @@ class SessionManager:
         """Abort a session."""
         logger.info(f'Aborting session {session.session_id}')
         await session.async_abort()
+        # DO not remove the session here because it might be used by other components.
 
     async def async_abort_all(self):
         """Abort all sessions."""
@@ -197,12 +232,17 @@ class SessionManager:
         for session in list(self.sessions.values()):
             tasks.append(session.async_abort())
         await asyncio.gather(*tasks, return_exceptions=True)
+        # "abort all" is designed for async RL. The aborted sessions will be no longer used,
+        # so we can reset and clear the sessions here.
+        for session in list(self.sessions.values()):
+            session.reset()
         self.sessions.clear()
 
     async def async_end(self, session: Session):
         """End a session."""
         logger.info(f'Ending session {session.session_id}')
         await session.async_end()
+        self.sessions.pop(session.session_id)
 
     def has(self, session_id: int) -> bool:
         """Check if a session exists."""
