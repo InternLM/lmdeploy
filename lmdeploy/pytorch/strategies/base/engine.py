@@ -19,3 +19,7 @@ class EngineStrategy(ABC):
     def get_num_decode_tokens(self) -> int:
         """Get num_decode_tokens."""
         pass
+
+    def get_num_required_tokens(self) -> int:
+        """Get num_require_tokens."""
+        return self.get_num_decode_tokens()

@@ -436,6 +436,7 @@ class InputsMakerAsync:
         batch_size = len(self.running_seqs)
         assert batch_size > 0
         num_decode_tokens = self.engine_strategy.get_num_decode_tokens()
+        max_q_seqlen = num_decode_tokens
         prealloc_size = self.engine_strategy.get_prealloc_size(True)
         valid_mask = self.scheduler.schedule_running(self.running_seqs,
                                                      num_decode_tokens=num_decode_tokens,
@@ -458,7 +459,6 @@ class InputsMakerAsync:
         else:
             num_ignored_history = None
 
-        max_q_seqlen = num_decode_tokens
         kv_seqlens = [seq.num_all_ids + max_q_seqlen for seq in valid_seqs]
         sum_kv_seqlen = sum(kv_seqlens) + batch_size * max_q_seqlen
         max_kv_seqlen = max(kv_seqlens) + max_q_seqlen
@@ -513,6 +513,10 @@ class InputsMakerAsync:
 
     def update_running_seqs(self, running: 'SeqList', inputs: Optional[ModelInputs]):
         """Update running seqs."""
+        if self.config.role == EngineRole.Prefill:
+            # p node will not update running seqs
+            return
+
         is_decoding = inputs is None
         if self.long_context_chunker.enabled() and not is_decoding:
             # long context chunk does not need to update running seqs

@@ -23,4 +23,4 @@ class ARSpecEngineStrategy(EngineStrategy):
 
     def get_num_decode_tokens(self) -> int:
         """Get num_decode_tokens."""
-        return 1
+        return self.num_spec_tokens + 1

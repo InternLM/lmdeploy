@@ -79,7 +79,7 @@ class SpecModelAgent(BaseSpecModelAgent):
                                             world_size=1,
                                             cache_stream=cache_stream)
 
-    def _rejection_sampling(self, next_token_ids, model_inputs: 'ModelInputs', extra_inputs: ExtraInputs):
+    def _rejection_sampling(self, next_token_ids, model_inputs: 'ModelInputs', extra_inputs: ARSpecExtraInputs):
         """Do rejection sampling."""
         num_rejected_tokens = None
         bonus_token_ids = output_token_ids = next_token_ids.unsqueeze(-1)
@@ -140,35 +140,16 @@ class SpecModelAgent(BaseSpecModelAgent):
         await asyncio.sleep(0)
         return output
 
-    async def _async_model_forward(self, inputs: ModelInputs, extra_inputs: ExtraInputs,
+    async def _async_model_forward(self, inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                    sampling_inputs: SamplingInputs):
         """Model forward.
 
         Args:
             inputs (Dict): The input data comes from _make_inputs.
         """
-        max_prefill_token_num = self.cache_config.max_prefill_token_num
-
-        async def __long_context_single_forward(new_inputs):
-            """One large sequence."""
-            model_metas = new_inputs[0].model_metas
-            for inp in new_inputs:
-                inp.model_metas = model_metas
-                output = await self._async_forward(inp)
-                model_metas = output.get('model_metas')
-            return output
-
-        # make long context inputs
-        is_long_context = inputs.input_ids.numel() > max_prefill_token_num and not inputs.is_decoding
-
-        if is_long_context:
-            seq_len = inputs.seq_length
-            batch_size = seq_len.size(0)
-            assert batch_size == 1, 'Do not support batched long context.'
-            inputs_li = inputs.split(max_prefill_token_num)
-            outputs = await __long_context_single_forward(inputs_li)
-        else:
-            outputs = await self._async_forward(inputs)
+        outputs = await self._async_forward(inputs)
+        if inputs.is_chunk:
+            return None
 
         loop_count = self.num_spec_tokens - 1
         draft_token_ids, model_metas, target_hidden_states = self.proposer.get_outputs(outputs, inputs, extra_inputs)

@@ -26,7 +26,7 @@ class DLLMModelInputsStrategy(ModelInputsStrategy):
                                  dummy_block_id=dummy_block_id,
                                  vocab_size=vocab_size)
 
-    def next_decoding(self, inputs: ModelInputs, input_ids: Tensor) -> ModelInputs:
+    def next_decoding(self, inputs: ModelInputs, input_ids: Tensor, **kwargs) -> ModelInputs:
         """Next decoding step."""
         return get_model_inputs_next_decoding(inputs, input_ids, max_q_seqlen=self.block_size)
 

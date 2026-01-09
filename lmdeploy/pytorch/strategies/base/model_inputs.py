@@ -6,6 +6,8 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
+from .model_agent import ExtraOutputs
+
 
 @record_function('make_dummy_input')
 def make_dummy_inputs(batch_size: int,
@@ -57,7 +59,7 @@ class ModelInputsStrategy(ABC):
         pass
 
     @abstractmethod
-    def next_decoding(self, inputs: ModelInputs, input_ids: torch.Tensor) -> ModelInputs:
+    def next_decoding(self, inputs: ModelInputs, input_ids: torch.Tensor, extra_outputs: 'ExtraOutputs') -> ModelInputs:
         """Next decoding step."""
         pass
 

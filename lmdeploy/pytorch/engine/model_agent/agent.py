@@ -412,108 +412,14 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         return_logits: bool,
-        return_routed_experts: bool,
     ):
         """Model forward."""
-        strategy = self.agent_strategy
-
-        class _OutputGather:
-            """Output gather."""
-
-            def __init__(self, max_seq_len):
-                self._max_seq_len = max_seq_len
-                self._start = 0
-                self._output: torch.Tensor = None
-                self._device: torch.device = None
-                self._routed_experts: torch.Tensor = None
-                # aux hidden states for eagle3
-                self._aux_output: torch.Tensor = None
-
-            def gather(self, output):
-                """gather."""
-                tmp_output = output['hidden_states']
-                seq_len = tmp_output.size(-2)
-
-                if return_routed_experts and 'all_routed_experts' in output:
-                    tmp_exp_ids = output['all_routed_experts']
-                    out_exp_ids = self._routed_experts
-                    if out_exp_ids is None:
-                        out_exp_ids = tmp_exp_ids.new_empty(self._max_seq_len, *tmp_exp_ids.shape[1:], device='cpu')
-                        self._device = tmp_output.device
-                    out_exp_ids[self._start:self._start + seq_len, ...].copy_(tmp_exp_ids, non_blocking=True)
-                    self._routed_experts = out_exp_ids
-                    if not return_logits:
-                        self._start += seq_len
-
-                if not return_logits:
-                    self._output = tmp_output
-                    return
-
-                out_logits = self._output
-                start = self._start
-
-                if out_logits is None:
-                    out_logits = tmp_output.new_empty(1, self._max_seq_len, tmp_output.size(-1), device='cpu')
-                    self._device = tmp_output.device
-                out_logits[:, start:start + seq_len].copy_(tmp_output, non_blocking=True)
-
-                # egale3
-                if 'aux_hidden_states' in output:
-                    tmp_aux = output['aux_hidden_states']
-                    aux_out = self._aux_output
-                    if aux_out is None:
-                        aux_out = tmp_aux.new_empty(1, self._max_seq_len, tmp_aux.size(-1), device='cpu')
-                    aux_out[:, start:start + seq_len].copy_(tmp_aux, non_blocking=True)
-                    self._aux_output = aux_out
-
-                self._start = start + seq_len
-                self._output = out_logits
-
-            def get_output(self):
-                """Get tmp_output."""
-                aux_hidden_states = None
-                if return_logits:
-                    torch.cuda.synchronize()
-                    output_hidden_states = self._output.to(self._device)
-                    if self._aux_output is not None:
-                        aux_hidden_states = self._aux_output.to(self._device)
-                else:
-                    seqlen = torch.full((1, ),
-                                        self._output.numel() // self._output.size(-1),
-                                        device=self._output.device,
-                                        dtype=self._output.dtype)
-                    output_hidden_states = strategy.slice_outputs(self._output, seqlen)
-                return output_hidden_states, self._routed_experts, aux_hidden_states
 
         async def __forward(inputs):
             """Warp forward."""
             return await self.async_forward(inputs)
 
-        async def __long_context_single_forward(new_inputs, max_seqlen: int):
-            """One large sequence."""
-            model_metas = new_inputs[0].model_metas
-            output_gather = _OutputGather(max_seqlen)
-            for inp in new_inputs:
-                inp.model_metas = model_metas
-                tmp_out = await __forward(inp)
-                model_metas = tmp_out.get('model_metas')
-                output_gather.gather(tmp_out)
-                tmp_out.pop('hidden_states', None)
-                tmp_out.pop('all_routed_experts', None)
-                tmp_out.pop('aux_hidden_states', None)
-                tmp_out.pop('position_ids', None)
-
-            tmp_out['hidden_states'], routed_experts, aux_hidden_states = output_gather.get_output()
-
-            if return_routed_experts:
-                tmp_out['all_routed_experts'] = routed_experts
-
-            if aux_hidden_states is not None:
-                tmp_out['aux_hidden_states'] = aux_hidden_states
-            return tmp_out
-
         origin_inputs = inputs
-
         ret = await __forward(inputs)
 
         if not return_logits:
@@ -525,7 +431,7 @@ class BaseModelAgent:
         ret['logits'] = logits
         return ret
 
-    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs, inputs: ModelInputs):
+    async def async_sampling_logits(self, logits: torch.Tensor, sampling_inputs: SamplingInputs):
         """Sampling logits."""
 
         # record function does not support async function
@@ -563,191 +469,6 @@ class BaseModelAgent:
         dist_ctx = self.dist_ctx
         with self.agent_strategy.broadcast_next_token(next_token_ids, extra_inputs, dist_ctx) as handle:
             yield handle
-
-    @record_function('prepare_dp')
-    async def _prepare_dp(self, inputs: ModelInputs, sync_long_context: bool, is_dummy: bool):
-        """Prepare dp."""
-        world_size = self.dist_config.world_size
-        is_decoding = inputs.is_decoding
-
-        # gather dp forward metadata
-        batch_size = inputs.seq_length.numel()
-        dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
-        # check enable_microbatch
-        if self.enable_microbatch:
-            tokens_num = inputs.input_ids.numel()
-            if is_decoding:
-                enable_microbatch = batch_size >= \
-                    self.enable_microbatch_decode_batchsize_threshold
-            else:
-                enable_microbatch = batch_size >= \
-                    self.enable_microbatch_prefill_batchsize_threshold and \
-                    tokens_num >= self.enable_microbatch_prefill_token_threshold
-            dp_forward_meta.append(int(enable_microbatch))
-        gathered_meta = DistGatherScalar(dp_forward_meta, world_size, device='cuda')
-        gathered_meta = (await gathered_meta.async_wait()).cpu()
-
-        # check is_decoding
-        all_is_decoding = gathered_meta[:, 0]
-        assert all_is_decoding.sum().item() in [0, world_size]
-
-        # check if all inputs are dummy inputs
-        is_all_dummy = gathered_meta[:, 1].all()
-        if is_all_dummy:
-            return inputs, sync_long_context, is_all_dummy
-
-        if is_decoding:
-            all_batch_sizes = gathered_meta[:, 2]
-            padding_batch_size = all_batch_sizes.max().item()
-            meta = self.patched_model.get_meta()
-            meta.padding_batch_size = padding_batch_size
-            logger.debug(f'padding_batch_size={padding_batch_size}')
-        else:
-            all_sync_flags = gathered_meta[:, 3].bool()
-            sync_long_context = all_sync_flags.any().item()
-            logger.debug(f'sync_long_context={sync_long_context}')
-
-        # update if enable_microbatch
-        if self.enable_microbatch and gathered_meta[:, 4].all():
-            inputs.enable_microbatch = True
-
-        # update dp meta
-        inputs.build_dp_meta()
-        inputs = self.patched_model.update_inputs(inputs)
-        return inputs, sync_long_context, is_all_dummy
-
-    async def _async_step_background(
-        self,
-        inputs: ModelInputs,
-        loop_count: int,
-        swap_in_map: Dict = None,
-        swap_out_map: Dict = None,
-        sampling_inputs: SamplingInputs = None,
-        stopping_criteria: StoppingCriteria = None,
-        return_logits: bool = False,
-        return_routed_experts: bool = False,
-        is_dummy: bool = False,
-        sync_long_context: bool = False,
-        extra_inputs: ExtraInputs = None,
-    ):
-        """Asyc forward task."""
-
-        @record_function('update_inputs_for_next_step')
-        def __update_inputs(next_token_ids, model_metas, extra_inputs):
-            """Update inputs."""
-            return self.agent_strategy.update_inputs_for_next_step(
-                inputs,
-                sampling_inputs,
-                next_token_ids=next_token_ids,
-                model_metas=model_metas,
-                extra_inputs=extra_inputs,
-            )
-
-        # dist tools
-        dist_ctx = get_dist_manager().current_context()
-        dist_config = dist_ctx.dist_config
-        rank = self.rank
-        tp = dist_config.attn_tp
-        dp = dist_config.dp
-        sync_long_context = False if dp == 1 else sync_long_context
-        is_decoding = inputs.is_decoding
-
-        # is_all_dummy would be updated in __prepare_dp
-        if dp > 1:
-            inputs, sync_long_context, is_all_dummy = await self._prepare_dp(inputs, sync_long_context, is_dummy)
-
-            # skip dummy forward.
-            if is_all_dummy:
-                logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
-                return
-
-        logger.debug(f'<ForwardTask> rank[{rank}]: '
-                     f'batch_size={inputs.seq_length.size(0)} '
-                     f'num_tokens={inputs.input_ids.size(-1)} '
-                     f'is_decoding={inputs.is_decoding}')
-
-        if not is_decoding:
-            # init state cache for first time prefill
-            # I don't know if this is necessary...
-            self.state_cache_engine.init_caches(inputs.state_offsets, inputs.history_lengths == 0)
-        cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-        for idx in range(loop_count):
-            # inference
-            logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
-            output = await self._async_model_forward(
-                inputs,
-                return_logits=return_logits,
-                sync_long_context=sync_long_context,
-                return_routed_experts=return_routed_experts and self.need_output,
-            )
-            logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
-            seq_length = output.get('seq_length', inputs.seq_length)
-            last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
-            last_loop_step = (idx == loop_count - 1)
-            extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
-            model_metas = output.get('model_metas')
-
-            # output empty for dummy inputs
-            if is_dummy:
-                continue
-
-            need_broadcast_next = (tp > 1 and idx < loop_count - 1)
-
-            # sampling and stopping
-            if self.need_output:
-                logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
-                # sampling
-                next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
-
-                # post sampling
-                next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
-                                                                                 extra_inputs)
-                # for router replay
-                all_routed_experts = output.get('all_routed_experts', None)
-
-                # spec decoding
-                output_token_ids = next_token_ids
-                extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
-                                                                         sampling_inputs)
-                if self.spec_agent.is_enabled():
-                    next_token_ids = extra_inputs.next_token_ids
-                    output_token_ids = extra_inputs.output_token_ids
-                    logits = None
-
-                with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
-                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
-
-                    # stopping criteria
-                    stopped, stop_pos, stopping_criteria = stopping_criteria.step(next_token_ids,
-                                                                                  sampling_inputs.stop_words,
-                                                                                  inputs=inputs,
-                                                                                  extra_inputs=extra_inputs)
-
-                    # send output
-                    logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
-                    extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs, last_loop_step=last_loop_step)
-                    self._push_output(
-                        BatchedOutputs(next_token_ids=output_token_ids,
-                                       logits=logits if return_logits else None,
-                                       stopped=stopped,
-                                       stop_pos=stop_pos,
-                                       model_metas=model_metas,
-                                       logprobs=logprobs,
-                                       all_routed_experts=all_routed_experts,
-                                       extra_outputs=extra_outputs))
-            else:
-                # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
-                # as it can trigger recompilation on different ranks when using torch.compile.
-                next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(
-                    inputs, last_logits, extra_inputs)
-
-                # broadcast next token for TP > 1
-                with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
-                    logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids [{idx}]')
-
-            # update for next loop
-            if is_decoding and idx < loop_count - 1:
-                inputs, extra_inputs = __update_inputs(next_token_ids, model_metas, extra_inputs)
 
     @record_function('prepare_dp')
     async def _prepare_dp_v1(self, inputs: ModelInputs):
@@ -810,7 +531,7 @@ class BaseModelAgent:
     def _merge_prefill_inputs(self, inputs: ModelInputs, extra_inputs: ExtraInputs, next_token_ids: torch.Tensor,
                               extra_outputs: ExtraOutputs):
 
-        next_decoding_inputs = self.inputs_strategy.next_decoding(inputs, next_token_ids)
+        next_decoding_inputs = self.inputs_strategy.next_decoding(inputs, next_token_ids, extra_outputs=extra_outputs)
         next_decoding_ex_inputs = extra_inputs.next_decoding(extra_outputs)
         if self.decoding_inputs is None:
             self.decoding_inputs = next_decoding_inputs
@@ -911,7 +632,6 @@ class BaseModelAgent:
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits,
-            return_routed_experts=return_routed_experts and self.need_output,
         )
         # recovery is_decoding
         inputs.is_decoding = is_decoding
@@ -929,14 +649,14 @@ class BaseModelAgent:
         if self.need_output:
             logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
             # sampling
-            next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs, inputs)
+            next_token_ids, logprobs = await self.async_sampling_logits(last_logits, sampling_inputs)
 
             # post sampling
             next_token_ids, extra_inputs = self.agent_strategy.post_sampling(inputs, last_logits, next_token_ids,
                                                                              extra_inputs)
 
-            # spec decoding
             output_token_ids = next_token_ids
+            # spec decoding
             extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
                                                                      sampling_inputs)
             if self.spec_agent.is_enabled():
@@ -987,7 +707,7 @@ class BaseModelAgent:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
         elif self.cache_config.role != EngineRole.Prefill:
-            self._merge_prefill_inputs(inputs, extra_inputs, next_token_ids, extra_outputs)
+            self._merge_prefill_inputs(inputs, extra_inputs, output_token_ids, extra_outputs)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""

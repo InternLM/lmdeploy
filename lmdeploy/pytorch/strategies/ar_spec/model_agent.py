@@ -10,7 +10,7 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
-from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
 from ..ar.model_agent import ARStoppingCriteria
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy
@@ -44,6 +44,15 @@ class ARSpecExtraInputs(ExtraInputs):
         dist.broadcast(self.output_draft_token_ids, src=src, group=group, async_op=async_op)
         handle = dist.broadcast(self.num_rejected_tokens, src=src, group=group, async_op=async_op)
         return handle
+
+    def next_decoding(self, extra_outputs: 'ARSpecExtraOutputs'):
+        """Next decoding step."""
+        return ARSpecExtraInputs(output_token_ids=extra_outputs.draft_token_ids)
+
+    def merge(self, other: 'ARSpecExtraInputs'):
+        """Merge extra inputs."""
+        output_token_ids = torch.cat([self.output_token_ids, other.output_token_ids], dim=0)
+        return ARSpecExtraInputs(output_token_ids=output_token_ids)
 
 
 @dataclass
@@ -143,6 +152,12 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         """Create extra inputs."""
         return ARSpecExtraInputs()
 
+    def update_extra_inputs(self, extra_inputs: ARSpecExtraInputs, delta: 'ModelInputsDelta') -> ARSpecExtraInputs:
+        """Update extra inputs with model inputs delta."""
+        indices = delta.indices
+        output_token_ids = extra_inputs.output_token_ids[indices]
+        return ARSpecExtraInputs(output_token_ids=output_token_ids)
+
     def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs, last_loop_step: bool = False) -> ARSpecExtraOutputs:
         """Create extra outputs."""
         output = ARSpecExtraOutputs()
@@ -165,7 +180,6 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         input_ids[:, 1:] = extra_inputs.output_draft_token_ids
         input_ids = input_ids.flatten()[None, :]
         model_inputs.step(input_ids, step_seqlens)
-        self._step_sampling_inputs(sampling_inputs, next_token_ids)
         return model_inputs, extra_inputs
 
     def post_sampling(self, inputs: 'ModelInputs', logits: torch.Tensor, next_token_ids: torch.LongTensor,

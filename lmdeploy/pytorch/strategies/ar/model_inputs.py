@@ -99,7 +99,7 @@ class ARModelInputsStrategy(ModelInputsStrategy):
                                  vocab_size=vocab_size)
 
     @record_function('ModelInputs.next_decoding')
-    def next_decoding(self, inputs: ModelInputs, input_ids: torch.Tensor) -> ModelInputs:
+    def next_decoding(self, inputs: ModelInputs, input_ids: torch.Tensor, **kwargs) -> ModelInputs:
         """Next decoding step."""
         return get_model_inputs_next_decoding(inputs, input_ids, max_q_seqlen=1)
 
