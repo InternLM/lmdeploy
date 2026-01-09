@@ -64,6 +64,7 @@ class Pipeline:
                                            speculative_config=speculative_config,
                                            **kwargs)
         self.session_mgr = self.async_engine.session_mgr
+        self.backend_config = self.async_engine.backend_config
 
     def infer(self,
               prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
