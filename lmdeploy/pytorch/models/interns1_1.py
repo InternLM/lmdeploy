@@ -1,19 +1,23 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.model_inputs import StepContextManager
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import get_build_model_context
 from .qwen3_moe import Qwen3MoeModel
-from .qwen3_vl import Qwen3VLForConditionalGeneration
+from .qwen3_vl import Qwen3VLInputProcessor, Qwen3VLVisionModel
+from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixin
 
 
-class InternS1_1_ForConditionalGeneration(Qwen3VLForConditionalGeneration):
+class InternS1_1_ForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -33,9 +37,30 @@ class InternS1_1_ForConditionalGeneration(Qwen3VLForConditionalGeneration):
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
-        super().__init__(config=config, ctx_mgr=ctx_mgr, dtype=dtype, device=device)
+        super().__init__()
 
+        self.config = config
+        self.ctx_mgr = ctx_mgr
+
+        # build preprocessor
+        self.input_processor = Qwen3VLInputProcessor(self.config)
+
+        # build vision model
+        self.visual = Qwen3VLVisionModel(
+            config.vision_config,
+            dtype=dtype,
+            device=device,
+        )
+
+        # build text model
         self.language_model = Qwen3MoeModel(config.text_config, dtype=dtype, device=device)
+
+        # build lm_head
+        self.lm_head = build_rowwise_linear(config.text_config.hidden_size,
+                                            config.text_config.vocab_size,
+                                            bias=False,
+                                            dtype=dtype,
+                                            device=device)
 
         # for router replay
         bm_ctx = get_build_model_context()
@@ -99,6 +124,88 @@ class InternS1_1_ForConditionalGeneration(Qwen3VLForConditionalGeneration):
         if all_routed_experts is None:
             return hidden_states
         return dict(hidden_states=hidden_states, all_routed_experts=all_routed_experts)
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        """Compute logits of the model output."""
+        return self.lm_head(hidden_states)
+
+    def update_weights(self):
+        """Update weights."""
+        if self.config.tie_word_embeddings:
+            self.lm_head.weight = self.language_model.embed_tokens.weight
+
+    def get_input_embeddings(self):
+        """Get input embeddings."""
+        return self.language_model.get_input_embeddings()
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: Optional[torch.Tensor] = None,
+        context: StepContext = None,
+    ):
+        """Prepare input."""
+
+        # get input_ids, position_ids and attention metadatas
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+
+        pixel_values = None
+        vis_cu_seqlens = None
+        vis_pos_emb = None
+        image_mask = None
+        grid_thw = None
+        pos_embeds = None
+        if context.input_multimodals is not None:
+            image_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
+            if len(image_data) > 0:
+                # flatten batch
+                image_data = [data for im_data in image_data for data in im_data]
+                pixel_values = torch.cat([data.data for data in image_data])
+                image_token_id = image_data[0].meta['image_token_id']
+                image_mask = input_ids == image_token_id
+                grid_thw = torch.cat([data.meta['grid_thw'] for data in image_data]).cpu()
+                vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
+                pos_embeds = self.visual.fast_pos_embed_interpolate(grid_thw)
+                vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
+                                                         grid_thw[:, 0]).to(pixel_values.device)
+                vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
+                vis_pos_emb = vis_pos_emb.repeat(1, 2)
+                vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
+
+        # process vision embeddings
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(input_ids)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
+
+        # inputs of forward
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            vis_cu_seqlens=vis_cu_seqlens,
+            vis_pos_emb=vis_pos_emb,
+            image_mask=image_mask,
+            grid_thw=grid_thw,
+            pos_embeds=pos_embeds,
+        )
+
+    def rename_weight(self, name: str) -> str:
+        """Rename weight."""
+        if name.startswith('model.language_model.'):
+            return 'language_model.' + name[len('model.language_model.'):]
+        elif name.startswith('model.visual.'):
+            return 'visual.' + name[len('model.visual.'):]
+        elif name.startswith('model.'):
+            return name[len('model.'):]
+        return name
 
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
@@ -208,3 +315,7 @@ class InternS1_1_ForConditionalGeneration(Qwen3VLForConditionalGeneration):
                     else:
                         param = params_dict[name]
                         load_weight(param, loaded_weight)
+
+    def get_input_processor(self) -> BaseModelInputProcessor:
+        """Get input processor."""
+        return self.input_processor
