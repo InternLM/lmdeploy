@@ -467,7 +467,7 @@ class MiscConfig:
             logprobs_mode=engine_config.logprobs_mode,
             dllm_config=dllm_config,
             enable_return_routed_experts=engine_config.enable_return_routed_experts,
-            enable_chunked_prefill=engine_config.enable_chunked_prefill,
+            enable_chunked_prefill=False,
         )
         return misc_config
 

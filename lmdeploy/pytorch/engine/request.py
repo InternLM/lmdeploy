@@ -228,6 +228,24 @@ class RequestManager:
         self.requests = asyncio.Queue()
         return self._loop_task
 
+    async def wait_tasks(self):
+        """Wait for loop task and sender wait task to finish."""
+        if self._loop_task is None:
+            return
+
+        try:
+            await self._loop_task
+        except asyncio.CancelledError:
+            logger.info('Engine main loop task has been cancelled.')
+            raise
+        finally:
+            if self._sender_wait_task is not None:
+                self._sender_wait_task.cancel()
+                try:
+                    await self._sender_wait_task
+                except Exception:
+                    logger.debug('Sender wait task has been cancelled.')
+
     @property
     def event_loop(self):
         """Get event loop."""

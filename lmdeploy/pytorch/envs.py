@@ -108,8 +108,6 @@ with set_envs():
     # dp
     dp_master_addr = os.getenv('LMDEPLOY_DP_MASTER_ADDR', None)
     dp_master_port = os.getenv('LMDEPLOY_DP_MASTER_PORT', None)
-    # timeout to wait for dp inputs
-    dp_input_timeout = env_to_float('LMDEPLOY_DPINPUT_TIMEOUT', 0.04)
 
     # executor
     executor_backend = os.getenv('LMDEPLOY_EXECUTOR_BACKEND', None)

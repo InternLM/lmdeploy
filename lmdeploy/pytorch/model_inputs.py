@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import numpy as np
 import torch
+import torch.distributed as torch_dist
 from torch.profiler import record_function
 
 # from torch import distributed as dist
@@ -23,36 +24,33 @@ class DPMeta:
     moe_tp_sizes: List[int] = None
 
     @staticmethod
-    def _gather_tp_sizes(tp: int, seqlen: int, dist_ctx: dist.DistContext, layer_type: str):
+    def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: List[int], dist_ctx: dist.DistContext, layer_type: str):
         """Gather tp size."""
         attn_tp = dist_ctx.dist_config.attn_tp
         if tp > 1 and tp != attn_tp:
             dist_group = dist.get_dist_group(layer_type=layer_type)
             gather_group = dist_group.gpu_gather_group
-            rank = gather_group.rank()
-            tp_size_tensor = torch.zeros(gather_group.size(), dtype=torch.int32, device='cuda')
-            tp_size_tensor[rank].fill_(seqlen)
-            dist.all_gather_into_tensor(tp_size_tensor, tp_size_tensor[rank], group=gather_group)
-            tp_sizes = tp_size_tensor.tolist()
-            assert all(size >= 0 for size in tp_sizes), (f'seqlen: {seqlen}, Invalid tp sizes: {tp_sizes}')
+            ranks = torch_dist.get_process_group_ranks(gather_group)
+            tp_sizes = [num_tokens[r] for r in ranks]
+            assert all(size >= 0 for size in tp_sizes), (f'Invalid tp sizes: {tp_sizes}')
         else:
             tp_sizes = [seqlen]
         return tp_sizes
 
     @classmethod
-    def build(cls, seqlen: int):
+    def build(cls, seqlen: int, num_tokens: List[int]):
         """Get dp meta."""
         dist_ctx = dist.get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
 
         mlp_tp = dist_config.mlp_tp
-        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, dist_ctx, layer_type='mlp')
+        tp_sizes = cls._gather_tp_sizes(mlp_tp, seqlen, num_tokens, dist_ctx, layer_type='mlp')
 
         moe_tp = dist_config.moe_tp
         if moe_tp == mlp_tp:
             moe_tp_sizes = tp_sizes
         else:
-            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, dist_ctx, layer_type='moe')
+            moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, num_tokens, dist_ctx, layer_type='moe')
 
         return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
 
@@ -223,9 +221,9 @@ class ModelInputs:
 
         return ModelInputs(**out_dict)
 
-    def build_dp_meta(self):
+    def build_dp_meta(self, num_tokens: List[int]):
         """Build dp meta."""
-        self.dp_meta = DPMeta.build(self.input_ids.numel())
+        self.dp_meta = DPMeta.build(self.input_ids.numel(), num_tokens)
 
     def log_info(self):
         """Get log info."""

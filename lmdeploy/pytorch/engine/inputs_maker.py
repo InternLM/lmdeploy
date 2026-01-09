@@ -223,10 +223,8 @@ class InputsMakerAsync:
             self.do_prefill = self.do_prefill_pnode
         elif config.enable_chunked_prefill:
             self.do_prefill = self.do_prefill_chunked
-        elif config.dp == 1:
-            self.do_prefill = self.do_prefill_default
         else:
-            self.do_prefill = self.do_prefill_dp
+            self.do_prefill = self.do_prefill_default
 
     def _create_vision_model_inputs(self, messages: 'SeqList', model_inputs: ModelInputs):
         """Create vision model inputs."""
@@ -612,22 +610,12 @@ class InputsMakerAsync:
             sampling_inputs=sampling_inputs,
             stopping_criteria=stopping_criteria,
             return_logits=return_logits,
-            is_dummy=False,
             extra_inputs=extra_inputs,
             return_routed_experts=return_routed_experts,
         )
 
     def do_prefill_pnode(self):
         return True
-
-    def do_prefill_dp(self):
-        scheduler = self.scheduler
-
-        if self.next_is_prefill:
-            ret = scheduler.has_waiting()
-        else:
-            ret = not scheduler.has_ready()
-        return ret
 
     def do_prefill_default(self):
         # decoding if no waiting

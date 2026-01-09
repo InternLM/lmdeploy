@@ -391,7 +391,6 @@ class PytorchEngineConfig:
     hf_overrides: Optional[Dict[str, Any]] = None
     disable_vision_encoder: bool = False
     logprobs_mode: str = None
-    enable_chunked_prefill: bool = False
     # router replay
     enable_return_routed_experts: bool = False
     enable_transfer_obj_ref: bool = False
