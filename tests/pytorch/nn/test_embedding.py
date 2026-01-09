@@ -105,7 +105,7 @@ class TestEmbedding:
         result_queue = mp.Queue()
 
         for rank in range(world_size):
-            p = mp.Process(target=parrall_emb,
+            p = mp.Process(target=parallel_emb,
                            args=(rank, world_size, vocab_size, feat_size, padding_idx, dtype, x, weight, result_queue))
             processes.append(p)
             p.start()
