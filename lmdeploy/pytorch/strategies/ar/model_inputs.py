@@ -121,6 +121,11 @@ class ARModelInputsStrategy(ModelInputsStrategy):
         """Index select."""
         assert inputs.is_decoding, 'Only support index_select in decoding.'
 
+        if len(indices) == len(inputs.seq_length):
+            # we will not change the order of indices
+            # so same length means no change
+            indices = Ellipsis
+
         # required inputs
         input_ids = inputs.input_ids[..., indices]
         seq_length = inputs.seq_length[indices]

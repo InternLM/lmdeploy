@@ -216,6 +216,73 @@ class DistGatherScalar:
 SwapMap = Dict[int, int]
 
 
+@dataclass
+class StepInputs:
+    """Step inputs."""
+    model_inputs: ModelInputs = None
+    extra_inputs: ExtraInputs = None
+    stopping_criteria: StoppingCriteria = None
+
+    def merge(
+        self,
+        inputs: ModelInputs,
+        extra_inputs: ExtraInputs,
+        stopping_criteria: StoppingCriteria,
+        next_token_ids: torch.Tensor,
+        extra_outputs: ExtraOutputs,
+        model_agent: 'BaseModelAgent',
+    ):
+        """Merge prefill inputs."""
+
+        inputs = model_agent.inputs_strategy.next_decoding(inputs, next_token_ids, extra_outputs=extra_outputs)
+        extra_inputs = extra_inputs.next_decoding(extra_outputs)
+        stopping_criteria = stopping_criteria.next_decoding()
+        if self.model_inputs is None:
+            self.model_inputs = inputs
+            self.extra_inputs = extra_inputs
+            self.stopping_criteria = stopping_criteria
+        else:
+            self.model_inputs = model_agent.inputs_strategy.merge(self.model_inputs, inputs)
+            self.extra_inputs = self.extra_inputs.merge(extra_inputs)
+            self.stopping_criteria = self.stopping_criteria.merge(stopping_criteria)
+
+    def update_delta(
+        self,
+        delta: ModelInputsDelta,
+        model_agent: 'BaseModelAgent',
+    ):
+        """Get inputs from delta."""
+        self.model_inputs = model_agent.inputs_strategy.update_inputs(self.model_inputs, delta)
+        self.extra_inputs = model_agent.agent_strategy.update_extra_inputs(self.extra_inputs, delta)
+        self.stopping_criteria = self.stopping_criteria.update(delta)
+
+    @record_function('update_inputs_for_next_step')
+    def step(
+        self,
+        model_inputs: ModelInputs,
+        extra_inputs: ExtraInputs,
+        next_token_ids: torch.Tensor,
+        model_metas,
+        extra_outputs,
+        stopping_criteria,
+        model_agent: 'BaseModelAgent',
+    ):
+        """Update inputs."""
+        # dp might change is_decoding of decoding inputs
+        self.model_inputs.is_decoding = True
+        (
+            self.model_inputs,
+            self.extra_inputs,
+        ) = model_agent.agent_strategy.update_inputs_for_next_step(
+            model_inputs,
+            next_token_ids=next_token_ids,
+            model_metas=model_metas,
+            extra_inputs=extra_inputs,
+            extra_outputs=extra_outputs,
+        )
+        self.stopping_criteria = stopping_criteria
+
+
 class BaseModelAgent:
     """Base model agent.
 
@@ -313,9 +380,7 @@ class BaseModelAgent:
                                            device=device)
 
         # decoding inputs
-        self.decoding_inputs: ModelInputs = None
-        self.decoding_ex_inputs: ExtraInputs = None
-        self.decoding_stopping_criteria: StoppingCriteria = None
+        self.step_inputs = StepInputs()
 
         # long context
         self._prev_chunk_output: Dict = None
@@ -537,18 +602,14 @@ class BaseModelAgent:
         next_token_ids: torch.Tensor,
         extra_outputs: ExtraOutputs,
     ):
-
-        next_decoding_inputs = self.inputs_strategy.next_decoding(inputs, next_token_ids, extra_outputs=extra_outputs)
-        next_decoding_ex_inputs = extra_inputs.next_decoding(extra_outputs)
-        next_stopping_criteria = stopping_criteria.next_decoding()
-        if self.decoding_inputs is None:
-            self.decoding_inputs = next_decoding_inputs
-            self.decoding_ex_inputs = next_decoding_ex_inputs
-            self.decoding_stopping_criteria = next_stopping_criteria
-        else:
-            self.decoding_inputs = self.inputs_strategy.merge(self.decoding_inputs, next_decoding_inputs)
-            self.decoding_ex_inputs = self.decoding_ex_inputs.merge(next_decoding_ex_inputs)
-            self.decoding_stopping_criteria = self.decoding_stopping_criteria.merge(next_stopping_criteria)
+        self.step_inputs.merge(
+            inputs,
+            extra_inputs,
+            stopping_criteria,
+            next_token_ids,
+            extra_outputs,
+            self,
+        )
 
     def _get_inputs_from_delta(
         self,
@@ -556,11 +617,10 @@ class BaseModelAgent:
         sampling_inputs: SamplingInputs,
     ):
         """Get inputs from delta."""
-        inputs = self.decoding_inputs
-        extra_inputs = self.decoding_ex_inputs
-        inputs = self.inputs_strategy.update_inputs(inputs, delta)
-        extra_inputs = self.agent_strategy.update_extra_inputs(extra_inputs, delta)
-        stopping_criteria = self.decoding_stopping_criteria.update(delta)
+        self.step_inputs.update_delta(delta, self)
+        inputs = self.step_inputs.model_inputs
+        extra_inputs = self.step_inputs.extra_inputs
+        stopping_criteria = self.step_inputs.stopping_criteria
         next_token_ids = inputs.input_ids[0]
         self.agent_strategy.step_sampling_inputs(sampling_inputs, next_token_ids, extra_inputs=extra_inputs)
         return inputs, extra_inputs, stopping_criteria, sampling_inputs
@@ -575,9 +635,7 @@ class BaseModelAgent:
         if delta is not None:
             # update decoding inputs with delta
             # for second round chat
-            self.decoding_inputs = self.inputs_strategy.update_inputs(self.decoding_inputs, delta)
-            self.decoding_ex_inputs = self.agent_strategy.update_extra_inputs(self.decoding_ex_inputs, delta)
-            self.decoding_stopping_criteria = self.decoding_stopping_criteria.update(delta)
+            self.step_inputs.update_delta(delta, self)
 
         # check long context
         if self._prev_chunk_output is not None:
@@ -685,18 +743,15 @@ class BaseModelAgent:
         def __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs, stopping_criteria):
             """Update inputs."""
             # dp might change is_decoding of decoding inputs
-            self.decoding_inputs.is_decoding = True
-            (
-                self.decoding_inputs,
-                self.decoding_ex_inputs,
-            ) = self.agent_strategy.update_inputs_for_next_step(
+            self.step_inputs.step(
                 inputs,
-                next_token_ids=next_token_ids,
-                model_metas=model_metas,
-                extra_inputs=extra_inputs,
-                extra_outputs=extra_outputs,
+                extra_inputs,
+                next_token_ids,
+                model_metas,
+                extra_outputs,
+                stopping_criteria,
+                self,
             )
-            self.decoding_stopping_criteria = stopping_criteria
 
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
