@@ -374,6 +374,8 @@ class InputsMakerAsync:
 
         return model_inputs
 
+    @torch.inference_mode()
+    @record_function('create_model_inputs_long_context')
     def create_model_inputs_long_context(self,
                                          seq: 'SchedulerSequence',
                                          chunk_size: int,
@@ -475,8 +477,11 @@ class InputsMakerAsync:
 
         return output, valid_seqs, invalid_seqs
 
-    def create_model_inputs_detla_valid_only(self):
-        """Create model inputs delta for valid running seqs only."""
+    def create_model_inputs_delta_valid_only(self):
+        """Create model inputs delta for valid running seqs only.
+
+        Only check validation, no resources will be scheduled.
+        """
         from lmdeploy.pytorch.messages import MessageStatus
         batch_size = len(self.running_seqs)
 
@@ -528,6 +533,18 @@ class InputsMakerAsync:
         else:
             self.running_seqs += running
 
+    def deactivate_evict_seqs(self):
+        """Deactivate and evict seqs."""
+        scheduler = self.scheduler
+        to_evict_seqs = self.to_evict_seqs
+        if len(to_evict_seqs) == 0:
+            return
+        # deactivate seqs(running -> ready)
+        scheduler.deactivate_seqs(to_evict_seqs)
+        # ready to waiting
+        scheduler.evict_seqs(to_evict_seqs)
+        self.to_evict_seqs.clear()
+
     @torch.inference_mode()
     @record_function('make_forward_inputs')
     def _make_forward_inputs(self, prefill: bool, enable_empty: bool = False):
@@ -546,9 +563,49 @@ class InputsMakerAsync:
         def __create_model_inputs(seqs):
             """Createe model inputs."""
             inputs = self.create_model_inputs(seqs, True)
-            delta, valid_seqs, _ = self.create_model_inputs_detla_valid_only()
+            delta, valid_seqs, _ = self.create_model_inputs_delta_valid_only()
             self.running_seqs = valid_seqs
-            return inputs, delta
+            extra_inputs = self.model_agent_strategy.make_extra_inputs(seqs, inputs)
+            return inputs, delta, extra_inputs
+
+        def __create_inputs_chunk(running: 'SeqList'):
+            chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
+            inputs = self.create_model_inputs_long_context(running[0], chunk_size, multimodals)
+            extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
+            return inputs, extra_inputs
+
+        def __create_inputs_long_context_chunk():
+            seq = self.long_context_chunker.seq
+            running = [seq]
+            if self.long_context_chunker.is_last_chunk():
+                inputs, delta, extra_inputs = __create_model_inputs(running)
+                self.long_context_chunker.clear()
+            else:
+                inputs, extra_inputs = __create_inputs_chunk(running)
+                delta = None
+            return running, inputs, delta, extra_inputs
+
+        def __create_inputs_prefill():
+            if self.config.role == EngineRole.Prefill:
+                prealloc_size = 0
+            else:
+                prealloc_size = self.engine_strategy.get_prealloc_size(True)
+            scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
+            running = scheduler_output.running
+            swap_in_map = scheduler_output.swap_in_map
+            swap_out_map = scheduler_output.swap_out_map
+
+            inputs = None
+            delta = None
+            extra_inputs = None
+            if len(running) == 1 and self.long_context_chunker.is_long_context(running[0]):
+                # set long context chunker
+                self.long_context_chunker.set_seq(running[0])
+                inputs, extra_inputs = __create_inputs_chunk(running)
+            elif len(running) > 0:
+                # create inputs
+                inputs, delta, extra_inputs = __create_model_inputs(running)
+            return running, inputs, delta, extra_inputs, swap_in_map, swap_out_map
 
         scheduler = self.scheduler
         logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
@@ -560,36 +617,17 @@ class InputsMakerAsync:
 
         if self.long_context_chunker.enabled():
             # long context chunking
-            seq = self.long_context_chunker.seq
-            running = [seq]
-            if self.long_context_chunker.is_last_chunk():
-                inputs, delta = __create_model_inputs(running)
-                self.long_context_chunker.clear()
-            else:
-                chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
-                inputs = self.create_model_inputs_long_context(seq, chunk_size, multimodals)
-            extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
+            running, inputs, delta, extra_inputs = __create_inputs_long_context_chunk()
         elif prefill:
             # prefill
-            if self.config.role == EngineRole.Prefill:
-                prealloc_size = 0
-            else:
-                prealloc_size = self.engine_strategy.get_prealloc_size(True)
-            scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prealloc_size)
-            running = scheduler_output.running
-            swap_in_map = scheduler_output.swap_in_map
-            swap_out_map = scheduler_output.swap_out_map
-
-            if len(running) == 1 and self.long_context_chunker.is_long_context(running[0]):
-                # set long context chunker
-                self.long_context_chunker.set_seq(running[0])
-                chunk_size, multimodals = self.long_context_chunker.next_chunk_size()
-                inputs = self.create_model_inputs_long_context(running[0], chunk_size, multimodals)
-                extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
-            elif len(running) > 0:
-                # create inputs
-                inputs, delta = __create_model_inputs(running)
-                extra_inputs = self.model_agent_strategy.make_extra_inputs(running, inputs)
+            (
+                running,
+                inputs,
+                delta,
+                extra_inputs,
+                swap_in_map,
+                swap_out_map,
+            ) = __create_inputs_prefill()
 
         # try decoding
         if inputs is None and len(self.running_seqs) > 0 and self.config.role != EngineRole.Prefill:

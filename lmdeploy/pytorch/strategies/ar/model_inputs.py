@@ -10,26 +10,6 @@ from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 from ..base.model_inputs import ModelInputsStrategy, make_dummy_inputs
 
 
-def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen: int) -> ModelInputs:
-    """Next decoding step."""
-    if input_ids.dim() == 1:
-        input_ids = input_ids[None, :]
-    return ModelInputs(
-        input_ids=input_ids,
-        seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
-        history_lengths=inputs.history_lengths + inputs.seq_length,
-        block_offsets=inputs.block_offsets,
-        is_decoding=True,
-        num_ignored_history=inputs.num_ignored_history,
-        max_q_seqlen=max_q_seqlen,
-        max_kv_seqlen=inputs.max_kv_seqlen + max_q_seqlen,
-        sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
-        local_adapter_ids=inputs.local_adapter_ids,
-        model_metas=inputs.model_metas,
-        state_offsets=inputs.state_offsets,
-    )
-
-
 def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
     """Merge model inputs."""
     """Concatenate two model inputs."""
@@ -97,11 +77,6 @@ class ARModelInputsStrategy(ModelInputsStrategy):
                                  device=device,
                                  dummy_block_id=dummy_block_id,
                                  vocab_size=vocab_size)
-
-    @record_function('ModelInputs.next_decoding')
-    def next_decoding(self, inputs: ModelInputs, input_ids: torch.Tensor, **kwargs) -> ModelInputs:
-        """Next decoding step."""
-        return get_model_inputs_next_decoding(inputs, input_ids, max_q_seqlen=1)
 
     @record_function('ModelInputs.merge')
     def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:

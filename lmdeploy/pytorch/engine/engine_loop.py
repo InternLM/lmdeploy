@@ -215,6 +215,17 @@ class EngineLoop:
         delta: 'ModelInputsDelta',
     ):
         """Make infer output."""
+
+        def __get_logit(msg, logits: torch.Tensor, seq_length: List[int], idx: int):
+            logit = logits.split(seq_length)[idx]
+            if len(msg.all_logits) > 0:
+                # for chunked long context
+                msg.append_logits(logit)
+                logit = msg.logits
+                msg.all_logits.resize(0)
+
+            return logit
+
         logits = batched_outputs.logits
         all_routed_experts = batched_outputs.all_routed_experts
 
@@ -282,11 +293,7 @@ class EngineLoop:
             outputs[session_id] = out
 
             if msg.return_logits:
-                logit = logits.split(seq_length)[idx]
-                if len(msg.all_logits) > 0:
-                    msg.append_logits(logit)
-                    logit = msg.logits
-                    msg.all_logits.resize(0)
+                logit = __get_logit(msg, logits, seq_length, idx)
                 outputs[session_id].logits = logit
         return outputs
 
@@ -337,9 +344,7 @@ class EngineLoop:
             logger.warning(f'no next prefill running request, Maybe cache is full, '
                            f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
                            f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
-            # forward_event.set()
             await asyncio.sleep(0.1)
-            # forward_event.clear()
 
         while not self.stop_event.is_set():
             if next_running is None:
@@ -353,10 +358,7 @@ class EngineLoop:
                 running=next_running,
                 forward_inputs=forward_inputs,
             )
-            to_evict_seqs = self.inputs_maker.to_evict_seqs
-            self.scheduler.deactivate_seqs(to_evict_seqs)
-            self.scheduler.evict_seqs(to_evict_seqs)
-            self.inputs_maker.to_evict_seqs.clear()
+            self.inputs_maker.deactivate_evict_seqs()
             has_runable_event.set()
 
     def update_running_migration(self, running: 'SeqList', next_token_ids: np.ndarray, stopped: torch.Tensor,

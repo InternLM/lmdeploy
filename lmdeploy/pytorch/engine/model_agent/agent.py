@@ -229,14 +229,19 @@ class StepInputs:
         extra_inputs: ExtraInputs,
         stopping_criteria: StoppingCriteria,
         next_token_ids: torch.Tensor,
+        model_metas,
         extra_outputs: ExtraOutputs,
         model_agent: 'BaseModelAgent',
     ):
         """Merge prefill inputs."""
-
-        inputs = model_agent.inputs_strategy.next_decoding(inputs, next_token_ids, extra_outputs=extra_outputs)
-        extra_inputs = extra_inputs.next_decoding(extra_outputs)
-        stopping_criteria = stopping_criteria.next_decoding()
+        inputs, extra_inputs, stopping_criteria = model_agent.agent_strategy.update_decoding_for_next_step(
+            inputs,
+            extra_inputs,
+            stopping_criteria,
+            next_token_ids,
+            model_metas,
+            extra_outputs,
+        )
         if self.model_inputs is None:
             self.model_inputs = inputs
             self.extra_inputs = extra_inputs
@@ -261,10 +266,10 @@ class StepInputs:
         self,
         model_inputs: ModelInputs,
         extra_inputs: ExtraInputs,
+        stopping_criteria: StoppingCriteria,
         next_token_ids: torch.Tensor,
         model_metas,
-        extra_outputs,
-        stopping_criteria,
+        extra_outputs: ExtraOutputs,
         model_agent: 'BaseModelAgent',
     ):
         """Update inputs."""
@@ -594,23 +599,6 @@ class BaseModelAgent:
         inputs = self.patched_model.update_inputs(inputs)
         return inputs
 
-    def _merge_prefill_inputs(
-        self,
-        inputs: ModelInputs,
-        extra_inputs: ExtraInputs,
-        stopping_criteria: StoppingCriteria,
-        next_token_ids: torch.Tensor,
-        extra_outputs: ExtraOutputs,
-    ):
-        self.step_inputs.merge(
-            inputs,
-            extra_inputs,
-            stopping_criteria,
-            next_token_ids,
-            extra_outputs,
-            self,
-        )
-
     def _get_inputs_from_delta(
         self,
         delta: ModelInputsDelta,
@@ -746,11 +734,11 @@ class BaseModelAgent:
             self.step_inputs.step(
                 inputs,
                 extra_inputs,
+                stopping_criteria,
                 next_token_ids,
                 model_metas,
                 extra_outputs,
-                stopping_criteria,
-                self,
+                model_agent=self,
             )
 
         dist_ctx = get_dist_manager().current_context()
@@ -866,7 +854,15 @@ class BaseModelAgent:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
         elif self.cache_config.role != EngineRole.Prefill:
-            self._merge_prefill_inputs(inputs, extra_inputs, stopping_criteria, next_token_ids, extra_outputs)
+            self.step_inputs.merge(
+                inputs,
+                extra_inputs,
+                stopping_criteria,
+                next_token_ids,
+                model_metas,
+                extra_outputs,
+                model_agent=self,
+            )
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
@@ -878,12 +874,9 @@ class BaseModelAgent:
             while True:
                 forward_inputs = await input_maker.get()
 
-                # await self._async_step_background(**forward_inputs, )
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
-
-                input_maker.step()
 
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""

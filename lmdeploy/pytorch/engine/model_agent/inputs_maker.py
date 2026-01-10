@@ -72,14 +72,14 @@ class DPForwardInputsMaker:
         return (has_inputs > 0).item()
 
     async def _get_inputs(self):
+        # get local forward inputs
         try:
             forward_inputs = self._in_que.get_nowait()
         except asyncio.QueueEmpty:
             forward_inputs = None
 
+        # async inputs around tp group
         has_inputs = await self._gather_has_inputs(forward_inputs is not None)
-
-        # try get inputs
         if has_inputs and forward_inputs is None:
             forward_inputs = await self._in_que.get()
 

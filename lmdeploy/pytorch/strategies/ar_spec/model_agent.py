@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -12,7 +12,7 @@ from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
-from ..ar.model_agent import ARStoppingCriteria
+from ..ar.model_agent import ARStoppingCriteria, get_model_inputs_next_decoding
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy
 
 SeqList = List[SchedulerSequence]
@@ -44,10 +44,6 @@ class ARSpecExtraInputs(ExtraInputs):
         dist.broadcast(self.output_draft_token_ids, src=src, group=group, async_op=async_op)
         handle = dist.broadcast(self.num_rejected_tokens, src=src, group=group, async_op=async_op)
         return handle
-
-    def next_decoding(self, extra_outputs: 'ARSpecExtraOutputs'):
-        """Next decoding step."""
-        return ARSpecExtraInputs(output_token_ids=extra_outputs.draft_token_ids)
 
     def merge(self, other: 'ARSpecExtraInputs'):
         """Merge extra inputs."""
@@ -163,6 +159,26 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         output = ARSpecExtraOutputs()
         output.draft_token_ids = extra_inputs.output_draft_token_ids
         return output
+
+    def update_decoding_for_next_step(
+        self,
+        model_inputs: 'ModelInputs',
+        extra_inputs: ARSpecExtraInputs,
+        stopping_criteria: ARSpecStoppingCriteria,
+        next_token_ids: torch.Tensor,
+        model_metas: Any,
+        extra_outputs: ARSpecExtraOutputs,
+    ) -> Tuple['ModelInputs', ARSpecExtraInputs, ARSpecStoppingCriteria]:
+        """Step next decoding."""
+        next_token_ids = next_token_ids[:, None]
+        next_token_ids = torch.cat([next_token_ids, extra_outputs.draft_token_ids], dim=-1)
+        inputs = get_model_inputs_next_decoding(model_inputs,
+                                                next_token_ids,
+                                                max_q_seqlen=next_token_ids.size(-1),
+                                                model_metas=model_metas)
+        extra_inputs = ARSpecExtraInputs(output_token_ids=extra_outputs.draft_token_ids)
+        stopping_criteria = stopping_criteria.clone()
+        return inputs, extra_inputs, stopping_criteria
 
     def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
                                     extra_inputs: ARSpecExtraInputs, extra_outputs: ARSpecExtraOutputs):

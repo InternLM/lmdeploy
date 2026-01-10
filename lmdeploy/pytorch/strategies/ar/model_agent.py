@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -15,6 +15,27 @@ from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 
 SeqList = List[SchedulerSequence]
+
+
+def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen: int,
+                                   model_metas) -> ModelInputs:
+    """Next decoding step."""
+    if input_ids.dim() == 1:
+        input_ids = input_ids[None, :]
+    return ModelInputs(
+        input_ids=input_ids,
+        seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
+        history_lengths=inputs.history_lengths + inputs.seq_length,
+        block_offsets=inputs.block_offsets,
+        is_decoding=True,
+        num_ignored_history=inputs.num_ignored_history,
+        max_q_seqlen=max_q_seqlen,
+        max_kv_seqlen=inputs.max_kv_seqlen + max_q_seqlen,
+        sum_kv_seqlen=inputs.sum_kv_seqlen + inputs.seq_length.numel() * inputs.max_q_seqlen,
+        local_adapter_ids=inputs.local_adapter_ids,
+        model_metas=model_metas,
+        state_offsets=inputs.state_offsets,
+    )
 
 
 @dataclass
@@ -31,7 +52,7 @@ class ARExtraOutputs(ExtraOutputs):
 class ARStoppingCriteria(StoppingCriteria):
     num_appendable_ids: torch.Tensor
 
-    def next_decoding(self):
+    def clone(self):
         """Step decoding."""
         return ARStoppingCriteria(num_appendable_ids=self.num_appendable_ids)
 
@@ -117,6 +138,20 @@ class ARModelAgentStrategy(ModelAgentStrategy):
     def make_extra_outputs(self, extra_inputs: ARExtraInputs) -> ARExtraOutputs:
         """Create extra outputs."""
         return ARExtraOutputs()
+
+    def update_decoding_for_next_step(
+        self,
+        model_inputs: 'ModelInputs',
+        extra_inputs: ARExtraInputs,
+        stopping_criteria: ARStoppingCriteria,
+        next_token_ids: torch.Tensor,
+        model_metas: Any,
+        extra_outputs: ARExtraOutputs,
+    ) -> Tuple['ModelInputs', ARExtraInputs, ARStoppingCriteria]:
+        """Step next decoding."""
+        inputs = get_model_inputs_next_decoding(model_inputs, next_token_ids, max_q_seqlen=1, model_metas=model_metas)
+        stopping_criteria = stopping_criteria.clone()
+        return inputs, extra_inputs, stopping_criteria
 
     def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
                                     extra_inputs: ARExtraInputs, **kwargs):

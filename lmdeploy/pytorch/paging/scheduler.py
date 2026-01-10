@@ -287,6 +287,7 @@ class Scheduler:
 
         return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
 
+    @record_function('schedule_running')
     def schedule_running(self, running: SeqList, num_decode_tokens: int = 1, prealloc_size: int = 1):
         """Schedule running sequences.
 

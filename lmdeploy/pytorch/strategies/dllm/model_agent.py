@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -15,6 +15,7 @@ from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
+from ..ar.model_agent import get_model_inputs_next_decoding
 from ..base.model_agent import ExtraInputs, ExtraOutputs, ModelAgentStrategy, StoppingCriteria
 from .unmasking import UnmaskingProcessor
 
@@ -28,10 +29,6 @@ class DLLMExtraInputs(ExtraInputs):
 
     def broadcast(self, src: int, group, async_op=False):
         return dist.broadcast(self.dllm_mask, src=src, group=group, async_op=async_op)
-
-    def next_decoding(self, extra_outputs: 'DLLMExtraOutputs'):
-        """Next decoding step."""
-        return DLLMExtraInputs(dllm_mask=extra_outputs.dllm_mask)
 
     def merge(self, other: 'DLLMExtraInputs'):
         """Merge extra inputs."""
@@ -83,7 +80,7 @@ class DLLMStoppingCriteria(StoppingCriteria):
     num_appendable_ids: torch.Tensor
     output_start_pos: torch.Tensor
 
-    def next_decoding(self) -> 'DLLMStoppingCriteria':
+    def clone(self) -> 'DLLMStoppingCriteria':
         """Step decoding."""
         return DLLMStoppingCriteria(num_appendable_ids=self.num_appendable_ids, output_start_pos=self.output_start_pos)
 
@@ -248,6 +245,24 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         """Create extra outputs."""
         dllm_mask = extra_inputs.dllm_mask
         return DLLMExtraOutputs(dllm_mask=dllm_mask)
+
+    def update_decoding_for_next_step(
+        self,
+        model_inputs: 'ModelInputs',
+        extra_inputs: DLLMExtraInputs,
+        stopping_criteria: DLLMStoppingCriteria,
+        next_token_ids: torch.Tensor,
+        model_metas: Any,
+        extra_outputs: DLLMExtraOutputs,
+    ) -> Tuple['ModelInputs', DLLMExtraInputs, DLLMStoppingCriteria]:
+        """Step next decoding."""
+        inputs = get_model_inputs_next_decoding(model_inputs,
+                                                next_token_ids,
+                                                max_q_seqlen=self.block_size,
+                                                model_metas=model_metas)
+        extra_inputs = DLLMExtraInputs(dllm_mask=extra_outputs.dllm_mask)
+        stopping_criteria = stopping_criteria.clone()
+        return inputs, extra_inputs, stopping_criteria
 
     def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
                                     extra_inputs: DLLMExtraInputs, **kwargs):

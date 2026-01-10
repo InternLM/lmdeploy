@@ -39,10 +39,6 @@ class ExtraInputs(ABC):
         """Broadcast extra inputs."""
         pass
 
-    def next_decoding(self, extra_outputs: 'ExtraOutputs'):
-        """Next decoding step."""
-        return self
-
     def merge(self, other: 'ExtraInputs'):
         """Merge extra inputs."""
         return self
@@ -89,10 +85,6 @@ class ExtraOutputs(ABC):
 @dataclass
 class StoppingCriteria(ABC):
     """Base class for stopping criteria."""
-
-    @abstractmethod
-    def next_decoding(self) -> 'StoppingCriteria':
-        """Step decoding."""
 
     @abstractmethod
     def merge(self, other: 'StoppingCriteria') -> 'StoppingCriteria':
@@ -157,6 +149,19 @@ class ModelAgentStrategy(ABC):
         extra_inputs: ExtraInputs,
     ):
         """step."""
+        pass
+
+    @abstractmethod
+    def update_decoding_for_next_step(
+        self,
+        model_inputs: 'ModelInputs',
+        extra_inputs: ExtraInputs,
+        stopping_criteria: StoppingCriteria,
+        next_token_ids: torch.Tensor,
+        model_metas: Any,
+        extra_outputs: ExtraOutputs,
+    ) -> Tuple['ModelInputs', ExtraInputs, StoppingCriteria]:
+        """Step next decoding."""
         pass
 
     @abstractmethod

@@ -4,9 +4,8 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
-from ..ar.model_inputs import get_model_inputs_next_decoding, merge_model_inputs
+from ..ar.model_inputs import merge_model_inputs
 from ..base.model_inputs import ModelInputsStrategy, make_dummy_inputs
-from .model_agent import ARSpecExtraOutputs
 
 
 class ARSpecModelInputsStrategy(ModelInputsStrategy):
@@ -37,14 +36,6 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
                                                       dtype=target_dtype,
                                                       device=device)
         return inputs
-
-    @record_function('ModelInputs.next_decoding')
-    def next_decoding(self, inputs: ModelInputs, input_ids: torch.Tensor,
-                      extra_outputs: 'ARSpecExtraOutputs') -> ModelInputs:
-        """Next decoding step."""
-        input_ids = input_ids[:, None]
-        input_ids = torch.cat([input_ids, extra_outputs.draft_token_ids], dim=-1)
-        return get_model_inputs_next_decoding(inputs, input_ids, max_q_seqlen=input_ids.size(-1))
 
     @record_function('ModelInputs.merge')
     def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:

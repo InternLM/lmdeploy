@@ -1,9 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from torch import Tensor
-
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
-from ..ar.model_inputs import get_model_inputs_next_decoding, merge_model_inputs
+from ..ar.model_inputs import merge_model_inputs
 from ..base.model_inputs import ModelInputsStrategy, make_dummy_inputs
 
 
@@ -25,10 +23,6 @@ class DLLMModelInputsStrategy(ModelInputsStrategy):
                                  device=device,
                                  dummy_block_id=dummy_block_id,
                                  vocab_size=vocab_size)
-
-    def next_decoding(self, inputs: ModelInputs, input_ids: Tensor, **kwargs) -> ModelInputs:
-        """Next decoding step."""
-        return get_model_inputs_next_decoding(inputs, input_ids, max_q_seqlen=self.block_size)
 
     def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         """Merge model inputs."""
