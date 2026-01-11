@@ -176,6 +176,9 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
         if out.logits is not None:
             shape = tuple(out.logits.shape)
             meta_content.append(f"{colored('• Logits Shape:', meta_color)}     {colored(shape, number_color)}")
+        if out.logprobs is not None:
+            size = len(out.logprobs)
+            meta_content.append(f"{colored('• Logprobs:', meta_color)}      {colored(size, number_color)}")
 
         lines = '\n'.join(meta_content)
         lines += '\n'

@@ -20,7 +20,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine, StateCacheEngine
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
-from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, SamplingInputsDelta
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
@@ -222,34 +222,42 @@ class StepInputs:
     model_inputs: ModelInputs = None
     extra_inputs: ExtraInputs = None
     stopping_criteria: StoppingCriteria = None
+    sampling_delta: SamplingInputsDelta = None
 
+    @record_function('StepInputs.merge')
     def merge(
         self,
         inputs: ModelInputs,
         extra_inputs: ExtraInputs,
         stopping_criteria: StoppingCriteria,
+        sampling_delta: SamplingInputsDelta,
         next_token_ids: torch.Tensor,
         model_metas,
         extra_outputs: ExtraOutputs,
         model_agent: 'BaseModelAgent',
     ):
         """Merge prefill inputs."""
-        inputs, extra_inputs, stopping_criteria = model_agent.agent_strategy.update_decoding_for_next_step(
+        inputs, extra_inputs = model_agent.agent_strategy.update_prefill_for_next_step(
             inputs,
             extra_inputs,
-            stopping_criteria,
             next_token_ids,
             model_metas,
             extra_outputs,
         )
+        stopping_criteria = stopping_criteria.clone()
+        sampling_delta = model_agent.agent_strategy.step_sampling_delta(sampling_delta,
+                                                                        next_token_ids,
+                                                                        extra_inputs=extra_inputs)
         if self.model_inputs is None:
             self.model_inputs = inputs
             self.extra_inputs = extra_inputs
             self.stopping_criteria = stopping_criteria
+            self.sampling_delta = sampling_delta
         else:
             self.model_inputs = model_agent.inputs_strategy.merge(self.model_inputs, inputs)
             self.extra_inputs = self.extra_inputs.merge(extra_inputs)
             self.stopping_criteria = self.stopping_criteria.merge(stopping_criteria)
+            self.sampling_delta = model_agent.agent_strategy.merge_sampling_delta(self.sampling_delta, sampling_delta)
 
     def update_delta(
         self,
@@ -260,13 +268,15 @@ class StepInputs:
         self.model_inputs = model_agent.inputs_strategy.update_inputs(self.model_inputs, delta)
         self.extra_inputs = model_agent.agent_strategy.update_extra_inputs(self.extra_inputs, delta)
         self.stopping_criteria = self.stopping_criteria.update(delta)
+        self.sampling_delta = model_agent.agent_strategy.update_sampling_delta(self.sampling_delta, delta)
 
-    @record_function('update_inputs_for_next_step')
+    @record_function('StepInputs.step')
     def step(
         self,
         model_inputs: ModelInputs,
         extra_inputs: ExtraInputs,
         stopping_criteria: StoppingCriteria,
+        sampling_delta: SamplingInputsDelta,
         next_token_ids: torch.Tensor,
         model_metas,
         extra_outputs: ExtraOutputs,
@@ -278,14 +288,17 @@ class StepInputs:
         (
             self.model_inputs,
             self.extra_inputs,
-        ) = model_agent.agent_strategy.update_inputs_for_next_step(
+        ) = model_agent.agent_strategy.update_decoding_for_next_step(
             model_inputs,
             next_token_ids=next_token_ids,
             model_metas=model_metas,
             extra_inputs=extra_inputs,
             extra_outputs=extra_outputs,
         )
-        self.stopping_criteria = stopping_criteria
+        self.stopping_criteria = stopping_criteria.clone()
+        self.sampling_delta = model_agent.agent_strategy.step_sampling_delta(sampling_delta,
+                                                                             next_token_ids,
+                                                                             extra_inputs=extra_inputs)
 
 
 class BaseModelAgent:
@@ -609,8 +622,7 @@ class BaseModelAgent:
         inputs = self.step_inputs.model_inputs
         extra_inputs = self.step_inputs.extra_inputs
         stopping_criteria = self.step_inputs.stopping_criteria
-        next_token_ids = inputs.input_ids[0]
-        self.agent_strategy.step_sampling_inputs(sampling_inputs, next_token_ids, extra_inputs=extra_inputs)
+        sampling_inputs.update_delta(self.step_inputs.sampling_delta)
         return inputs, extra_inputs, stopping_criteria, sampling_inputs
 
     def _prepare_inputs_prefill(
@@ -727,14 +739,23 @@ class BaseModelAgent:
     ):
         """Asyc forward task."""
 
-        @record_function('update_inputs_for_next_step')
-        def __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs, stopping_criteria):
+        @record_function('update_decoding_for_next_step')
+        def __update_inputs(
+            inputs,
+            next_token_ids,
+            model_metas,
+            extra_inputs,
+            extra_outputs,
+            stopping_criteria,
+            sampling_delta: SamplingInputsDelta = None,
+        ):
             """Update inputs."""
             # dp might change is_decoding of decoding inputs
             self.step_inputs.step(
                 inputs,
                 extra_inputs,
                 stopping_criteria,
+                sampling_delta,
                 next_token_ids,
                 model_metas,
                 extra_outputs,
@@ -848,8 +869,15 @@ class BaseModelAgent:
                 need_broadcast_next,
             )
 
+        sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
-            __update_inputs(inputs, next_token_ids, model_metas, extra_inputs, extra_outputs, stopping_criteria)
+            __update_inputs(inputs,
+                            next_token_ids,
+                            model_metas,
+                            extra_inputs,
+                            extra_outputs,
+                            stopping_criteria,
+                            sampling_delta=sampling_delta)
         elif inputs.is_chunk:
             # _prev_chunk_output is used to update model metas
             self._prev_chunk_output = output
@@ -858,6 +886,7 @@ class BaseModelAgent:
                 inputs,
                 extra_inputs,
                 stopping_criteria,
+                sampling_delta,
                 next_token_ids,
                 model_metas,
                 extra_outputs,

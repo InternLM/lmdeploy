@@ -146,7 +146,6 @@ class ARSamplingStrategy(SamplingStrategy):
             top_p, min_top_p = None, 1.0
             min_p = None
             random_seeds = None
-            random_offsets = None
         else:
             top_k = torch.tensor(top_k)
             if (top_k == max_top_k).all():
@@ -156,7 +155,7 @@ class ARSamplingStrategy(SamplingStrategy):
             top_p, min_top_p = __get_topp(top_p)
             min_p = __get_minp(min_p)
             random_seeds = torch.tensor(random_seeds)
-            random_offsets = torch.tensor(random_offsets)
+        random_offsets = torch.tensor(random_offsets)
 
         max_num_logprobs = max(num_logprobs)
 

@@ -9,7 +9,7 @@ import torch
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.distributed import DistContext
-    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+    from lmdeploy.pytorch.engine.logits_process import SamplingInputs, SamplingInputsDelta
     from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     SeqList = List[SchedulerSequence]
@@ -87,6 +87,10 @@ class StoppingCriteria(ABC):
     """Base class for stopping criteria."""
 
     @abstractmethod
+    def clone(self) -> 'StoppingCriteria':
+        """Step decoding."""
+
+    @abstractmethod
     def merge(self, other: 'StoppingCriteria') -> 'StoppingCriteria':
         """Merge two stopping criteria."""
 
@@ -152,22 +156,48 @@ class ModelAgentStrategy(ABC):
         pass
 
     @abstractmethod
-    def update_decoding_for_next_step(
+    def merge_sampling_delta(
+        self,
+        sampling_delta: 'SamplingInputsDelta',
+        other: 'SamplingInputsDelta',
+    ) -> 'SamplingInputsDelta':
+        """Merge two sampling deltas."""
+
+    @abstractmethod
+    def step_sampling_delta(
+        self,
+        sampling_delta: 'SamplingInputsDelta',
+        next_token_ids: torch.Tensor,
+        extra_inputs: ExtraInputs,
+    ) -> 'SamplingInputsDelta':
+        """Step next delta."""
+        pass
+
+    @abstractmethod
+    def update_sampling_delta(
+        self,
+        sampling_delta: 'SamplingInputsDelta',
+        delta: 'ModelInputsDelta',
+    ) -> 'SamplingInputsDelta':
+        """Update sampling delta with model inputs delta."""
+        pass
+
+    @abstractmethod
+    def update_prefill_for_next_step(
         self,
         model_inputs: 'ModelInputs',
         extra_inputs: ExtraInputs,
-        stopping_criteria: StoppingCriteria,
         next_token_ids: torch.Tensor,
         model_metas: Any,
         extra_outputs: ExtraOutputs,
-    ) -> Tuple['ModelInputs', ExtraInputs, StoppingCriteria]:
+    ) -> Tuple['ModelInputs', ExtraInputs]:
         """Step next decoding."""
         pass
 
     @abstractmethod
-    def update_inputs_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
-                                    extra_inputs: ExtraInputs,
-                                    extra_outputs: ExtraOutputs) -> Tuple['ModelInputs', ExtraInputs]:
+    def update_decoding_for_next_step(self, model_inputs: 'ModelInputs', next_token_ids: torch.Tensor, model_metas: Any,
+                                      extra_inputs: ExtraInputs,
+                                      extra_outputs: ExtraOutputs) -> Tuple['ModelInputs', ExtraInputs]:
         """Step next inputs."""
         pass
 
