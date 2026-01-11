@@ -316,6 +316,10 @@ class Scheduler:
                 self.block_trie.allocate(seq)
                 continue
 
+            # running to ready
+            seq.state.deactivate()
+            # ready to waiting
+            seq.state.evict()
             valid_mask[idx] = False
         valid_mask = list(reversed(valid_mask))
         return valid_mask
