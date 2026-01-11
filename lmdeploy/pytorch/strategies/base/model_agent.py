@@ -88,7 +88,7 @@ class StoppingCriteria(ABC):
 
     @abstractmethod
     def clone(self) -> 'StoppingCriteria':
-        """Step decoding."""
+        """clone."""
 
     @abstractmethod
     def merge(self, other: 'StoppingCriteria') -> 'StoppingCriteria':

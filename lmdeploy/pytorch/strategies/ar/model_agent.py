@@ -53,7 +53,7 @@ class ARStoppingCriteria(StoppingCriteria):
     num_appendable_ids: torch.Tensor
 
     def clone(self):
-        """Step decoding."""
+        """clone."""
         return ARStoppingCriteria(num_appendable_ids=self.num_appendable_ids)
 
     def merge(self, other: 'ARStoppingCriteria'):

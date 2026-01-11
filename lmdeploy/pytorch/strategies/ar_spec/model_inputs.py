@@ -40,16 +40,12 @@ class ARSpecModelInputsStrategy(ModelInputsStrategy):
     @record_function('ModelInputs.merge')
     def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         """Merge model inputs."""
-        """Concatenate two model inputs."""
         return merge_model_inputs(inputs, other)
 
     @record_function('ModelInputs.update_inputs')
     def update_inputs(self, inputs: ModelInputs, delta: 'ModelInputsDelta') -> ModelInputs:
         """Update model inputs with delta."""
-        """Update inputs with delta."""
         assert inputs.is_decoding, 'Only support update_delta in decoding.'
-
-        assert inputs.is_decoding, 'Only support index_select in decoding.'
         indices = delta.indices
         indice_cpu = delta.indice_cpu
         block_offsets = delta.block_offsets

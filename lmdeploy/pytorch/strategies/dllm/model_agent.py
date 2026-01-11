@@ -81,7 +81,7 @@ class DLLMStoppingCriteria(StoppingCriteria):
     output_start_pos: torch.Tensor
 
     def clone(self) -> 'DLLMStoppingCriteria':
-        """Step decoding."""
+        """clone."""
         return DLLMStoppingCriteria(num_appendable_ids=self.num_appendable_ids, output_start_pos=self.output_start_pos)
 
     def merge(self, other: 'DLLMStoppingCriteria') -> 'DLLMStoppingCriteria':

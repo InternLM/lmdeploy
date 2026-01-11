@@ -12,7 +12,6 @@ from ..base.model_inputs import ModelInputsStrategy, make_dummy_inputs
 
 def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
     """Merge model inputs."""
-    """Concatenate two model inputs."""
 
     def __try_pad_block_offsets(block_offsets: torch.Tensor, target_size: int):
         """Try pad block offsets to target size."""
@@ -157,7 +156,6 @@ class ARModelInputsStrategy(ModelInputsStrategy):
     @record_function('ModelInputs.update_inputs')
     def update_inputs(self, inputs: ModelInputs, delta: 'ModelInputsDelta') -> ModelInputs:
         """Update model inputs with delta."""
-        """Update inputs with delta."""
         assert inputs.is_decoding, 'Only support update_delta in decoding.'
         return self.index_select(
             inputs=inputs,
