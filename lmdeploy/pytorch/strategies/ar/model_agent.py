@@ -106,7 +106,8 @@ class ARModelAgentStrategy(ModelAgentStrategy):
         """Slice outputs."""
         return extra_inputs
 
-    def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
+    @record_function('step_sampling_inputs')
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
         """step."""
         sampling_inputs.num_ignore_eos = sampling_inputs.num_ignore_eos - 1
         if sampling_inputs.random_offsets is not None:
@@ -119,11 +120,6 @@ class ARModelAgentStrategy(ModelAgentStrategy):
             sampling_inputs.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
 
         return sampling_inputs
-
-    @record_function('step_sampling_inputs')
-    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
-        """step."""
-        return self._step_sampling_inputs(sampling_inputs, next_token_ids)
 
     def make_stopping_criteria(self, seqs: SeqList) -> ARStoppingCriteria:
         """Create stopping criteria."""

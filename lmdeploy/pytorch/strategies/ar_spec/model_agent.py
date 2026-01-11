@@ -124,7 +124,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
             extra_inputs.target_logits = logits.unflatten(0, (batch_size, -1))[:, :-1]
         return extra_inputs
 
-    def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor):
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
         """step."""
         sampling_inputs.num_ignore_eos = sampling_inputs.num_ignore_eos - 1
 
@@ -133,10 +133,6 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
             sampling_inputs.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
 
         return sampling_inputs
-
-    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor, **kwargs):
-        """step."""
-        return self._step_sampling_inputs(sampling_inputs, next_token_ids)
 
     def make_stopping_criteria(self, seqs: SeqList) -> ARSpecStoppingCriteria:
         """Create stopping criteria."""

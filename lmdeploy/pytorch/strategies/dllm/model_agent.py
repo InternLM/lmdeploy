@@ -182,10 +182,11 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         dllm_mask = self.slice_outputs(extra_inputs.dllm_mask, model_inputs.seq_length)
         return DLLMExtraInputs(dllm_mask=dllm_mask)
 
-    def _step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
-                              dllm_mask: torch.Tensor, **kwargs):
-        """step."""
+    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
+                             extra_inputs: DLLMExtraInputs, **kwargs):
+        """Step sampling inputs."""
         from lmdeploy.pytorch import consts
+        dllm_mask = extra_inputs.dllm_mask
         dllm_block_size = self.block_size
         DLLM_UNMASKED = consts.DLLM_UNMASKED
         is_unmasked = (dllm_mask == DLLM_UNMASKED).view(-1, dllm_block_size).all(dim=1, keepdim=True)
@@ -197,12 +198,6 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
             # so we need to increase it by 1 at each step
             sampling_inputs.random_offsets += 1
         return sampling_inputs
-
-    def step_sampling_inputs(self, sampling_inputs: SamplingInputs, next_token_ids: torch.Tensor,
-                             extra_inputs: DLLMExtraInputs, **kwargs):
-        """Step sampling inputs."""
-        dllm_mask = extra_inputs.dllm_mask
-        return self._step_sampling_inputs(sampling_inputs, next_token_ids, dllm_mask=dllm_mask)
 
     def make_stopping_criteria(self, seqs: SeqList) -> DLLMStoppingCriteria:
         """Create stopping criteria."""
