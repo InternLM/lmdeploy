@@ -117,7 +117,7 @@ class Session:
                 raise RuntimeError(f'Session {self.session_id} is not finished yet.')
         inst = await self._inst_mgr.get().get()
         try:
-            await self._inst.async_end(self.session_id)
+            await inst.async_end(self.session_id)
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             logger.error(f'[async_end] exception caught: {e}')
         finally:
