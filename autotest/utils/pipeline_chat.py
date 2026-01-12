@@ -19,6 +19,7 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
 
     log_path = config.get('log_path')
     case_name = get_case_str_by_config(run_config)
+    os.makedirs(log_path, exist_ok=True)
     pipeline_log = os.path.join(log_path, f'pipeline_llm_{case_name}.log')
 
     env = os.environ.copy()
@@ -68,6 +69,7 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
         model_path = config.get('model_path') + '/' + model
 
     log_path = config.get('log_path')
+    os.makedirs(log_path, exist_ok=True)
     case_name = get_case_str_by_config(run_config)
     pipeline_log = os.path.join(log_path, f'pipeline_mllm_{case_name}.log')
 

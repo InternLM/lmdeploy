@@ -48,6 +48,7 @@ def hf_command_line_test(config, case, case_info, run_config, cuda_prefix: str =
 def command_test(config, cmd, run_config, case_info, need_extract_output):
     try:
         log_path = config.get('log_path')
+        os.makedirs(log_path, exist_ok=True)
         case_name = get_case_str_by_config(run_config)
 
         chat_log = os.path.join(log_path, f'chat_{case_name}.log')

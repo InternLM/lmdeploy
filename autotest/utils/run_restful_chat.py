@@ -129,6 +129,7 @@ def run_all_step(log_path, cases_info, port: int = DEFAULT_PORT):
 
 def open_chat_test(log_path, case, case_info, model, url, port: int = DEFAULT_PORT):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
+    os.makedirs(log_path, exist_ok=True)
     restful_log = os.path.join(log_path, f'restful_{model}_{str(port)}_{case}_{timestamp}.log')
 
     file = open(restful_log, 'w')
@@ -222,6 +223,7 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     model_name = client.models.list().data[0].id
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
+    os.makedirs(log_path, exist_ok=True)
     restful_log = os.path.join(log_path,
                                f'restful_vl_{timestamp}_{model_name.split(' / ')[-1]}_{str(port)}_{timestamp}.log')
     file = open(restful_log, 'w')
