@@ -1,5 +1,5 @@
 import pytest
-from tools.common_case_config import (PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2, PYTORCH_MODELSCOPE_CONFIG,
+from tools.common_case_config import (MODELSCOPE_CONFIG, PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2,
                                       PYTORCH_PR_TEST_LLM_GPU1, PYTORCH_PR_TEST_LLM_GPU2)
 from utils.config_utils import get_func_config_list
 from utils.run_client_chat import run_tests
@@ -76,7 +76,7 @@ def test_hf_turbomind_chat_pr_tp1(config, run_config, cli_case_config, worker_id
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('run_config', PYTORCH_MODELSCOPE_CONFIG)
+@pytest.mark.parametrize('run_config', [item for item in MODELSCOPE_CONFIG if item['backend'] == BACKEND])
 def test_modelscope_turbomind_chat_tp1(config, run_config, cli_case_config, worker_id):
     run_config['env'] = {'LMDEPLOY_USE_MODELSCOPE': 'True'}
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)

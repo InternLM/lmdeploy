@@ -1,6 +1,6 @@
 import pytest
-from tools.common_case_config import (TURBOMIND_FALLBACK_TEST_LLM_GPU1, TURBOMIND_FALLBACK_TEST_LLM_GPU2,
-                                      TURBOMIND_MODELSCOPE_CONFIG, TURBOMIND_PR_TEST_LLM_GPU1,
+from tools.common_case_config import (MODELSCOPE_CONFIG, TURBOMIND_FALLBACK_TEST_LLM_GPU1,
+                                      TURBOMIND_FALLBACK_TEST_LLM_GPU2, TURBOMIND_PR_TEST_LLM_GPU1,
                                       TURBOMIND_PR_TEST_LLM_GPU2)
 from utils.config_utils import get_func_config_list
 from utils.run_client_chat import run_tests
@@ -83,6 +83,6 @@ def test_hf_turbomind_chat_pr_tp1(config, run_config, cli_case_config, worker_id
 
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('run_config', TURBOMIND_MODELSCOPE_CONFIG)
+@pytest.mark.parametrize('run_config', [item for item in MODELSCOPE_CONFIG if item['backend'] == BACKEND])
 def test_modelscope_turbomind_chat_tp1(config, run_config, cli_case_config, worker_id):
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)

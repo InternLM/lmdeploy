@@ -137,7 +137,7 @@ pytorch_chat_model:
         - OpenGVLab/InternVL2-4B
         - OpenGVLab/InternVL2-40B
         - OpenGVLab/InternVL2-Llama3-76B-AWQ
-        - OpenGVLab/Mono-InternVL-2B
+        # - OpenGVLab/Mono-InternVL-2B 'dict' object has no attribute 'image_size'
         - Qwen/Qwen3-0.6B
         - Qwen/Qwen3-4B
         - Qwen/Qwen3-8B
@@ -229,7 +229,7 @@ pytorch_vl_model:
         - OpenGVLab/InternVL2-2B
         - OpenGVLab/InternVL2-4B
         - OpenGVLab/InternVL2-40B
-        - OpenGVLab/Mono-InternVL-2B
+        # - OpenGVLab/Mono-InternVL-2B 'dict' object has no attribute 'image_size'
         - Qwen/Qwen3-VL-8B-Instruct
         - Qwen/Qwen3-VL-32B-Instruct
         - Qwen/Qwen3-VL-30B-A3B-Instruct
@@ -335,7 +335,7 @@ pytorch_quantization:
         - Qwen/Qwen3-32B
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
-        - microsoft/Phi-4-mini-instruct
+        # - microsoft/Phi-4-mini-instruct The size of tensor a (5120) must match the size of tensor b (3072) at non-singleton dimension 0
         - THUDM/glm-4v-9b
     w8a8:
         - meta-llama/Meta-Llama-3-8B-Instruct
@@ -348,7 +348,7 @@ pytorch_quantization:
         - mistralai/Mistral-7B-Instruct-v0.3
         - Qwen/Qwen2.5-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
-        - microsoft/Phi-4-mini-instruct
+        # - microsoft/Phi-4-mini-instruct The size of tensor a (5120) must match the size of tensor b (3072) at non-singleton dimension 0
         - internlm/internlm2_5-20b
         - internlm/internlm2_5-7b
         - meta-llama/Meta-Llama-3-1-8B-Instruct

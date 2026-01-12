@@ -1,8 +1,7 @@
-import datetime
 import json
 import os
 import subprocess
-from time import sleep, time
+import time
 
 import allure
 import requests
@@ -21,7 +20,7 @@ BASE_HTTP_URL = f'http://{MASTER_ADDR}'
 
 def start_openai_service(config, run_config, worker_id):
     case_name = get_case_str_by_config(run_config)
-    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
     server_log = os.path.join(config.get('server_log_path'), f'log_{case_name}_{timestamp}.log')
 
     port = DEFAULT_PORT + get_workerid(worker_id)
@@ -60,9 +59,9 @@ def start_openai_service(config, run_config, worker_id):
     start_time = int(time())
     start_timeout = 720
 
-    sleep(5)
+    time.sleep(5)
     for i in range(start_timeout):
-        sleep(1)
+        time.sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
@@ -109,7 +108,7 @@ def terminate_restful_api(worker_id, param):
     assert response is not None and response.status_code == 200, f'terminate with {response}'
 
 
-def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
+def run_all_step(log_path, cases_info, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
     model = get_model(http_url)
 
@@ -122,15 +121,13 @@ def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
         case_info = cases_info.get(case)
 
         with allure.step(case + ' restful_test - openai chat'):
-            restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, port)
+            restful_result, restful_log, msg = open_chat_test(log_path, case, case_info, model, http_url, port)
             allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
 
 
-def open_chat_test(config, case, case_info, model, url, port: int = DEFAULT_PORT):
-    log_path = config.get('log_path')
-
+def open_chat_test(log_path, case, case_info, model, url, port: int = DEFAULT_PORT):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     restful_log = os.path.join(log_path, f'restful_{model}_{str(port)}_{case}_{timestamp}.log')
 
@@ -193,8 +190,7 @@ def get_model(url):
         return None
 
 
-def test_logprobs(worker_id: str = None):
-    port = DEFAULT_PORT + get_workerid(worker_id)
+def _run_logprobs_test(port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
     api_client = APIClient(http_url)
     model_name = api_client.available_models[0]
@@ -215,9 +211,8 @@ PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tig
 PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'  # noqa E501
 
 
-def run_vl_testcase(config, port: int = DEFAULT_PORT):
+def run_vl_testcase(log_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
-    log_path = config.get('log_path')
 
     model = get_model(http_url)
     if model is None:
@@ -266,9 +261,8 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
         item).lower(), item
 
 
-def run_reasoning_case(config, port: int = DEFAULT_PORT):
+def _run_reasoning_case(log_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
-    log_path = config.get('log_path')
 
     model = get_model(http_url)
 
@@ -555,9 +549,8 @@ def test_qwen_multiple_round_prompt(client, model):
     return response_list
 
 
-def run_tools_case(config, port: int = DEFAULT_PORT):
+def _run_tools_case(log_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
-    log_path = config.get('log_path')
 
     model = get_model(http_url)
 
@@ -677,7 +670,7 @@ def start_proxy_server(config, worker_id):
         log_path = '/nvme/qa_test_models/evaluation_report'
     os.makedirs(log_path, exist_ok=True)
 
-    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
     proxy_log = os.path.join(log_path, f'proxy_server_{worker_id}_{timestamp}.log')
 
     worker_num = get_workerid(worker_id)
@@ -692,7 +685,7 @@ def start_proxy_server(config, worker_id):
         if response.status_code == 200:
             print(f'Terminating existing nodes on proxy {proxy_url}')
             requests.get(f'{proxy_url}/nodes/terminate_all', timeout=10)
-            sleep(5)
+            time.sleep(5)
     except requests.exceptions.RequestException:
         pass
 
@@ -714,9 +707,9 @@ def start_proxy_server(config, worker_id):
     start_time = int(time())
     timeout = 300
 
-    sleep(5)
+    time.sleep(5)
     for i in range(timeout):
-        sleep(1)
+        time.sleep(1)
         if proxy_health_check(f'http://127.0.0.1:{port}'):  # noqa: E231, E261
             break
 
@@ -741,3 +734,63 @@ def start_proxy_server(config, worker_id):
 
     print(f'Proxy server started successfully with PID: {pid}')
     return pid, proxy_process
+
+
+def run_llm_test(config, run_config, common_case_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            run_all_step(config.get('log_path'), common_case_config, port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id, run_config)
+
+
+def run_mllm_case(config, run_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            run_vl_testcase(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id, run_config)
+
+
+def run_reasoning_case(config, run_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            _run_reasoning_case(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id, run_config)
+
+
+def run_tools_case(config, run_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            _run_tools_case(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id, run_config)
+
+
+def run_logprob_test(config, run_config, worker_id):
+    pid, content = start_openai_service(config, run_config, worker_id)
+    try:
+        if pid > 0:
+            _run_logprobs_test(port=DEFAULT_PORT + get_workerid(worker_id))
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id, run_config)

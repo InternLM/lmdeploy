@@ -59,24 +59,6 @@ TURBOMIND_FALLBACK_TEST_LLM_GPU1 = [{
         'tp': 1
     },
     'extra_params': {}
-}, {
-    'model': 'microsoft/Phi-4-mini-instruct-inner-4bits',
-    'backend': TURBOMIND,
-    'communicator': 'nccl',
-    'quant_policy': 4,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}, {
-    'model': 'microsoft/Phi-4-mini-instruct-inner-w8a8',
-    'backend': TURBOMIND,
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
 }]
 
 TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{
@@ -93,6 +75,44 @@ TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{
     'backend': TURBOMIND,
     'communicator': 'nccl',
     'quant_policy': 8,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
+}]
+
+TURBOMIND_FALLBACK_TEST_MLLM_GPU1 = [{
+    'model': 'microsoft/Phi-4-mini-instruct',
+    'backend': TURBOMIND,
+    'communicator': 'cuda-ipc',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
+}, {
+    'model': 'THUDM/glm-4v-9b',
+    'backend': TURBOMIND,
+    'communicator': 'cuda-ipc',
+    'quant_policy': 4,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
+}, {
+    'model': 'THUDM/glm-4v-9b-inner-4bits',
+    'backend': TURBOMIND,
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
+}, {
+    'model': 'OpenGVLab/InternVL2-4B',
+    'backend': TURBOMIND,
+    'communicator': 'nccl',
+    'quant_policy': 0,
     'parallel_config': {
         'tp': 1
     },
@@ -143,9 +163,11 @@ BASE_MODELSCOPE_CONFIG = [{
     }
 }]
 
-TURBOMIND_MODELSCOPE_CONFIG = [{**item, 'backend': TURBOMIND} for item in BASE_MODELSCOPE_CONFIG]
-
-PYTORCH_MODELSCOPE_CONFIG = [{**item, 'backend': PYTORCH} for item in BASE_MODELSCOPE_CONFIG]
+MODELSCOPE_CONFIG = [{
+    **item, 'backend': TURBOMIND
+} for item in BASE_MODELSCOPE_CONFIG] + [{
+    **item, 'backend': PYTORCH
+} for item in BASE_MODELSCOPE_CONFIG]
 
 PYTORCH_LORA_TEST_LLM_GPU1 = [{
     'model': 'meta-llama/Llama-2-7b-chat-hf',
@@ -287,10 +309,14 @@ BASE_REASONING_TEST_LLM = [{
     }
 }]
 
-TURBOMIND_TOOLCALL_TEST_LLM = [{**item, 'backend': TURBOMIND} for item in BASE_TOOLCALL_TEST_LLM]
+TOOLCALL_TEST_LLM = [{
+    **item, 'backend': TURBOMIND
+} for item in BASE_TOOLCALL_TEST_LLM] + [{
+    **item, 'backend': PYTORCH
+} for item in BASE_TOOLCALL_TEST_LLM]
 
-PYTORCH_TOOLCALL_TEST_LLM = [{**item, 'backend': PYTORCH} for item in BASE_TOOLCALL_TEST_LLM]
-
-TURBOMIND_REASONING_TEST_LLM = [{**item, 'backend': TURBOMIND} for item in BASE_REASONING_TEST_LLM]
-
-PYTORCH_REASONING_TEST_LLM = [{**item, 'backend': PYTORCH} for item in BASE_REASONING_TEST_LLM]
+REASONING_TEST_LLM = [{
+    **item, 'backend': TURBOMIND
+} for item in BASE_REASONING_TEST_LLM] + [{
+    **item, 'backend': PYTORCH
+} for item in BASE_REASONING_TEST_LLM]
