@@ -674,8 +674,9 @@ class BaseModelAgent:
 
         # spec decoding
         output_token_ids = next_token_ids
-        extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs, sampling_inputs)
         if self.spec_agent.is_enabled():
+            extra_inputs = await self.spec_agent.async_model_forward(next_token_ids, inputs, extra_inputs,
+                                                                     sampling_inputs)
             next_token_ids = extra_inputs.next_token_ids
             output_token_ids = extra_inputs.output_token_ids
             logits = None

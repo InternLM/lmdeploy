@@ -163,7 +163,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         next_token_ids: torch.Tensor,
         model_metas: Any,
         extra_outputs: ARSpecExtraOutputs,
-    ) -> Tuple['ModelInputs', ARSpecExtraInputs, ARSpecStoppingCriteria]:
+    ) -> Tuple['ModelInputs', ARSpecExtraInputs]:
         """Step next decoding."""
         next_token_ids = next_token_ids[:, None]
         next_token_ids = torch.cat([next_token_ids, extra_outputs.draft_token_ids], dim=-1)
