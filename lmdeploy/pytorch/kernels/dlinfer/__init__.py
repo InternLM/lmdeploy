@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from dlinfer.utils.type_annotation import DlinferDistContext
-
 from ..default import multinomial_sampling, per_channel_quant
 from .apply_rotary_pos_emb import apply_rotary_pos_emb
 from .awq_kernels import awq_linear
@@ -13,7 +11,6 @@ from .pagedattention import paged_attention_fwd
 from .rms_norm import rms_norm
 
 __all__ = [
-    'DlinferDistContext',
     'rms_norm',
     'apply_rotary_pos_emb',
     'awq_linear',

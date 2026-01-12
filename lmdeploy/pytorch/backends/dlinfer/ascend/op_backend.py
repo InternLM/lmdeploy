@@ -2,6 +2,7 @@
 import itertools
 import os
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Tuple
@@ -14,6 +15,7 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.utils import get_logger
 
+from ..moe import MoeType
 from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
@@ -41,6 +43,30 @@ class SocVersion:
     @classmethod
     def is_Ascend910(cls) -> bool:
         return cls.device_name().startswith(cls.Ascend910)
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def soc_version(cls) -> str:
+        return torch.npu.get_soc_version()
+
+    @classmethod
+    def is_A2(cls) -> bool:
+        return 220 <= cls.soc_version() <= 225
+
+    @classmethod
+    def is_A3(cls) -> bool:
+        return 250 <= cls.soc_version() <= 255
+
+
+@dataclass
+class DistMeta:
+    dp_size: int
+    tp_size: int
+    ep_size: int
+    tp_rank: int
+    ep_rank: int
+    tp_group: torch.distributed.ProcessGroup
+    ep_group: torch.distributed.ProcessGroup
 
 
 class AscendKVQuantMeta:
@@ -90,10 +116,12 @@ class AscendKVQuantMeta:
 
 class AscendOpsBackend(DlinferOpsBackend):
     """Ascend layer backend."""
-    enable_graph = False
-    half_negative_inf = torch.finfo(torch.float16).min
+    enable_graph: bool = False
+    half_negative_inf: float = torch.finfo(torch.float16).min
     total_slots = None
     max_batches = None
+    dist_meta: DistMeta = None
+    graph_capture_sizes = None
     max_tokens_accros_dp = 0
 
     @staticmethod
@@ -235,27 +263,83 @@ class AscendOpsBackend(DlinferOpsBackend):
 
             return kv_start_indices, attention_mask
 
-        def get_max_tokens_across_dp():
+        def get_dist_meta():
+            if cls.dist_meta is not None:
+                return cls.dist_meta
             dist_ctx = get_dist_manager().current_context()
-            if dist_ctx.dist_config.dp > 1:
-                total_token_current_rank = torch.sum(step_context.q_seqlens).to(step_context.q_seqlens.dtype)
-                if cls.enable_graph and step_context.is_decoding:
-                    from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
-                    total_token_current_rank_item = total_token_current_rank.item()
-                    total_token_current_rank = torch.tensor(
-                        [get_ascend_compatible_size(total_token_current_rank_item)],
-                        dtype=total_token_current_rank.dtype,
-                        device=total_token_current_rank.device,
-                    )
-                world_size = dist_ctx.dist_config.world_size
-                total_token_buffer = torch.zeros(world_size,
+            dp_size, tp_size, ep_size = dist_ctx.dist_config.dp, dist_ctx.dist_config.tp, dist_ctx.dist_config.ep
+            tp_rank, ep_rank = dist_ctx.attn_tp_group.rank, dist_ctx.ep_rank
+            tp_group = dist_ctx.attn_tp_group.gpu_group
+            ep_group = dist_ctx.ep_gpu_group
+            cls.dist_meta = DistMeta(dp_size=dp_size,
+                                     tp_size=tp_size,
+                                     ep_size=ep_size,
+                                     tp_rank=tp_rank,
+                                     ep_rank=ep_rank,
+                                     tp_group=tp_group,
+                                     ep_group=ep_group)
+            return cls.dist_meta
+
+        def get_tokens_info(dp_size, tp_size, ep_size, ep_group):
+            if ep_size <= 1:
+                return 0, 0, 0, None
+            # get runtime num_tokens
+            is_graph = cls.enable_graph and step_context.is_decoding
+            if is_graph:
+                from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import get_ascend_compatible_size
+                tokens_current_rank = step_context.q_seqlens.shape[0]
+                num_tokens = min(get_ascend_compatible_size(tokens_current_rank), cls.max_batches)
+            else:
+                tokens_current_rank = step_context.q_seqlens.sum().item()
+                num_tokens = tokens_current_rank
+            # get max_tokens_across_dp
+            if dp_size > 1:
+                num_tokens_tensor = torch.tensor([num_tokens],
                                                  dtype=step_context.q_seqlens.dtype,
                                                  device=torch.npu.current_device())
-                dist.all_gather_into_tensor(total_token_buffer, total_token_current_rank, dist_ctx.ep_gpu_group)
-                max_tokens_accros_dp = torch.max(total_token_buffer).item()
+                world_size = dp_size * tp_size
+                num_tokens_buffer = torch.zeros([world_size],
+                                                dtype=step_context.q_seqlens.dtype,
+                                                device=torch.npu.current_device())
+                dist.all_gather_into_tensor(num_tokens_buffer, num_tokens_tensor, ep_group)
+                max_tokens_across_dp = torch.max(num_tokens_buffer).item()
             else:
-                max_tokens_accros_dp = torch.sum(step_context.q_seqlens).item()
-            return max_tokens_accros_dp
+                max_tokens_across_dp = num_tokens
+            # get pad_size
+            paded_size = (max_tokens_across_dp + tp_size - 1) // tp_size * tp_size
+            pad_size = paded_size - num_tokens
+            # get x_active_mask
+            x_active_mask = torch.ones(num_tokens, dtype=torch.bool, device=torch.npu.current_device())
+            if pad_size > 0:
+                x_active_mask = torch.nn.functional.pad(x_active_mask, (0, pad_size), value=False)
+            return num_tokens, max_tokens_across_dp, pad_size, x_active_mask
+
+        @lru_cache
+        def init_mc2_token_capacity(tp_size):
+            max_num_tokens = min(cls.max_batches, 512)
+            num_tokens_per_tp_rank = (max_num_tokens + tp_size - 1) // tp_size
+            return num_tokens_per_tp_rank * tp_size
+
+        def select_moe_type(num_tokens, dp_size, tp_size, ep_size):
+            if ep_size <= 1:
+                return MoeType.ALLGATHER
+            mc2_token_capacity = init_mc2_token_capacity(tp_size)
+            is_graph = cls.enable_graph and step_context.is_decoding
+            if is_graph:
+                import math
+                num_tokens = math.ceil(num_tokens / tp_size) * tp_size
+            if SocVersion.is_A2():
+                if num_tokens <= mc2_token_capacity and dp_size * tp_size >= 16:
+                    return MoeType.MC2
+                else:
+                    return MoeType.ALLGATHER
+            elif SocVersion.is_A3():
+                if num_tokens <= mc2_token_capacity:
+                    return MoeType.MC2
+                else:
+                    return MoeType.ALLTOALL
+            else:
+                raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
 
         q_seqlens_cpu, kv_seqlens_cpu, kv_seqlens_expanded = get_cpu_seqlens(step_context.is_decoding,
                                                                              is_unpaged_prefill)
@@ -267,7 +351,6 @@ class AscendOpsBackend(DlinferOpsBackend):
                                                                                    is_unpaged_prefill, q_seqlens_list,
                                                                                    kv_seqlens_list, max_q_seq_len,
                                                                                    max_kv_seq_len)
-        cls.max_tokens_accros_dp = get_max_tokens_across_dp()
 
         if not cls.enable_graph and step_context.kv_quant_policy == 8:
             record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
@@ -300,8 +383,29 @@ class AscendOpsBackend(DlinferOpsBackend):
             quant_policy=step_context.kv_quant_policy,
             quant_meta=AscendKVQuantMeta.quant_meta,
         )
-
         step_context.attn_metadata = attn_metadata
+
+        get_dist_meta()
+        num_tokens, max_tokens_across_dp, pad_size, x_active_mask = get_tokens_info(cls.dist_meta.dp_size,
+                                                                                    cls.dist_meta.tp_size,
+                                                                                    cls.dist_meta.ep_size,
+                                                                                    cls.dist_meta.ep_group)
+        moe_type = select_moe_type(num_tokens, cls.dist_meta.dp_size, cls.dist_meta.tp_size, cls.dist_meta.ep_size)
+        mlp_meta_cls = cls.get_mlp_metadata_cls()
+        mlp_metadata = mlp_meta_cls(
+            max_tokens_across_dp=max_tokens_across_dp,
+            pad_size=pad_size,
+            dp_size=cls.dist_meta.dp_size,
+            tp_size=cls.dist_meta.tp_size,
+            ep_size=cls.dist_meta.ep_size,
+            tp_rank=cls.dist_meta.tp_rank,
+            ep_rank=cls.dist_meta.ep_rank,
+            tp_group=cls.dist_meta.tp_group,
+            ep_group=cls.dist_meta.ep_group,
+            moe_type=moe_type,
+            x_active_mask=x_active_mask,
+        )
+        step_context.mlp_metadata = mlp_metadata
         return step_context
 
     @staticmethod

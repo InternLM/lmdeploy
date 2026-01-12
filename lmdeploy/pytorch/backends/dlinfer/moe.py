@@ -1,29 +1,32 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
+from dataclasses import dataclass
 from typing import Callable, List
 
 import torch
+from dlinfer.utils.type_annotation import MoeType
 
-from lmdeploy.pytorch.distributed import get_dist_manager
-from lmdeploy.pytorch.kernels.dlinfer import DlinferDistContext, fused_moe, moe_gating_topk_softmax
+from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
 
-from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
-
-
-def get_dist_ctx():
-    dist_ctx = get_dist_manager().current_context()
-
-    return DlinferDistContext(dp_size=dist_ctx.dist_config.dp,
-                              tp_size=dist_ctx.dist_config.tp,
-                              ep_size=dist_ctx.dist_config.ep,
-                              dp_rank=dist_ctx.dp_rank,
-                              tp_rank=dist_ctx.attn_tp_group.rank,
-                              ep_rank=dist_ctx.ep_rank,
-                              max_tokens_accros_dp=1,
-                              tp_group=dist_ctx.attn_tp_group.gpu_group,
-                              ep_group=dist_ctx.ep_gpu_group)
+from ..moe import FusedMoEBuilder, FusedMoEImpl, MLPMetadata, SoftmaxTopKBuilder, SoftmaxTopKImpl
 
 
-class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
+@dataclass
+class DlinferMLPMetadata(MLPMetadata):
+    max_tokens_across_dp: int = 1
+    pad_size: int = 0
+    dp_size: int = 1
+    tp_size: int = 1
+    ep_size: int = 1
+    tp_rank: int = 0
+    ep_rank: int = 0
+    tp_group: torch.distributed.ProcessGroup = None
+    ep_group: torch.distributed.ProcessGroup = None
+    moe_type: MoeType = MoeType.UNDEFINED
+    x_active_mask: torch.Tensor = None
+
+
+class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl[DlinferMLPMetadata]):
     """Dlinfer softmax topk implementation."""
 
     def __init__(self, top_k: int, dim: int = -1, n_groups: int = -1):
@@ -31,14 +34,15 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
         self.dim = dim
         if n_groups != -1:
             raise NotImplementedError('Group router not supported')
-        self.dist_ctx = get_dist_ctx()
 
-    def forward(self, x: torch.Tensor):
-        routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k, self.dist_ctx)
+    def forward(self, x: torch.Tensor, mlp_metada: DlinferMLPMetadata):
+        routing_weights, selected_experts = moe_gating_topk_softmax(x, self.top_k, mlp_metada.max_tokens_across_dp,
+                                                                    mlp_metada.pad_size, mlp_metada.tp_size,
+                                                                    mlp_metada.ep_size, mlp_metada.tp_rank)
         return routing_weights, selected_experts
 
 
-class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
+class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder[DlinferMLPMetadata]):
     """Dlinfer softmax topk implementation builder."""
 
     @staticmethod
@@ -47,7 +51,7 @@ class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
         return DlinferSoftmaxTopKImpl(top_k, dim, n_groups)
 
 
-class DlinferFusedMoEImpl(FusedMoEImpl):
+class DlinferFusedMoEImpl(FusedMoEImpl[DlinferMLPMetadata]):
     """Dlinfer fused moe implementation."""
 
     def __init__(self,
@@ -61,12 +65,13 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         self.renormalize = renormalize
         self.ep_size = ep_size
         self.ep_group = ep_group
-        self.dist_ctx = get_dist_ctx()
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         """Update weights."""
         device_type = gate_up_weights.device.type
         if device_type in ['npu']:
+            if os.getenv('DLINFER_RESET_MOE_UPDATE_WEIGHTS', '0') == '1':
+                return gate_up_weights, down_weights
             return gate_up_weights.transpose(-1, -2).contiguous(), down_weights.transpose(-1, -2).contiguous()
         return gate_up_weights, down_weights
 
@@ -84,6 +89,7 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                 topk_ids: torch.LongTensor,
                 gate_up_weights: torch.Tensor,
                 down_weights: torch.Tensor,
+                mlp_metadata: DlinferMLPMetadata,
                 gate_up_bias: torch.Tensor = None,
                 down_bias: torch.Tensor = None,
                 expert_list: List[int] = None,
@@ -92,10 +98,12 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         assert gate_up_bias is None
         assert down_bias is None
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
-                         self.renormalize, self.dist_ctx)
+                         self.renormalize, mlp_metadata.pad_size, mlp_metadata.tp_size, mlp_metadata.ep_size,
+                         mlp_metadata.tp_rank, mlp_metadata.ep_rank, mlp_metadata.tp_group, mlp_metadata.ep_group,
+                         mlp_metadata.moe_type, mlp_metadata.x_active_mask)
 
 
-class DlinferFusedMoEBuilder(FusedMoEBuilder):
+class DlinferFusedMoEBuilder(FusedMoEBuilder[DlinferMLPMetadata]):
     """Dlinfer fused moe builder."""
 
     @staticmethod

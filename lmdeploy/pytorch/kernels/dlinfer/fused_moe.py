@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dlinfer.ops as ext_ops
+import torch.distributed as dist
+from dlinfer.utils.type_annotation import MoeType
 from torch import Tensor
-
-from . import DlinferDistContext
 
 
 def fused_moe(
@@ -13,8 +13,16 @@ def fused_moe(
     topk_ids: Tensor,
     topk: int,
     renormalize: bool,
-    dist_ctx: DlinferDistContext,
+    pad_size: int,
+    tp_size: int,
+    ep_size: int,
+    tp_rank: int,
+    ep_rank: int,
+    tp_group: dist.ProcessGroup,
+    ep_group: dist.ProcessGroup,
+    moe_type: MoeType,
+    x_active_mask: Tensor,
 ):
     """Dlinfer fused moe."""
     return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize,
-                             dist_ctx)
+                             pad_size, tp_size, ep_size, tp_rank, ep_rank, tp_group, ep_group, moe_type, x_active_mask)

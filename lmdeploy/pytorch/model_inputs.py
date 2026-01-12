@@ -350,6 +350,7 @@ class StepContext:
     input_multimodals: List[MultiModalTensor] = None
     vision_inputs: VisionModelInputs = None
     attn_metadata: Any = None
+    mlp_metadata: Any = None
     cross_seqlens: torch.LongTensor = None
     cross_kv_seqlens: torch.LongTensor = None
     cross_attn_metadata: Any = None

@@ -68,6 +68,11 @@ class DlinferOpsBackend(DefaultOpsBackend):
         return DlinferAttentionMetadata
 
     @staticmethod
+    def get_mlp_metadata_cls():
+        from .moe import DlinferMLPMetadata
+        return DlinferMLPMetadata
+
+    @staticmethod
     def get_k_block_shape(
         block_size: int,
         num_heads: int,
