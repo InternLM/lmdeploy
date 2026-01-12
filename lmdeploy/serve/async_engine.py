@@ -464,18 +464,19 @@ class AsyncEngine(LogitsMixin):
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
-        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
-        if gen_config.max_new_tokens + session.step + len(input_ids) > self.session_len:
-            logger.error(f'[generate] session {session_id} run out of tokens.')
-            yield GenOut(response='',
-                         history_token_len=session.step,
-                         input_token_len=len(input_ids),
-                         generate_token_len=0,
-                         finish_reason='length',
-                         token_ids=[])
-            if sequence_end is True and sequence_start is False:
-                await self.end_session(session_id)
-            return
+        if gen_config.max_new_tokens is None:
+            max_new_tokens = max(0, self.session_len - self.id2step[session_id] - len(input_ids))
+            if max_new_tokens == 0:
+                logger.error(f'run out of tokens. session={session_id}.')
+                yield GenOut(response='',
+                             history_token_len=self.id2step[session_id],
+                             input_token_len=len(input_ids),
+                             generate_token_len=0,
+                             finish_reason='length',
+                             token_ids=[])
+                if sequence_end is True and sequence_start is False:
+                    await self.end_session(session_id)
+                return
         if self.backend_config.enable_prefix_caching and (gen_config.output_last_hidden_state == 'all'
                                                           or gen_config.output_logits == 'all'):
             errmsg = ('lmdeploy does not support outputting all token\'s logits or last_hidden_state '
@@ -487,7 +488,6 @@ class AsyncEngine(LogitsMixin):
                          finish_reason='error',
                          token_ids=[])
             return
-
         logger.info(f'session={session_id}, '
                     f'history_tokens={session.step}, '
                     f'input_tokens={len(input_ids)}, '
@@ -497,6 +497,8 @@ class AsyncEngine(LogitsMixin):
 
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
+
+        gen_config = self._determine_gen_config(session, input_ids, gen_config=gen_config)
 
         stop_ids = []
         if not gen_config.ignore_eos:
