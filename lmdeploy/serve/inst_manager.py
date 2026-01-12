@@ -4,15 +4,12 @@ from typing import TYPE_CHECKING
 
 from lmdeploy.utils import get_logger
 
-from .utils import singleton
-
 if TYPE_CHECKING:
     from lmdeploy.serve.async_engine import AsyncEngine
 
 logger = get_logger('lmdeploy')
 
 
-@singleton
 class InferInstManager:
     """Manages inference instances."""
 

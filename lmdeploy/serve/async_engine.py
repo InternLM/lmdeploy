@@ -216,6 +216,7 @@ class AsyncEngine(LogitsMixin):
     def close(self):
         self.internal_thread.close()
         self.inst_mgr.clear()
+        self.session_mgr.clear()
         self.engine.close()
 
     def __enter__(self):

@@ -37,14 +37,14 @@ class Session:
 
     def __repr__(self) -> str:
         """Return a string representation of the Session object."""
-        return (f'Session(session_id={self.session_id}, state={self._state.value}, '
+        return (f'Session(session_id={self.session_id}, '
                 f'step={self.step}, history_len={len(self.history)}, '
                 f'has_response={self.response is not None}, '
                 f'has_gen_config={self.gen_config is not None})')
 
     def __str__(self) -> str:
         """Return a human-readable string representation of the Session."""
-        res = f'Session(id={self.session_id}, state={self._state.value}, step={self.step})'
+        res = f'Session(id={self.session_id}, step={self.step})'
         if self.history:
             res += '\nHistory:\n'
             for user, assistant in self.history:
@@ -72,12 +72,12 @@ class Session:
     async def acquire_inst(self, inst_mgr: InferInstManager):
         if self._inst is not None:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
-
+        logger.debug(f'[acquire_inst] session {self.session_id} acquiring an instance')
         self._inst_mgr = inst_mgr
         free_insts = self._inst_mgr.get()
         self._inst = await free_insts.get()
         self._active = asyncio.Event()
-        logger.debug(f'[model_inst] session {self.session_id} acquired an instance')
+        logger.debug(f'[acquire_inst] session {self.session_id} acquired an instance')
         try:
             yield self._inst
         except SafeRunException:
@@ -185,3 +185,9 @@ class SessionManager:
     def has(self, session_id: int) -> bool:
         """Check if a session exists."""
         return session_id in self.sessions
+
+    def clear(self):
+        """Clear all sessions."""
+        self.sessions.clear()
+        # reset the session id generator
+        self.session_id_generator = itertools.count()
