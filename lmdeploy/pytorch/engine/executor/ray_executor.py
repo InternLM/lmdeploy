@@ -54,15 +54,24 @@ def get_ascend_device_rank_mapping(master_addr):
         rank_table = json.load(f)
     try:
         assert master_addr == rank_table['server_list'][0]['server_id'], 'Master address does not match rank table'
-        rank_mapping = {}
-        worker_ips = []
+        rank_mapping: Dict[int, int] = {}
+        worker_ip_by_rank: Dict[int, str] = {}
         for server in rank_table['server_list']:
             node_ip = server['server_id']
             for idx, device in enumerate(server['device']):
-                local_rank = idx
+                # Prefer explicit device_id if present; fall back to enumeration order.
+                local_rank = int(device.get('device_id', idx))
                 global_rank = int(device['rank_id'])
                 rank_mapping[global_rank] = local_rank
-                worker_ips.append(node_ip)
+                worker_ip_by_rank[global_rank] = node_ip
+
+        if len(worker_ip_by_rank) == 0:
+            raise ValueError('Rank table contains no devices.')
+
+        ranks = sorted(worker_ip_by_rank.keys())
+        if ranks[0] != 0 or ranks[-1] != len(ranks) - 1:
+            raise ValueError(f'Rank ids are not contiguous starting from 0: {ranks[:8]}...{ranks[-8:]}')
+        worker_ips = [worker_ip_by_rank[r] for r in range(len(ranks))]
     except Exception as e:
         logger.error(f'Parse rank table file({rank_table})  failed')
         raise e
@@ -629,8 +638,19 @@ class RayExecutor(ExecutorBase):
         if rank_table_file:
             # if rank table file is set, use it to get rank mapping, multiple nodes
             rank_mapping, worker_ips, envs = get_ascend_device_rank_mapping(driver_ip)
-            self.workers = self._sort_workers_by_ip(worker_ips, self.workers)
-            ray.get([worker.set_device.remote(rank_mapping[idx]) for idx, worker in enumerate(self.workers)])
+            rank_start = self.rank_offset
+            rank_end = rank_start + len(self.workers)
+            if rank_end > len(worker_ips):
+                raise ValueError(
+                    'Rank table world_size is smaller than required ranks for current dp_rank. '
+                    f'rank_table_world_size={len(worker_ips)}, required_rank_range=[{rank_start}, {rank_end})')
+
+            # In dp mode each process only owns a slice of global ranks.
+            expected_worker_ips = worker_ips[rank_start:rank_end]
+            self.workers = self._sort_workers_by_ip(expected_worker_ips, self.workers)
+
+            ray.get(
+                [worker.set_device.remote(rank_mapping[rank_start + idx]) for idx, worker in enumerate(self.workers)])
             ray.get([worker.set_env.remote(envs) for worker in self.workers])
         elif not set_rt_visable_devices_by_ray:
             # if rank table file is not set, treat as single node
