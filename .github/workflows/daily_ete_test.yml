@@ -53,6 +53,7 @@ env:
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
+  RUN_ID: ${{ github.run_id }}
 
 jobs:
   linux-build:
@@ -630,7 +631,7 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test benchmark script
         run: |
-          pytest autotest/benchmark -n 4 --run_id ${{ github.run_id }} -m function ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/benchmark -n 4 -m function ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()

@@ -2,8 +2,6 @@ import os
 import subprocess
 from subprocess import PIPE
 
-from utils.config_utils import _is_bf16_supported_by_device
-
 
 def quantization(config,
                  quantization_model_name,

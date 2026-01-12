@@ -50,6 +50,7 @@ env:
   HF_DATASETS_CACHE: /nvme/qa_test_models/hf_datasets
   HF_HUB_OFFLINE: 1
   HF_EVALUATE_OFFLINE: 1
+  RUN_ID: ${{ github.run_id }}
 
 jobs:
   linux-build:

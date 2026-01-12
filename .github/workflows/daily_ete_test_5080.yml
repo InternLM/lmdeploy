@@ -52,6 +52,8 @@ env:
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
+  RUN_ID: ${{ github.run_id }}
+  TEST_ENV: 5080
 
 jobs:
   linux-build:

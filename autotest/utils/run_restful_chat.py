@@ -22,8 +22,7 @@ BASE_HTTP_URL = f'http://{MASTER_ADDR}'
 def start_openai_service(config, run_config, worker_id):
     case_name = get_case_str_by_config(run_config)
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    server_log = os.path.join(config.get('server_log_path', '/nvme/qa_test_models/server_log/local_run'),
-                              f'log_{case_name}_{timestamp}.log')
+    server_log = os.path.join(config.get('server_log_path'), f'log_{case_name}_{timestamp}.log')
 
     port = DEFAULT_PORT + get_workerid(worker_id)
     model = run_config.get('model')
@@ -76,12 +75,12 @@ def start_openai_service(config, run_config, worker_id):
                 with open(server_log, 'r') as f:
                     content = f.read()
                     print(content)
-                return 0, startRes
+                return 0, content
         except subprocess.TimeoutExpired:
             continue
     file.close()
     allure.attach.file(server_log, attachment_type=allure.attachment_type.TEXT)
-    return pid, startRes
+    return pid, ''
 
 
 def stop_restful_api(pid, startRes, param):
@@ -132,7 +131,8 @@ def run_all_step(config, cases_info, port: int = DEFAULT_PORT):
 def open_chat_test(config, case, case_info, model, url, port: int = DEFAULT_PORT):
     log_path = config.get('log_path')
 
-    restful_log = os.path.join(log_path, 'restful_' + model + str(port) + '_' + case + '.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    restful_log = os.path.join(log_path, f'restful_{model}_{str(port)}_{case}_{timestamp}.log')
 
     file = open(restful_log, 'w')
 

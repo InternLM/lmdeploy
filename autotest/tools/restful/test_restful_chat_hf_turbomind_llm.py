@@ -1,8 +1,8 @@
 import pytest
-from tools.common_testcase_config import (TURBOMIND_FALLBACK_TEST_LLM_GPU1, TURBOMIND_FALLBACK_TEST_LLM_GPU2,
-                                          TURBOMIND_LOGPROBS_TEST_LLM_GPU2, TURBOMIND_MODELSCOPE_CONFIG,
-                                          TURBOMIND_PR_TEST_LLM_GPU1, TURBOMIND_PR_TEST_LLM_GPU2,
-                                          TURBOMIND_REASONING_TEST_LLM, TURBOMIND_TOOLCALL_TEST_LLM)
+from tools.common_case_config import (TURBOMIND_FALLBACK_TEST_LLM_GPU1, TURBOMIND_FALLBACK_TEST_LLM_GPU2,
+                                      TURBOMIND_LOGPROBS_TEST_LLM_GPU2, TURBOMIND_MODELSCOPE_CONFIG,
+                                      TURBOMIND_PR_TEST_LLM_GPU1, TURBOMIND_PR_TEST_LLM_GPU2,
+                                      TURBOMIND_REASONING_TEST_LLM, TURBOMIND_TOOLCALL_TEST_LLM)
 from utils.config_utils import get_func_config_list, get_workerid
 from utils.constant import DEFAULT_PORT
 from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_openai_service,
