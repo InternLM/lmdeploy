@@ -1,250 +1,92 @@
-import os
-
 import pytest
-from utils.config_utils import get_torch_model_list, set_device_env_variable
-from utils.pipeline_chat import run_pipeline_chat_test
+from tools.common_case_config import (MODELSCOPE_CONFIG, PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2,
+                                      PYTORCH_PR_TEST_LLM_GPU1, PYTORCH_PR_TEST_LLM_GPU2)
+from utils.config_utils import get_func_config_list
+from utils.pipeline_chat import run_pipeline_llm_test
+
+BACKEND = 'pytorch'
 
 
-@pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.prefix_cache_test
-@pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=1, exclude_dup=True))
-def test_pipeline_chat_pytorch_prefix_cache_tp1(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id)
-    run_pipeline_chat_test(config,
-                           common_case_config,
-                           model,
-                           'pytorch',
-                           worker_id,
-                           extra={'enable_prefix_caching': True})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
 @pytest.mark.test_3090
-@pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=1, exclude_dup=True))
-def test_pipeline_chat_pytorch_tp1(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 1}))
+def test_pipeline_chat_tp1(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
 
-@pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_2
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.test_ascend
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=2, exclude_dup=True))
-def test_pipeline_chat_pytorch_tp2(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=2)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}))
+def test_pipeline_chat_tp2(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
 
-@pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_4
-@pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=4, exclude_dup=True))
-def test_pipeline_chat_pytorch_tp4(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=4)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 4}))
+def test_pipeline_chat_tp4(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
 
-@pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_8
-@pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=8, exclude_dup=True))
-def test_pipeline_chat_pytorch_tp8(config, common_case_config, model, worker_id):
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 8}))
+def test_pipeline_chat_tp8(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
 
-@pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_16
 @pytest.mark.test_ascend
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=16, exclude_dup=True))
-def test_pipeline_chat_pytorch_tp16(config, common_case_config, model, worker_id):
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id)
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 16}))
+def test_pipeline_chat_tp16(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
 
-@pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat
-@pytest.mark.gpu_num_1
-@pytest.mark.test_3090
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=1, quant_policy=4, exclude_dup=True))
-def test_pipeline_chat_kvint4_tp1(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 4})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=2, quant_policy=4, exclude_dup=True))
-def test_pipeline_chat_kvint4_tp2(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=2)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 4})
+@pytest.mark.parametrize('run_config',
+                         get_func_config_list(BACKEND, {'tp': 2}, extra={'enable_prefix_caching': True}),
+                         indirect=True)
+def test_pipeline_chat_turbomind_prefix_cache_tp2(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
 
-@pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat
-@pytest.mark.gpu_num_4
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=4, quant_policy=4, exclude_dup=True))
-def test_pipeline_chat_kvint4_tp4(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=4)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 4})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat
-@pytest.mark.gpu_num_1
-@pytest.mark.test_3090
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=1, quant_policy=8, exclude_dup=True))
-def test_pipeline_chat_kvint8_tp1(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 8})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat
-@pytest.mark.gpu_num_2
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=2, quant_policy=8, exclude_dup=True))
-def test_pipeline_chat_kvint8_tp2(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=2)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 8})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat
-@pytest.mark.gpu_num_4
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=4, quant_policy=8, exclude_dup=True))
-def test_pipeline_chat_kvint8_tp4(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=4)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 8})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat
-@pytest.mark.gpu_num_8
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', get_torch_model_list(parallel_config=8, quant_policy=8, exclude_dup=True))
-def test_pipeline_chat_kvint8_tp8(config, common_case_config, model, worker_id):
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch-kvint', worker_id, {'quant_policy': 8})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'mistralai/Mixtral-8x7B-Instruct-v0.1'])
-def test_pipeline_chat_pytorch_pr(config, common_case_config, model, worker_id):
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id, is_smoke=True)
+@pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU2)
+def test_hf_turbomind_chat_pr_tp2(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
 
 
-@pytest.mark.order(6)
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
 @pytest.mark.gpu_num_1
-@pytest.mark.other
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
-def test_modelscope_pipeline_chat_pytorch_tp1(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id)
-    os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id, use_local_model=True)
-    del os.environ['LMDEPLOY_USE_MODELSCOPE']
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
-@pytest.mark.gpu_num_1
-@pytest.mark.other
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', ['meta-llama/Llama-2-7b-chat-hf'])
-def test_pipeline_chat_pytorch_with_lora_tp1(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch_lora', worker_id,
-                           {'adapters': {
-                               'adapter0': 'lora/Llama2-Chinese-7b-Chat-LoRA'
-                           }})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
-@pytest.mark.gpu_num_2
-@pytest.mark.other
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', ['baichuan-inc/Baichuan2-13B-Chat'])
-def test_pipeline_chat_pytorch_with_lora_tp2(config, common_case_config, model, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=2)
-        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch_lora', worker_id,
-                           {'adapters': {
-                               'adapter0': 'lora/2024-01-25_self_dup',
-                               'adapter1': 'lora/2024-01-25_self'
-                           }})
-
-
-@pytest.mark.order(6)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.pipeline_chat_pytorch
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
-def test_pipeline_chat_pytorch_kvint_pr(config, common_case_config, model, worker_id):
-    run_pipeline_chat_test(config,
-                           common_case_config,
-                           model,
-                           'pytorch-kvint',
-                           worker_id,
-                           extra={'quant_policy': 4},
-                           is_smoke=True)
+@pytest.mark.parametrize('run_config', PYTORCH_PR_TEST_LLM_GPU1)
+def test_hf_turbomind_chat_pr_tp1(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
+
+
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('run_config', [item for item in MODELSCOPE_CONFIG if item['backend'] == BACKEND],
+                         indirect=True)
+def test_modelscope_pipeline_chat_tp1(config, run_config, common_case_config, worker_id):
+    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
+    run_pipeline_llm_test(config, run_config, case_config, worker_id)
+
+
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU1)
+def test_pytorch_chat_with_lora_tp1(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)
+
+
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('run_config', PYTORCH_LORA_TEST_LLM_GPU2)
+def test_pytorch_chat_with_lora_tp2(config, run_config, common_case_config, worker_id):
+    run_pipeline_llm_test(config, run_config, common_case_config, worker_id)

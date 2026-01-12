@@ -93,12 +93,15 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
                 else:
                     output = outputDialogs[index]
                 case_result, reason = assert_result(output, prompt_detail.values(), run_config.get('model'))
-                file.writelines('prompt:' + list(prompt_detail.keys())[0] + '\n')
-                file.writelines('output:' + output + '\n')
-                file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
+                file.writelines(f'prompt: {list(prompt_detail.keys())[0]}\n')
+                file.writelines(f'output: {output}\n')
+                file.writelines(f'result: {case_result}, reason: {reason}\n')
                 index += 1
                 if not case_result:
-                    msg = reason
+                    print(f'prompt: {list(prompt_detail.keys())[0]}\n')
+                    print(f'output: {output}\n')
+                    print(f'result: {case_result}, reason: {reason}\n')
+                    msg += reason
                 result = result & case_result
             file.writelines('\n\n\n' + 'full log:' + outputs + '\n')
 

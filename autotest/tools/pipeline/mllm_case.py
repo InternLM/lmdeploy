@@ -1,12 +1,10 @@
 import json
-import os
 
 import fire
 import numpy as np
 from PIL import Image
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.utils import is_bf16_supported
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64
@@ -23,55 +21,45 @@ DESC = 'What are the similarities and differences between these two images.'
 DESC_ZH = '两张图有什么相同和不同的地方.'
 
 
-def _is_bf16_supported_by_device():
-    """Check if bf16 is supported based on the current device."""
-    device = os.environ.get('DEVICE', 'cuda')
-    if device == 'ascend':
-        # For Ascend, bf16 support check would be different
-        # Placeholder implementation
-        return True
+def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bool = False):
+    backend = run_config.get('backend')
+    device = run_config.get('device', None)
+    dtype = run_config.get('dtype', None)
+    communicator = run_config.get('communicator')
+    quant_policy = run_config.get('quant_policy')
+    extra_params = run_config.get('extra_params', {})
+    parallel_config = run_config.get('parallel_config', {})
+
+    if 'pytorch' == backend:
+        backend_config = PytorchEngineConfig(session_len=32576, quant_policy=quant_policy, cache_max_entry_count=0.6)
     else:
-        # For CUDA and default, use the existing check
-        return is_bf16_supported()
+        backend_config = TurbomindEngineConfig(session_len=32576,
+                                               communicator=communicator,
+                                               quant_policy=quant_policy,
+                                               cache_max_entry_count=0.6)
 
-
-def _clear_device_cache():
-    """Clear cache based on the current device type."""
-    device = os.environ.get('DEVICE', 'cuda')
-    if device == 'ascend':
-        try:
-            import torch_npu
-            torch_npu.npu.empty_cache()
-        except ImportError:
-            pass  # torch_npu not available
-    else:
-        import torch
-        torch.cuda.empty_cache()
-
-
-def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_test, extra: object = None):
-    if 'pytorch' in backend_type:
-        backend_config = PytorchEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.6)
-    else:
-        backend_config = TurbomindEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.6)
-
-    if 'kvint' in backend_type:
-        backend_config.quant_policy = extra.get('quant_policy')
-    if 'turbomind' in backend_type and extra is not None and 'communicator' in extra:
-        backend_config.communicator = extra.get('communicator')
-
-    # Add device_type based on DEVICE environment variable
-    device = os.environ.get('DEVICE', '')
     if device:
         backend_config.device_type = device
+    if dtype:
+        backend_config.dtype = dtype
 
-    if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
-        backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
-
-    if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
+    # quant format
+    model_lower = model_path.lower()
+    if 'w4' in model_lower or '4bits' in model_lower or 'awq' in model_lower:
         backend_config.model_format = 'awq'
-    if not _is_bf16_supported_by_device():
-        backend_config.dtype = 'float16'
+    elif 'gptq' in model_lower:
+        backend_config.model_format = 'gptq'
+
+    # Parallel config
+    for para_key in ('dp', 'ep', 'cp'):
+        if para_key in parallel_config:
+            backend_config[para_key] = parallel_config[para_key]
+    if 'tp' in parallel_config and parallel_config['tp'] > 1:
+        backend_config['tp'] = parallel_config['tp']
+
+    # Extra params
+    for key, value in extra_params.items():
+        backend_config[key] = value
 
     print('backend_config config: ' + str(backend_config))
     pipe = pipeline(model_path, backend_config=backend_config)
@@ -133,14 +121,7 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
         if 'qwen' in model_path.lower():
             Qwen_vl_testcase(pipe, resource_path)
 
-    if device == 'ascend':
-        pass
-    else:
-        pipe.close()
-    import gc
-
-    gc.collect()
-    _clear_device_cache()
+    pipe.close()
 
 
 def internvl_vl_testcase(pipe, resource_path, lang='en'):

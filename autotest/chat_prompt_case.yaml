@@ -8,6 +8,7 @@ base_testcase:
             - 新疆
             - introduce
             - 水磨沟
+            - 天池
         - len_g:
             10
     - end:

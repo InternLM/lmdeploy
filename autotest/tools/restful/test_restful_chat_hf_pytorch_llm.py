@@ -137,7 +137,7 @@ def test_restful_chat_distributed_dpep16(shared_proxy_manager, config, run_confi
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('run_config',
-                         get_func_config_list(BACKEND, {'tp': 2}, extra={'enable_prefix_caching': None}),
+                         get_func_config_list(BACKEND, {'tp': 2}, extra={'enable_prefix_caching': True}),
                          indirect=True)
 def test_restful_chat_turbomind_prefix_cache_tp2(config, run_config, common_case_config, worker_id):
     run_llm_test(config, run_config, common_case_config, port=DEFAULT_PORT + get_workerid(worker_id))
@@ -183,7 +183,6 @@ def test_pytorch_chat_with_lora_tp2(config, run_config, common_case_config, work
 
 
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
@@ -195,7 +194,6 @@ def test_restful_chat_reasoning_tp1(config, run_config, worker_id):
 
 
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize(
@@ -207,7 +205,6 @@ def test_restful_chat_reasoning_tp2(config, run_config, worker_id):
 
 
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize(
@@ -219,7 +216,6 @@ def test_restful_chat_tools_tp1(config, run_config, worker_id):
 
 
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize(
@@ -231,7 +227,6 @@ def test_restful_chat_tools_tp2(config, run_config, worker_id):
 
 
 @pytest.mark.usefixtures('common_case_config')
-@pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
 @pytest.mark.parametrize(

@@ -41,7 +41,7 @@ def test_restful_chat_tp8(config, run_config, common_case_config, worker_id):
 
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra={'enable_prefix_caching': None}))
+@pytest.mark.parametrize('run_config', get_func_config_list(BACKEND, {'tp': 2}, extra={'enable_prefix_caching': True}))
 def test_restful_chat_prefix_cache_tp2(config, run_config, common_case_config, worker_id):
     run_llm_test(config, run_config, common_case_config, port=DEFAULT_PORT + get_workerid(worker_id))
 

@@ -50,6 +50,35 @@ TURBOMIND_PR_TEST_LLM_GPU1 = [{
     'extra_params': {}
 }]
 
+TURBOMIND_PR_TEST_MLLM_GPU1 = [{
+    'model': 'liuhaotian/llava-v1.6-vicuna-7b',
+    'backend': TURBOMIND,
+    'communicator': 'cuda-ipc',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
+}, {
+    'model': 'OpenGVLab/InternVL2-4B',
+    'backend': TURBOMIND,
+    'communicator': 'nccl',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
+}, {
+    'model': 'OpenGVLab/InternVL3-8B',
+    'backend': TURBOMIND,
+    'communicator': 'nccl',
+    'quant_policy': 8,
+    'parallel_config': {
+        'tp': 1
+    },
+    'extra_params': {}
+}]
+
 TURBOMIND_FALLBACK_TEST_LLM_GPU1 = [{
     'model': 'microsoft/Phi-4-mini-instruct',
     'backend': TURBOMIND,

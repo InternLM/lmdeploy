@@ -41,7 +41,7 @@ def get_func_config_list(backend: str,
             for quant_policy in [0, 4, 8]:
                 # temp remove testcase because of issue 3434
                 if 'turbomind' == backend and communicator == 'cuda-ipc' and parallel_config.get(
-                        'tp', 1) > 1 and ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
+                        'tp', 1) > 1 and ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model and 'InternVL2-Llama3' in model): # noqa
                     continue
                 if not _is_kvint_model(config, backend, model, quant_policy):
                     continue
@@ -90,20 +90,19 @@ def get_cli_common_param(run_config: Dict[str, Any]) -> str:
     if quant_policy != 0:
         cli_params.append(f'--quant-policy {quant_policy}')
 
-    # Turbomind quant format
-    if backend == 'turbomind':
-        model_lower = model.lower()
-        if 'w4' in model or '4bits' in model or 'awq' in model_lower:
-            cli_params.append('--model-format awq')
-        elif 'gptq' in model_lower:
-            cli_params.append('--model-format gptq')
+    # quant format
+    model_lower = model.lower()
+    if 'w4' in model_lower or '4bits' in model_lower or 'awq' in model_lower:
+        cli_params.append('--model-format awq')
+    if 'gptq' in model_lower:
+        cli_params.append('--model-format gptq')
 
     # Parallel config
     for para_key in ('dp', 'ep', 'cp'):
         if para_key in parallel_config:
             cli_params.append(f'--{para_key} {parallel_config[para_key]}')
     if 'tp' in parallel_config and parallel_config['tp'] > 1:
-        cli_params.append(f'--tp {parallel_config["tp"]}')
+        cli_params.append(f'--tp {parallel_config['tp']}')
 
     # Extra params
     for key, value in extra_params.items():
@@ -397,7 +396,7 @@ def is_model_in_list(config: Dict, parallel_config: Dict[str, int], model: str) 
     return model_config == parallel_config
 
 
-def get_case_str_by_config(run_config: Dict[str, Any]) -> str:
+def get_case_str_by_config(run_config: Dict[str, Any], is_simple: bool = True) -> str:
     """Generate case name string by run config dict."""
     model_name = run_config['model']
     backend_type = run_config['backend']
@@ -412,8 +411,12 @@ def get_case_str_by_config(run_config: Dict[str, Any]) -> str:
     # Get last section of model name, compatible with model name contains '/'
     pure_model_name = model_name.split('/')[-1].replace('_', '-')
     extra_params_case = ''
-    for k, v in extra_params.items():
-        extra_params_case += f'_{k}{v}'.replace('_', '-').replace('/', '-').replace('.', '-')
+    if not is_simple:
+        for k, v in extra_params.items():
+            if len(v) > 10:
+                extra_params_case += f'_{k}'.replace('_', '-').replace('/', '-').replace('.', '-')
+            else:
+                extra_params_case += f'_{k}{v}'.replace('_', '-').replace('/', '-').replace('.', '-')
 
     return f'{backend_type}_{pure_model_name}_{communicator}_{parallel_str}_{quant_policy}{extra_params_case}'
 

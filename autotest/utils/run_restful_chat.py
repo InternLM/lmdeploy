@@ -56,13 +56,13 @@ def start_openai_service(config, run_config, worker_id):
     pid = startRes.pid
 
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
-    start_time = int(time())
+    start_time = int(time.time())
     start_timeout = 720
 
     time.sleep(5)
     for i in range(start_timeout):
         time.sleep(1)
-        end_time = int(time())
+        end_time = int(time.time())
         total_time = end_time - start_time
         result = health_check(http_url)
         if result or total_time >= start_timeout:
@@ -704,7 +704,7 @@ def start_proxy_server(config, worker_id):
                                      encoding='utf-8')
     pid = proxy_process.pid
 
-    start_time = int(time())
+    start_time = int(time.time())
     timeout = 300
 
     time.sleep(5)
@@ -724,7 +724,7 @@ def start_proxy_server(config, worker_id):
         except subprocess.TimeoutExpired:
             continue
 
-        end_time = int(time())
+        end_time = int(time.time())
         total_time = end_time - start_time
         if total_time >= timeout:
             break
