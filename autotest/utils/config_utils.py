@@ -41,7 +41,8 @@ def get_func_config_list(backend: str,
             for quant_policy in [0, 4, 8]:
                 # temp remove testcase because of issue 3434
                 if 'turbomind' == backend and communicator == 'cuda-ipc' and parallel_config.get(
-                        'tp', 1) > 1 and ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model and 'InternVL2-Llama3' in model): # noqa
+                        'tp', 1) > 1 and ('InternVL3' in model or 'InternVL2_5' in model
+                                          or 'MiniCPM-V-2_6' in model and 'InternVL2-Llama3' in model):  # noqa
                     continue
                 if not _is_kvint_model(config, backend, model, quant_policy):
                     continue
@@ -102,7 +103,7 @@ def get_cli_common_param(run_config: Dict[str, Any]) -> str:
         if para_key in parallel_config:
             cli_params.append(f'--{para_key} {parallel_config[para_key]}')
     if 'tp' in parallel_config and parallel_config['tp'] > 1:
-        cli_params.append(f'--tp {parallel_config['tp']}')
+        cli_params.append(f'--tp {parallel_config['tp']}')  # noqa
 
     # Extra params
     for key, value in extra_params.items():

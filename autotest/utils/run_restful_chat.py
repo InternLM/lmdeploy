@@ -207,11 +207,11 @@ def _run_logprobs_test(port: int = DEFAULT_PORT):
     assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
 
 
-PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
-PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'  # noqa E501
+PIC = 'tiger.jpeg'  # noqa E501
+PIC2 = 'human-pose.jpg'  # noqa E501
 
 
-def run_vl_testcase(log_path, port: int = DEFAULT_PORT):
+def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
     model = get_model(http_url)
@@ -221,7 +221,9 @@ def run_vl_testcase(log_path, port: int = DEFAULT_PORT):
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
-    restful_log = os.path.join(log_path, 'restful_vl_' + model_name.split('/')[-1] + str(port) + '.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    restful_log = os.path.join(log_path,
+                               f'restful_vl_{timestamp}_{model_name.split(' / ')[-1]}_{str(port)}_{timestamp}.log')
     file = open(restful_log, 'w')
 
     prompt_messages = [{
@@ -233,12 +235,12 @@ def run_vl_testcase(log_path, port: int = DEFAULT_PORT):
         }, {
             'type': 'image_url',
             'image_url': {
-                'url': PIC,
+                'url': f'{resource_path}/{PIC}',
             },
         }, {
             'type': 'image_url',
             'image_url': {
-                'url': PIC2,
+                'url': f'{resource_path}/{PIC2}',
             },
         }],
     }]
@@ -748,11 +750,13 @@ def run_llm_test(config, run_config, common_case_config, worker_id):
             terminate_restful_api(worker_id, run_config)
 
 
-def run_mllm_case(config, run_config, worker_id):
+def run_mllm_test(config, run_config, worker_id):
     pid, content = start_openai_service(config, run_config, worker_id)
     try:
         if pid > 0:
-            run_vl_testcase(config.get('log_path'), port=DEFAULT_PORT + get_workerid(worker_id))
+            run_vl_testcase(config.get('log_path'),
+                            config.get('resource_path'),
+                            port=DEFAULT_PORT + get_workerid(worker_id))
         else:
             assert False, f'Failed to start RESTful API server: {content}'
     finally:
