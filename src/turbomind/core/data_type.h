@@ -72,6 +72,7 @@ enum class DataType: int {
     kUint2       = encode_data_type(0,  0,  2),
     kUint4       = encode_data_type(0,  0,  4),
     kUint6       = encode_data_type(0,  0,  6),
+    kPointer,
     kUint        = kUint32,
     kInt         = kInt32,
     kFloat       = kFloat32,
@@ -86,6 +87,7 @@ enum class DataType: int {
 
 inline constexpr DataType kNull = DataType::kNull;
 inline constexpr DataType kBool = DataType::kBool;
+inline constexpr DataType kPointer = DataType::kPointer;
 inline constexpr DataType kUint8  = DataType::kUint8;
 inline constexpr DataType kUint16 = DataType::kUint16;
 inline constexpr DataType kUint32 = DataType::kUint32;
@@ -147,6 +149,9 @@ CVT_DATA_TYPE(kUint6, uint6_t);
 
 #undef CVT_DATA_TYPE
 
+template <class T> struct to_data_type<T*> { static constexpr auto value = DataType::kPointer; };
+template <>  struct from_data_type<DataType::kPointer> { using type = void*; };
+
 template <class T>
 inline constexpr auto data_type_v = to_data_type<std::remove_cv_t<T>>::value;
 
@@ -180,6 +185,7 @@ constexpr std::ptrdiff_t byte_size(DataType type, std::ptrdiff_t size = 1) {
         case kFloat4_e2m1:
             return size * 4 / 8;
         case kUint6: return size * 6 / 8;
+        case kPointer: return size * sizeof(void*);
         default:
             return 0;
     }
@@ -216,6 +222,7 @@ constexpr std::ptrdiff_t numel(DataType type, std::ptrdiff_t size = 1) {
         case kFloat4_e2m1:
             return size * 8 / 4;
         case kUint6: return size * 8 / 6;
+        case kPointer: return size / sizeof(void*);
         default:
             return 0;
     }
@@ -247,6 +254,7 @@ constexpr const char* to_string(DataType type) {
         case kUint2: return "u2";
         case kUint4: return "u4";
         case kUint6: return "u8";
+        case kPointer: return "pointer";
         default:
             return "unknown";
     }

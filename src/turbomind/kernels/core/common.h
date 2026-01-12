@@ -40,13 +40,18 @@
 #if defined(__CUDA_ARCH__) && !defined(__INTELLISENSE__)
 #if defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
 #define PRAGMA_UNROLL _Pragma("unroll")
+#define PRAGMA_UNROLL_4 _Pragma("unroll 4")
 #define PRAGMA_NO_UNROLL _Pragma("unroll 1")
+
 #else
 #define PRAGMA_UNROLL #pragma unroll
+#define PRAGMA_UNROLL_4 #pragma unroll 4
 #define PRAGMA_NO_UNROLL #pragma unroll 1
+
 #endif
 #else
 #define PRAGMA_UNROLL
+#define PRAGMA_UNROLL_4
 #define PRAGMA_NO_UNROLL
 #endif
 
