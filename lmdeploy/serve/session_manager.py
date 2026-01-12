@@ -143,7 +143,7 @@ class SessionManager:
         """Reserve a new session id."""
         return next(self.session_id_generator)
 
-    def create(self, session_id: Optional[int] = None, **kwargs) -> Session:
+    def get(self, session_id: Optional[int] = None, **kwargs) -> Session:
         """Create a new session."""
         if session_id is None:
             session_id = self.reserve()

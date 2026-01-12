@@ -432,7 +432,7 @@ class AsyncEngine(LogitsMixin):
         epoch = self.epoch
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
-        session = self.session_mgr.create(session_id, step=step)
+        session = self.session_mgr.get(session_id, step=step)
         chat_template_kwargs = chat_template_kwargs or {}
         if enable_thinking is not None:
             logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
