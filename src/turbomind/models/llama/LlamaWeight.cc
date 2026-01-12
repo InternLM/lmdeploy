@@ -32,11 +32,9 @@ namespace turbomind {
 LlamaWeight::LlamaWeight(DataType           data_type,
                          const ModelParam&  model,
                          const EngineParam& engine_param,
-                         const LoraParam&   lora_param,
                          const MoeParam&    moe_param):
     model_param_{model},
     engine_param_{engine_param},
-    lora_param_{lora_param},
     moe_param_{moe_param},
     hidden_units_(model.hidden_units),
     inter_size_(model.inter_size),
@@ -94,7 +92,7 @@ void LlamaWeight::initialize()
     decoder_layer_weights.reserve(num_layer_);
     for (int i = 0; i < num_layer_; ++i) {
         decoder_layer_weights.emplace_back(
-            new LlamaDecoderLayerWeight(data_type_, i, model_param_, engine_param_, lora_param_, moe_param_));
+            new LlamaDecoderLayerWeight(data_type_, i, model_param_, engine_param_, moe_param_));
         register_module("layers", *decoder_layer_weights.back(), i);
     }
 

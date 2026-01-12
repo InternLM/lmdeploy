@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025-2025, OpenMMLab.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,27 +16,28 @@
 
 #pragma once
 
-#include <vector>
+#include <memory>
 
-#include <xgrammar/xgrammar.h>
+#include "src/turbomind/core/core.h"
 
-#include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
-
-#include "src/turbomind/engine/request.h"
+#include "src/turbomind/generation/base_param.h"
 
 namespace turbomind {
 
-template<typename T>
-class GuidedDecodeUpdateLayer: public BaseDynamicDecodeLayer {
+class LogitsProcessor: public BaseGenerationParam {
 public:
-    explicit GuidedDecodeUpdateLayer(const BaseParam&);
+    explicit LogitsProcessor(const BaseGenerationParam& base, int phases);
 
-    void Setup(const std::vector<const Request*>&, const TensorMap&) override;
+    void Setup(int phase, TensorMap& env);
 
-    void Forward(TensorMap&) override;
+    void Forward(int phase, TensorMap& env);
 
 private:
-    std::vector<std::shared_ptr<xgrammar::GrammarMatcher>> matchers_;
+    struct Data;
+
+    std::vector<std::shared_ptr<Data>> data_;
+
+    std::shared_ptr<Data> buf_;  // temp host buffer
 };
 
 }  // namespace turbomind

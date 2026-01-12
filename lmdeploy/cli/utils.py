@@ -568,6 +568,16 @@ class ArgumentHelper:
                                    help='the max number of forward passes in prefill stage')
 
     @staticmethod
+    def async_(parser):
+        return parser.add_argument('--async',
+                                   type=int,
+                                   default=1,
+                                   choices=[0, 1],
+                                   dest='async_',
+                                   help='Enable async execution (default: 1, enabled). '
+                                   'Set to 0 to disable async mode, 1 to enable it.')
+
+    @staticmethod
     def max_prefill_token_num(parser):
         return parser.add_argument('--max-prefill-token-num',
                                    type=int,

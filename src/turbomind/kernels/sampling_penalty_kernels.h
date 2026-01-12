@@ -17,57 +17,17 @@
 
 #include <cuda_fp16.h>
 
-#include "src/turbomind/kernels/penalty_types.h"
 #include "src/turbomind/utils/cuda_utils.h"
+
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
-template<typename T>
-void invokeApplyRepetitionPenalty(T*                          logits,
-                                  const float                 penalty,
-                                  const int*                  start_ids,
-                                  int*                        output_ids,
-                                  const int                   batch_size,
-                                  const int                   local_batch_size,
-                                  const int                   vocab_size,
-                                  const int                   vocab_size_padd,
-                                  const int*                  input_lengths,
-                                  const int                   max_input_len,
-                                  const int                   step,
-                                  const RepetitionPenaltyType penalty_type,
-                                  cudaStream_t                stream);
-
-template<typename T>
-void invokeBatchApplyRepetitionPenalty(T*                          logits,
-                                       const float*                penalties,
-                                       int*                        penalty_workspace,
-                                       const int*                  output_ids,
-                                       const int                   batch_size,
-                                       const int                   local_batch_size,
-                                       const int                   vocab_size,
-                                       const int*                  input_lengths,
-                                       const int                   max_input_length,
-                                       const int                   step,
-                                       const RepetitionPenaltyType penalty_type,
-                                       cudaStream_t                stream);
-
-template<typename T>
-void invokeApplyTemperaturePenalty(T*           logits,
-                                   const T*     bias,
-                                   const float  temperature,
-                                   const int    batch_size,
-                                   const int    vocab_size,
-                                   const int    vocab_size_padd,
-                                   cudaStream_t stream);
-
-template<typename T>
-void invokeBatchApplyTemperaturePenalty(T*           logits,
-                                        const T*     bias,
-                                        const float* temperatures,
-                                        const int    batch_size,
-                                        const int    vocab_size,
-                                        const int    vocab_size_padd,
-                                        cudaStream_t stream);
+void ApplyRepetitionPenalty(Tensor&               logits,
+                            const Buffer_<float>& penalties,
+                            const Buffer_<int*>&  token_ids_ptrs,
+                            const Buffer_<int>&   sequence_length,
+                            cudaStream_t          stream);
 
 template<typename T>
 void invokeBatchApplyTemperaturePenalty_v2(T*           logits,
