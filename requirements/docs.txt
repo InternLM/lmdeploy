@@ -1,7 +1,9 @@
 markdown>=3.4.0
 myst-parser
 sphinx==8.0.2
+sphinx-autodoc-typehints
 sphinx-book-theme
 sphinx-copybutton
 sphinx-tabs
 sphinxcontrib-mermaid
+sphinxcontrib-openapi

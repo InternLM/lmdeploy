@@ -61,7 +61,7 @@ class Function(BaseModel):
     """Function descriptions."""
     description: Optional[str] = Field(default=None, examples=[None])
     name: str
-    parameters: Optional[object] = None
+    parameters: Optional[BaseModel] = None
 
 
 class Tool(BaseModel):
