@@ -25,7 +25,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, D
 from lmdeploy.serve.exceptions import SafeRunException
 from lmdeploy.serve.inst_manager import InferInstManager
 from lmdeploy.serve.multimodal_processor import MultimodalProcessor
-from lmdeploy.serve.session_manager import SessionManager, SessionState
+from lmdeploy.serve.session_manager import SessionManager
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -211,10 +211,11 @@ class AsyncEngine(LogitsMixin):
 
         # build stat loggers
         self._build_stat_loggers()
+        self.epoch = 0
 
     def close(self):
         self.internal_thread.close()
-        # GeneratorManager cleanup will be handled by its clear method if needed
+        self.inst_mgr.clear()
         self.engine.close()
 
     def __enter__(self):
@@ -267,6 +268,7 @@ class AsyncEngine(LogitsMixin):
     async def stop_all_session(self):
         """Stop all running sessions."""
         logger.info('stop all sessions')
+        self.epoch += 1
         await self.session_mgr.async_abort_all()
 
     async def stop_session(self, session_id: int):
@@ -426,6 +428,7 @@ class AsyncEngine(LogitsMixin):
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
+        epoch = self.epoch
         if (messages is not None) ^ (input_ids is None):
             raise ValueError('You must specify exactly one of messages or input_ids')
         session = self.session_mgr.create(session_id, step=step)
@@ -501,7 +504,7 @@ class AsyncEngine(LogitsMixin):
         metrics_processor.increment_total_requests()
 
         async with session.acquire_inst(self.inst_mgr) as inst:
-            if session.state == SessionState.ABORTING:
+            if epoch != self.epoch:
                 logger.debug(f'[generate] session {session_id} got aborted before starting inference')
                 # TODO(lvhan): metrics_processor.increment_failed_requests('abort')
                 metrics_processor.increment_finished_requests()

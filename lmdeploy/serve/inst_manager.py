@@ -45,3 +45,8 @@ class InferInstManager:
         """
         self.insts = [engine.create_instance() for _ in range(self.size)]
         self.pool = None
+
+    def clear(self):
+        """Clear all instances."""
+        self.insts = []
+        self.pool = None

@@ -201,6 +201,19 @@ class Pipeline:
         """End a session."""
         self.async_engine._run(coro=self.session_mgr.async_end(session)).result()
 
+    def get_ppl(self, input_ids: Union[List[int], List[List[int]]]) -> List[float]:
+        """Get perplexity scores given a list of input tokens that have to be
+        of the same length.
+
+        Args:
+            input_ids (Union[List[int], List[List[int]]]): the batch of
+                input token ids
+
+        Returns:
+            List[float]: A list of perplexity scores.
+        """
+        return self.async_engine.get_ppl(input_ids)
+
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
                  gen_config: Optional[GenerationConfig] = None,

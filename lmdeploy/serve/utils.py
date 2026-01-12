@@ -66,8 +66,8 @@ class LogitsMixin:
 
         logits = [None] * len(input_ids)
 
-        async def _proc(i):
-            async with self.model_inst(session_id=i) as inst:
+        async def _proc(session, i):
+            async with session.acquire_inst(self.inst_mgr) as inst:
                 input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
@@ -86,12 +86,12 @@ class LogitsMixin:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
 
-        session_ids = list(range(len(input_ids)))
-        tasks = [_proc(i) for i in range(len(input_ids))]
+        sessions = [self.session_mgr.create() for _ in range(len(input_ids))]
+        tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
         if sequence_end and self.backend == 'pytorch':
-            for session_id in session_ids:
-                await self.end_session(session_id)
+            for session in sessions:
+                await self.session_mgr.async_end(session)
         return logits
 
     def get_ppl(self, input_ids: Union[List[int], List[List[int]]]) -> List[float]:

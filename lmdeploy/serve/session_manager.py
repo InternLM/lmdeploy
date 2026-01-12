@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import enum
 import itertools
 from contextlib import asynccontextmanager
 from typing import Any, List, Optional, Tuple
@@ -15,14 +14,6 @@ from .utils import singleton
 logger = get_logger('lmdeploy')
 
 
-class SessionState(enum.Enum):
-    """Session state enumeration."""
-    IDLE = 'idle'  # Initial state, no active inference
-    ACQUIRING = 'acquiring'  # Acquiring an inference instance
-    ACTIVE = 'active'  # Has an inference instance and is active
-    ABORTING = 'aborting'  # Aborting the session
-
-
 class Session:
     """Session for the engine."""
 
@@ -33,14 +24,11 @@ class Session:
         self.history: List[Tuple[Any, str]] = []
         self.gen_config: Optional[GenerationConfig] = None
         self.step: int = 0
-        self._state = SessionState.IDLE
+        # event to wait for the session to be active
+        self._active: Optional[asyncio.Event] = None
         self._inst = None  # inference instance
+        self._inst_mgr: Optional[InferInstManager] = None
         self.update(**kwargs)
-
-    @property
-    def state(self) -> SessionState:
-        """Get the current session state."""
-        return self._state
 
     def update(self, **kwargs):
         """Update the session."""
@@ -75,8 +63,9 @@ class Session:
         self.history = []
         self.gen_config = None
         self.step = 0
-        self._state = SessionState.IDLE
+        self._active = None
         self._inst = None
+        self._inst_mgr = None
         logger.debug(f'Session {self.session_id} has been reset.')
 
     @asynccontextmanager
@@ -84,9 +73,10 @@ class Session:
         if self._inst is not None:
             raise RuntimeError(f'Session {self.session_id} already has an inference instance.')
 
-        free_insts = inst_mgr.get()
+        self._inst_mgr = inst_mgr
+        free_insts = self._inst_mgr.get()
         self._inst = await free_insts.get()
-        self._state = SessionState.ACTIVE
+        self._active = asyncio.Event()
         logger.debug(f'[model_inst] session {self.session_id} acquired an instance')
         try:
             yield self._inst
@@ -102,12 +92,13 @@ class Session:
             if self._inst is not None:
                 inst_mgr.ret(self._inst)
                 self._inst = None
-            self._state = SessionState.IDLE
+            # MUST set the signal after releasing the instance to avoid race condition
+            # refer to async_end method
+            self._active.set()
 
     async def async_abort(self):
         """Abort the session."""
         logger.info(f'Aborting session {self.session_id}')
-        self._state = SessionState.ABORTING
         if self._inst is not None:
             await self._inst.async_cancel(self.session_id)
         # DO NOT reset the session here because it might be used by other components.
@@ -116,9 +107,22 @@ class Session:
     async def async_end(self):
         """End the session."""
         logger.debug(f'Ending session {self.session_id}')
+        if self._inst_mgr is None:
+            logger.warning(f'Session {self.session_id} has no inference instance manager.')
+            return
+
         if self._inst is not None:
+            await self._active.wait()
+            if self._inst is not None:
+                raise RuntimeError(f'Session {self.session_id} is not finished yet.')
+        inst = await self._inst_mgr.get().get()
+        try:
             await self._inst.async_end(self.session_id)
-        self.reset()
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+            logger.error(f'[async_end] exception caught: {e}')
+        finally:
+            self._inst_mgr.ret(inst)
+            self.reset()
 
 
 @singleton
@@ -167,7 +171,7 @@ class SessionManager:
             tasks.append(session.async_abort())
         await asyncio.gather(*tasks, return_exceptions=True)
         # "abort all" is designed for async RL. The aborted sessions will be no longer used,
-        # so we can reset and clear the sessions here.
+        # so we reset and clear the sessions here.
         for session in list(self.sessions.values()):
             session.reset()
         self.sessions.clear()
