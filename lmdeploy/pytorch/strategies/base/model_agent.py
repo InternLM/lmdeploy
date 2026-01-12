@@ -9,7 +9,7 @@ import torch
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.distributed import DistContext
-    from lmdeploy.pytorch.engine.logits_process import SamplingInputs, SamplingInputsDelta
+    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
     from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     SeqList = List[SchedulerSequence]
@@ -153,33 +153,6 @@ class ModelAgentStrategy(ABC):
         extra_inputs: ExtraInputs,
     ):
         """step."""
-        pass
-
-    @abstractmethod
-    def merge_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        other: 'SamplingInputsDelta',
-    ) -> 'SamplingInputsDelta':
-        """Merge two sampling deltas."""
-
-    @abstractmethod
-    def step_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        next_token_ids: torch.Tensor,
-        extra_inputs: ExtraInputs,
-    ) -> 'SamplingInputsDelta':
-        """Step next delta."""
-        pass
-
-    @abstractmethod
-    def update_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        delta: 'ModelInputsDelta',
-    ) -> 'SamplingInputsDelta':
-        """Update sampling delta with model inputs delta."""
         pass
 
     @abstractmethod

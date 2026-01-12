@@ -11,7 +11,7 @@ from torch.profiler import record_function
 from lmdeploy.pytorch import consts
 from lmdeploy.pytorch.config import DLLMConfig
 from lmdeploy.pytorch.distributed import DistContext
-from lmdeploy.pytorch.engine.logits_process import SamplingInputs, SamplingInputsDelta
+from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
@@ -240,62 +240,6 @@ class DLLMModelAgentStrategy(ModelAgentStrategy):
         """Create extra outputs."""
         dllm_mask = extra_inputs.dllm_mask
         return DLLMExtraOutputs(dllm_mask=dllm_mask)
-
-    def merge_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        other: 'SamplingInputsDelta',
-    ) -> 'SamplingInputsDelta':
-        """Merge two sampling deltas."""
-        num_ignore_eos = torch.cat([sampling_delta.num_ignore_eos, other.num_ignore_eos], 0)
-        random_offsets = torch.cat([sampling_delta.random_offsets, other.random_offsets], 0)
-
-        return SamplingInputsDelta(
-            num_ignore_eos=num_ignore_eos,
-            random_offsets=random_offsets,
-            all_ids=None,
-        )
-
-    def update_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        delta: 'ModelInputsDelta',
-    ) -> 'SamplingInputsDelta':
-        """Update sampling delta with model inputs delta."""
-        indices = delta.indices
-        num_ignore_eos = sampling_delta.num_ignore_eos.view(-1, self.block_size)
-        num_ignore_eos = num_ignore_eos[indices].flatten()
-        if sampling_delta.random_offsets is not None:
-            random_offsets = sampling_delta.random_offsets.view(-1, self.block_size)
-            random_offsets = random_offsets[indices].flatten()
-        else:
-            random_offsets = None
-        return SamplingInputsDelta(
-            num_ignore_eos=num_ignore_eos,
-            random_offsets=random_offsets,
-            all_ids=None,
-        )
-
-    def step_sampling_delta(
-        self,
-        sampling_delta: 'SamplingInputsDelta',
-        next_token_ids: torch.Tensor,
-        extra_inputs: DLLMExtraInputs,
-    ) -> 'SamplingInputsDelta':
-        """Step next delta."""
-        from lmdeploy.pytorch import consts
-        dllm_mask = extra_inputs.dllm_mask
-        dllm_block_size = self.block_size
-        DLLM_UNMASKED = consts.DLLM_UNMASKED
-        is_unmasked = (dllm_mask == DLLM_UNMASKED).view(-1, dllm_block_size).all(dim=1, keepdim=True)
-        num_ignore_eos = sampling_delta.num_ignore_eos.view(-1, dllm_block_size)
-        num_ignore_eos = torch.where(is_unmasked, num_ignore_eos - dllm_block_size, num_ignore_eos)
-        sampling_delta.num_ignore_eos = num_ignore_eos.flatten()
-        if sampling_delta.random_offsets is not None:
-            # random offset is used to generate random numbers for multinomial sampling
-            # so we need to increase it by 1 at each step
-            sampling_delta.random_offsets += 1
-        return sampling_delta
 
     def update_prefill_for_next_step(
         self,

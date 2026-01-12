@@ -245,9 +245,9 @@ class StepInputs:
             extra_outputs,
         )
         stopping_criteria = stopping_criteria.clone()
-        sampling_delta = model_agent.agent_strategy.step_sampling_delta(sampling_delta,
-                                                                        next_token_ids,
-                                                                        extra_inputs=extra_inputs)
+        sampling_delta = model_agent.sampling_strategy.step_sampling_delta(sampling_delta,
+                                                                           next_token_ids,
+                                                                           extra_inputs=extra_inputs)
         if self.model_inputs is None:
             self.model_inputs = inputs
             self.extra_inputs = extra_inputs
@@ -257,7 +257,8 @@ class StepInputs:
             self.model_inputs = model_agent.inputs_strategy.merge(self.model_inputs, inputs)
             self.extra_inputs = self.extra_inputs.merge(extra_inputs)
             self.stopping_criteria = self.stopping_criteria.merge(stopping_criteria)
-            self.sampling_delta = model_agent.agent_strategy.merge_sampling_delta(self.sampling_delta, sampling_delta)
+            self.sampling_delta = model_agent.sampling_strategy.merge_sampling_delta(
+                self.sampling_delta, sampling_delta)
 
     def update_delta(
         self,
@@ -268,7 +269,7 @@ class StepInputs:
         self.model_inputs = model_agent.inputs_strategy.update_inputs(self.model_inputs, delta)
         self.extra_inputs = model_agent.agent_strategy.update_extra_inputs(self.extra_inputs, delta)
         self.stopping_criteria = self.stopping_criteria.update(delta)
-        self.sampling_delta = model_agent.agent_strategy.update_sampling_delta(self.sampling_delta, delta)
+        self.sampling_delta = model_agent.sampling_strategy.update_sampling_delta(self.sampling_delta, delta)
 
     @record_function('StepInputs.step')
     def step(
@@ -296,9 +297,9 @@ class StepInputs:
             extra_outputs=extra_outputs,
         )
         self.stopping_criteria = stopping_criteria.clone()
-        self.sampling_delta = model_agent.agent_strategy.step_sampling_delta(sampling_delta,
-                                                                             next_token_ids,
-                                                                             extra_inputs=extra_inputs)
+        self.sampling_delta = model_agent.sampling_strategy.step_sampling_delta(sampling_delta,
+                                                                                next_token_ids,
+                                                                                extra_inputs=extra_inputs)
 
 
 class BaseModelAgent:
@@ -388,6 +389,7 @@ class BaseModelAgent:
         self.strategy_factory = build_strategy_factory(model_config, misc_config, specdecode_config=specdecode_config)
         self.inputs_strategy = self.strategy_factory.build_model_inputs_strategy()
         self.agent_strategy = self.strategy_factory.build_model_agent_strategy()
+        self.sampling_strategy = self.strategy_factory.build_sampling_strategy()
 
         # spec decoding
         self.spec_agent = build_spec_agent(specdecode_config,

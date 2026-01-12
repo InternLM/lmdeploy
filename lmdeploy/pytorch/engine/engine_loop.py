@@ -257,13 +257,12 @@ class EngineLoop:
                 continue
             token_ids = msg.generated_ids
             finish = msg.status == MessageStatus.STOPPED or msg.status == MessageStatus.TO_BE_MIGRATED
-            if not finish:
-                if len(token_ids) == 0:
-                    continue
-                resp_data = msg.resp.data
-                if resp_data is not None and len(resp_data.get('token_ids', [])) == len(token_ids):
-                    # no new tokens
-                    continue
+            if not finish and len(token_ids) == 0:
+                continue
+            resp_data = msg.resp.data
+            if resp_data is not None and len(resp_data.get('token_ids', [])) == len(token_ids):
+                # no new tokens
+                continue
             session_id = msg.session_id
             if msg.resp_cache:
                 cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
