@@ -11,8 +11,6 @@ gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=10)
 
 def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool = False):
     backend = run_config.get('backend')
-    device = run_config.get('device', None)
-    dtype = run_config.get('dtype', None)
     communicator = run_config.get('communicator')
     quant_policy = run_config.get('quant_policy')
     extra_params = run_config.get('extra_params', {})
@@ -22,11 +20,6 @@ def run_pipeline_chat_test(model_path, run_config, cases_path, is_pr_test: bool 
         backend_config = PytorchEngineConfig(quant_policy=quant_policy)
     else:
         backend_config = TurbomindEngineConfig(communicator=communicator, quant_policy=quant_policy)
-
-    if device:
-        backend_config.device_type = device
-    if dtype:
-        backend_config.dtype = dtype
 
     # quant format
     model_lower = model_path.lower()

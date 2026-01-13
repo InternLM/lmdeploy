@@ -1,4 +1,5 @@
 import os
+import time
 from subprocess import PIPE, Popen
 
 import allure
@@ -23,12 +24,10 @@ def hf_command_line_test(config, case, case_info, run_config, cuda_prefix: str =
     model = run_config.get('model')
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
-    else:
-        model_path = f"{config.get('model_path')}/{model}"
 
-    # Ensure extra_params exists before modifying
-    if 'extra_params' not in run_config:
-        run_config['extra_params'] = {}
+    else:
+        model_path = config.get('model_path') + '/' + model
+
     run_config['extra_params']['session_len'] = 4096
     if case == 'base_testcase':
         run_config['extra_params']['chat_template'] = TEMPLATE
@@ -48,8 +47,8 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
     try:
         log_path = config.get('log_path')
         case_name = get_case_str_by_config(run_config)
-
-        chat_log = os.path.join(log_path, f'chat_{case_name}.log')
+        timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+        chat_log = os.path.join(log_path, f'chat_{case_name}_{timestamp}.log')
 
         file = open(chat_log, 'w')
 
@@ -78,10 +77,9 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
             outputs, errors = proc.communicate(input=prompt)
             returncode = proc.returncode
             if returncode != 0:
-                error_msg = errors if errors else 'Unknown error occurred'
-                file.writelines('error:' + error_msg + '\n')
+                file.writelines('error:' + errors + '\n')
                 result = False
-                return result, chat_log, error_msg
+                return result, chat_log, errors
 
             outputDialogs = parse_dialogue(outputs)
             file.writelines('answersize:' + str(len(outputDialogs)) + '\n')
@@ -102,7 +100,7 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
                     print(f'output: {output}\n')
                     print(f'result: {case_result}, reason: {reason}\n')
                     msg += reason
-                result = result and case_result
+                result = result & case_result
             file.writelines('\n\n\n' + 'full log:' + outputs + '\n')
 
         file.close()
@@ -112,37 +110,26 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
 
 
 def parse_dialogue(inputs: str):
-    if not inputs or not inputs.strip():
-        return []
     dialogues = inputs.strip()
     sep = 'double enter to end input >>>'
+    dialogues = dialogues.strip()
     dialogues = dialogues.split(sep)
-    dialogues = [d.strip() for d in dialogues if d.strip()]
-    # Return all but first and last (which are typically empty or prompt)
-    if len(dialogues) <= 2:
-        return []
+    dialogues = [d.strip() for d in dialogues]
     return dialogues[1:-1]
 
 
 def extract_output(output: str, model: str):
-    if not output:
-        return output
-    # Check Qwen or internlm2 first (case-sensitive to match original behavior)
     if 'Qwen' in model or 'internlm2' in model:
-        parts = output.split('<|im_start|>assistant')
-        if len(parts) >= 2:
-            return parts[1]
-    elif 'Baichuan2' in model:
-        parts = output.split('<reserved_107>')
-        if len(parts) >= 2:
-            return parts[1]
-    elif 'internlm' in model.lower():
-        parts = output.split('<|Bot|>: ')
-        if len(parts) >= 2:
-            return parts[1]
-    elif 'llama' in model.lower() or 'Llama' in model:
-        parts = output.split('[/INST]')
-        if len(parts) >= 2:
-            return parts[1]
+        if len(output.split('<|im_start|>assistant')) >= 2:
+            return output.split('<|im_start|>assistant')[1]
+    if 'Baichuan2' in model:
+        if len(output.split('<reserved_107>')) >= 2:
+            return output.split('<reserved_107>')[1]
+    if 'internlm' in model:
+        if len(output.split('<|Bot|>: ')) >= 2:
+            return output.split('<|Bot|>: ')[1]
+    if 'llama' in model or 'Llama' in model:
+        if len(output.split('[/INST]')) >= 2:
+            return output.split('[/INST]')[1]
 
     return output

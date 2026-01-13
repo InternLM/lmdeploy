@@ -16,7 +16,7 @@ def prepare_environment(request, config, worker_id):
         yield param
     finally:
         if pid > 0:
-            terminate_restful_api(worker_id, param)
+            terminate_restful_api(worker_id)
 
 
 def getModelList(tp_num):

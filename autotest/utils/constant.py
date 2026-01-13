@@ -54,3 +54,18 @@ RESTFUL_BASE_MODEL_LIST = ['Qwen/Qwen3-8B-Base', 'internlm/internlm2_5-20b', 'Qw
 SUFFIX_INNER_AWQ = '-inner-4bits'
 SUFFIX_INNER_GPTQ = '-inner-gptq'
 SUFFIX_INNER_W8A8 = '-inner-w8a8'
+
+EVAL_RUN_CONFIG = {
+    'model': 'Qwen/Qwen2.5-32B-Instruct',
+    'backend': 'turbomind',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'server-name': '127.0.0.1',
+        'session-len': 76000,
+        'cache-max-entry-count': 0.7
+    }
+}

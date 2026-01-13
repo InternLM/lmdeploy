@@ -23,8 +23,6 @@ DESC_ZH = '两张图有什么相同和不同的地方.'
 
 def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bool = False):
     backend = run_config.get('backend')
-    device = run_config.get('device', None)
-    dtype = run_config.get('dtype', None)
     communicator = run_config.get('communicator')
     quant_policy = run_config.get('quant_policy')
     extra_params = run_config.get('extra_params', {})
@@ -37,11 +35,6 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
                                                communicator=communicator,
                                                quant_policy=quant_policy,
                                                cache_max_entry_count=0.6)
-
-    if device:
-        backend_config.device_type = device
-    if dtype:
-        backend_config.dtype = dtype
 
     # quant format
     model_lower = model_path.lower()

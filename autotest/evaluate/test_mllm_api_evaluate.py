@@ -56,8 +56,8 @@ def prepare_environment_judge_evaluate(request, config, run_id, worker_id):
     try:
         yield request.param
     finally:
-        terminate_restful_api(worker_id, request.param)
-        stop_restful_api(proxy_pid, proxy_process, request.param)
+        terminate_restful_api(worker_id)
+        stop_restful_api(proxy_pid, proxy_process)
 
 
 def get_turbomind_vl_model_list(tp_num):

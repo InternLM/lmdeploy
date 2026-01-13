@@ -8,7 +8,7 @@ import requests
 from openai import OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
-from utils.constant import DEFAULT_PORT, PROXY_PORT
+from utils.constant import DEFAULT_PORT
 from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 
@@ -85,18 +85,12 @@ def start_openai_service(config, run_config, worker_id):
     return pid, ''
 
 
-def stop_restful_api(pid, startRes, param):
+def stop_restful_api(pid, startRes):
     if pid > 0:
         startRes.terminate()
-    if 'modelscope' in param:
-        modelscope = param['modelscope']
-        if modelscope:
-            del os.environ['LMDEPLOY_USE_MODELSCOPE']
-    if 'MASTER_PORT' in os.environ:
-        del os.environ['MASTER_PORT']
 
 
-def terminate_restful_api(worker_id, param):
+def terminate_restful_api(worker_id):
     port = DEFAULT_PORT + get_workerid(worker_id)
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
 
@@ -680,18 +674,14 @@ def proxy_health_check(url):
         return False
 
 
-def start_proxy_server(config, worker_id):
+def start_proxy_server(log_path, port):
     """Start the proxy server for testing with enhanced error handling and
     logging."""
-    log_path = config.get('eval_path')
     if log_path is None:
         log_path = '/nvme/qa_test_models/evaluation_report'
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    proxy_log = os.path.join(log_path, f'proxy_server_{worker_id}_{timestamp}.log')
-
-    worker_num = get_workerid(worker_id)
-    port = PROXY_PORT + worker_num
+    proxy_log = os.path.join(log_path, f'proxy_server_{str(port)}_{timestamp}.log')
 
     proxy_url = f'http://127.0.0.1:{port}'  # noqa: E231, E261
     try:
@@ -759,7 +749,7 @@ def run_llm_test(config, run_config, common_case_config, worker_id):
             assert False, f'Failed to start RESTful API server: {content}'
     finally:
         if pid > 0:
-            terminate_restful_api(worker_id, run_config)
+            terminate_restful_api(worker_id)
 
 
 def run_mllm_test(config, run_config, worker_id):
@@ -773,7 +763,7 @@ def run_mllm_test(config, run_config, worker_id):
             assert False, f'Failed to start RESTful API server: {content}'
     finally:
         if pid > 0:
-            terminate_restful_api(worker_id, run_config)
+            terminate_restful_api(worker_id)
 
 
 def run_reasoning_case(config, run_config, worker_id):
@@ -785,7 +775,7 @@ def run_reasoning_case(config, run_config, worker_id):
             assert False, f'Failed to start RESTful API server: {content}'
     finally:
         if pid > 0:
-            terminate_restful_api(worker_id, run_config)
+            terminate_restful_api(worker_id)
 
 
 def run_tools_case(config, run_config, worker_id):
@@ -797,7 +787,7 @@ def run_tools_case(config, run_config, worker_id):
             assert False, f'Failed to start RESTful API server: {content}'
     finally:
         if pid > 0:
-            terminate_restful_api(worker_id, run_config)
+            terminate_restful_api(worker_id)
 
 
 def run_logprob_test(config, run_config, worker_id):
@@ -809,4 +799,4 @@ def run_logprob_test(config, run_config, worker_id):
             assert False, f'Failed to start RESTful API server: {content}'
     finally:
         if pid > 0:
-            terminate_restful_api(worker_id, run_config)
+            terminate_restful_api(worker_id)

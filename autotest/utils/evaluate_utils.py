@@ -151,7 +151,7 @@ def eval_test(config, run_config, port=DEFAULT_PORT, test_type='infer', **kwargs
         model = run_config['model']
         backend = run_config['backend']
         model_path = os.path.join(config.get('model_path'), model)
-        model_base_path = config.get('model_path', '/nvme/qa_test_models')
+        model_base_path = config.get('model_path')
 
         case_name = get_case_str_by_config(run_config)
         eval_path = os.path.join(config.get('eval_path'))

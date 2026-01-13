@@ -64,9 +64,9 @@ def get_func_config_list(backend: str,
                     'extra_params': copy.copy(extra)
                 }
                 if dtype and backend == 'pytorch':
-                    run_config['dtype'] = dtype
+                    run_config['extra_params']['dtype'] = dtype
                 if device != 'cuda':
-                    run_config['device'] = device
+                    run_config['extra_params']['device'] = device
                 run_configs.append(run_config)
 
     for run_config in run_configs:
@@ -83,8 +83,6 @@ def get_func_config_list(backend: str,
 def get_cli_common_param(run_config: Dict[str, Any]) -> str:
     """Generate cli common params string by run config dict."""
     backend = run_config.get('backend')
-    device = run_config.get('device', None)
-    dtype = run_config.get('dtype', None)
     model = run_config.get('model')
     communicator = run_config.get('communicator')
     quant_policy = run_config.get('quant_policy')
@@ -93,10 +91,6 @@ def get_cli_common_param(run_config: Dict[str, Any]) -> str:
 
     cli_params = [f'--backend {backend}', f'--communicator {communicator}']
     # Optional params
-    if device:
-        cli_params.append(f'--device {device}')
-    if dtype:
-        cli_params.append(f'--dtype {dtype}')
     if quant_policy != 0:
         cli_params.append(f'--quant-policy {quant_policy}')
 
@@ -370,6 +364,11 @@ def _get_communicator_list(config: Dict, backend: str, parallel_config: Dict[str
     return ['nccl', 'cuda-ipc']
 
 
+def _is_bf16_supported_by_device():
+    """Check if bf16 is supported based on the current device."""
+    return is_bf16_supported()
+
+
 def set_device_env_variable(worker_id, parallel_config: Dict[str, int] = None):
     """Set device environment variable based on the device type."""
     device = os.environ.get('DEVICE', 'cuda')
@@ -537,9 +536,9 @@ def test_cli_common_param():
             'dp': 16,
             'ep': 16
         },
-        'dtype': 'bfloat16',
-        'device': 'ascend',
         'extra_params': {
+            'dtype': 'bfloat16',
+            'device': 'ascend',
             'enable_prefix_caching': None,
             'max_batch_size': 2048,
             'session_len': 8192,
@@ -548,7 +547,7 @@ def test_cli_common_param():
     }
 
     cli_params = get_cli_common_param(run_config)
-    assert cli_params == '--backend turbomind --communicator nccl --device ascend --dtype bfloat16 --quant-policy 8 --model-format awq --dp 16 --ep 16 --enable-prefix-caching --max-batch-size 2048 --session-len 8192 --cache-max-entry-count 0.75', cli_params  # noqa
+    assert cli_params == '--backend turbomind --communicator nccl --quant-policy 8 --model-format awq --dp 16 --ep 16 --dtype bfloat16 --device ascend --enable-prefix-caching --max-batch-size 2048 --session-len 8192 --cache-max-entry-count 0.75', cli_params  # noqa
     run_config = {
         'model': 'test/test_dpep16-inner-4bits',
         'backend': 'pytorch',
@@ -560,7 +559,7 @@ def test_cli_common_param():
     }
 
     cli_params = get_cli_common_param(run_config)
-    assert cli_params == '--backend pytorch --communicator hccl --tp 8', cli_params
+    assert cli_params == '--backend pytorch --communicator hccl --model-format awq --tp 8', cli_params
     os.unsetenv('TEST_ENV')
 
 
@@ -802,8 +801,8 @@ def test_run_config():
     assert run_config3['communicator'] == 'hccl'
     assert run_config3['quant_policy'] == 0
     assert run_config3['parallel_config'] == {'tp': 1}
-    assert run_config3['speculative_algorithm'] == 'eagle'
-    assert run_config3['session_len'] == 1024
+    assert run_config3['extra_params']['speculative_algorithm'] == 'eagle'
+    assert run_config3['extra_params']['session_len'] == 1024
     os.unsetenv('TEST_ENV')
 
 

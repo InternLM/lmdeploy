@@ -2,7 +2,7 @@ from multiprocessing import Process
 
 import pydantic
 import pytest
-from utils.config_utils import _is_bf16_supported_by_device, set_device_env_variable, unset_device_env_variable
+from utils.config_utils import set_device_env_variable, unset_device_env_variable
 from utils.get_run_config import close_pipeline
 from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_batch_stream_return,
                                  assert_pipeline_common_log, assert_pipeline_single_return,
@@ -10,10 +10,11 @@ from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_b
 from utils.restful_return_check import has_repeated_fragment
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.utils import is_bf16_supported
 
 
 def init_pipeline(model_path, backend_config):
-    if not _is_bf16_supported_by_device() and isinstance(backend_config, PytorchEngineConfig):
+    if not is_bf16_supported() and isinstance(backend_config, PytorchEngineConfig):
         backend_config.dtype = 'float16'
     return pipeline(model_path, backend_config=backend_config)
 
