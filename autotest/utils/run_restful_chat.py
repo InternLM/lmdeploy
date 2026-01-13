@@ -224,8 +224,9 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     os.makedirs(log_path, exist_ok=True)
+    simple_model_name = model_name.split('/')[-1]
     restful_log = os.path.join(log_path,
-                               f'restful_vl_{timestamp}_{model_name.split(' / ')[-1]}_{str(port)}_{timestamp}.log')
+                               f'restful_vl_{timestamp}_{simple_model_name}_{str(port)}_{timestamp}.log')  # noqa
     file = open(restful_log, 'w')
 
     prompt_messages = [{
