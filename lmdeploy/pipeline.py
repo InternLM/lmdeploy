@@ -189,9 +189,9 @@ class Pipeline:
 
         return session
 
-    def open_session(self):
+    def open_session(self) -> 'Session':
         """Open a new session."""
-        return self.session_mgr.create()
+        return self.session_mgr.get()
 
     def stop_session(self, session: 'Session'):
         """Stop a session."""

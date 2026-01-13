@@ -624,12 +624,7 @@ class AsyncEngine(LogitsMixin):
                                  last_hidden_state=last_hidden_state,
                                  routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids)
-                    # Update a session's sequence only when it is in finished status
-                    if outputs.status == ResponseType.FINISH:
-                        if rewind_stop_tokens:
-                            # rewind the step to the token before the stop token
-                            output_len = gen_len
-                        session.update(step=session.step + input_len + output_len)
+                    # Note: We remove the session step update here. Let the caller(e.g., pipeline.chat) take care of it.
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')

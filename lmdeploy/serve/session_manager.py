@@ -32,6 +32,7 @@ class Session:
 
     def update(self, **kwargs):
         """Update the session."""
+        self.prompt = kwargs.get('prompt', self.prompt)
         self.gen_config = kwargs.get('gen_config', self.gen_config)
         self.step = kwargs.get('step', self.step)
 
