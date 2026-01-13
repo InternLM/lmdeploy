@@ -519,7 +519,7 @@ auto SequenceManager::Materialize(Sequences             sequences,
         // }
         return p->status != Sequence::kActive;
     });
-    outcome.swap_out   = std::count_if(schedule.inactive.begin(), schedule.inactive.end(), [](auto p) {
+    outcome.swap_out = std::count_if(schedule.inactive.begin(), schedule.inactive.end(), [](auto p) {
         // if (p->status == Sequence::kActive) {
         //     dbg(*p);
         // }
