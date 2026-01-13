@@ -1,7 +1,6 @@
 import json
 import os
-import subprocess
-from subprocess import PIPE
+import shutil
 
 import allure
 from pytest_assume.plugin import assume
@@ -15,11 +14,10 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = config.get('model_path') + '/' + model
+        model_path = f"{config.get('model_path')}/{model}"
 
     log_path = config.get('log_path')
     case_name = get_case_str_by_config(run_config)
-    os.makedirs(log_path, exist_ok=True)
     pipeline_log = os.path.join(log_path, f'pipeline_llm_{case_name}.log')
 
     env = os.environ.copy()
@@ -50,6 +48,8 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
 
         with allure.step(case):
             case_info = common_case_config.get(case)
+            case_result = True
+            reason = ''
 
             for prompt_detail in case_info:
                 prompt = list(prompt_detail.keys())[0]
@@ -69,10 +69,9 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = config.get('model_path') + '/' + model
+        model_path = f"{config.get('model_path')}/{model}"
 
     log_path = config.get('log_path')
-    os.makedirs(log_path, exist_ok=True)
     case_name = get_case_str_by_config(run_config)
     pipeline_log = os.path.join(log_path, f'pipeline_mllm_{case_name}.log')
 
@@ -150,6 +149,8 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
         if 'qwen' in model.lower():
             Qwen_vl_testcase(output_text, file)
 
+    file.close()
+
     with open(pipeline_log, 'r', encoding='utf-8') as file:
         output_text = file.read()
     print(output_text)
@@ -157,12 +158,11 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
 
 
 def get_response_from_output(output_text, case):
-    return output_text.split('[caseresult ' + case + ' start]')[1].split('[caseresult ' + case + ' end]')[0]
+    return output_text.split(f'[caseresult {case} start]')[1].split(f'[caseresult {case} end]')[0]
 
 
 def get_response_from_output_by_prompt(output_text, case, prompt):
-    get_response_from_output(output_text, case)
-    output_list = output_text.split('[caseresult ' + case + ' start]')[1].split('[caseresult ' + case + ' end]')[0]
+    output_list = output_text.split(f'[caseresult {case} start]')[1].split(f'[caseresult {case} end]')[0]
     output_dict = json.loads(output_list.rstrip())
     for output in output_dict:
         if output.get('prompt') == prompt:
@@ -212,7 +212,7 @@ def assert_pipeline_single_element(output, is_stream: bool = False, is_last: boo
     result &= output.input_token_len > 0
     result &= output.index >= 0
     if is_last:
-        result &= len(output.text) >= 0
+        result &= output.text is not None
         result &= output.finish_reason in ['stop', 'length']
         if is_stream:
             result &= output.token_ids is None or output.token_ids == []
@@ -234,7 +234,7 @@ def assert_pipeline_single_element(output, is_stream: bool = False, is_last: boo
             for content in output.logprobs:
                 result &= len(content.keys()) <= logprobs_num
                 for key in content.keys():
-                    result &= type(content.get(key)) == float
+                    result &= isinstance(content.get(key), float)
     return result
 
 
@@ -313,25 +313,25 @@ def Qwen_vl_testcase(output_text, file):
         case_result = any(word in response.lower() for word in ['buildings', '楼', 'skyline', 'city'])
         file.writelines(f'qwen-combined-images result: {case_result}, reason: buildings should in {response} \n')
         with assume:
-            assert case_result, f'reason: combined images: panda should in {response}'
+            assert case_result, f'reason: combined images: buildings should in {response}'
     with allure.step('qwen-combined-images2'):
         response = get_response_from_output(output_text, 'qwen-combined-images2')
         case_result = any(word in response.lower() for word in ['buildings', '楼', 'skyline', 'city'])
         file.writelines(f'qwen-combined-images2 result: {case_result}, reason: buildings should in {response} \n')
         with assume:
-            assert case_result, f'reason: combined images: panda should in {response}'
+            assert case_result, f'reason: combined images2: buildings should in {response}'
     with allure.step('qwen-performance-images'):
         response = get_response_from_output(output_text, 'qwen-performance-images')
         case_result = any(word in response.lower() for word in ['buildings', '楼', 'skyline', 'city'])
-        file.writelines(f'qwen-performance-images result: {case_result}, reason: panda should in {response} \n')
+        file.writelines(f'qwen-performance-images result: {case_result}, reason: buildings should in {response} \n')
         with assume:
-            assert case_result, f'reason: performance images: panda should in {response}'
+            assert case_result, f'reason: performance images: buildings should in {response}'
     with allure.step('qwen-performance-images2'):
         response = get_response_from_output(output_text, 'qwen-performance-images2')
         case_result = any(word in response.lower() for word in ['buildings', '楼', 'skyline', 'city'])
-        file.writelines(f'qwen-performance-images2 result: {case_result}, reason: panda should in {response} \n')
+        file.writelines(f'qwen-performance-images2 result: {case_result}, reason: buildings should in {response} \n')
         with assume:
-            assert case_result, f'reason: performance images: panda should in {response}'
+            assert case_result, f'reason: performance images2: buildings should in {response}'
 
 
 def save_pipeline_common_log(config, log_name, result, content, msg: str = '', write_type: str = 'w'):
@@ -362,11 +362,12 @@ def assert_pipeline_common_log(config, log_name):
             if 'result:True, reason:' in line and not result:
                 result = True
                 msg = ''
-    subprocess.run([' '.join(['rm -rf', config_log])],
-                   stdout=PIPE,
-                   stderr=PIPE,
-                   shell=True,
-                   text=True,
-                   encoding='utf-8')
+    try:
+        if os.path.isfile(config_log):
+            os.remove(config_log)
+        elif os.path.isdir(config_log):
+            shutil.rmtree(config_log)
+    except OSError:
+        pass  # Ignore errors when removing log file
 
     assert result, msg

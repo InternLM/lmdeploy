@@ -28,10 +28,13 @@ def start_openai_service(config, run_config, worker_id):
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = config.get('model_path') + '/' + model
+        model_path = f"{config.get('model_path')}/{model}"
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
+    # Ensure extra_params exists before modifying
+    if 'extra_params' not in run_config:
+        run_config['extra_params'] = {}
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None
     cmd = ' '.join([cuda_prefix, ' '.join(['lmdeploy serve api_server', model_path,
@@ -85,7 +88,7 @@ def start_openai_service(config, run_config, worker_id):
 def stop_restful_api(pid, startRes, param):
     if pid > 0:
         startRes.terminate()
-    if 'modelscope' in param.keys():
+    if 'modelscope' in param:
         modelscope = param['modelscope']
         if modelscope:
             del os.environ['LMDEPLOY_USE_MODELSCOPE']
@@ -129,7 +132,7 @@ def run_all_step(log_path, cases_info, port: int = DEFAULT_PORT):
 
 def open_chat_test(log_path, case, case_info, model, url, port: int = DEFAULT_PORT):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    os.makedirs(log_path, exist_ok=True)
+
     restful_log = os.path.join(log_path, f'restful_{model}_{str(port)}_{case}_{timestamp}.log')
 
     file = open(restful_log, 'w')
@@ -162,7 +165,7 @@ def open_chat_test(log_path, case, case_info, model, url, port: int = DEFAULT_PO
         file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
         if not case_result:
             msg += reason
-        result = result & case_result
+        result = result and case_result
     file.close()
     return result, restful_log, msg
 
@@ -176,7 +179,9 @@ def health_check(url):
         for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1):
             if output.get('code') is not None and output.get('code') != 0:
                 return False
+            # Return True on first successful response
             return True
+        return False  # No output received
     except Exception:
         return False
 
@@ -195,6 +200,7 @@ def _run_logprobs_test(port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
     api_client = APIClient(http_url)
     model_name = api_client.available_models[0]
+    output = None
     for output in api_client.chat_completions_v1(model=model_name,
                                                  messages='Hi, pls intro yourself',
                                                  max_tokens=5,
@@ -202,6 +208,8 @@ def _run_logprobs_test(port: int = DEFAULT_PORT):
                                                  logprobs=True,
                                                  top_logprobs=10):
         continue
+    if output is None:
+        assert False, 'No output received from logprobs test'
     print(output)
     assert_chat_completions_batch_return(output, model_name, check_logprobs=True, logprobs_num=10)
     assert output.get('choices')[0].get('finish_reason') == 'length'
@@ -223,10 +231,9 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     model_name = client.models.list().data[0].id
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    os.makedirs(log_path, exist_ok=True)
+
     simple_model_name = model_name.split('/')[-1]
-    restful_log = os.path.join(log_path,
-                               f'restful_vl_{timestamp}_{simple_model_name}_{str(port)}_{timestamp}.log')  # noqa
+    restful_log = os.path.join(log_path, f'restful_vl_{simple_model_name}_{str(port)}_{timestamp}.log')  # noqa
     file = open(restful_log, 'w')
 
     prompt_messages = [{
@@ -274,7 +281,8 @@ def _run_reasoning_case(log_path, port: int = DEFAULT_PORT):
     if model is None:
         assert False, 'server not start correctly'
 
-    restful_log = os.path.join(log_path, 'restful_reasoning_' + model + str(port) + '.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    restful_log = os.path.join(log_path, f'restful_reasoning_{model}_{str(port)}_{timestamp}.log')
     file = open(restful_log, 'w')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
@@ -370,7 +378,8 @@ def test_internlm_multiple_round_prompt(client, model):
     response_list = [response]
     func1_name = response.choices[0].message.tool_calls[0].function.name
     func1_args = response.choices[0].message.tool_calls[0].function.arguments
-    func1_out = eval(f'{func1_name}(**{func1_args})')
+    func1_args_dict = json.loads(func1_args)
+    func1_out = add(**func1_args_dict) if func1_name == 'add' else mul(**func1_args_dict)
     with assume:
         assert response.choices[0].finish_reason == 'tool_calls'
     with assume:
@@ -394,7 +403,8 @@ def test_internlm_multiple_round_prompt(client, model):
     response_list.append(response)
     func2_name = response.choices[0].message.tool_calls[0].function.name
     func2_args = response.choices[0].message.tool_calls[0].function.arguments
-    func2_out = eval(f'{func2_name}(**{func2_args})')
+    func2_args_dict = json.loads(func2_args)
+    func2_out = add(**func2_args_dict) if func2_name == 'add' else mul(**func2_args_dict)
     with assume:
         assert response.choices[0].finish_reason == 'tool_calls'
     with assume:
@@ -562,7 +572,8 @@ def _run_tools_case(log_path, port: int = DEFAULT_PORT):
     if model is None:
         assert False, 'server not start correctly'
 
-    restful_log = os.path.join(log_path, 'restful_reasoning_' + model + str(port) + '.log')
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    restful_log = os.path.join(log_path, f'restful_toolcall_{model}_{str(port)}_{timestamp}.log')
     file = open(restful_log, 'w')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
@@ -643,12 +654,14 @@ def _run_tools_case(log_path, port: int = DEFAULT_PORT):
         file.writelines(str(response) + '\n')
 
     with allure.step('step3 - multiple_round_prompt'):
+        response_list = None
         if 'intern' in model.lower():
             response_list = test_internlm_multiple_round_prompt(client, model_name)
-        if 'qwen' in model.lower():
+        elif 'qwen' in model.lower():
             response_list = test_qwen_multiple_round_prompt(client, model_name)
 
-        file.writelines(str(response_list) + '\n')
+        if response_list is not None:
+            file.writelines(str(response_list) + '\n')
 
     file.close()
     allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
@@ -673,16 +686,12 @@ def start_proxy_server(config, worker_id):
     log_path = config.get('eval_path')
     if log_path is None:
         log_path = '/nvme/qa_test_models/evaluation_report'
-    os.makedirs(log_path, exist_ok=True)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     proxy_log = os.path.join(log_path, f'proxy_server_{worker_id}_{timestamp}.log')
 
     worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = PROXY_PORT
-    else:
-        port = PROXY_PORT + worker_num
+    port = PROXY_PORT + worker_num
 
     proxy_url = f'http://127.0.0.1:{port}'  # noqa: E231, E261
     try:

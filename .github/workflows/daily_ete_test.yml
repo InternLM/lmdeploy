@@ -189,7 +189,6 @@ jobs:
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - quantization w4a16
@@ -277,7 +276,6 @@ jobs:
           cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat
@@ -440,7 +438,6 @@ jobs:
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Start restful api
@@ -561,7 +558,6 @@ jobs:
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - interface pipeline case
@@ -626,7 +622,6 @@ jobs:
           lmdeploy check_env
           rm -rf allure-results
           # remove tmp log in testcase
-          rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test benchmark script

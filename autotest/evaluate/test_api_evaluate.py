@@ -46,7 +46,7 @@ def prepare_environment_judge_evaluate(request, config, worker_id):
     param = judge_config['param']
     model = judge_config['model']
     backend = judge_config['backend']
-    model_path = config.get('model_path') + '/' + model
+    model_path = f"{config.get('model_path')}/{model}"
 
     proxy_pid, proxy_process = start_proxy_server(config, worker_id)
 

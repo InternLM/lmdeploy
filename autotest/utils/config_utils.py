@@ -16,7 +16,7 @@ def get_func_config_list(backend: str,
                          parallel_config: Dict[str, int],
                          model_type: str = 'chat_model',
                          func_type: str = 'func',
-                         extra: Dict[str, any] = {}) -> List[Dict]:
+                         extra: Optional[Dict[str, Any]] = None) -> List[Dict]:
     """Generate all valid running config combinations (communicator + quant
     policy + model).
 
@@ -33,6 +33,9 @@ def get_func_config_list(backend: str,
     device = config.get('device', 'cuda')
     base_case_list = get_model_list(config, backend, parallel_config, model_type, func_type)
 
+    if extra is None:
+        extra = {}
+
     run_configs = []
     dtype = 'float16' if not is_bf16_supported(device) else None
 
@@ -45,7 +48,7 @@ def get_func_config_list(backend: str,
                                           or 'InternVL2-Llama3' in model):  # noqa
                     continue
                 # [TM][FATAL] models/llama/LlamaBatch.cc(362): Check failed: r->session.start_flag Mrope doesn't support interactive chat # noqa
-                if 'Qwen2.5-VL' in model or 'Qwen2-VL' in model and 'turbomind' == backend:
+                if ('Qwen2.5-VL' in model or 'Qwen2-VL' in model) and 'turbomind' == backend:
                     continue
                 # AssertionError: prompts should be a list
                 if 'phi' in model.lower() and model_type == 'vl_model':
@@ -58,7 +61,7 @@ def get_func_config_list(backend: str,
                     'communicator': communicator,
                     'quant_policy': quant_policy,
                     'parallel_config': parallel_config,
-                    'extra_params': extra
+                    'extra_params': copy.copy(extra)
                 }
                 if dtype and backend == 'pytorch':
                     run_config['dtype'] = dtype
@@ -72,7 +75,7 @@ def get_func_config_list(backend: str,
             run_config['extra_params']['max-batch-size'] = 1024
 
         if config.get('env_tag', '') in ['3090', '5080']:
-            run_config['cache-max-entry-count'] = 0.5
+            run_config['extra_params']['cache-max-entry-count'] = 0.5
 
     return run_configs
 

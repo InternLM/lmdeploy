@@ -9,7 +9,7 @@ def prepare_environment(request, config, worker_id):
     param = request.param
     model = param['model']
     backend = param['backend']
-    model_path = config.get('model_path') + '/' + model
+    model_path = f"{config.get('model_path')}/{model}"
 
     pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
     try:

@@ -13,7 +13,7 @@ def prepare_environment(request, config, run_id, worker_id):
     param['extra'] = ' '.join(
         [param.get('extra', ''), '--model-name',
          model.split('/')[-1], '--cache-max-entry-count 0.6'])  # noqa
-    model_path = config.get('model_path') + '/' + model
+    model_path = f"{config.get('model_path')}/{model}"
     pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
     try:
         yield param
@@ -47,7 +47,7 @@ def prepare_environment_judge_evaluate(request, config, run_id, worker_id):
     param = judge_config['param']
     model = judge_config['model']
     backend = judge_config['backend']
-    model_path = config.get('model_path') + '/' + model
+    model_path = f"{config.get('model_path')}/{model}"
 
     proxy_pid, proxy_process = start_proxy_server(config, worker_id)
 
