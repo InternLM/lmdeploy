@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import threading
 from typing import Dict, List, Tuple, Union
 
 import numpy as np
@@ -239,11 +240,31 @@ class LogitsMixin:
 
 
 def singleton(cls):
-    _instances = {}
+    """Singleton decorator that preserves class type."""
+    _instance = None
+    _lock = threading.Lock()
+    _initialized = False
 
-    def get_instance(*args, **kwargs):
-        if cls not in _instances:
-            _instances[cls] = cls(*args, **kwargs)
-        return _instances[cls]
+    class SingletonClass(cls):
 
-    return get_instance
+        def __new__(cls_, *args, **kwargs):
+            nonlocal _instance, _initialized
+            with _lock:
+                if _instance is None:
+                    _instance = super().__new__(cls_)
+            return _instance
+
+        def __init__(self, *args, **kwargs):
+            nonlocal _initialized
+            with _lock:
+                if not _initialized:
+                    super().__init__(*args, **kwargs)
+                    _initialized = True
+
+    # Preserve original class metadata
+    SingletonClass.__name__ = cls.__name__
+    SingletonClass.__qualname__ = cls.__qualname__
+    SingletonClass.__doc__ = cls.__doc__
+    SingletonClass.__module__ = cls.__module__
+
+    return SingletonClass
