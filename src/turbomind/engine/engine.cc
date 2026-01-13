@@ -374,9 +374,6 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 {
     auto& s = states_.at(0);
 
-    const int offset = s.rc.size();
-    int       index  = offset;
-
     vector<unique_ptr<RequestCache>> incoming;
     incoming.reserve(rs.size());
 
@@ -522,7 +519,7 @@ void Engine::Impl::Schedule()
 
     // dbg("Schedule");
 
-    auto outcome = seq_mgr_->Materialize(
+    seq_mgr_->Materialize(
         sequences, context_length, alpha, priorities, param_.max_forward_token_num, param_.max_context_token_num);
 
     vector<int> idxs(sequences.size());
@@ -703,12 +700,12 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
                     s.tokens.insert(s.tokens.end(), c.token_ids + c.seq_len - new_tokens, c.token_ids + c.seq_len);
                 }
                 if (TM_UNLIKELY(finished[i])) {
-                    signals.push_back([this, r = c.req, l = c.seq_len] {  //
+                    signals.push_back([r = c.req, l = c.seq_len] {  //
                         UpdateState(*r, Request::kFinish, l);
                     });
                 }
                 else if (c.req->stream_output) {
-                    signals.push_back([this, r = c.req, l = c.seq_len] {  //
+                    signals.push_back([r = c.req, l = c.seq_len] {  //
                         UpdateState(*r, Request::kOk, l);
                     });
                 }

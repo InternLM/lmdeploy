@@ -1,14 +1,17 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/models/llama/SequenceManager.h"
-#include "src/turbomind/kernels/attention/block.h"
-#include "src/turbomind/models/llama/BlockManager.h"
-#include "src/turbomind/utils/debug_utils.h"
-#include "src/turbomind/utils/logger.h"
 #include <cstddef>
 #include <cstdlib>
 #include <ctime>
 #include <numeric>
+
+#include "src/turbomind/kernels/attention/block.h"
+#include "src/turbomind/models/llama/BlockManager.h"
+#include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/utils/logger.h"
+
+// #include "dbg.h"
+
 namespace turbomind {
 
 template<typename T>
@@ -114,19 +117,19 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
     }
 
     for (int i = 0; i < active_size; ++i) {
-        if (auto& seq = *sequences[i]; !seq.prompt.empty() && seq.cache_len >= seq.prompt.size()) {
-            BlockIds  block_ids;
-            UniqueIds block_unique_ids;
-            std::tie(block_ids, block_unique_ids) = block_trie_->Cache(seq, seq.prompt);
+        if (auto& seq = *sequences[i]; !seq.prompt.empty()) {
+            const auto& [block_ids, unique_ids] = block_trie_->Cache(seq, seq.prompt);
             if (rank_ == 0) {
                 // clang-format off
                 TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, tokens %d", seq.id,
                             (int)block_ids.size(), (int)seq.prompt.size());
                 TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
-                             vector2string(block_ids).c_str(), vector2string(block_unique_ids).c_str());
+                             vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
                 // clang-format on
             }
-            seq.prompt.clear();
+            if (seq.cache_len >= seq.prompt.size()) {
+                seq.prompt.clear();
+            }
         }
     }
 }
@@ -137,19 +140,15 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
         return;
     }
 
-    BlockIds  block_ids;
-    UniqueIds block_unique_ids;
+    const auto& [block_ids, unique_ids] = block_trie_->Cache(seq, seq.tokens);
 
-    std::tie(block_ids, block_unique_ids) = block_trie_->Cache(seq, seq.tokens);
     if (rank_ == 0) {
+        // clang-format off
         TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, tokens %d",
-                    seq.id,
-                    block_ids.size(),
-                    seq.tokens.size());
-        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, unique_ids %s",
-                     seq.id,
-                     vector2string(block_ids).c_str(),
-                     vector2string(block_unique_ids).c_str());
+                    seq.id, (int)block_ids.size(), (int)seq.tokens.size());
+        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, unique_ids %s", seq.id,
+                     vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+        // clang-format on
     }
 }
 
@@ -161,7 +160,7 @@ void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
         if (seq.status != Sequence::kCached) {
             continue;
         }
-        FT_CHECK(seq.blocks.size() == seq.block_unique_ids.size());
+        TM_CHECK_EQ(seq.blocks.size(), seq.block_unique_ids.size());
         // Verify cache blocks that may be invalidated
         const int count = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
         seq.blocks.resize(count);
@@ -189,7 +188,7 @@ void SequenceManager::CommitUnlockAndFree()
 
 void SequenceManager::UpdateAndSetUnlock(const Sequence& sequence)
 {
-    FT_CHECK(sequence.status != Sequence::kCached);
+    TM_CHECK_NE(sequence.status, Sequence::kCached);
     auto& seq = const_cast<Sequence&>(sequence);
     block_manager_->Touch(seq.blocks);
     unlocked_.insert(unlocked_.end(), seq.blocks.begin(), seq.blocks.end());
@@ -217,14 +216,14 @@ struct Schedule {
     Sequences        victims;
 
     Schedule(Snapshot snapshot, int size, int max_fwd_tokens, int max_tmp_tokens):
-        free(snapshot.free),
-        cached(snapshot.cached),
-        last(size),
-        use_count_(std::move(snapshot.use_count)),
-        unlocked_(size),
-        it_(size),
+        free{snapshot.free},
+        cached{snapshot.cached},
+        last{size},
         max_fwd_tokens{max_fwd_tokens},
-        max_tmp_tokens{max_tmp_tokens}
+        max_tmp_tokens{max_tmp_tokens},
+        use_count_{std::move(snapshot.use_count)},
+        unlocked_{size},
+        it_{size}
     {
     }
 
@@ -281,16 +280,14 @@ struct Transaction {
     const Sequences& sequences_;
     Schedule&        schedule_;
 
-    std::shared_ptr<BlockTrie> block_trie_;
-
     explicit Transaction(
         const Sequences& sequences, int index, int block_count, int input_len, int temp_len, Schedule& sched):
-        sequences_(sequences),
-        schedule_(sched),
-        index_(index),
-        block_count_(block_count),
-        input_len_(input_len),
-        temp_len_{temp_len}
+        index_{index},
+        block_count_{block_count},
+        input_len_{input_len},
+        temp_len_{temp_len},
+        sequences_{sequences},
+        schedule_{sched}
     {
     }
 
@@ -334,10 +331,10 @@ struct Transaction {
     {
         // update available resources
         schedule_.free -= allocate_;
-        FT_CHECK(schedule_.free >= 0);
+        TM_CHECK_GE(schedule_.free, 0);
         schedule_.cached += preempt_;
         schedule_.cached -= evict_;
-        FT_CHECK(schedule_.cached >= 0);
+        TM_CHECK_GE(schedule_.cached, 0);
 
         // update scheduled operations
         schedule_.allocate += allocate_;
@@ -399,13 +396,13 @@ void SequenceManager::AssignAndActivate(const Sequences&        sequences,  //
                                         const BlockIds&         blocks,
                                         const UniqueIds&        unique_ids)
 {
-    FT_CHECK(sequences.size() == counts.size());
+    TM_CHECK_EQ(sequences.size(), counts.size());
     int first = 0;
     for (int i = 0; i < sequences.size(); ++i) {
         auto& s     = const_cast<Sequence&>(*sequences[i]);
         auto  count = counts[i];
         int   last  = first + count;
-        FT_CHECK(last <= blocks.size());
+        TM_CHECK_LE(last, blocks.size());
         s.blocks.insert(s.blocks.end(), blocks.begin() + first, blocks.begin() + last);
         s.block_unique_ids.insert(s.block_unique_ids.end(), unique_ids.begin() + first, unique_ids.begin() + last);
         s.status = Sequence::kActive;
@@ -420,40 +417,44 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
     }
 
     for (int i = 0; i < sequences.size(); i++) {
-        BlockIds  block_ids;
-        UniqueIds unique_ids;
-        auto&     seq = const_cast<Sequence&>(*sequences[i]);
-        if (seq.cache_len != 0 || alpha[i] != 0) {
-            // We only apply prefix-cache matching when seq.cache_len is 0,
-            // which means this seq is a brand-new sequence.
-            // seq.cache_len is updated after every forward iter. Refer to `LlamaBatch::Forward`
+
+        auto& seq = const_cast<Sequence&>(*sequences[i]);
+
+        /// TODO: Is there a way to exploit the alpha[i] != 0 case?
+        if (alpha[i] != 0 || seq.cache_len >= seq.prompt.size()) {
             continue;
         }
-        std::tie(block_ids, unique_ids) = block_trie_->Match(seq);
 
-        block_manager_->Lock(block_ids);
-        int valid = block_ids.size();
+        const auto& [block_ids, unique_ids] = block_trie_->Match(seq);
+
         if (rank_ == 0) {
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, valid, seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s",
-                         seq.id,
-                         vector2string(block_ids).c_str(),
-                         vector2string(unique_ids).c_str());
+            // clang-format off
+            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, (int)block_ids.size(), seq.cache_len);
+            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s", seq.id, 
+                         vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
+            // clang-format on
         }
 
-        FT_CHECK(seq.blocks.empty());
-        seq.cache_len = valid * block_seq_len_;
-        seq.blocks.insert(seq.blocks.end(), block_ids.begin(), block_ids.end());
-        seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin(), unique_ids.end());
+        /// TODO: `Unlock` and `Lock` can't be batched because there may be repeated blocks between sequences
+        if (const int offset = seq.cache_len / block_seq_len_; offset < block_ids.size()) {
+            if (BlockIds tail{seq.blocks.begin() + offset, seq.blocks.end()}; !tail.empty()) {
+                block_manager_->Unlock(tail);
+                seq.blocks.resize(offset);
+                seq.block_unique_ids.resize(offset);
+            }
+            seq.blocks.insert(seq.blocks.end(), block_ids.begin() + offset, block_ids.end());
+            seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin() + offset, unique_ids.end());
+            seq.cache_len = seq.blocks.size() * block_seq_len_;
+            block_manager_->Lock({block_ids.begin() + offset, block_ids.end()});
+        }
+
         if (rank_ == 0) {
+            // clang-format off
             TM_LOG_INFO("[SeqMgr][match] ID %llu, after matching, blocks %d, cache_len %d",
-                        seq.id,
-                        seq.blocks.size(),
-                        seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s",
-                         seq.id,
-                         vector2string(seq.blocks).c_str(),
-                         vector2string(seq.block_unique_ids).c_str());
+                        seq.id, seq.blocks.size(), seq.cache_len);
+            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s", seq.id,
+                         vector2string(seq.blocks).c_str(), vector2string(seq.block_unique_ids).c_str());
+            // clang-format on
         }
     }
 }
@@ -506,23 +507,23 @@ auto SequenceManager::Materialize(Sequences             sequences,
     // combine allocate and evict since evicted blocks are reused by allocation
     schedule.allocate += schedule.evict;
 
-    if (schedule.allocate) {
-        dbg(*block_manager_);
-    }
+    // if (schedule.allocate) {
+    //     dbg(*block_manager_);
+    // }
 
     Outcome outcome{};
     outcome.allocation = schedule.allocate;
     outcome.swap_in    = std::count_if(schedule.active.begin(), schedule.active.end(), [](auto p) {
-        if (p->status != Sequence::kActive) {
-            dbg(*p);
-        }
-        return p->status != Sequence::kActive;  //
+        // if (p->status != Sequence::kActive) {
+        //     dbg(*p);
+        // }
+        return p->status != Sequence::kActive;
     });
     outcome.swap_out   = std::count_if(schedule.inactive.begin(), schedule.inactive.end(), [](auto p) {
-        if (p->status == Sequence::kActive) {
-            dbg(*p);
-        }
-        return p->status == Sequence::kActive;  //
+        // if (p->status == Sequence::kActive) {
+        //     dbg(*p);
+        // }
+        return p->status == Sequence::kActive;
     });
 
     // release preempted blocks -> cached
