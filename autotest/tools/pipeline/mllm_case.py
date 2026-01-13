@@ -66,7 +66,7 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
 
     image = load_image(f'{resource_path}/{PIC1}')
 
-    if 'deepseek' in model_path:
+    if 'deepseek' in model_lower:
         prompt = f'describe this image{IMAGE_TOKEN}'
     else:
         prompt = 'describe this image'
@@ -215,9 +215,9 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
         question = question + f'Frame{i+1}: {IMAGE_TOKEN}\n'
 
     if lang == 'cn':
-        question += '小熊猫在做什么？'
+        question += '视频里有什么动物，它在做什么？'
     else:
-        question += 'What is the red panda doing?'
+        question += 'What animals are in the video, and what are they doing?'
 
     content = [{'type': 'text', 'text': question}]
     for img in imgs:
@@ -326,7 +326,7 @@ def MiniCPM_vl_testcase(pipe, resource_path):
 
     video_path = resource_path + '/red-panda.mp4'
     frames = encode_video(video_path)
-    question = 'Describe the video'
+    question = 'What animals are in the video, and what are they doing?'
 
     content = [dict(type='text', text=question)]
     for frame in frames:

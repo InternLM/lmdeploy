@@ -11,7 +11,7 @@ from utils.rule_condition_assert import assert_result
 
 
 def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str = '', is_smoke: bool = False):
-    model = run_config.pop('model')
+    model = run_config.get('model')
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
@@ -24,9 +24,12 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
 
     env = os.environ.copy()
     env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
-    env.update(run_config.pop('env', {}))
+    env.update(run_config.get('env', {}))
 
-    run_config_string = json.dumps(run_config, ensure_ascii=False, indent=None)
+    run_config_bk = run_config.copy()
+    run_config_bk.pop('env', None)
+    run_config_bk.pop('model', None)
+    run_config_string = json.dumps(run_config_bk, ensure_ascii=False, indent=None)
     run_config_string = run_config_string.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
@@ -62,7 +65,7 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
 
 
 def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
-    model = run_config.pop('model')
+    model = run_config.get('model')
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
@@ -75,16 +78,19 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
 
     env = os.environ.copy()
     env['MASTER_PORT'] = str(get_workerid(worker_id) + 29500)
-    env.update(run_config.pop('env', {}))
+    env.update(run_config.get('env', {}))
 
-    run_config_string = json.dumps(run_config, ensure_ascii=False, indent=None)
+    run_config_bk = run_config.copy()
+    run_config_bk.pop('env', None)
+    run_config_bk.pop('model', None)
+    run_config_string = json.dumps(run_config_bk, ensure_ascii=False, indent=None)
     run_config_string = run_config_string.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
     resource_path = config.get('resource_path')
     cmd = f'{cuda_prefix} python3 autotest/tools/pipeline/mllm_case.py run_pipeline_mllm_test {model_path} {run_config_string} {resource_path} {is_smoke}'  # noqa E501
 
-    result, stderr = execute_command_with_logging(cmd, pipeline_log, timeout=1800, env=env)
+    result, stderr = execute_command_with_logging(cmd, pipeline_log, timeout=1800, env=env, should_print=False)
 
     with assume:
         assert result, stderr
@@ -143,6 +149,10 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
             MiniCPM_vl_testcase(output_text, file)
         if 'qwen' in model.lower():
             Qwen_vl_testcase(output_text, file)
+
+    with open(pipeline_log, 'r', encoding='utf-8') as file:
+        output_text = file.read()
+    print(output_text)
     allure.attach.file(pipeline_log, attachment_type=allure.attachment_type.TEXT)
 
 
