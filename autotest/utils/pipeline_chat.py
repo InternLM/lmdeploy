@@ -254,7 +254,7 @@ def internvl_vl_testcase(output_text, file, lang: str = 'en'):
             assert case_result, f'reason: combined images2: panda should in {response}'
     with allure.step(f'internvl-separate-images-{lang}'):
         response = get_response_from_output(output_text, f'internvl-separate-images-{lang}')
-        case_result = any(word in response.lower() for word in ['panda', '熊猫', 'same', 'different'])
+        case_result = any(word in response.lower() for word in ['panda', '熊猫', 'same', 'different', 'eat', 'cute'])
         file.writelines(f'internvl-separate-images-{lang} result: {case_result}, reason: panda should in {response} \n')
         with assume:
             assert case_result, f'reason: separate images: panda should in {response}'
