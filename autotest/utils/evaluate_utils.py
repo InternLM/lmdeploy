@@ -145,7 +145,7 @@ def mllm_summary(case_name,
     write_to_summary(case_name, result, msg, metrics, result_dir)
 
 
-def eval_test(config, run_id, run_config, port=DEFAULT_PORT, test_type='infer', **kwargs):
+def eval_test(config, run_config, port=DEFAULT_PORT, test_type='infer', **kwargs):
     work_dir = None
     try:
         model = run_config['model']
@@ -154,7 +154,7 @@ def eval_test(config, run_id, run_config, port=DEFAULT_PORT, test_type='infer', 
         model_base_path = config.get('model_path', '/nvme/qa_test_models')
 
         case_name = get_case_str_by_config(run_config)
-        eval_path = os.path.join(config.get('eval_path', '/nvme/qa_test_models/evaluation_report'), run_id)
+        eval_path = os.path.join(config.get('eval_path'))
         work_dir = os.path.join(eval_path, f'wk_{case_name}')
         eval_log = os.path.join(eval_path, f'log_{case_name}.log')
         temp_config_path = os.path.join(eval_path, f'temp_{case_name}.py')

@@ -569,7 +569,7 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
         backend_config = backend(tp=2)
         pipe = init_pipeline(model_path, backend_config=backend_config)
         # test repetition_penalty
-        gen_config = GenerationConfig(top_p=0.1, random_seed=1)
+        gen_config = GenerationConfig(top_p=0, random_seed=1)
         response = pipe('Shanghai is', gen_config=gen_config)
         result, msg = assert_pipeline_single_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)

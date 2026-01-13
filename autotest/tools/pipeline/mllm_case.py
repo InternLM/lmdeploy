@@ -53,13 +53,16 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
     # Parallel config
     for para_key in ('dp', 'ep', 'cp'):
         if para_key in parallel_config:
-            backend_config[para_key] = parallel_config[para_key]
+            setattr(backend_config, para_key, parallel_config[para_key])
     if 'tp' in parallel_config and parallel_config['tp'] > 1:
-        backend_config['tp'] = parallel_config['tp']
+        backend_config.tp = parallel_config['tp']
 
     # Extra params
     for key, value in extra_params.items():
-        backend_config[key] = value
+        try:
+            setattr(backend_config, key, value)
+        except AttributeError:
+            print(f"Warning: Cannot set attribute '{key}' on backend_config. Skipping.")
 
     print('backend_config config: ' + str(backend_config))
     pipe = pipeline(model_path, backend_config=backend_config)
