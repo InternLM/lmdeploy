@@ -80,7 +80,6 @@ class ARModelInputsStrategy(ModelInputsStrategy):
     @record_function('ModelInputs.merge')
     def merge(self, inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         """Merge model inputs."""
-        """Concatenate two model inputs."""
         return merge_model_inputs(inputs, other)
 
     @staticmethod
