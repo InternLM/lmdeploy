@@ -213,7 +213,10 @@ class ARSamplingStrategy(SamplingStrategy):
             max_len0 = 0 if all_ids0 is None else all_ids0.size(1)
             max_len1 = 0 if all_ids1 is None else all_ids1.size(1)
             max_len = max(max_len0, max_len1)
-            all_ids = torch.full((batch_size, max_len), self.pad_token_id, dtype=torch.int64)
+            all_ids = torch.full((batch_size, max_len),
+                                 self.pad_token_id,
+                                 dtype=torch.int64,
+                                 device=num_ignore_eos.device)
             if all_ids0 is not None:
                 bs0 = all_ids0.size(0)
                 all_ids[:bs0, :max_len0] = all_ids0
