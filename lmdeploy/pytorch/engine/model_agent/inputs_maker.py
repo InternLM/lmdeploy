@@ -41,6 +41,7 @@ class DPForwardInputsMaker:
 
         # maker metas
         self._ready_event = torch.cuda.Event()
+        self._ready_event.record()
 
     def _make_dummy_forward_inputs(self):
         """Make dummy forward inputs."""
@@ -102,6 +103,7 @@ class DPForwardInputsMaker:
 
     def step(self):
         """step."""
+        self._ready_event.wait()
         self._ready_event = torch.cuda.Event()
         self._ready_event.record()
 

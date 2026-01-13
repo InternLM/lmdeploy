@@ -285,7 +285,7 @@ class StepInputs:
     ):
         """Update inputs."""
         # dp might change is_decoding of decoding inputs
-        self.model_inputs.is_decoding = True
+        model_inputs.is_decoding = True
         (
             self.model_inputs,
             self.extra_inputs,
@@ -801,6 +801,7 @@ class BaseModelAgent:
             # skip dummy forward.
             if inputs is None:
                 logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
+                await asyncio.sleep(0.01)
                 return
 
         if not is_decoding:
@@ -909,6 +910,8 @@ class BaseModelAgent:
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
+
+                input_maker.step()
 
     async def _async_loop_inputs_preprocess(self, forward_event: asyncio.Event = None):
         """Async loop inputs preprocess."""
@@ -1027,6 +1030,7 @@ class BaseModelAgent:
         while not event.query():
             await asyncio.sleep(0.001)
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
+            event.wait()
             out = out.to_cpu()
             out.new_token_timestamp = time.time()
         return out

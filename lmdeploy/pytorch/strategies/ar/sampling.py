@@ -215,13 +215,11 @@ class ARSamplingStrategy(SamplingStrategy):
             max_len = max(max_len0, max_len1)
             all_ids = torch.full((batch_size, max_len), self.pad_token_id, dtype=torch.int64)
             if all_ids0 is not None:
-                all_ids[:, :max_len0] = all_ids0
+                bs0 = all_ids0.size(0)
+                all_ids[:bs0, :max_len0] = all_ids0
             if all_ids1 is not None:
-                all_ids[:, :max_len1] = torch.where(
-                    all_ids1 != self.pad_token_id,
-                    all_ids1,
-                    all_ids,
-                )
+                bs1 = all_ids1.size(0)
+                all_ids[-bs1:, :max_len1] = all_ids1
 
         return SamplingInputsDelta(
             num_ignore_eos=num_ignore_eos,

@@ -194,6 +194,15 @@ class SchedulerSequenceDLLM(SchedulerSequenceDefault):
         if model_meta is not None:
             self.model_meta = model_meta
 
+    def set_step(self, step: int):
+        """Set step."""
+        # reset dllm mask
+        start = min(step, self.num_history_ids)
+        end = self.num_history_ids
+        if end > start:
+            self.history_dllm_mask[start:end] = DLLM_MASKED
+        super().set_step(step)
+
 
 class DLLMSequenceStrategy(SequenceStrategy):
 
