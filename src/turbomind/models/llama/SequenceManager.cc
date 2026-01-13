@@ -430,7 +430,7 @@ void SequenceManager::PrefixMatch(Sequences& sequences, const std::vector<int>& 
         if (rank_ == 0) {
             // clang-format off
             TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, (int)block_ids.size(), seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s", seq.id, 
+            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s", seq.id,
                          vector2string(block_ids).c_str(), vector2string(unique_ids).c_str());
             // clang-format on
         }

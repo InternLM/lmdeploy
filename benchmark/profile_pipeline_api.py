@@ -286,21 +286,19 @@ def main():
     random.seed(args.seed)
     os.environ['TM_LOG_LEVEL'] = args.log_level
     if args.backend == 'turbomind':
-        engine_config = TurbomindEngineConfig(
-            max_batch_size=args.concurrency,
-            tp=args.tp,
-            cache_max_entry_count=args.cache_max_entry_count,
-            session_len=args.session_len,
-            cache_block_seq_len=args.cache_block_seq_len,
-            model_format=args.model_format,
-            quant_policy=args.quant_policy,
-            num_tokens_per_iter=args.num_tokens_per_iter,
-            max_prefill_iters=args.max_prefill_iters,
-            enable_prefix_caching=args.enable_prefix_caching,
-            communicator=args.communicator,
-            enable_metrics=False,
-            async_=args.async_
-        )
+        engine_config = TurbomindEngineConfig(max_batch_size=args.concurrency,
+                                              tp=args.tp,
+                                              cache_max_entry_count=args.cache_max_entry_count,
+                                              session_len=args.session_len,
+                                              cache_block_seq_len=args.cache_block_seq_len,
+                                              model_format=args.model_format,
+                                              quant_policy=args.quant_policy,
+                                              num_tokens_per_iter=args.num_tokens_per_iter,
+                                              max_prefill_iters=args.max_prefill_iters,
+                                              enable_prefix_caching=args.enable_prefix_caching,
+                                              communicator=args.communicator,
+                                              enable_metrics=False,
+                                              async_=args.async_)
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
             cache_max_entry_count=args.cache_max_entry_count,
