@@ -75,7 +75,6 @@ class Pipeline:
               gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
               do_preprocess: bool = True,
               adapter_name: Optional[str] = None,
-              stream_response: bool = False,
               use_tqdm: bool = False,
               **kwargs):
         """Inference prompts.
@@ -87,7 +86,6 @@ class Pipeline:
             gen_config: Generation configuration(s).
             do_preprocess: Whether to pre-process messages.
             adapter_name: Adapter name.
-            stream_response: Whether to stream response.
             use_tqdm: Whether to use progress bar.
             **kwargs: Additional keyword arguments.
         """
@@ -102,7 +100,7 @@ class Pipeline:
                                                gen_config=gen_config,
                                                do_preprocess=do_preprocess,
                                                adapter_name=adapter_name,
-                                               stream_response=stream_response,
+                                               stream_response=False,
                                                **kwargs)
             for g in self.async_engine._infer(requests, multiplex=False, pbar=pbar):
                 res = None
@@ -116,16 +114,35 @@ class Pipeline:
         return outputs
 
     def stream_infer(self,
-                     prompt: Union[str, List[Dict]],
-                     session_id: Optional[int] = None,
-                     gen_config: Optional[GenerationConfig] = None,
+                     prompts: Union[List[str], str, List[Dict], List[List[Dict]], Tuple, List[Tuple]],
+                     session_id: Optional[Union[int, List[int]]] = None,
+                     gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
                      do_preprocess: bool = True,
                      adapter_name: Optional[str] = None,
                      stream_response: bool = True,
                      **kwargs):
-        """Stream inference."""
-        prompt = MultimodalProcessor.format_prompts(prompt)
-        requests = self._request_generator(prompt,
+        """Stream inference.
+        Args:
+            prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
+            Tuple can be (prompt, image or [images]) or (image or [images], prompt).
+            session_id: Session ID.
+            gen_config: Generation configuration(s).
+            do_preprocess: Whether to pre-process messages.
+            adapter_name: Adapter name.
+            stream_response: Whether to stream the response. If True, the generator will stream the response.
+            Otherwise, the generator will run until finish and return the final response. This argument
+            is introduced to support the streaming and non-streaming modes of Pipeline.chat.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            Generator: A generator that yields the output (i.e. instance of class `Response`) of the inference.
+        Notes:
+        - When stream_response is False, the generator will run until finish.
+        - When stream_response is True, the generator will stream the response.
+
+        """
+        prompts = MultimodalProcessor.format_prompts(prompts)
+        requests = self._request_generator(prompts,
                                            session_id=session_id,
                                            gen_config=gen_config,
                                            do_preprocess=do_preprocess,

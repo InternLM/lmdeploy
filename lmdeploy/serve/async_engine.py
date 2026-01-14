@@ -465,11 +465,11 @@ class AsyncEngine(LogitsMixin):
             # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
         if gen_config.max_new_tokens is None:
-            max_new_tokens = max(0, self.session_len - self.id2step[session_id] - len(input_ids))
+            max_new_tokens = max(0, self.session_len - session.step - len(input_ids))
             if max_new_tokens == 0:
                 logger.error(f'run out of tokens. session={session_id}.')
                 yield GenOut(response='',
-                             history_token_len=self.id2step[session_id],
+                             history_token_len=session.step,
                              input_token_len=len(input_ids),
                              generate_token_len=0,
                              finish_reason='length',
