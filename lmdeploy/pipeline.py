@@ -136,10 +136,6 @@ class Pipeline:
 
         Returns:
             Generator: A generator that yields the output (i.e. instance of class `Response`) of the inference.
-        Notes:
-        - When stream_response is False, the generator will run until finish.
-        - When stream_response is True, the generator will stream the response.
-
         """
         prompts = MultimodalProcessor.format_prompts(prompts)
         requests = self._request_generator(prompts,
@@ -169,9 +165,9 @@ class Pipeline:
             session (Session): the chat session
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
-            do_preprocess (bool): whether pre-process the messages. Default to
-                True, which means chat_template will be applied.
-            **kwargs (dict): ad hoc parametrization of `gen_config
+            stream_response (bool): whether to stream the response.
+            adapter_name (str): adapter name.
+            **kwargs (dict): additional keyword arguments.
         """
         if session is None:
             session = self.session_mgr.get()
@@ -242,26 +238,9 @@ class Pipeline:
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
-                 gen_config: Optional[GenerationConfig] = None,
-                 do_preprocess: bool = True,
-                 adapter_name: Optional[str] = None,
-                 use_tqdm: bool = False,
+                 gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
                  **kwargs):
-        """Inference a batch of prompts.
-
-        Args:
-            prompts: A batch of prompts.
-            gen_config: Generation configuration.
-            do_preprocess: Whether to pre-process the messages.
-            adapter_name: Adapter name for slora.
-            use_tqdm: Whether to use progress bar.
-        """
-        return self.infer(prompts,
-                          gen_config=gen_config,
-                          do_preprocess=do_preprocess,
-                          adapter_name=adapter_name,
-                          use_tqdm=use_tqdm,
-                          **kwargs)
+        return self.infer(prompts, gen_config=gen_config, **kwargs)
 
     def __enter__(self):
         return self
@@ -272,8 +251,8 @@ class Pipeline:
     @staticmethod
     def _is_single(prompts):
         """Check if prompts is a single prompt."""
-        return isinstance(prompts, str) or (isinstance(prompts, list) and len(prompts) > 0
-                                            and isinstance(prompts[0], Dict))
+        return (isinstance(prompts, str) or (isinstance(prompts, tuple) and len(prompts) == 2)
+                or (isinstance(prompts, list) and len(prompts) > 0 and isinstance(prompts[0], Dict)))
 
     def _request_generator(self,
                            prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
