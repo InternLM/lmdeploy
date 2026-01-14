@@ -14,7 +14,7 @@ from .utils import get_logger, get_model
 if TYPE_CHECKING:
     from PIL.Image import Image
 
-    from .serve.session_manager import Session
+    from .serve.managers import Session
 
 logger = get_logger('lmdeploy')
 

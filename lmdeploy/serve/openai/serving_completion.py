@@ -6,7 +6,7 @@ from .protocol import CompletionRequest
 if TYPE_CHECKING:
     from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 
-from lmdeploy.serve.session_manager import SessionManager
+from lmdeploy.serve.managers import SessionManager
 
 session_manager: SessionManager = SessionManager()
 

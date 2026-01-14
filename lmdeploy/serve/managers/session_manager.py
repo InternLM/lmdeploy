@@ -5,11 +5,11 @@ from contextlib import asynccontextmanager
 from typing import Any, List, Optional, Tuple
 
 from lmdeploy.messages import GenerationConfig, Response
+from lmdeploy.serve.exceptions import SafeRunException
+from lmdeploy.serve.utils import singleton
 from lmdeploy.utils import get_logger
 
-from .exceptions import SafeRunException
-from .inst_manager import InferInstManager
-from .utils import singleton
+from .instance_manager import InferInstManager
 
 logger = get_logger('lmdeploy')
 

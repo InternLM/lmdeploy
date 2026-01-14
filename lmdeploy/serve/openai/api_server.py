@@ -31,6 +31,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, Di
                                                    DistServeDropConnectionRequest, DistServeInitRequest,
                                                    MigrationRequest)
 from lmdeploy.serve.async_engine import AsyncEngine
+from lmdeploy.serve.managers import SessionManager
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -44,7 +45,6 @@ from lmdeploy.serve.openai.protocol import (AbortRequest, ChatCompletionRequest,
                                             TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
-from lmdeploy.serve.session_manager import SessionManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 

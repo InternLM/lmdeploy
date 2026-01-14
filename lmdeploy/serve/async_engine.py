@@ -23,9 +23,8 @@ from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
 from lmdeploy.serve.exceptions import SafeRunException
-from lmdeploy.serve.inst_manager import InferInstManager
+from lmdeploy.serve.managers import InferInstManager, SessionManager
 from lmdeploy.serve.multimodal_processor import MultimodalProcessor
-from lmdeploy.serve.session_manager import SessionManager
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
