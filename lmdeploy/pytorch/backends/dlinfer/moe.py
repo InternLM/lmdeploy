@@ -4,9 +4,8 @@ from dataclasses import dataclass
 from typing import Callable, List
 
 import torch
-from dlinfer.utils.type_annotation import MoeType
 
-from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
+from lmdeploy.pytorch.kernels.dlinfer import MoeType, fused_moe, moe_gating_topk_softmax
 
 from ..moe import FusedMoEBuilder, FusedMoEImpl, MLPMetadata, SoftmaxTopKBuilder, SoftmaxTopKImpl
 

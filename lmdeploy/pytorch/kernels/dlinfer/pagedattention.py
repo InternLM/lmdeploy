@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Optional, Sequence
+
 import dlinfer.ops as ext_ops
-import torch
-from dlinfer.utils.type_annotation import Optional, Sequence, Tensor
+from torch import Tensor
 
 
 def prefill_attention(
@@ -111,8 +112,8 @@ def paged_token_attention(
 
 def paged_attention_fwd(
     query_states: Tensor,
-    key_states: torch.Tensor,
-    value_states: torch.Tensor,
+    key_states: Tensor,
+    value_states: Tensor,
     attn_output: Tensor,
     key_cache: Tensor,
     value_cache: Tensor,
