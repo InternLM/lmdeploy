@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+
+import PIL
 
 from lmdeploy import Tokenizer
 from lmdeploy.model import MODELS, BaseChatTemplate
@@ -247,6 +249,81 @@ class MultimodalProcessor:
                                                            **kwargs)
         else:
             raise RuntimeError(f'unsupported prompt type: {type(prompt)}')
+
+    @staticmethod
+    def format_prompts(prompts: Any) -> List[Dict]:
+        """Format prompts."""
+        if not isinstance(prompts, list):
+            prompts = [prompts]
+        # str or batch of str
+        if all(isinstance(prompt, str) for prompt in prompts):
+            return prompts
+        if (MultimodalProcessor._is_openai_message(prompts)
+                or all(MultimodalProcessor._is_openai_message(prompt) for prompt in prompts)):
+            return prompts
+        if all(MultimodalProcessor._is_str_images_pair(prompt) for prompt in prompts):
+            # batch of (prompt, image or [images]) or (image or [images], prompt)
+            return [MultimodalProcessor._re_format_prompt_images_pair(prompt) for prompt in prompts]
+        raise ValueError(f'Unsupported prompts: {prompts}. Only support str, openai message format, '
+                         'or (prompt, image or [images]) or (image or [images], prompt) pair.')
+
+    @staticmethod
+    def _is_openai_message(message) -> bool:
+        """Check if the message conforms to openai message format."""
+        return isinstance(message, list) and all(isinstance(msg, dict) for msg in message)
+
+    @staticmethod
+    def _is_str_images_pair(message) -> bool:
+        """Check if the message is a (prompt, image or [images]) or (image or
+        [images], prompt) pair."""
+        if not (isinstance(message, tuple) and len(message) == 2):
+            return False
+        _1, _2 = message
+        if MultimodalProcessor._is_image(_1) or MultimodalProcessor._is_image_list(_1):
+            _1, _2 = _2, _1
+        return isinstance(_1, str) and (MultimodalProcessor._is_image(_2) or MultimodalProcessor._is_image_list(_2))
+
+    @staticmethod
+    def _is_image(obj) -> bool:
+        # image or image url or base64-encoded image data
+        return (isinstance(obj, PIL.Image.Image)
+                or isinstance(obj, str) and (obj.startswith('http') or obj.startswith('data:image')))
+
+    @staticmethod
+    def _is_image_list(obj) -> bool:
+        return isinstance(obj, list) and all(MultimodalProcessor._is_image(img) for img in obj)
+
+    @staticmethod
+    def _re_format_prompt_images_pair(prompt: Tuple) -> Dict:
+        """Reformat the prompt to openai message format."""
+        from lmdeploy.vl.utils import load_image
+
+        messages = {'role': 'user', 'content': []}
+        prompt, images = prompt
+        prompt_first = True
+        if MultimodalProcessor._is_image(prompt) or MultimodalProcessor._is_image_list(prompt):
+            prompt, images = images, prompt
+            prompt_first = False
+        image_contents = []
+        for image in images:
+            # 'image_url': means url or local path to image.
+            # 'image_data': means PIL.Image.Image object.
+            if isinstance(image, str):
+                image = load_image(image)
+                item = {'type': 'image_data', 'image_data': {'data': image}}
+            elif isinstance(image, PIL.Image.Image):
+                item = {'type': 'image_data', 'image_data': {'data': image}}
+            else:
+                raise ValueError('image should be a str(url/path) or PIL.Image.Image')
+            image_contents.append(item)
+
+        if prompt_first:
+            messages['content'].append({'type': 'text', 'text': prompt})
+            messages['content'].extend(image_contents)
+        else:
+            messages['content'].extend(image_contents)
+            messages['content'].append({'type': 'text', 'text': prompt})
+        return messages
 
     def _has_multimodal_input(self, messages: List[Dict]) -> bool:
         """Check if messages contain multimodal input (images)."""

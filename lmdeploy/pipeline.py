@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 from contextlib import closing
-from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple, Union
 
 import tqdm
 
@@ -11,6 +11,8 @@ from .model import ChatTemplateConfig
 from .utils import get_logger, get_model
 
 if TYPE_CHECKING:
+    from PIL.Image import Image
+
     from .serve.session_manager import Session
 
 logger = get_logger('lmdeploy')
@@ -67,7 +69,7 @@ class Pipeline:
         self.backend_config = self.async_engine.backend_config
 
     def infer(self,
-              prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+              prompts: Union[List[str], str, List[Dict], List[List[Dict]], Tuple, List[Tuple]],
               session_id: Optional[Union[List[int], int]] = None,
               gen_config: Optional[Union[GenerationConfig, List[GenerationConfig]]] = None,
               do_preprocess: bool = True,
@@ -78,14 +80,19 @@ class Pipeline:
         """Inference prompts.
 
         Args:
-            prompts: Prompts to inference.
+            prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
+            Tuple can be (prompt, image or [images]) or (image or [images], prompt).
+            session_id: Session ID(s).
             gen_config: Generation configuration(s).
             do_preprocess: Whether to pre-process messages.
             adapter_name: Adapter name.
             stream_response: Whether to stream response.
-            multiplex: Whether to multiplex responses.
-            pbar: Progress bar.
+            use_tqdm: Whether to use progress bar.
+            **kwargs: Additional keyword arguments.
         """
+        is_single = self._is_single(prompts)
+        # format prompts to openai message format, which is a list of dicts
+        prompts = self.async_engine.prompt_processor.format_prompts(prompts)
         pbar = tqdm.tqdm(total=len(prompts)) if use_tqdm else None
         outputs = []
         try:
@@ -103,7 +110,7 @@ class Pipeline:
                 outputs.append(res)
         finally:
             if pbar: pbar.close()  # noqa
-        if self._is_single(prompts):
+        if is_single:
             return outputs[0]
         return outputs
 
@@ -116,6 +123,7 @@ class Pipeline:
                      stream_response: bool = True,
                      **kwargs):
         """Stream inference."""
+        prompt = self.async_engine.prompt_processor.format_prompts(prompt)
         requests = self._request_generator(prompt,
                                            session_id=session_id,
                                            gen_config=gen_config,
@@ -130,7 +138,7 @@ class Pipeline:
         self.async_engine.close()
 
     def chat(self,
-             prompt: str,
+             prompt: Union[str, Tuple[str, Union['Image', List['Image']]]],
              session=None,
              gen_config: Optional[GenerationConfig] = None,
              stream_response=False,
@@ -150,6 +158,7 @@ class Pipeline:
         if session is None:
             session = self.session_mgr.create()
 
+        prompt = self.async_engine.prompt_processor.format_prompts(prompt)
         # sync & init
         session.update(prompt=prompt, response=None)
 
