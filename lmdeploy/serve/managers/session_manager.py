@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any, List, Optional, Tuple
 
 from lmdeploy.messages import GenerationConfig, Response
-from lmdeploy.serve.exceptions import SafeRunException
+from lmdeploy.serve.core.exceptions import SafeRunException
 from lmdeploy.serve.utils import singleton
 from lmdeploy.utils import get_logger
 

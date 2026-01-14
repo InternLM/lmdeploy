@@ -22,12 +22,13 @@ from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDeco
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
-from lmdeploy.serve.exceptions import SafeRunException
+from lmdeploy.serve.core.mixin import LogitsMixin
 from lmdeploy.serve.managers import InferInstManager, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
-from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
+
+from .exceptions import SafeRunException
 
 logger = get_logger('lmdeploy')
 
