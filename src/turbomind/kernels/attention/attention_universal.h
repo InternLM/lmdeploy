@@ -2,13 +2,15 @@
 
 #pragma once
 
+#include <limits>
+#include <type_traits>
+
 #include "quantization.h"
+
 #include "src/turbomind/kernels/attention/rotary_embedding.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/layout.h"
-#include "src/turbomind/kernels/core/sync.h"
-#include <limits>
-#include <type_traits>
+#include "src/turbomind/kernels/core/math.h"
 
 #include "attention_params.h"
 

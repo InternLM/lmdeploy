@@ -85,6 +85,7 @@ with open(spec_dir / 'proxy.yaml', 'w', encoding='utf-8') as f:
 
 extensions = [
     'myst_parser',
+    'sphinx_argparse_cli',
     'sphinx.ext.autodoc',
     'sphinx.ext.autosectionlabel',
     'sphinx.ext.autosummary',

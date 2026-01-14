@@ -52,12 +52,8 @@ static bool is_fuse_silu_act()
     return value;
 }
 
-LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
-                                                 int                layer_id,
-                                                 const ModelParam&  model,
-                                                 const EngineParam& engine,
-                                                 const LoraParam&   lora_param,
-                                                 const MoeParam&    moe_param):
+LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
+    DataType data_type, int layer_id, const ModelParam& model, const EngineParam& engine, const MoeParam& moe_param):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),
     size_per_head_(model.head_dim),
