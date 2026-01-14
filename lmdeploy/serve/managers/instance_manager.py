@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from lmdeploy.utils import get_logger
 
 if TYPE_CHECKING:
-    from lmdeploy.serve.async_engine import AsyncEngine
+    from lmdeploy.serve.core import AsyncEngine
 
 logger = get_logger('lmdeploy')
 

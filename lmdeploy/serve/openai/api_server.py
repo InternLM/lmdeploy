@@ -30,7 +30,7 @@ from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeCacheFreeRequest, DistServeConnectionRequest,
                                                    DistServeDropConnectionRequest, DistServeInitRequest,
                                                    MigrationRequest)
-from lmdeploy.serve.async_engine import AsyncEngine
+from lmdeploy.serve.core import AsyncEngine
 from lmdeploy.serve.managers import SessionManager
 from lmdeploy.serve.openai.harmony_utils import GptOssChatParser
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501

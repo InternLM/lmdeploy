@@ -2,10 +2,11 @@
 from typing import Literal, Optional, Union
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
-from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.utils import get_logger, try_import_deeplink
 from lmdeploy.vl.engine import ImageEncoder
+
+from .async_engine import AsyncEngine
 
 logger = get_logger('lmdeploy')
 
