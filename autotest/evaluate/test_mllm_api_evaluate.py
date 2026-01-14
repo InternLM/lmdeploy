@@ -1,188 +1,154 @@
+import os
+
 import pytest
 import utils.constant as constant
-from utils.config_utils import get_evaluate_pytorch_model_list, get_evaluate_turbomind_model_list, get_workerid
+from utils.config_utils import get_case_str_by_config, get_func_config_list, get_workerid
 from utils.evaluate_utils import mllm_eval_test
-from utils.run_restful_chat import start_proxy_server, start_restful_api, stop_restful_api, terminate_restful_api
+from utils.run_restful_chat import start_openai_service, start_proxy_server, stop_restful_api, terminate_restful_api
 
 
-@pytest.fixture(scope='function')
-def prepare_environment(request, config, run_id, worker_id):
-    param = request.param
-    model = param['model']
-    backend = param['backend']
-    param['extra'] = ' '.join(
-        [param.get('extra', ''), '--model-name',
-         model.split('/')[-1], '--cache-max-entry-count 0.6'])  # noqa
-    model_path = f"{config.get('model_path')}/{model}"
-    pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
-    try:
-        yield param
-    finally:
-        if pid > 0:
-            terminate_restful_api(worker_id, param)
-
-
-@pytest.fixture(scope='function')
-def prepare_environment_judge_evaluate(request, config, run_id, worker_id):
-    if get_workerid(worker_id) is None:
-        port = constant.PROXY_PORT
-    else:
-        port = constant.PROXY_PORT + get_workerid(worker_id)
-    judge_config = {
-        'model': 'Qwen/Qwen2.5-32B-Instruct',
-        'backend': 'turbomind',
-        'param': {
-            'tp_num':
-            2,
-            'extra':
-            '--server-name 127.0.0.1 --proxy-url http://127.0.0.1:{} --session-len 46000 '
-            '--model-name Qwen2.5-32B-Instruct '
-            '--cache-max-entry-count 0.7 '.format(port),
-            'cuda_prefix':
-            None
-        },
-        'log_path': config.get('log_path'),
-    }
-
-    param = judge_config['param']
-    model = judge_config['model']
-    backend = judge_config['backend']
-    model_path = f"{config.get('model_path')}/{model}"
-
-    proxy_pid, proxy_process = start_proxy_server(config, worker_id)
-
-    judge_pid, judge_start_res = start_restful_api(config, param, model, model_path, backend, worker_id)
-
-    try:
-        yield request.param
-    finally:
-        terminate_restful_api(worker_id)
-        stop_restful_api(proxy_pid, proxy_process)
-
-
-def get_turbomind_vl_model_list(tp_num):
-    model_list = get_evaluate_turbomind_model_list(tp_num, is_mllm=True, kvint_list=[4, 8])
-    new_model_list = []
-    for model in model_list:
-        model['cuda_prefix'] = None
-        new_model_list.append(model)
-    return new_model_list
-
-
-def get_pytorch_vl_model_list(tp_num):
-    model_list = get_evaluate_pytorch_model_list(tp_num, is_mllm=True)
-    new_model_list = []
-    for model in model_list:
-        model['cuda_prefix'] = None
-        new_model_list.append(model)
-    return new_model_list
-
-
-def run_test(config, run_id, prepare_environment, worker_id, test_type='infer', eval_config_name='default'):
-    if 'gpt' in prepare_environment.get('model', '').lower():
-        eval_config_name = 'gpt'
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_config_name='default'):
+    extra_command = constant.MLLM_EVAL_CONFIGS.get(eval_config_name, {})
+    eval_path = config.get('mllm_eval_path')
+    case_name = get_case_str_by_config(run_config)
 
     if test_type == 'infer':
-        port = constant.DEFAULT_PORT
+        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT)
+        work_num = int(8 / run_config.get('parallel_config', {}).get('tp', 1))
+        run_config_new = run_config.copy()
+        run_config_new['extra_params']['proxy-url'] = f'http://127.0.0.1:{constant.PROXY_PORT}'
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        def run_openai_service_start(i):
+            return start_openai_service(config, run_config_new, f'gw{i}')
+
+        with ThreadPoolExecutor(max_workers=work_num) as executor:
+            futures = [executor.submit(run_openai_service_start, i) for i in range(int(work_num))]
+        results = []
+        for future in futures:
+            pid, content = future.result()
+            results.append((pid, content))
+
+        try:
+            model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+            mllm_eval_test(model_path,
+                           eval_path,
+                           case_name,
+                           port=constant.PROXY_PORT,
+                           test_type=test_type,
+                           extra_command=extra_command)
+        finally:
+            for i in range(work_num):
+                terminate_restful_api(f'gw{i}')
+            stop_restful_api(proxy_pid, proxy_process)
     else:  # eval
-        port = constant.PROXY_PORT
+        port = constant.PROXY_PORT + get_workerid(worker_id)
+        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port)
+        eval_run_config = constant.EVAL_RUN_CONFIG.copy()
+        eval_run_config['extra_params']['proxy-url'] = f'http://127.0.0.1:{port}'
+        pid, content = start_openai_service(config, eval_run_config, worker_id)
+        try:
+            if pid > 0:
+                model_path = os.path.join(config.get('model_path'), eval_run_config.get('model'))
+                mllm_eval_test(model_path, eval_path, case_name, port=port, test_type=test_type)
+            else:
+                assert False, f'Failed to start RESTful API server: {content}'
+        finally:
+            if pid > 0:
+                terminate_restful_api(worker_id)
+            stop_restful_api(proxy_pid, proxy_process)
 
-    if get_workerid(worker_id) is None:
-        result, msg = mllm_eval_test(config,
-                                     run_id,
-                                     prepare_environment,
-                                     port=port,
-                                     test_type=test_type,
-                                     **preset_config)
-    else:
-        result, msg = mllm_eval_test(config,
-                                     run_id,
-                                     prepare_environment,
-                                     port=port + get_workerid(worker_id),
-                                     test_type=test_type,
-                                     **preset_config)
-    return result, msg
+
+TURBOMIND = 'turbomind'
+PYTORCH = 'pytorch'
+
+
+def get_models(backend, parallel_config):
+    return get_func_config_list(backend,
+                                parallel_config,
+                                model_type='vl_model',
+                                func_type='mllm_evaluate',
+                                extra={
+                                    'session-len': 65536,
+                                    'cache-max-entry-count': 0.6
+                                })
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_vl_model_list(tp_num=1), indirect=True)
-def test_turbomind_vl_eval_tp1(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 1}))
+def test_turbomind_vl_eval_tp1(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_vl_model_list(tp_num=2), indirect=True)
-def test_turbomind_vl_eval_tp2(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 2}))
+def test_turbomind_vl_eval_tp2(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_vl_model_list(tp_num=4), indirect=True)
-def test_turbomind_vl_eval_tp4(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 4}))
+def test_turbomind_vl_eval_tp4(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.turbomind
 @pytest.mark.gpu_num_8
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_turbomind_vl_model_list(tp_num=8), indirect=True)
-def test_turbomind_vl_eval_tp8(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 8}))
+def test_turbomind_vl_eval_tp8(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_vl_model_list(tp_num=1), indirect=True)
-def test_pytorch_vl_eval_tp1(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 1}))
+def test_pytorch_vl_eval_tp1(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_2
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_vl_model_list(tp_num=2), indirect=True)
-def test_pytorch_vl_eval_tp2(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 2}))
+def test_pytorch_vl_eval_tp2(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_4
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_vl_model_list(tp_num=4), indirect=True)
-def test_pytorch_vl_eval_tp4(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 4}))
+def test_pytorch_vl_eval_tp4(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
 @pytest.mark.pytorch
 @pytest.mark.gpu_num_8
+@pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_vl_model_list(tp_num=8), indirect=True)
-def test_pytorch_vl_eval_tp8(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 8}))
+def test_pytorch_vl_eval_tp8(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
 
 
 @pytest.mark.infer
@@ -190,10 +156,45 @@ def test_pytorch_vl_eval_tp8(config, run_id, prepare_environment, worker_id):
 @pytest.mark.gpu_num_16
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment', get_pytorch_vl_model_list(tp_num=16), indirect=True)
-def test_pytorch_vl_eval_tp16(config, run_id, prepare_environment, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment, worker_id)
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 16}))
+def test_pytorch_vl_eval_tp16(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'infer')
+
+
+@pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_1
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 1}))
+def test_turbomind_eval_tp1(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_2
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 2}))
+def test_turbomind_eval_tp2(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_4
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 4}))
+def test_turbomind_eval_tp4(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')
+
+
+@pytest.mark.eval
+@pytest.mark.turbomind
+@pytest.mark.gpu_num_8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(TURBOMIND, {'tp': 8}))
+def test_turbomind_eval_tp8(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
@@ -201,10 +202,9 @@ def test_pytorch_vl_eval_tp16(config, run_id, prepare_environment, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_vl_model_list(tp_num=1), indirect=True)
-def test_pytorch_judgeeval_tp1(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 1}))
+def test_pytorch_eval_tp1(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
@@ -212,80 +212,36 @@ def test_pytorch_judgeeval_tp1(config, run_id, prepare_environment_judge_evaluat
 @pytest.mark.gpu_num_2
 @pytest.mark.test_ascend
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_vl_model_list(tp_num=2), indirect=True)
-def test_pytorch_judgeeval_tp2(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 2}))
+def test_pytorch_eval_tp2(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.pytorch
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
 @pytest.mark.test_ascend
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_vl_model_list(tp_num=4), indirect=True)
-def test_pytorch_judgeeval_tp4(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 4}))
+def test_pytorch_eval_tp4(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.pytorch
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_8
 @pytest.mark.test_ascend
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_vl_model_list(tp_num=8), indirect=True)
-def test_pytorch_judgeeval_tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 8}))
+def test_pytorch_eval_tp8(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')
 
 
 @pytest.mark.eval
 @pytest.mark.pytorch
-@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_16
 @pytest.mark.test_ascend
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_pytorch_vl_model_list(tp_num=16), indirect=True)
-def test_pytorch_judgeeval_tp16(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
-
-
-@pytest.mark.eval
-@pytest.mark.turbomind
-@pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_vl_model_list(tp_num=1), indirect=True)
-def test_turbomind_judgeeval_tp1(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
-
-
-@pytest.mark.eval
-@pytest.mark.turbomind
-@pytest.mark.gpu_num_2
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_vl_model_list(tp_num=2), indirect=True)
-def test_turbomind_judgeeval_tp2(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
-
-
-@pytest.mark.eval
-@pytest.mark.turbomind
-@pytest.mark.gpu_num_4
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_vl_model_list(tp_num=4), indirect=True)
-def test_turbomind_judgeeval_tp4(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
-
-
-@pytest.mark.eval
-@pytest.mark.turbomind
-@pytest.mark.gpu_num_8
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment_judge_evaluate', get_turbomind_vl_model_list(tp_num=8), indirect=True)
-def test_turbomind_judgeeval_tp8(config, run_id, prepare_environment_judge_evaluate, worker_id):
-    result, msg = run_test(config, run_id, prepare_environment_judge_evaluate, worker_id, 'eval')
-    assert result, msg
+@pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 16}))
+def test_pytorch_eval_tp16(config, run_config, worker_id):
+    run_eval_test_new(config, run_config, worker_id, 'eval')

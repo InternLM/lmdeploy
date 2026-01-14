@@ -37,6 +37,7 @@ def start_openai_service(config, run_config, worker_id):
         run_config['extra_params'] = {}
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None
+    run_config['extra_params']['model_name'] = case_name
     cmd = ' '.join([cuda_prefix, ' '.join(['lmdeploy serve api_server', model_path,
                                            get_cli_common_param(run_config)])]).strip()
 
@@ -67,7 +68,7 @@ def start_openai_service(config, run_config, worker_id):
         time.sleep(1)
         end_time = int(time.time())
         total_time = end_time - start_time
-        result = health_check(http_url)
+        result = health_check(http_url, case_name)
         if result or total_time >= start_timeout:
             break
         try:
@@ -164,17 +165,17 @@ def open_chat_test(log_path, case, case_info, model, url, port: int = DEFAULT_PO
     return result, restful_log, msg
 
 
-def health_check(url):
+def health_check(url, model_name):
     try:
         api_client = APIClient(url)
-        model_name = api_client.available_models[0]
+        model_name_current = api_client.available_models[0]
         messages = []
         messages.append({'role': 'user', 'content': '你好'})
         for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1):
             if output.get('code') is not None and output.get('code') != 0:
                 return False
             # Return True on first successful response
-            return True
+            return model_name == model_name_current
         return False  # No output received
     except Exception:
         return False

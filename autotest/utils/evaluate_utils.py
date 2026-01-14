@@ -8,9 +8,7 @@ import allure
 import pandas as pd
 from mmengine.config import Config
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import get_case_str_by_config, parse_config_by_case
-from utils.constant import MLLM_EVAL_CONFIGS
-from utils.get_run_config import _simple_model_name
+from utils.config_utils import parse_config_by_case
 
 DEFAULT_PORT = 23333
 
@@ -145,16 +143,10 @@ def mllm_summary(case_name,
     write_to_summary(case_name, result, msg, metrics, result_dir)
 
 
-def eval_test(config, run_config, port=DEFAULT_PORT, test_type='infer', **kwargs):
+def eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='infer', **kwargs):
     work_dir = None
     try:
-        model = run_config['model']
-        backend = run_config['backend']
-        model_path = os.path.join(config.get('model_path'), model)
-        model_base_path = config.get('model_path')
 
-        case_name = get_case_str_by_config(run_config)
-        eval_path = os.path.join(config.get('eval_path'))
         work_dir = os.path.join(eval_path, f'wk_{case_name}')
         eval_log = os.path.join(eval_path, f'log_{case_name}.log')
         temp_config_path = os.path.join(eval_path, f'temp_{case_name}.py')
@@ -163,9 +155,9 @@ def eval_test(config, run_config, port=DEFAULT_PORT, test_type='infer', **kwargs
         parent_dir = os.path.dirname(current_dir)
         config_file = os.path.join(parent_dir, 'evaluate/eval_config_chat.py')
 
-        print(f'Starting OpenCompass evaluation for model: {model}')
+        print(f'Starting OpenCompass evaluation for model: {model_path}')
         print(f'Model path: {model_path}')
-        print(f'Backend: {backend}')
+        print(f'Case: {case_name}')
         print(f'Config file: {config_file}')
 
         original_cwd = os.getcwd()
@@ -206,7 +198,7 @@ def eval_test(config, run_config, port=DEFAULT_PORT, test_type='infer', **kwargs
                 print(f'Using existing temp config file: {temp_config_path}')
 
                 cfg.JUDGE_API_BASE = test_url
-                cfg.JUDGE_MODEL_PATH = os.path.join(model_base_path, 'Qwen/Qwen2.5-32B-Instruct')
+                cfg.JUDGE_MODEL_PATH = model_path
 
                 if hasattr(cfg, 'judge_cfg'):
                     cfg.judge_cfg['path'] = cfg.JUDGE_MODEL_PATH
@@ -243,52 +235,39 @@ def eval_test(config, run_config, port=DEFAULT_PORT, test_type='infer', **kwargs
                 llm_summary(case_name, result, stderr, work_dir, eval_path)
 
             return result, stderr
+        except Exception as e:
+            print(f'Error occurred: {e}')
+            return False, f'Error occurred: {e}'
         finally:
             os.chdir(original_cwd)
             print(f'Returned to directory: {original_cwd}')
 
     except subprocess.TimeoutExpired:
-        timeout_msg = (f'Evaluation timed out for {model} '
+        timeout_msg = (f'Evaluation timed out for {model_path} '
                        f'after 259200 seconds')
         if work_dir and test_type == 'eval':
             llm_summary(case_name, False, timeout_msg, work_dir, eval_path)
         return False, timeout_msg
     except Exception as e:
-        error_msg = f'Error during evaluation for {model}: {str(e)}'
+        error_msg = f'Error during evaluation for {model_path}: {str(e)}'
         if work_dir and test_type == 'eval':
             llm_summary(case_name, False, error_msg, work_dir, eval_path)
         return False, error_msg
 
 
-def mllm_eval_test(config, run_id, run_config, port=DEFAULT_PORT, test_type='infer', **kwargs):
-    model = run_config['model']
-    backend = run_config['backend']
-    model_path = os.path.join(config.get('model_path'), model)
-    model_base_path = config.get('model_path', '/nvme/qa_test_models')
-
-    case_name = get_case_str_by_config(run_config)
-    eval_path = os.path.join(config.get('mllm_eval_path', '/nvme/qa_test_models/mllm_evaluation_report'), run_id)
+def mllm_eval_test(model_path, eval_path, case_name, port=DEFAULT_PORT, test_type='infer', extra_command=''):
     work_dir = os.path.join(eval_path, f'wk_{case_name}')
     eval_log = os.path.join(eval_path, f'log_{case_name}.log')
 
-    model_base_path = config.get('model_path', '/nvme/qa_test_models')
-    model_path = os.path.join(model_base_path, model)
-
-    print(f'Starting VLMEvalKit evaluation for model: {model}')
+    print(f'Starting VLMEvalKit evaluation for model: {model_path}')
     print(f'Model path: {model_path}')
-    print(f'Backend: {backend}')
+    print(f'Case: {case_name}')
     print(f'Work directory: {work_dir}')
 
     os.makedirs(work_dir, exist_ok=True)
 
     if test_type == 'infer':
-        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode infer '  # noqa
-        if _simple_model_name(model) in MLLM_EVAL_CONFIGS.keys():
-            extra_params = MLLM_EVAL_CONFIGS.get(_simple_model_name(model))
-        else:
-            extra_params = MLLM_EVAL_CONFIGS.get(_simple_model_name('default'))
-        cmd += extra_params
-
+        cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:{port}/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode infer {extra_command}'  # noqa
     elif test_type == 'eval':
         cmd = f'python run.py --data MMBench_V11_MINI MMStar_MINI AI2D_MINI OCRBench_MINI --model {case_name} --base-url http://127.0.0.1:empty/v1 --reuse --work-dir {work_dir} --api-nproc 32 --mode eval --judge Qwen2.5-32B-Instruct --judge-base-url http://127.0.0.1:{port}/v1'  # noqa
 

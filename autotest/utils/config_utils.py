@@ -296,11 +296,13 @@ def get_config() -> Dict[str, Any]:
     config_copy['eval_path'] = os.path.join(config_copy['eval_path'], str(run_id))
     config_copy['mllm_eval_path'] = os.path.join(config_copy['mllm_eval_path'], str(run_id))
     config_copy['benchmark_path'] = os.path.join(config_copy['benchmark_path'], str(run_id))
+    config_copy['server_log_path'] = os.path.join(config_copy['server_log_path'], str(run_id))
 
     os.makedirs(config_copy['log_path'], exist_ok=True)
     os.makedirs(config_copy['eval_path'], exist_ok=True)
     os.makedirs(config_copy['mllm_eval_path'], exist_ok=True)
     os.makedirs(config_copy['benchmark_path'], exist_ok=True)
+    os.makedirs(config_copy['server_log_path'], exist_ok=True)
 
     return config_copy
 
