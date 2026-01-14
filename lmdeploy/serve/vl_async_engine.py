@@ -1,14 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple, Union
+from typing import Literal, Optional, Union
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.multimodal_processor import MultimodalProcessor
 from lmdeploy.utils import get_logger, try_import_deeplink
 from lmdeploy.vl.engine import ImageEncoder
-
-if TYPE_CHECKING:
-    from PIL.Image import Image
 
 logger = get_logger('lmdeploy')
 
@@ -43,14 +40,3 @@ class VLAsyncEngine(AsyncEngine):
         if hasattr(self, 'vl_encoder'):
             del self.vl_encoder
             super().close()
-
-    def chat(self, prompts: Union[str, Tuple[str, Union['Image', List['Image']]]], *args, **kwargs):
-        """chat."""
-        sess = super().chat(prompts, *args, **kwargs)
-
-        # recover prompts & history
-        sess._prompt = prompts
-        if sess.history:
-            last_round = sess.history[-1]
-            sess.history[-1] = (prompts, last_round[-1])
-        return sess

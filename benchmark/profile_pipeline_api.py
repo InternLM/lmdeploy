@@ -177,7 +177,7 @@ class Engine:
                     pbar.update(1)
             pbar.close()
         else:
-            for output in self.pipe(prompts, gen_configs, do_preprocess=False, use_tqdm=True):
+            for output in self.pipe.infer(prompts, gen_configs, do_preprocess=False, use_tqdm=True):
                 index = output.index
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
