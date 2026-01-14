@@ -70,8 +70,15 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
         env = os.environ.copy()
         env.update(run_config.get('env', {}))
 
-        with Popen([cmd], stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=True, text=True, encoding='utf-8',
-                   env=env) as proc:
+        with Popen([cmd],
+                   stdin=PIPE,
+                   stdout=PIPE,
+                   stderr=PIPE,
+                   shell=True,
+                   text=True,
+                   encoding='utf-8',
+                   env=env,
+                   start_new_session=True) as proc:
             file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)

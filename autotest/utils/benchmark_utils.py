@@ -12,7 +12,7 @@ GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
 GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
 
 
-def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_id: str = '', is_smoke: bool = False):
+def throughput_test(config, run_config, cuda_prefix: str = None, worker_id: str = '', is_smoke: bool = False):
     model = run_config['model']
     backend = run_config['backend']
     # parallel_config = run_config.get('parallel_config', 1)
@@ -22,7 +22,7 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
     dataset_path = config.get('dataset_path')
 
     case_name = get_case_str_by_config(run_config)
-    benchmark_path = os.path.join(config.get('benchmark_path'), run_id, 'throughtput')
+    benchmark_path = os.path.join(config.get('benchmark_path'), 'throughtput')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
     benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
 
