@@ -8,6 +8,7 @@ import tqdm
 from .archs import autoget_backend_config, get_task
 from .messages import GenerationConfig, PytorchEngineConfig, SpeculativeConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
+from .serve.multimodal_processor import MultimodalProcessor
 from .utils import get_logger, get_model
 
 if TYPE_CHECKING:
@@ -92,7 +93,7 @@ class Pipeline:
         """
         is_single = self._is_single(prompts)
         # format prompts to openai message format, which is a list of dicts
-        prompts = self.async_engine.prompt_processor.format_prompts(prompts)
+        prompts = MultimodalProcessor.format_prompts(prompts)
         pbar = tqdm.tqdm(total=len(prompts)) if use_tqdm else None
         outputs = []
         try:
@@ -123,7 +124,7 @@ class Pipeline:
                      stream_response: bool = True,
                      **kwargs):
         """Stream inference."""
-        prompt = self.async_engine.prompt_processor.format_prompts(prompt)
+        prompt = MultimodalProcessor.format_prompts(prompt)
         requests = self._request_generator(prompt,
                                            session_id=session_id,
                                            gen_config=gen_config,
@@ -156,11 +157,10 @@ class Pipeline:
             **kwargs (dict): ad hoc parametrization of `gen_config
         """
         if session is None:
-            session = self.session_mgr.create()
-
-        prompt = self.async_engine.prompt_processor.format_prompts(prompt)
-        # sync & init
+            session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
+
+        prompt = MultimodalProcessor.format_prompts(prompt)
 
         sequence_start = session.step == 0
         generator = self.stream_infer(prompt,

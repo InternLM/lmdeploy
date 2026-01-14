@@ -87,7 +87,7 @@ class LogitsMixin:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
 
-        sessions = [self.session_mgr.create() for _ in range(len(input_ids))]
+        sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
         tasks = [_proc(session, i) for i, session in enumerate(sessions)]
         await asyncio.gather(*tasks)
         if sequence_end and self.backend == 'pytorch':

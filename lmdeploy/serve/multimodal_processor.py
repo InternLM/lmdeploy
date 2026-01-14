@@ -4,8 +4,8 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import PIL
 
-from lmdeploy import Tokenizer
 from lmdeploy.model import MODELS, BaseChatTemplate
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -262,8 +262,9 @@ class MultimodalProcessor:
                 or all(MultimodalProcessor._is_openai_message(prompt) for prompt in prompts)):
             return prompts
         if all(MultimodalProcessor._is_str_images_pair(prompt) for prompt in prompts):
-            # batch of (prompt, image or [images]) or (image or [images], prompt)
-            return [MultimodalProcessor._re_format_prompt_images_pair(prompt) for prompt in prompts]
+            # batch of (prompt, image or [images]) or (image or [images], prompt) ->
+            # [[openai_gpt4v_message], [openai_gpt4v_message], ...]
+            return [[MultimodalProcessor._re_format_prompt_images_pair(prompt)] for prompt in prompts]
         raise ValueError(f'Unsupported prompts: {prompts}. Only support str, openai message format, '
                          'or (prompt, image or [images]) or (image or [images], prompt) pair.')
 
@@ -305,6 +306,7 @@ class MultimodalProcessor:
             prompt, images = images, prompt
             prompt_first = False
         image_contents = []
+        images = images if isinstance(images, list) else [images]
         for image in images:
             # 'image_url': means url or local path to image.
             # 'image_data': means PIL.Image.Image object.

@@ -69,6 +69,7 @@ class VariableInterface:
     allow_terminate_by_client: bool = False
     enable_abort_handling: bool = False
 
+    @staticmethod
     def apply_session_id(session_id: int) -> int:
         if session_id == -1:
             return VariableInterface.session_mgr.reserve()
