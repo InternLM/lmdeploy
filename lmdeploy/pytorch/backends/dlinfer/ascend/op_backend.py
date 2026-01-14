@@ -122,8 +122,6 @@ class AscendOpsBackend(DlinferOpsBackend):
     max_batches = None
     dist_meta: DistMeta = None
     graph_capture_sizes = None
-    max_tokens_accros_dp = 0
-    max_tokens_accros_dp = 0
 
     @staticmethod
     def get_name() -> str:
@@ -309,12 +307,9 @@ class AscendOpsBackend(DlinferOpsBackend):
             # get pad_size
             paded_size = (max_tokens_across_dp + tp_size - 1) // tp_size * tp_size
             pad_size = paded_size - num_tokens
-            # # get x_active_mask
-            # x_active_mask = torch.ones(num_tokens, dtype=torch.bool, device=torch.npu.current_device())
-            # if pad_size > 0:
-            #     x_active_mask = torch.nn.functional.pad(x_active_mask, (0, pad_size), value=False)
+            # get x_active_mask
             x_active_mask = torch.ones(tokens_current_rank, dtype=torch.bool, device=torch.npu.current_device())
-            return num_tokens, max_tokens_across_dp, pad_size, x_active_mask
+            return max_tokens_across_dp, pad_size, x_active_mask
 
         @lru_cache
         def init_mc2_token_capacity(tp_size):
@@ -342,18 +337,6 @@ class AscendOpsBackend(DlinferOpsBackend):
                     return MoeType.ALLTOALL
             else:
                 raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
-
-        def get_x_active_mask(num_tokens, pad_size, tp_size, tp_rank, moe_type):
-            if moe_type in {MoeType.MC2, MoeType.ALLTOALL}:
-                x_active_mask = torch.ones(num_tokens, dtype=torch.bool, device=torch.npu.current_device())
-            else:
-                return None
-            # if pad_size > 0:
-            #     x_active_mask = torch.nn.functional.pad(x_active_mask, (0, pad_size), value=False)
-            # if tp_size > 1:
-            #     split_x_active_mask = torch.tensor_split(x_active_mask, tp_size, dim=0)
-            #     x_active_mask = split_x_active_mask[tp_rank]
-            return x_active_mask
 
         q_seqlens_cpu, kv_seqlens_cpu, kv_seqlens_expanded = get_cpu_seqlens(step_context.is_decoding,
                                                                              is_unpaged_prefill)
@@ -400,14 +383,11 @@ class AscendOpsBackend(DlinferOpsBackend):
         step_context.attn_metadata = attn_metadata
 
         cls.dist_meta = get_dist_meta()
-        num_tokens, max_tokens_across_dp, pad_size, x_active_mask = get_tokens_info(cls.dist_meta.dp_size,
-                                                                                    cls.dist_meta.tp_size,
-                                                                                    cls.dist_meta.ep_size,
-                                                                                    cls.dist_meta.ep_group)
+        max_tokens_across_dp, pad_size, x_active_mask = get_tokens_info(cls.dist_meta.dp_size, cls.dist_meta.tp_size,
+                                                                        cls.dist_meta.ep_size, cls.dist_meta.ep_group)
         moe_type = select_moe_type(max_tokens_across_dp, cls.dist_meta.dp_size, cls.dist_meta.tp_size,
                                    cls.dist_meta.ep_size)
         mlp_meta_cls = cls.get_mlp_metadata_cls()
-        cls.max_tokens_accros_dp = max_tokens_across_dp
         mlp_metadata = mlp_meta_cls(
             max_tokens_across_dp=max_tokens_across_dp,
             pad_size=pad_size,
