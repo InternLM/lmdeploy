@@ -24,7 +24,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, D
                                                    DistServeInitRequest)
 from lmdeploy.serve.exceptions import SafeRunException
 from lmdeploy.serve.managers import InferInstManager, SessionManager
-from lmdeploy.serve.multimodal_processor import MultimodalProcessor
+from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger

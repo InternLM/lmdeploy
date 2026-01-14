@@ -8,7 +8,7 @@ import tqdm
 from .archs import autoget_backend_config, get_task
 from .messages import GenerationConfig, PytorchEngineConfig, SpeculativeConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
-from .serve.multimodal_processor import MultimodalProcessor
+from .serve.processors import MultimodalProcessor
 from .utils import get_logger, get_model
 
 if TYPE_CHECKING:
