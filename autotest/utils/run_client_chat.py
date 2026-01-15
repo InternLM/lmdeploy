@@ -26,7 +26,7 @@ def hf_command_line_test(config, case, case_info, run_config, cuda_prefix: str =
         model_path = model
 
     else:
-        model_path = config.get('model_path') + '/' + model
+        model_path = os.path.join(config.get('model_path'), model)
 
     run_config['extra_params']['session_len'] = 4096
     if case == 'base_testcase':

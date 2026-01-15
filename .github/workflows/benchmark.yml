@@ -181,15 +181,15 @@ jobs:
       - name: Run other benchmark - all
         if: contains(fromJson(github.event.inputs.backend), 'turbomind') && contains(fromJson(github.event.inputs.backend), 'pytorch')
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test' --alluredir=${{env.ALLURE_REPORT_DIR}}
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test and not function' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Run other benchmark - turbomind
         if: contains(fromJson(github.event.inputs.backend), 'turbomind') && !contains(fromJson(github.event.inputs.backend), 'pytorch')
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test and turbomind' --alluredir=${{env.ALLURE_REPORT_DIR}}
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test and not function and turbomind' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Run other benchmark - pytorch
         if: contains(fromJson(github.event.inputs.backend), 'pytorch') && !contains(fromJson(github.event.inputs.backend), 'turbomind')
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} --run_id ${{ github.run_id }} -m '${{matrix.gpu_num}} and not pr_test and not function and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Clear workfile
         if: always()
         run: |

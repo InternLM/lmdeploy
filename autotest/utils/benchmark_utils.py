@@ -1,59 +1,43 @@
 import os
-import subprocess
-from subprocess import PIPE
 
 import allure
+import utils.constant as constant
 from utils.common_utils import execute_command_with_logging
-from utils.config_utils import _is_bf16_supported_by_device, get_case_str_by_config, get_workerid
-from utils.run_restful_chat import health_check
-
-DEFAULT_PORT = 23333
-GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
-GENERATION_LONGTEXT_CONFIG = ' -c 1 --session-len 200000 -ct 1024 -pt 198000'
+from utils.config_utils import get_case_str_by_config, get_cli_common_param, get_cuda_prefix_by_workerid, get_workerid
+from utils.run_restful_chat import health_check, start_openai_service, terminate_restful_api
 
 
-def throughput_test(config, run_config, cuda_prefix: str = None, worker_id: str = '', is_smoke: bool = False):
-    model = run_config['model']
-    backend = run_config['backend']
-    # parallel_config = run_config.get('parallel_config', 1)
-    tp_num = run_config.get('tp_num', 1)
-    quant_policy = run_config.get('quant_policy', 0)
+def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = False):
+    model = run_config.get('model')
     model_path = os.path.join(config.get('model_path'), model)
     dataset_path = config.get('dataset_path')
 
     case_name = get_case_str_by_config(run_config)
-    benchmark_path = os.path.join(config.get('benchmark_path'), 'throughtput')
+    benchmark_path = os.path.join(config.get('benchmark_path'), 'throughput')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
-    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
 
-    os.makedirs(work_dir, exist_ok=True)
+    max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
+    if max_cache_entry is not None:
+        run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
-    command = f'python3 benchmark/profile_throughput.py {dataset_path} {model_path} '  # noqa: F401, E501
-    command = get_command_with_extra(command, cuda_prefix)
+    cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
+
+    command = f'{cuda_prefix} python3 benchmark/profile_throughput.py {dataset_path} {model_path} {get_cli_common_param(run_config)}'  # noqa
 
     if is_smoke:
-        num_prompts = '--num-prompts 500'
+        num_prompts = '--num-prompts 100'
     else:
         num_prompts = '--num-prompts 5000'
-    if backend == 'pytorch':
-        command += ' --backend pytorch'
-        if not _is_bf16_supported_by_device():
-            command += ' --dtype float16'
-    else:
-        if '4bit' in model:
-            command += ' --model-format awq'
-    command = command + f' --quant-policy {quant_policy}'
+
+    env = os.environ.copy()
+    env.update(run_config.get('env', {}))
 
     for batch in [128, 256]:
-        csv_path = f'{work_dir}/throughput_batch_{batch}_1th.csv'
-        cmd = ' '.join([
-            command, '--concurrency',
-            str(batch), num_prompts, '--tp',
-            str(tp_num),
-            get_max_cache_entry(model, backend), '--csv ', csv_path
-        ])
+        csv_path = os.path.join(work_dir, f'{batch}.csv')
+        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{batch}.log')
+        cmd = ' '.join([command, '--concurrency', str(batch), num_prompts, '--csv ', csv_path]).strip()
 
-        result, stderr = execute_command_with_logging(cmd, benchmark_log)
+        result, stderr = execute_command_with_logging(cmd, benchmark_log, env=env)
         allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if result and not os.path.isfile(csv_path):
@@ -64,54 +48,40 @@ def throughput_test(config, run_config, cuda_prefix: str = None, worker_id: str 
     return True, 'success'
 
 
-def longtext_throughput_test(config,
-                             run_id,
-                             run_config,
-                             cuda_prefix: str = None,
-                             worker_id: str = '',
-                             is_smoke: bool = False):
-    model = run_config['model']
-    backend = run_config['backend']
-    # parallel_config = run_config.get('parallel_config', 1)
-    tp_num = run_config.get('tp_num', 1)
-    quant_policy = run_config.get('quant_policy', 0)
+def longtext_throughput_test(config, run_config, worker_id: str = ''):
+    model = run_config.get('model')
     model_path = os.path.join(config.get('model_path'), model)
     dataset_path = config.get('dataset_path')
 
     case_name = get_case_str_by_config(run_config)
-    benchmark_path = os.path.join(config.get('benchmark_path'), run_id, 'longtext-throughtput')
+    benchmark_path = os.path.join(config.get('benchmark_path'), 'longtext-throughtput')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
-    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
 
-    os.makedirs(work_dir, exist_ok=True)
+    max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
+    if max_cache_entry is not None:
+        run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
-    command = f'python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} --tp {tp_num}'  # noqa: F401, E501
-    command = get_command_with_extra(command, cuda_prefix)
+    cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
-    if backend == 'pytorch':
-        command += ' --backend pytorch'
-        if not _is_bf16_supported_by_device():
-            command += ' --dtype float16'
-    else:
-        if '4bit' in model:
-            command += ' --model-format awq'
-        command = command + f' --quant-policy {quant_policy}'
+    command = f'{cuda_prefix} python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} {get_cli_common_param(run_config)}'  # noqa
+
+    env = os.environ.copy()
+    env.update(run_config.get('env', {}))
 
     for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', 20),
                                                                     (1, 65536, 10, '64k', 10),
                                                                     (65536, 1024, 15, '64k-1k', 15),
                                                                     (198000, 1024, 3, '198k-1k', 1)]:
         session_len = input_len + out_len + 1
-        csv_path = f'{work_dir}/longtext_{case_name}_1th.csv'
+        csv_path = os.path.join(work_dir, f'{case_name}.csv')
+        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{concurrency}.log')
         cmd = ' '.join([
             command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
-            f'--num-prompts {num_prompts}', '--stream-output', f'--session-len {session_len}', '--random-range-ratio 1',
-            f'--csv {csv_path}'
-        ])
-        if concurrency:
-            cmd += f' --concurrency {concurrency}'
+            f'--num-prompts {num_prompts}', f'--concurrency {concurrency}', '--stream-output',
+            f'--session-len {session_len}', '--random-range-ratio 1', f'--csv {csv_path}'
+        ]).strip()
 
-        result, stderr = execute_command_with_logging(cmd, benchmark_log)
+        result, stderr = execute_command_with_logging(cmd, benchmark_log, env=env)
         allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if result and not os.path.isfile(csv_path):
@@ -121,110 +91,132 @@ def longtext_throughput_test(config,
     return True, 'success'
 
 
-def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
-    model = run_config['model']
-    model_path = os.path.join(config.get('model_path'), model)
-    dataset_path = config.get('dataset_path')
+def restful_test(config, run_config, worker_id: str = '', is_smoke: bool = False, is_mllm: bool = False):
+    max_cache_entry = get_max_cache_entry(config.get('model'), run_config.get('backend'))
+    if max_cache_entry is not None:
+        run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
+    pid, content = start_openai_service(config, run_config, worker_id)
     case_name = get_case_str_by_config(run_config)
-    benchmark_path = os.path.join(config.get('benchmark_path'), run_id, 'restful')
+    try:
+        if pid > 0:
+            if is_mllm:
+                return mllm_restful_profile(config.get('log_path'),
+                                            case_name,
+                                            port=constant.DEFAULT_PORT + get_workerid(worker_id),
+                                            is_smoke=is_smoke)
+            else:
+                return restful_profile(config.get('log_path'),
+                                       case_name,
+                                       port=constant.DEFAULT_PORT + get_workerid(worker_id),
+                                       is_smoke=is_smoke)
+        else:
+            assert False, f'Failed to start RESTful API server: {content}'
+    finally:
+        if pid > 0:
+            terminate_restful_api(worker_id)
+
+
+MASTER_ADDR = os.getenv('MASTER_ADDR', 'localhost')
+BASE_HTTP_URL = f'http://{MASTER_ADDR}'
+
+
+def restful_profile(config, case_name, port, is_smoke: bool = False):
+    dataset_path = config.get('dataset_path')
+    benchmark_path = os.path.join(config.get('benchmark_path'), 'restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
     benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
 
-    os.makedirs(work_dir, exist_ok=True)
-
-    worker_num = get_workerid(worker_id)
-    if worker_num is None:
-        port = DEFAULT_PORT
-    else:
-        port = DEFAULT_PORT + worker_num
-
-    http_url = f'http://localhost:{port}'  # noqa: E231
-    if not health_check(http_url):
+    http_url = f'{BASE_HTTP_URL}:{port}'  # noqa: E231
+    if not health_check(http_url, case_name):
         return False, 'server not start'
 
-    command = f'python3 /nvme/qa_test_models/offline_pkg/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501, E231
+    csv_path = f'{work_dir}/restful.csv'
+
+    command = f'python benchmark/profile_restful_api.py --backend lmdeploy --dataset-name sharegpt --dataset-path {dataset_path} --base-url {http_url} --output-file {csv_path}'  # noqa
     if is_smoke:
-        command += ' --num-prompts 200'
+        command += ' --num-prompts 100'
     else:
         command += ' --num-prompts 5000'
 
-    for batch in [128, 256]:
-        csv_path = f'{work_dir}/restful_batch_{batch}_1th.csv'
-        cmd = ' '.join([command, '--concurrency', str(batch), '--csv', csv_path])
+    result, stderr = execute_command_with_logging(command, benchmark_log)
+    allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
-        with open(benchmark_log, 'w') as f:
-            f.writelines('reproduce command: ' + cmd + '\n')
-            print('reproduce command: ' + cmd)
-
-            benchmark_res = subprocess.run([cmd],
-                                           stdout=f,
-                                           stderr=PIPE,
-                                           shell=True,
-                                           text=True,
-                                           encoding='utf-8',
-                                           errors='replace')
-            f.writelines(benchmark_res.stderr)
-        allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
-    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
+    if result and not os.path.isfile(csv_path):
         return False, 'result is empty'
-    return benchmark_res.returncode == 0, benchmark_res.stderr
+    if not result:
+        return False, stderr
+    return True, 'success'
 
 
-def prefixcache_throughput_test(config,
-                                run_id,
-                                run_config,
-                                cuda_prefix: str = None,
-                                worker_id: str = '',
-                                is_smoke: bool = False):
-    model = run_config['model']
-    backend = run_config['backend']
-    # parallel_config = run_config.get('parallel_config', 1)
-    tp_num = run_config.get('tp_num', 1)
-    quant_policy = run_config.get('quant_policy', 0)
+def mllm_restful_profile(config, case_name, port, is_smoke: bool = False):
+    benchmark_path = os.path.join(config.get('benchmark_path'), 'mllm_restful')
+    work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
+    benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
+
+    http_url = f'{BASE_HTTP_URL}:{port}'  # noqa: E231
+    if not health_check(http_url, case_name):
+        return False, 'server not start'
+
+    csv_path = f'{work_dir}/mllm_restful.csv'
+
+    command = f'python benchmark/profile_restful_api.py --backend lmdeploy-chat --dataset-name image --random-input-len 100 --random-output-len 100 --random-range-ratio 1 --image-format jpeg --image-count 1 --image-content random --image-resolution 1024x1024 --base-url {http_url} --output-file {csv_path}'  # noqa
+    if is_smoke:
+        command += ' --num-prompts 100'
+    else:
+        command += ' --num-prompts 5000'
+
+    result, stderr = execute_command_with_logging(command, benchmark_log)
+    allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
+
+    if result and not os.path.isfile(csv_path):
+        return False, 'result is empty'
+    if not result:
+        return False, stderr
+    return True, 'success'
+
+
+def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
+    model = run_config.get('model')
     model_path = os.path.join(config.get('model_path'), model)
     dataset_path = config.get('prefix_dataset_path')
 
     case_name = get_case_str_by_config(run_config)
-    benchmark_path = os.path.join(config.get('benchmark_path'), run_id, 'prefix-throughtput')
+    benchmark_path = os.path.join(config.get('benchmark_path'), 'prefix-throughtput')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
 
-    os.makedirs(work_dir, exist_ok=True)
+    max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
+    if max_cache_entry is not None:
+        run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
-    base_command = f'python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} --tp {tp_num}'
-    base_command = get_command_with_extra(base_command, cuda_prefix)
+    cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
-    if backend == 'pytorch':
-        base_command += ' --backend pytorch'
-        if not _is_bf16_supported_by_device():
-            base_command += ' --dtype float16'
-    else:
-        if '4bit' in model:
-            base_command += ' --model-format awq'
-        base_command = base_command + f' --quant-policy {quant_policy}'
+    run_config_new = run_config.copy()
+    run_config_new['extra_params'].pop('enable-prefix-caching', None)
+    run_config_new['extra_params']['session-len'] = 32768
+    command = f'{cuda_prefix} python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} {get_cli_common_param(run_config_new)}'  # noqa
+
+    env = os.environ.copy()
+    env.update(run_config.get('env', {}))
 
     test_configs = [(16384, 1024, 10, '16k', None)]
-
     for enable_prefix_caching in [False, True]:
-        suffix = '_cache' if enable_prefix_caching else '_no_cache'
+        suffix = 'cache' if enable_prefix_caching else 'no_cache'
 
         for input_len, out_len, num_prompts, case_name, concurrency in test_configs:
             benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{suffix}.log')
-            csv_path = f'{work_dir}/{case_name}{suffix}.csv'
+            csv_path = os.path.join(work_dir, f'{suffix}.csv')
 
             command = ' '.join([
-                base_command, '--dataset-name random', f'--random-input-len {input_len}',
-                f'--random-output-len {out_len}', '--random-range-ratio 1.0', f'--num-prompts {num_prompts}',
-                '--stream-output', '--session-len 32768', f'--csv {csv_path}'
-            ])
+                command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
+                '--random-range-ratio 1.0', f' --concurrency {concurrency}', f'--num-prompts {num_prompts}',
+                '--stream-output', f'--csv {csv_path}'
+            ]).strip()
 
             if enable_prefix_caching:
                 command += ' --enable-prefix-caching'
 
-            if concurrency:
-                command += f' --concurrency {concurrency}'
-
-            result, stderr = execute_command_with_logging(command, benchmark_log)
+            result, stderr = execute_command_with_logging(command, benchmark_log, env=env)
             allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
             if result and not os.path.isfile(csv_path):
@@ -234,19 +226,12 @@ def prefixcache_throughput_test(config,
     return True, 'success'
 
 
-def get_command_with_extra(cmd, cuda_prefix: str = None):
-    if cuda_prefix is not None and len(cuda_prefix) > 0:
-        cmd = ' '.join([cuda_prefix, cmd])
-    print(cmd)
-    return cmd
-
-
 def get_max_cache_entry(model, backend):
     if backend == 'pytorch':
-        return '--cache-max-entry-count 0.8'
+        return 0.8
     if 'Llama-2' in model:
-        return '--cache-max-entry-count 0.95'
+        return 0.95
     elif 'internlm2' in model:
-        return '--cache-max-entry-count 0.9'
+        return 0.9
     else:
-        return ''
+        return None

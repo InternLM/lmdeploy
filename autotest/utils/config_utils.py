@@ -103,7 +103,7 @@ def get_cli_common_param(run_config: Dict[str, Any]) -> str:
 
     # Parallel config
     for para_key in ('dp', 'ep', 'cp'):
-        if para_key in parallel_config:
+        if para_key in parallel_config and parallel_config[para_key] > 1:
             cli_params.append(f'--{para_key} {parallel_config[para_key]}')
     if 'tp' in parallel_config and parallel_config['tp'] > 1:
         tp_num = parallel_config['tp']

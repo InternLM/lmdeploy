@@ -14,7 +14,7 @@ def run_pipeline_llm_test(config, run_config, common_case_config, worker_id: str
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = f"{config.get('model_path')}/{model}"
+        model_path = os.path.join(config.get('model_path'), model)
 
     log_path = config.get('log_path')
     case_name = get_case_str_by_config(run_config)
@@ -69,7 +69,7 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = f"{config.get('model_path')}/{model}"
+        model_path = os.path.join(config.get('model_path'), model)
 
     log_path = config.get('log_path')
     case_name = get_case_str_by_config(run_config)

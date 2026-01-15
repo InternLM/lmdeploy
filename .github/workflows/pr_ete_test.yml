@@ -35,7 +35,7 @@ jobs:
       REPORT_DIR: /nvme/qa_test_models/test-reports
     container:
       image: nvidia/cuda:12.4.1-devel-ubuntu22.04
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
+      options: "--gpus='\"device=5,6\"' --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never"
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
         - /nvme/share_data/github-actions/packages:/root/packages
@@ -81,14 +81,14 @@ jobs:
           echo "starttime=$(date +%s)" > allure-results/status.txt
       - name: Test lmdeploy - func
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=allure-results --clean-alluredir
-          CUDA_VISIBLE_DEVICES=5,6 pytest autotest -m 'pr_test and gpu_num_1' -n 2 -x --alluredir=allure-results
+          pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=allure-results --clean-alluredir
+          pytest autotest -m 'pr_test and gpu_num_1' -n 2 -x --alluredir=allure-results
       - name: Update transformers
         run: |
           pip install transformers==4.57.3
       - name: Test restful server - turbomind Qwen3-32B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > turbomind_Qwen3-32B_start_restful.log 2>&1 &
+          lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > turbomind_Qwen3-32B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -108,7 +108,7 @@ jobs:
           exit 1
       - name: Test restful server - turbomind InternVL3-38B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > turbomind_InternVL3-38B_start_restful.log 2>&1 &
+          lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > turbomind_InternVL3-38B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -128,7 +128,7 @@ jobs:
           exit 1
       - name: Test restful server - turbomind Qwen3-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend turbomind --logprobs-mode raw_logprobs  --allow-terminate-by-client> turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
+          lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend turbomind --logprobs-mode raw_logprobs  --allow-terminate-by-client> turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -148,7 +148,7 @@ jobs:
           exit 1
       - name: Test restful server - pytorch Qwen3-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --allow-terminate-by-client > pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
+          lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --allow-terminate-by-client > pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -168,7 +168,7 @@ jobs:
           exit 1
       - name: Test restful server - pytorch Qwen3-VL-30B-A3B-Instruct
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --tp 2 --backend pytorch --logprobs-mode raw_logprobs --allow-terminate-by-client > pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
+          lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --tp 2 --backend pytorch --logprobs-mode raw_logprobs --allow-terminate-by-client > pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -188,7 +188,7 @@ jobs:
           exit 1
       - name: Test restful server - pytorch InternVL3_5-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=5,6 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3_5-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs  --allow-terminate-by-client > pytorch_InternVL3_5-30B-A3B_start_restful.log 2>&1 &
+          lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3_5-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs  --allow-terminate-by-client > pytorch_InternVL3_5-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do

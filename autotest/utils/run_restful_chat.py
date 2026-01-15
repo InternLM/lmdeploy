@@ -28,7 +28,7 @@ def start_openai_service(config, run_config, worker_id):
     if run_config.get('env', {}).get('LMDEPLOY_USE_MODELSCOPE', 'False') == 'True':
         model_path = model
     else:
-        model_path = f"{config.get('model_path')}/{model}"
+        model_path = os.path.join(config.get('model_path'), model)
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
