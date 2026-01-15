@@ -15,6 +15,7 @@ def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = Fa
     case_name = get_case_str_by_config(run_config)
     benchmark_path = os.path.join(config.get('benchmark_path'), 'throughput')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
+    os.makedirs(work_dir, exist_ok=True)
 
     max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
     if max_cache_entry is not None:
@@ -58,6 +59,7 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
     case_name = get_case_str_by_config(run_config)
     benchmark_path = os.path.join(config.get('benchmark_path'), 'longtext-throughtput')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
+    os.makedirs(work_dir, exist_ok=True)
 
     max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
     if max_cache_entry is not None:
@@ -132,6 +134,7 @@ def restful_profile(config, case_name, port, is_smoke: bool = False):
     benchmark_path = os.path.join(config.get('benchmark_path'), 'restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
     benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
+    os.makedirs(work_dir, exist_ok=True)
 
     http_url = f'{BASE_HTTP_URL}:{port}'  # noqa: E231
     if not health_check(http_url, case_name):
@@ -159,6 +162,7 @@ def mllm_restful_profile(config, case_name, port, is_smoke: bool = False):
     benchmark_path = os.path.join(config.get('benchmark_path'), 'mllm_restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
     benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
+    os.makedirs(work_dir, exist_ok=True)
 
     http_url = f'{BASE_HTTP_URL}:{port}'  # noqa: E231
     if not health_check(http_url, case_name):
@@ -190,7 +194,7 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
     case_name = get_case_str_by_config(run_config)
     benchmark_path = os.path.join(config.get('benchmark_path'), 'prefix-throughtput')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
-
+    os.makedirs(work_dir, exist_ok=True)
     max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
     if max_cache_entry is not None:
         if 'extra_params' not in run_config:
