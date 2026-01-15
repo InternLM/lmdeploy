@@ -14,27 +14,20 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
-#include "src/turbomind/macro.h"
-#include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
-__global__ void stop_words_criterion(const int* output_ids,
-                                     const int* parent_ids,
-                                     const int* stop_words,
-                                     bool*      finished,
-                                     size_t     id_offset,
-                                     size_t     stop_words_len,
-                                     int        batch_size,
-                                     int        beam_width,
-                                     int        step)
+__global__ void stop_words_criterion_v2(const int** token_ids_ptrs,
+                                        const int*  sequence_length,
+                                        const int*  stop_words,
+                                        bool*       finished,
+                                        int         stop_words_len,
+                                        int         batch_size)
 {
     const int id        = blockIdx.x * blockDim.x + threadIdx.x;
-    const int batch_idx = blockIdx.y / beam_width;
-    const int beam_idx  = blockIdx.y % beam_width;
+    const int batch_idx = blockIdx.y;
 
     const int* base_stop_words = stop_words + batch_idx * 2 * stop_words_len;
     const int* base_offsets    = base_stop_words + stop_words_len;
@@ -47,89 +40,64 @@ __global__ void stop_words_criterion(const int* output_ids,
     const int item_start = (id > 0) ? base_offsets[id - 1] : 0;
     const int item_size  = item_end - item_start;
 
-    /* The single-token case unconditionally bans the token */
-    bool should_stop = false;
+    const int  seq_len   = sequence_length[batch_idx];
+    const int* token_ids = token_ids_ptrs[batch_idx];
 
     /* Enough previously generated tokens to look for a match */
-    if (step + 1 >= item_size) {
-        should_stop            = true;
-        int        parent_id   = beam_idx;
-        const bool gather_beam = beam_width > 1;
-
-        for (int token_idx = item_size - 1; token_idx >= 0; token_idx--) {
-            const int previous_token = output_ids[(step - (item_size - 1) + token_idx) * batch_size * beam_width
-                                                  + id_offset + batch_idx * beam_width + parent_id];
-
-            if (previous_token != base_stop_words[item_start + token_idx]) {
-                should_stop = false;
-                break;
-            }
-            if (gather_beam) {
-                parent_id = parent_ids[(step - (item_size - 1) + token_idx) * beam_width * batch_size + id_offset
-                                       + batch_idx * beam_width + parent_id];
-
-                if (parent_id < 0 || parent_id >= beam_width) {
-                    should_stop = false;
-                    break;
-                }
+    if (seq_len >= item_size) {
+        // token_ids[seq_len - 1] is the last token
+        for (int token_idx = item_size - 1, offset = seq_len - 1; token_idx >= 0; token_idx--, offset--) {
+            if (token_ids[offset] != base_stop_words[item_start + token_idx]) {
+                return;
             }
         }
-    }
-
-    if (should_stop) {
-        finished[batch_idx * beam_width + beam_idx] = true;
+        finished[batch_idx] = true;
     }
 }
 
-void invokeStopWordsCriterion(const int*   output_ids,
-                              const int*   parent_ids,
-                              const int*   stop_words,
-                              bool*        finished,
-                              size_t       id_offset,
-                              size_t       stop_words_len,
+void invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
+                                 const int*   sequence_length,
+                                 const int*   stop_words,
+                                 bool*        finished,
+                                 int          stop_words_len,
+                                 int          batch_size,
+                                 cudaStream_t stream)
+{
+    // Check if we have sampled a word from the stop_words list. If so, stop the sequence.
+
+    const int  block = std::min(round_up(stop_words_len, 32), 256);
+    const dim3 grid(cdiv(stop_words_len, block), batch_size);
+
+    stop_words_criterion_v2<<<grid, block, 0, stream>>>(
+        token_ids_ptrs, sequence_length, stop_words, finished, stop_words_len, batch_size);
+}
+
+__global__ void length_criterion_v2(bool*      finished,  //
+                                    const int* sequence_length,
+                                    const int* sequence_length_limit,
+                                    int        batch_size)
+{
+    const int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    if (idx >= batch_size) {
+        return;
+    }
+    if (sequence_length[idx] >= sequence_length_limit[idx]) {
+        finished[idx] = true;
+    }
+}
+
+void invokeLengthCriterion_v2(bool*        finished,  //
+                              const int*   sequence_length,
+                              const int*   sequence_length_limit,
                               int          batch_size,
-                              int          beam_width,
-                              int          step,
                               cudaStream_t stream)
 {
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-    // Check if we have sampled a word from the stop_words list. If so, stop the sequence.
-    dim3 block, grid;
-    block.x = min((unsigned long)((stop_words_len + 32 - 1) / 32) * 32, 256UL);
-    grid.x  = (stop_words_len + block.x - 1) / block.x;
-    grid.y  = batch_size * beam_width;
-
-    stop_words_criterion<<<grid, block, 0, stream>>>(
-        output_ids, parent_ids, stop_words, finished, id_offset, stop_words_len, batch_size, beam_width, step);
-    sync_check_cuda_error();
-}
-
-__global__ void length_criterion(bool*      finished,  //
-                                 const int* sequence_limit_length,
-                                 int        batch_size,
-                                 int        beam_width,
-                                 int        step)
-{
-    for (int index = threadIdx.x; index < batch_size * beam_width; index += blockDim.x) {
-        const int batch_idx = index / beam_width;
-        finished[index] |= step >= sequence_limit_length[batch_idx];
-    }
-}
-
-void invokeLengthCriterion(bool*        finished,  //
-                           const int*   sequence_limit_length,
-                           int          batch_size,
-                           int          beam_width,
-                           int          step,
-                           cudaStream_t stream)
-{
     // Check if we have attained the sequence length limit. If so, stop the sequence.
-    // In addition, check if all sequences are stopped and return the result in should_stop
-    TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
-    dim3 block(std::min(512, batch_size * beam_width));
-    dim3 grid{1};
 
-    length_criterion<<<grid, block, 0, stream>>>(finished, sequence_limit_length, batch_size, beam_width, step);
+    constexpr int block = 256;
+    const int     grid  = cdiv(batch_size, block);
+
+    length_criterion_v2<<<grid, block, 0, stream>>>(finished, sequence_length, sequence_length_limit, batch_size);
 }
 
 }  // namespace turbomind

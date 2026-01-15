@@ -43,15 +43,21 @@ void invokeBatchTopKSampling(void*          workspace,
                              const int      batch_size,
                              const bool*    skip_decode);
 
-void invokeCurandInitialize(curandState_t*     state,
-                            const size_t       batch_size,
-                            unsigned long long random_seed,
-                            cudaStream_t       stream);
+// void invokeCurandInitialize(curandState_t*     state,
+//                             const size_t       batch_size,
+//                             unsigned long long random_seed,
+//                             cudaStream_t       stream);
 
-void invokeCurandBatchInitialize(curandState_t*  states,
-                                 const size_t    batch_size,
-                                 const uint64_t* random_seeds,
-                                 cudaStream_t    stream);
+// void invokeCurandBatchInitialize(curandState_t*  states,
+//                                  const size_t    batch_size,
+//                                  const uint64_t* random_seeds,
+//                                  cudaStream_t    stream);
+
+void InitializeRandomStates(curandState_t*  states,  //
+                            const uint64_t* random_seeds,
+                            const bool*     mask,
+                            size_t          batch_size,
+                            cudaStream_t    stream);
 
 struct TopKSortFilterParams {
     void* logits;

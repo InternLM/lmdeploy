@@ -69,6 +69,7 @@ class CLI(object):
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
         ArgumentHelper.cp(tb_group)
+        ArgumentHelper.async_(tb_group)
 
         # speculative decoding
         ArgumentHelper.add_spec_group(parser)

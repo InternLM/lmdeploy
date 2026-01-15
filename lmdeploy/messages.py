@@ -235,6 +235,7 @@ class TurbomindEngineConfig:
             "Dynamic SplitFuse"-like scheduling
         max_prefill_iters: the max number of forward pass during prefill
             stage
+        async_: enable async execution, default to 1 (enabled)
         devices: the used devices
         empty_init: Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
@@ -273,6 +274,7 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    async_: int = 1
     devices: Optional[List[int]] = None
     empty_init: bool = False
     communicator: str = 'nccl'
@@ -289,6 +291,7 @@ class TurbomindEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
+        assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
 
 
 @dataclass
@@ -451,6 +454,7 @@ class ResponseType(enum.Enum):
     INTERNAL_ENGINE_ERROR = enum.auto()
     CANCEL = enum.auto()
     PREFIX_CACHE_CONFLICT_INTERACTIVE_MODE = enum.auto()
+    NO_QUEUE = enum.auto()
 
 
 @dataclass

@@ -7,7 +7,9 @@ PYTORCH = 'pytorch'
 
 
 def get_models(backend, parallel_config):
-    return get_func_config_list(backend, parallel_config, func_type='benchmark')
+    run_configs = get_func_config_list(backend, parallel_config, func_type='benchmark')
+    return [item for item in run_configs
+            if 'gpt' not in item['model']]  # gpt models are excluded because of openai_harmony is not supported yet
 
 
 @pytest.mark.turbomind

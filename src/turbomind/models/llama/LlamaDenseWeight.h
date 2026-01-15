@@ -29,22 +29,6 @@
 
 namespace turbomind {
 
-inline LoraPolicy getLoraPolicy(const std::string& policy)
-{
-    if (policy == "plora") {
-        return LoraPolicy::kPlora;
-    }
-    return LoraPolicy::kNull;
-}
-
-struct LoraWeight {
-    LoraPolicy policy;
-    int        r;
-    float      scale;
-    void*      a;
-    void*      b;
-};
-
 using gemm::QuantDesc;
 using gemm::MatrixLayout;
 using gemm::Epilogue;

@@ -15,14 +15,25 @@
 add_subdirectory(utils)
 add_subdirectory(core)
 add_subdirectory(kernels)
-add_subdirectory(layers)
 add_subdirectory(comm)
+add_subdirectory(generation)
 add_subdirectory(models)
 add_subdirectory(engine)
-if(BUILD_PYT)
-    add_subdirectory(th_op)
-endif()
+
 if(BUILD_PY_FFI)
     add_subdirectory(python)
 endif()
-add_subdirectory(triton_backend)
+
+add_library(turbomind STATIC turbomind.cc)
+set_property(TARGET turbomind PROPERTY POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(turbomind PUBLIC
+        engine
+        models
+        device_comm
+        host_comm
+        core
+        memory_utils
+        nvtx_utils
+        CUDA::cublasLt
+        CUDA::cudart
+        yaml-cpp::yaml-cpp)

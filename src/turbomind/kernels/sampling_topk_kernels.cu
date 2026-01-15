@@ -33,40 +33,62 @@
 
 namespace turbomind {
 
-__global__ void curandInitialize(curandState_t* state, const int size, const unsigned long long random_seed)
-{
-    if (threadIdx.x + blockIdx.x * blockDim.x < size) {
-        curand_init(random_seed, 0, 0, &state[blockIdx.x * blockDim.x + threadIdx.x]);
-    }
-}
+// __global__ void curandInitialize(curandState_t* state, const int size, const unsigned long long random_seed)
+// {
+//     if (threadIdx.x + blockIdx.x * blockDim.x < size) {
+//         curand_init(random_seed, 0, 0, &state[blockIdx.x * blockDim.x + threadIdx.x]);
+//     }
+// }
 
-void invokeCurandInitialize(curandState_t*           state,
-                            const size_t             batch_size,
-                            const unsigned long long random_seed,
-                            cudaStream_t             stream)
-{
-    dim3 block(256);
-    dim3 grid((int)(ceil(batch_size * 1.0 / 256)));
-    curandInitialize<<<grid, block, 0, stream>>>(state, batch_size, random_seed);
-}
+// void invokeCurandInitialize(curandState_t*           state,
+//                             const size_t             batch_size,
+//                             const unsigned long long random_seed,
+//                             cudaStream_t             stream)
+// {
+//     dim3 block(256);
+//     dim3 grid((int)(ceil(batch_size * 1.0 / 256)));
+//     curandInitialize<<<grid, block, 0, stream>>>(state, batch_size, random_seed);
+// }
 
-__global__ void curandBatchInitialize(curandState_t* states, const int size, const unsigned long long* random_seeds)
+// __global__ void curandBatchInitialize(curandState_t* states, const int size, const unsigned long long* random_seeds)
+// {
+//     int idx = threadIdx.x + blockIdx.x * blockDim.x;
+//     if (idx < size) {
+//         curand_init(random_seeds[idx], 0, 0, &states[idx]);
+//     }
+// }
+
+// void invokeCurandBatchInitialize(curandState_t*  states,
+//                                  const size_t    batch_size,
+//                                  const uint64_t* random_seeds,
+//                                  cudaStream_t    stream)
+// {
+//     dim3 block(256);
+//     dim3 grid((int)(ceil(batch_size * 1.0 / 256)));
+//     static_assert(sizeof(uint64_t) == sizeof(unsigned long long));
+//     curandBatchInitialize<<<grid, block, 0, stream>>>(states, batch_size, (unsigned long long*)random_seeds);
+// }
+
+__global__ void InitializeRandomStates_Kernel(curandState_t*            states,
+                                              const unsigned long long* random_seeds,
+                                              const bool*               mask,
+                                              const size_t              size)
 {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx < size) {
+    if (auto idx = threadIdx.x + blockIdx.x * (size_t)blockDim.x; idx < size && mask[idx]) {
         curand_init(random_seeds[idx], 0, 0, &states[idx]);
     }
 }
 
-void invokeCurandBatchInitialize(curandState_t*  states,
-                                 const size_t    batch_size,
-                                 const uint64_t* random_seeds,
-                                 cudaStream_t    stream)
+void InitializeRandomStates(
+    curandState_t* states, const uint64_t* random_seeds, const bool* mask, size_t batch_size, cudaStream_t stream)
 {
-    dim3 block(256);
-    dim3 grid((int)(ceil(batch_size * 1.0 / 256)));
+    constexpr int threads = 128;
+    const int     blocks  = (batch_size + threads - 1) / threads;
+
     static_assert(sizeof(uint64_t) == sizeof(unsigned long long));
-    curandBatchInitialize<<<grid, block, 0, stream>>>(states, batch_size, (unsigned long long*)random_seeds);
+
+    InitializeRandomStates_Kernel<<<blocks, threads, 0, stream>>>(
+        (curandState_t*)states, (const unsigned long long*)random_seeds, mask, batch_size);
 }
 
 template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>

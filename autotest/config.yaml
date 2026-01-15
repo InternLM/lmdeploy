@@ -44,6 +44,7 @@ config:
         unsloth/gpt-oss-20b-BF16: 2
         unsloth/gpt-oss-120b-BF16: 4
         OpenGVLab/InternVL3_5-30B-A3B: 2
+        JetLM/SDAR-30B-A3B-Chat: 2
 
 turbomind_chat_model:
     tp:
@@ -183,6 +184,8 @@ pytorch_chat_model:
         - microsoft/Phi-3.5-vision-instruct
         - microsoft/Phi-3-mini-4k-instruct
         - microsoft/Phi-3-vision-128k-instruct
+        - JetLM/SDAR-4B-Chat
+        - JetLM/SDAR-30B-A3B-Chat
 
 turbomind_vl_model:
     tp:
@@ -389,6 +392,8 @@ pytorch_quantization:
         - openbmb/MiniCPM-V-2_6
         - unsloth/gpt-oss-20b-BF16
         - unsloth/gpt-oss-120b-BF16
+        - JetLM/SDAR-4B-Chat
+        - JetLM/SDAR-30B-A3B-Chat
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 
@@ -424,7 +429,8 @@ evaluate_model:
   - Qwen/Qwen2.5-32B-Instruct
   - Qwen/Qwen1.5-MoE-A2.7B-Chat
   - Qwen/Qwen3-30B-A3B
-
+  - JetLM/SDAR-4B-Chat
+  - JetLM/SDAR-30B-A3B-Chat
 
 mllm_evaluate_model:
   - internlm/Intern-S1-mini

@@ -117,20 +117,4 @@ struct EngineParam {
     std::vector<int> devices;
 };
 
-enum class LoraPolicy : int
-{
-    kNull,
-    kPlora,
-};
-
-struct LoraParam {
-    int        r;
-    float      scale;
-    LoraPolicy policy;
-    int        max_wo_r;
-
-    std::map<std::string, std::pair<std::regex, int>>   rank_pattern;
-    std::map<std::string, std::pair<std::regex, float>> scale_pattern;
-};
-
 }  // namespace turbomind
