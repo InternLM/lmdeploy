@@ -144,7 +144,9 @@ class WorkerWrapperBase:
             logger.debug('WorkerWrapper wait_tasks cancelled.')
             raise
         except BaseException:
-            logger.error('WorkerWrapper wait_tasks failed.')
+            # we want to keep logs in both ray logs and engine logs
+            msg = f'WorkerWrapper rank[{self.rank}] wait_tasks failed.'
+            logger.exception(msg)
             raise
 
     def stop(self):

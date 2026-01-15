@@ -31,7 +31,7 @@ class TestSiluAndMul:
         torch.testing.assert_close(out, gt)
 
 
-class TestSliluAndMulMoEEP:
+class TestSiluAndMulMoEEP:
 
     @pytest.fixture
     def num_experts(self, request):

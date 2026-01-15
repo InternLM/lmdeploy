@@ -409,7 +409,7 @@ class BaseModelAgent:
     def all_context(self):
         device_mgr = get_device_manager()
         dist_mgr = get_dist_manager()
-        with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
+        with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx), torch.inference_mode():
             yield
 
     def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
@@ -500,13 +500,8 @@ class BaseModelAgent:
         return_logits: bool,
     ):
         """Model forward."""
-
-        async def __forward(inputs):
-            """Warp forward."""
-            return await self.async_forward(inputs)
-
         origin_inputs = inputs
-        ret = await __forward(inputs)
+        ret = await self.async_forward(inputs)
 
         if not return_logits:
             ret = self._postprocess_forward_output(ret, origin_inputs)
@@ -968,9 +963,6 @@ class BaseModelAgent:
             logger.debug(f'ModelAgent rank[{self.rank}] wait_tasks cancelled.')
             raise
         except BaseException as e:
-            # we want to keep logs in both ray logs and engine logs
-            msg = f'ModelAgent rank[{self.rank}] wait_tasks failed'
-            logger.exception(msg)
             raise e from None
         finally:
             logger.debug(f'ModelAgent rank[{self.rank}] wait_tasks cleanup.')
