@@ -154,13 +154,13 @@ jobs:
           ln -s /nvme/qa_test_models/resource/nltk_data /usr/share/nltk_data
           execution_mode="${{ github.event.inputs.execution_mode || 'both' }}"
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "infer" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_1 and ${{matrix.backend}} and infer" -n 8 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_2 and ${{matrix.backend}} and infer" -n 4 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_4 and ${{matrix.backend}} and infer" -n 2 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
-            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_8 and ${{matrix.backend}} and infer" -n 1 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_1 and ${{matrix.backend}} and infer" -n 8 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_2 and ${{matrix.backend}} and infer" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_4 and ${{matrix.backend}} and infer" -n 2 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_api_evaluate.py -m "gpu_num_8 and ${{matrix.backend}} and infer" -n 1 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           if [ "$execution_mode" = "both" ] || [ "$execution_mode" = "eval" ]; then
-            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.backend}} and eval" -n 4 --run_id ${{ github.event.inputs.run_id || github.run_id }} --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
+            pytest autotest/evaluate/test_api_evaluate.py -m "${{matrix.backend}} and eval" -n 4 --alluredir=${{env.REPORT_DIR}} || overall_exit=$?
           fi
           exit $overall_exit
       - name: Clear workspace
