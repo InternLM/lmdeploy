@@ -5,6 +5,7 @@ Inference pipeline
 Pipeline
 --------
 .. autofunction:: pipeline
+.. autoclass:: Pipeline
 
 Serving
 --------
