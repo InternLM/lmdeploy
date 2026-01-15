@@ -64,6 +64,8 @@ def process_fp8(x: torch.Tensor, kind: str):
         return x.view(dtype=torch.uint8)
     elif kind != 'weight_scale_inv' and x.dtype == torch.float:
         return x.to(dtype=torch.bfloat16)
+    elif x.dtype == torch.float16:
+        return x.to(dtype=torch.bfloat16)
     else:
         return x
 
