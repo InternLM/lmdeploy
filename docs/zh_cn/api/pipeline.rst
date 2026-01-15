@@ -6,12 +6,10 @@ Pipeline
 --------
 .. autofunction:: pipeline
 .. autoclass:: Pipeline
-
-Serving
---------
-.. autofunction:: lmdeploy.api.serve
-.. autofunction:: lmdeploy.api.client
-
+   :undoc-members:
+   :show-inheritance:
+   :members: __init__, infer, stream_infer, chat, get_ppl
+   :member-order: bysource
 
 Config
 -------------------

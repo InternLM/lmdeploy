@@ -98,7 +98,11 @@ def serve(model_path: str,
 
 
 def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: Optional[str] = None, **kwargs):
-    """
+    """This function is deprecated and no longer available.
+
+    .. deprecated::
+        This function has been removed. Please use ``from lmdeploy.serve import APIClient`` instead.
+
     Args:
         api_server_url: communicating address ``http://<ip>:<port>`` of
             api_server
@@ -107,5 +111,11 @@ def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: Optional[str] 
     Return:
         Chatbot for LLaMA series models with turbomind as inference engine.
     """
-    from lmdeploy.serve.openai.api_client import APIClient
-    return APIClient(api_server_url, api_key, **kwargs)
+    warnings.warn(
+        "The 'client' function is deprecated and no longer available. "
+        "Please use 'from lmdeploy.serve import APIClient' instead.",
+        DeprecationWarning,
+        stacklevel=2)
+    raise NotImplementedError("The 'client' function is no longer available. "
+                              'This function has been deprecated and removed. '
+                              "Please use 'from lmdeploy.serve import APIClient' instead.")

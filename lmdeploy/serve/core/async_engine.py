@@ -12,7 +12,6 @@ from queue import Queue
 from threading import Thread
 from typing import Any, Dict, Iterator, List, Literal, Optional, Union
 
-from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response, ResponseType, SpeculativeConfig,
@@ -22,13 +21,13 @@ from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDeco
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
 from lmdeploy.pytorch.disagg.conn.protocol import (DistServeConnectionRequest, DistServeDropConnectionRequest,
                                                    DistServeInitRequest)
-from lmdeploy.serve.core.mixin import LogitsMixin
 from lmdeploy.serve.managers import InferInstManager, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
-from lmdeploy.tokenizer import DetokenizeState
+from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 from .exceptions import SafeRunException
+from .mixin import LogitsMixin
 
 logger = get_logger('lmdeploy')
 

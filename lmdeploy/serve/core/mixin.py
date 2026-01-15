@@ -1,19 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Dict, List, Tuple, Union
+from typing import List, Union
 
-import numpy as np
 import torch
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
-
-InputIdsType = List[int]
-InputEmbsType = Union[None, List[Union[torch.Tensor, np.ndarray]]]
-InputEmbRngsType = Union[None, List[Tuple[int, int]]]
-PromptType = Union[str, List[Dict]]
 
 
 class LogitsMixin:

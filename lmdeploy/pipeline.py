@@ -81,13 +81,13 @@ class Pipeline:
 
         Args:
             prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
-            Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            session_id: Session ID(s).
-            gen_config: Generation configuration(s).
-            do_preprocess: Whether to pre-process messages.
-            adapter_name: Adapter name.
-            use_tqdm: Whether to use progress bar.
-            **kwargs: Additional keyword arguments.
+                Tuple can be (prompt, image or [images]) or (image or [images], prompt).
+            session_id(Optional[Union[List[int], int]]): Session ID(s).
+            gen_config(Optional[Union[GenerationConfig, List[GenerationConfig]]]): Generation configuration(s).
+            do_preprocess(bool): Whether to pre-process messages.
+            adapter_name(Optional[str]): Adapter name.
+            use_tqdm(bool): Whether to use progress bar.
+            **kwargs(dict): Additional keyword arguments.
         """
         is_single = self._is_single(prompts)
         # format prompts to openai message format, which is a list of dicts
@@ -122,17 +122,19 @@ class Pipeline:
                      stream_response: bool = True,
                      **kwargs):
         """Stream inference.
+
         Args:
-            prompts: Prompts to inference. It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
-            Tuple can be (prompt, image or [images]) or (image or [images], prompt).
-            session_id: Session ID.
-            gen_config: Generation configuration(s).
-            do_preprocess: Whether to pre-process messages.
-            adapter_name: Adapter name.
-            stream_response: Whether to stream the response. If True, the generator will stream the response.
-            Otherwise, the generator will run until finish and return the final response. This argument
-            is introduced to support the streaming and non-streaming modes of Pipeline.chat.
-            **kwargs: Additional keyword arguments.
+            prompts(Union[List[str], str, List[Dict], List[List[Dict]], Tuple, List[Tuple]]): Prompts to inference.
+                It can be a single prompt, a list of prompts, a list of tuples, or a tuple.
+                Tuple can be (prompt, image or [images]) or (image or [images], prompt).
+            session_id(Optional[Union[int, List[int]]]): Session ID.
+            gen_config(Optional[Union[GenerationConfig, List[GenerationConfig]]]): Generation configuration(s).
+            do_preprocess(bool): Whether to pre-process messages.
+            adapter_name(Optional[str]): Adapter name.
+            stream_response(bool): Whether to stream the response. If True, the generator will stream the response.
+                Otherwise, the generator will run until finish and return the final response. This argument
+                is introduced to support the streaming and non-streaming modes of Pipeline.chat.
+            **kwargs(dict): Additional keyword arguments.
 
         Returns:
             Generator: A generator that yields the output (i.e. instance of class `Response`) of the inference.
