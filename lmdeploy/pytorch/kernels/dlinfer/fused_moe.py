@@ -22,7 +22,9 @@ def fused_moe(
     ep_group: dist.ProcessGroup,
     moe_type: MoeType,
     x_active_mask: Tensor,
+    expert_ids_per_ep_rank: Tensor,
 ):
     """Dlinfer fused moe."""
     return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize,
-                             pad_size, tp_size, ep_size, tp_rank, ep_rank, tp_group, ep_group, moe_type, x_active_mask)
+                             pad_size, tp_size, ep_size, tp_rank, ep_rank, tp_group, ep_group, moe_type, x_active_mask,
+                             expert_ids_per_ep_rank)

@@ -64,6 +64,11 @@ class DlinferFusedMoEImpl(FusedMoEImpl[DlinferMLPMetadata]):
         self.renormalize = renormalize
         self.ep_size = ep_size
         self.ep_group = ep_group
+        self.expert_ids_per_ep_rank = torch.tensor(
+            [i % (self.num_experts // self.ep_size) for i in range(num_experts)],
+            dtype=torch.int32,
+            device=torch.npu.current_device(),
+        )
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         """Update weights."""
@@ -96,10 +101,11 @@ class DlinferFusedMoEImpl(FusedMoEImpl[DlinferMLPMetadata]):
         """forward."""
         assert gate_up_bias is None
         assert down_bias is None
+
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
                          self.renormalize, mlp_metadata.pad_size, mlp_metadata.tp_size, mlp_metadata.ep_size,
                          mlp_metadata.tp_rank, mlp_metadata.ep_rank, mlp_metadata.tp_group, mlp_metadata.ep_group,
-                         mlp_metadata.moe_type, mlp_metadata.x_active_mask)
+                         mlp_metadata.moe_type, mlp_metadata.x_active_mask, self.expert_ids_per_ep_rank)
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder[DlinferMLPMetadata]):
