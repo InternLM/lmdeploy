@@ -65,6 +65,21 @@ class ARSpecExtraOutputs(ExtraOutputs):
 class ARSpecStoppingCriteria(ARStoppingCriteria):
     num_appendable_ids: torch.Tensor
 
+    def clone(self):
+        """clone."""
+        return ARSpecStoppingCriteria(num_appendable_ids=self.num_appendable_ids)
+
+    def merge(self, other: 'ARSpecStoppingCriteria'):
+        """Merge two stopping criteria."""
+        new_num_appendable = torch.cat([self.num_appendable_ids, other.num_appendable_ids], dim=0)
+        return ARSpecStoppingCriteria(num_appendable_ids=new_num_appendable)
+
+    def update(self, delta: ModelInputsDelta):
+        """Update stopping criteria."""
+        indices = delta.indices
+        new_num_appendable = self.num_appendable_ids[indices]
+        return ARSpecStoppingCriteria(num_appendable_ids=new_num_appendable)
+
     @record_function('stopping_criteria')
     def step(self,
              next_token_ids: torch.Tensor,
@@ -167,9 +182,11 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
         """Step next decoding."""
         next_token_ids = next_token_ids[:, None]
         next_token_ids = torch.cat([next_token_ids, extra_outputs.draft_token_ids], dim=-1)
+        max_q_seqlen = next_token_ids.size(-1)
+        next_token_ids = next_token_ids.flatten()[None, :]
         inputs = get_model_inputs_next_decoding(model_inputs,
                                                 next_token_ids,
-                                                max_q_seqlen=next_token_ids.size(-1),
+                                                max_q_seqlen=max_q_seqlen,
                                                 model_metas=model_metas)
         extra_inputs = ARSpecExtraInputs(output_token_ids=extra_outputs.draft_token_ids)
         return inputs, extra_inputs
