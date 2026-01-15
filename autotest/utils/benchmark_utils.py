@@ -18,6 +18,8 @@ def throughput_test(config, run_config, worker_id: str = '', is_smoke: bool = Fa
 
     max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
     if max_cache_entry is not None:
+        if 'extra_params' not in run_config:
+            run_config['extra_params'] = {}
         run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
@@ -59,6 +61,8 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
 
     max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
     if max_cache_entry is not None:
+        if 'extra_params' not in run_config:
+            run_config['extra_params'] = {}
         run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
@@ -94,6 +98,8 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
 def restful_test(config, run_config, worker_id: str = '', is_smoke: bool = False, is_mllm: bool = False):
     max_cache_entry = get_max_cache_entry(config.get('model'), run_config.get('backend'))
     if max_cache_entry is not None:
+        if 'extra_params' not in run_config:
+            run_config['extra_params'] = {}
         run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
     pid, content = start_openai_service(config, run_config, worker_id)
@@ -187,11 +193,15 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
 
     max_cache_entry = get_max_cache_entry(model, run_config.get('backend'))
     if max_cache_entry is not None:
+        if 'extra_params' not in run_config:
+            run_config['extra_params'] = {}
         run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
     run_config_new = run_config.copy()
+    if 'extra_params' not in run_config_new:
+        run_config_new['extra_params'] = {}
     run_config_new['extra_params'].pop('enable-prefix-caching', None)
     run_config_new['extra_params']['session-len'] = 32768
     command = f'{cuda_prefix} python3 benchmark/profile_pipeline_api.py {dataset_path} {model_path} {get_cli_common_param(run_config_new)}'  # noqa

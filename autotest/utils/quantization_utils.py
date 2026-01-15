@@ -10,8 +10,8 @@ def quantization(config,
                  cuda_prefix: str = 'CUDA_VISIBLE_DEVICES=0'):
     model_path = config.get('model_path')
     log_path = config.get('log_path')
-    origin_model_path = f"{config.get('model_path')}/{origin_model_name}"
-    quantization_model_path = model_path + '/' + quantization_model_name
+    origin_model_path = os.path.join(config.get('model_path'), origin_model_name)
+    quantization_model_path = os.path.join(model_path, quantization_model_name)
     quantization_log = os.path.join(
         log_path, '_'.join(['quantization', quantization_type,
                             quantization_model_name.split('/')[1]]) + '.log')

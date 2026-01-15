@@ -366,11 +366,6 @@ def _get_communicator_list(config: Dict, backend: str, parallel_config: Dict[str
     return ['nccl', 'cuda-ipc']
 
 
-def _is_bf16_supported_by_device():
-    """Check if bf16 is supported based on the current device."""
-    return is_bf16_supported()
-
-
 def set_device_env_variable(worker_id, parallel_config: Dict[str, int] = None):
     """Set device environment variable based on the device type."""
     device = os.environ.get('DEVICE', 'cuda')

@@ -106,29 +106,27 @@ def terminate_restful_api(worker_id):
     assert response is not None and response.status_code == 200, f'terminate with {response}'
 
 
-def run_all_step(log_path, cases_info, port: int = DEFAULT_PORT):
+def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
     http_url = ':'.join([BASE_HTTP_URL, str(port)])
     model = get_model(http_url)
 
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if ('coder' in model.lower() or 'codellama' in model.lower()) and 'code' not in case:
-            continue
-
         case_info = cases_info.get(case)
 
         with allure.step(case + ' restful_test - openai chat'):
-            restful_result, restful_log, msg = open_chat_test(log_path, case, case_info, model, http_url, port)
+            restful_result, restful_log, msg = open_chat_test(log_path, case_name, case, case_info, model, http_url,
+                                                              port)
             allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
 
 
-def open_chat_test(log_path, case, case_info, model, url, port: int = DEFAULT_PORT):
+def open_chat_test(log_path, case_name, case, case_info, model, url, port: int = DEFAULT_PORT):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
 
-    restful_log = os.path.join(log_path, f'restful_{model}_{str(port)}_{case}_{timestamp}.log')
+    restful_log = os.path.join(log_path, f'log_restful_{case_name}_{timestamp}.log')
 
     file = open(restful_log, 'w')
 
@@ -745,7 +743,11 @@ def run_llm_test(config, run_config, common_case_config, worker_id):
     pid, content = start_openai_service(config, run_config, worker_id)
     try:
         if pid > 0:
-            run_all_step(config.get('log_path'), common_case_config, port=DEFAULT_PORT + get_workerid(worker_id))
+            case_name = get_case_str_by_config(run_config)
+            run_all_step(config.get('log_path'),
+                         case_name,
+                         common_case_config,
+                         port=DEFAULT_PORT + get_workerid(worker_id))
         else:
             assert False, f'Failed to start RESTful API server: {content}'
     finally:

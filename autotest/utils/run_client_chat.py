@@ -107,7 +107,7 @@ def command_test(config, cmd, run_config, case_info, need_extract_output):
                     print(f'output: {output}\n')
                     print(f'result: {case_result}, reason: {reason}\n')
                     msg += reason
-                result = result & case_result
+                result = result and case_result
             file.writelines('\n\n\n' + 'full log:' + outputs + '\n')
 
         file.close()

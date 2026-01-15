@@ -9,33 +9,34 @@ prefix_dataset_path: /mnt/shared-storage-user/auto-eval-pipeline/datasets/prefix
 env_tag: h
 device: cuda
 
-tp_config:
-    Intern-S1: 4
-    Qwen3-235B-A22B: 8
-    Qwen3-235B-A22B-FP8: 4
-    Qwen3-30B-A3B: 2
-    Qwen3-32B: 2
-    gpt-oss-120b: 2
-    gpt-oss-120b-BF16: 4
-    gpt-oss-20b-BF16: 2
-    DeepSeek-V3.1: 8
-    Qwen3-30B-A3B-Base: 2
-    Qwen2.5-32B-Instruct: 2
-    Kimi-K2-Instruct-0905: 16
-    Qwen3-235B-A22B-Thinking-2507: 8
+config:
+    tp:
+        internlm/Intern-S1: 4
+        Qwen/Qwen3-235B-A22B: 8
+        Qwen/Qwen3-235B-A22B-FP8: 4
+        Qwen/Qwen3-30B-A3B: 2
+        Qwen/Qwen3-32B: 2
+        openai/gpt-oss-120b: 2
+        openai/gpt-oss-120b-BF16: 4
+        openai/gpt-oss-20b-BF16: 2
+        deepseek/DeepSeek-V3.1: 8
+        Qwen/Qwen3-30B-A3B-Base: 2
+        Qwen/Qwen2.5-32B-Instruct: 2
+        moonshotai/Kimi-K2-Instruct-0905: 16
+        Qwen/Qwen3-235B-A22B-Thinking-2507: 8
 
-dp_ep_config:
-    Kimi-K2-Instruct-0905:
-        dp: 16
-        ep: 16
-    Qwen3-235B-A22B-Thinking-2507:
-        dp: 8
-        ep: 8
+    dp_ep:
+        moonshotai/Kimi-K2-Instruct-0905:
+            dp: 16
+            ep: 16
+        Qwen/Qwen3-235B-A22B-Thinking-2507:
+            dp: 8
+            ep: 8
 
-cp_tp_config:
-    Qwen3-235B-A22B-Thinking-2507:
-        cp: 2
-        tp: 8
+    cp_tp:
+        Qwen/Qwen3-235B-A22B-Thinking-2507:
+            cp: 2
+            tp: 8
 
 
 turbomind_chat_model:
@@ -153,6 +154,7 @@ pytorch_quantization:
     no_kvint4:
         - internlm/Intern-S1
         - internlm/Intern-S1-mini
+        - Qwen/Qwen3-8B-Base
         - Qwen/Qwen3-0.6B-FP8
         - Qwen/Qwen3-1.7B-FP8
         - Qwen/Qwen3-4B-FP8

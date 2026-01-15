@@ -99,7 +99,7 @@ def llm_summary(case_name, result, msg, work_dir, result_dir=None):
 
         except Exception as e:
             print(f'Error reading metrics: {str(e)}')
-    if result_dir is None:
+    if not result_dir:
         result_dir = work_dir
     write_to_summary(case_name, result, msg, metrics, result_dir)
 

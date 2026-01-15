@@ -8,7 +8,7 @@ device: cuda
 
 config:
     tp:
-      empty: 2
+        empty: 2
 
 turbomind_chat_model:
     tp:

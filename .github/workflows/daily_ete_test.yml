@@ -246,7 +246,6 @@ jobs:
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
@@ -273,7 +272,7 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
+          cp -r /nvme/qa_test_models/offline_pkg/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f

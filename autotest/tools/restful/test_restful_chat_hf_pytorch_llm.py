@@ -5,7 +5,7 @@ import pytest
 from tools.common_case_config import (MODELSCOPE_CONFIG, PYTORCH_LORA_TEST_LLM_GPU1, PYTORCH_LORA_TEST_LLM_GPU2,
                                       PYTORCH_PR_TEST_LLM_GPU1, PYTORCH_PR_TEST_LLM_GPU2, REASONING_TEST_LLM,
                                       TOOLCALL_TEST_LLM)
-from utils.config_utils import get_func_config_list
+from utils.config_utils import get_case_str_by_config, get_func_config_list
 from utils.constant import PROXY_PORT
 from utils.proxy_distributed_utils import ApiServerPerTest, proxy_worker_node_wait
 from utils.ray_distributed_utils import ray_worker_node_wait
@@ -31,7 +31,8 @@ def _run_ray_distributed_test(
         manager.start_lmdeploy_api_server(model_path=model_path, run_config=run_config)
 
         try:
-            run_all_step(config.get('log_path'), common_case_config, port=PROXY_PORT)
+            case_name = get_case_str_by_config(run_config)
+            run_all_step(config.get('log_path'), case_name, common_case_config, port=PROXY_PORT)
 
         finally:
             # Clean up API Server for current model (worker nodes skip)
@@ -59,8 +60,8 @@ def _run_proxy_distributed_test(
 
         if manager.is_master:
             api_server.wait_until_ready()
-
-            run_all_step(config.get('log_path'), common_case_config, port=PROXY_PORT)
+            case_name = get_case_str_by_config(run_config)
+            run_all_step(config.get('log_path'), case_name, common_case_config, port=PROXY_PORT)
 
         else:
             print(f'⏸️ Worker node {manager.node_rank} waiting for master to complete test...')

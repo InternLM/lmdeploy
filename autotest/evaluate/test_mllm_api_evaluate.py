@@ -16,6 +16,8 @@ def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_con
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), constant.PROXY_PORT)
         work_num = int(8 / run_config.get('parallel_config', {}).get('tp', 1))
         run_config_new = run_config.copy()
+        if 'extra_params' not in run_config_new:
+            run_config_new['extra_params'] = {}
         run_config_new['extra_params']['proxy-url'] = f'http://127.0.0.1:{constant.PROXY_PORT}'
 
         from concurrent.futures import ThreadPoolExecutor
@@ -46,6 +48,8 @@ def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_con
         port = constant.PROXY_PORT + get_workerid(worker_id)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port)
         eval_run_config = constant.EVAL_RUN_CONFIG.copy()
+        if 'extra_params' not in eval_run_config:
+            eval_run_config['extra_params'] = {}
         eval_run_config['extra_params']['proxy-url'] = f'http://127.0.0.1:{port}'
         pid, content = start_openai_service(config, eval_run_config, worker_id)
         try:

@@ -96,49 +96,6 @@ def _run_proxy_distributed_test(config,
             time.sleep(1)
 
 
-def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default'):
-    """Run test with specified evaluation configuration."""
-    if 'gpt' in run_config.get('model', '').lower():
-        eval_config_name = 'gpt'
-    if str(config.get('env_tag')) == 'a100':
-        eval_config_name = f'{eval_config_name}-32k'
-    preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
-
-    if test_type == 'infer':
-        pid, content = start_openai_service(config, run_config, worker_id)
-        try:
-            if pid > 0:
-                eval_test(config,
-                          run_config,
-                          port=constant.DEFAULT_PORT + get_workerid(worker_id),
-                          test_type=test_type,
-                          **preset_config)
-            else:
-                assert False, f'Failed to start RESTful API server: {content}'
-        finally:
-            if pid > 0:
-                terminate_restful_api(worker_id)
-    else:  # eval
-        port = constant.PROXY_PORT + get_workerid(worker_id)
-        proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port)
-        eval_run_config = constant.EVAL_RUN_CONFIG.copy()
-        eval_run_config['extra_params']['proxy-url'] = f'http://127.0.0.1:{port}'
-        pid, content = start_openai_service(config, eval_run_config, worker_id)
-        try:
-            if pid > 0:
-                eval_test(config,
-                          run_config,
-                          port=constant.DEFAULT_PORT + get_workerid(worker_id),
-                          test_type=test_type,
-                          **preset_config)
-            else:
-                assert False, f'Failed to start RESTful API server: {content}'
-        finally:
-            if pid > 0:
-                terminate_restful_api(worker_id)
-            stop_restful_api(proxy_pid, proxy_process)
-
-
 def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_config_name='default'):
     """Run test with specified evaluation configuration."""
     if 'gpt' in run_config.get('model', '').lower():
@@ -154,6 +111,8 @@ def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_con
         work_num = int(8 / run_config.get('parallel_config', {}).get('tp', 1))
 
         run_config_new = run_config.copy()
+        if 'extra_params' not in run_config_new:
+            run_config_new['extra_params'] = {}
         run_config_new['extra_params']['proxy-url'] = f'http://127.0.0.1:{constant.PROXY_PORT}'
 
         from concurrent.futures import ThreadPoolExecutor
@@ -179,6 +138,8 @@ def run_eval_test_new(config, run_config, worker_id, test_type='infer', eval_con
         port = constant.PROXY_PORT + get_workerid(worker_id)
         proxy_pid, proxy_process = start_proxy_server(config.get('server_log_path'), port)
         eval_run_config = constant.EVAL_RUN_CONFIG.copy()
+        if 'extra_params' not in eval_run_config:
+            eval_run_config['extra_params'] = {}
         eval_run_config['extra_params']['proxy-url'] = f'http://127.0.0.1:{port}'
         pid, content = start_openai_service(config, eval_run_config, worker_id)
         try:

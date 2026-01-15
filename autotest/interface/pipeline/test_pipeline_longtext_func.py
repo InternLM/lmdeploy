@@ -3,7 +3,6 @@ import os
 import numpy as np
 import pytest
 from utils.config_utils import set_device_env_variable
-from utils.get_run_config import close_pipeline, get_tp_num
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 
@@ -29,25 +28,22 @@ SESSION_LEN_CONFIG = {
 @pytest.mark.parametrize(
     'model', ['internlm/Intern-S1-mini', 'internlm/internlm2_5-7b-chat', 'internlm/internlm2_5-7b-chat-inner-4bits'])
 def test_history_issue_tp1(config, model, worker_id):
-    log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
         set_device_env_variable(worker_id)
-    stream_infer_basic(config, model, log_name)
+    stream_infer_basic(config, model, 1)
 
 
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('model', ['Qwen/Qwen3-32B', 'Qwen/Qwen3-32B-inner-4bits', 'Qwen/Qwen3-30B-A3B'])
 def test_history_issue_tp2(config, model, worker_id):
-    log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    stream_infer_basic(config, model, log_name)
+    stream_infer_basic(config, model, 2)
 
 
-def stream_infer_basic(config, model, log_name):
-    tp_num = get_tp_num(config, model)
-    model_path = '/'.join([config.get('model_path'), model])
+def stream_infer_basic(config, model, tp_num):
+    model_path = os.path.join(config.get('model_path'), model)
 
     backend_config = TurbomindEngineConfig(session_len=SESSION_LEN, tp=tp_num)
     pipe = pipeline(model_path, backend_config=backend_config)
@@ -65,7 +61,7 @@ def stream_infer_basic(config, model, log_name):
         continue
     print(outputs)
 
-    close_pipeline(pipe)
+    pipe.close()
 
 
 @pytest.mark.gpu_num_1
@@ -171,7 +167,7 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
     pass_key2, prompt = get_passkey_prompt(pipe, session_len)
     response2 = pipe([prompt] * 2, gen_config=gen_config)
 
-    close_pipeline(pipe)
+    pipe.close()
 
     assert str(pass_key1) in response1.text, str(response1)
     assert str(pass_key2) in response2[0].text and str(pass_key2) in response2[1].text, str(response2)
