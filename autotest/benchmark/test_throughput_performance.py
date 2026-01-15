@@ -114,7 +114,7 @@ def test_pytorch_throughput_tp16(config, run_config, worker_id):
     },
     'extra_params': {}
 }])
-def test_throughput_func_tp2(config, run_id, run_config, worker_id):
+def test_throughput_func_tp2(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id, is_smoke=True)
     assert result, msg
 
@@ -141,6 +141,6 @@ def test_throughput_func_tp2(config, run_id, run_config, worker_id):
     },
     'extra_params': {}
 }])
-def test_throughput_prtest_tp1(config, run_id, run_config, worker_id):
+def test_throughput_prtest_tp1(config, run_config, worker_id):
     result, msg = throughput_test(config, run_config, worker_id=worker_id, is_smoke=True)
     assert result, msg

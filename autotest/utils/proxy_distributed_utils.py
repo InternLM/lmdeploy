@@ -218,6 +218,7 @@ class ApiServerPerTest:
     def __init__(self, proxy_manager: ProxyDistributedManager, model_path: str, run_config: Dict[str, Any]):
         self.proxy_manager = proxy_manager
         self.model_path = model_path
+        self.run_config = run_config
 
         self.master_addr = proxy_manager.master_addr
         self.proxy_port = proxy_manager.proxy_port

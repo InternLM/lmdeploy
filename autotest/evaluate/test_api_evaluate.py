@@ -12,32 +12,34 @@ from utils.run_restful_chat import start_openai_service, start_proxy_server, sto
 
 def _run_ray_distributed_test(
         config,
-        run_id,
-        model_param,
+        run_config,
         worker_id,
         test_type='infer',
         manager=None,  # ← New parameter: pass in shared manager
         eval_config_name='default'):
     """Universal distributed test executor (using shared Ray cluster)"""
     assert manager is not None, 'Manager instance must be provided'
-    if 'gpt' in model_param.get('model', '').lower():
+    if 'gpt' in run_config.get('model', '').lower():
         eval_config_name = 'gpt'
         preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
 
     if manager.is_master:
-        model_name = model_param['model']
+        model_name = run_config['model']
         model_path = os.path.join(config['model_path'], model_name)
         preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
+        eval_path = config.get('eval_path')
+        case_name = get_case_str_by_config(run_config)
 
         # Start API Server for current model (master node starts/stops, worker nodes verify)
-        manager.start_lmdeploy_api_server(model_path=model_path, model_param=model_param)
+        manager.start_lmdeploy_api_server(model_path=model_path, run_config=run_config)
 
         try:
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
-            result, msg = eval_test(config,
-                                    run_id,
-                                    model_param,
-                                    worker_id=worker_id,
+            case_name = get_case_str_by_config(run_config)
+
+            result, msg = eval_test(model_path,
+                                    eval_path,
+                                    case_name,
                                     port=constant.PROXY_PORT,
                                     test_type=test_type,
                                     **preset_config)
@@ -53,33 +55,33 @@ def _run_ray_distributed_test(
 
 
 def _run_proxy_distributed_test(config,
-                                run_id,
-                                model_param,
+                                run_config,
                                 worker_id,
                                 test_type='infer',
                                 manager=None,
                                 eval_config_name='default'):
     assert manager is not None, 'Manager instance must be provided'
 
-    if 'gpt' in model_param.get('model', '').lower():
+    if 'gpt' in run_config.get('model', '').lower():
         eval_config_name = 'gpt'
 
     preset_config = constant.EVAL_CONFIGS.get(eval_config_name, {})
-    model_name = model_param['model']
+    model_name = run_config['model']
     model_path = os.path.join(config['model_path'], model_name)
 
-    api_server = ApiServerPerTest(proxy_manager=manager, model_path=model_path, model_param=model_param)
+    api_server = ApiServerPerTest(proxy_manager=manager, model_path=model_path, run_config=run_config)
     api_server.start()
 
     try:
         if manager.is_master:
             api_server.wait_until_ready()
             print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
+            eval_path = config.get('eval_path')
+            case_name = get_case_str_by_config(run_config)
 
-            result, msg = eval_test(config,
-                                    run_id,
-                                    model_param,
-                                    worker_id=worker_id,
+            result, msg = eval_test(model_path,
+                                    eval_path,
+                                    case_name,
                                     port=constant.PROXY_PORT,
                                     test_type=test_type,
                                     **preset_config)
@@ -253,10 +255,9 @@ def test_pytorch_restful_tp16(config, run_config, worker_id):
 @pytest.mark.gpu_num_distributed_tp16
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(PYTORCH, {'tp': 16}))
-def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_id, run_config, worker_id):
+def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_config, worker_id):
     _run_ray_distributed_test(config=config,
-                              run_id=run_id,
-                              model_param=run_config,
+                              run_config=run_config,
                               worker_id=worker_id,
                               test_type='infer',
                               manager=shared_ray_manager)
@@ -267,10 +268,9 @@ def test_pytorch_restful_distributed_tp16(shared_ray_manager, config, run_id, ru
 @pytest.mark.gpu_num_distributed_dpep8
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(PYTORCH, {'dp': 8, 'ep': 8}))
-def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_id, run_config, worker_id):
+def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_config, worker_id):
     _run_proxy_distributed_test(config=config,
-                                run_id=run_id,
-                                model_param=run_config,
+                                run_config=run_config,
                                 worker_id=worker_id,
                                 test_type='infer',
                                 manager=shared_proxy_manager)
@@ -281,10 +281,9 @@ def test_pytorch_restful_distributed_dpep8(shared_proxy_manager, config, run_id,
 @pytest.mark.gpu_num_distributed_dpep16
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', get_models(PYTORCH, {'dp': 16, 'ep': 16}))
-def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_id, run_config, worker_id):
+def test_pytorch_restful_distributed_dpep16(shared_proxy_manager, config, run_config, worker_id):
     _run_proxy_distributed_test(config=config,
-                                run_id=run_id,
-                                model_param=run_config,
+                                run_config=run_config,
                                 worker_id=worker_id,
                                 test_type='infer',
                                 manager=shared_proxy_manager)
