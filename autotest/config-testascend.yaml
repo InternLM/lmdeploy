@@ -1,0 +1,32 @@
+model_path: /nvme/qa_test_models
+resource_path: /nvme/qa_test_models/resource
+log_path: /nvme/qa_test_models/autotest_model/log
+server_log_path: /nvme/qa_test_models/server_log
+eval_path: /nvme/qa_test_models/evaluation_report
+mllm_eval_path: /nvme/qa_test_models/mllm_evaluation_report
+benchmark_path: /nvme/qa_test_models/benchmark-reports
+dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+prefix_dataset_path: /nvme/qa_test_models/datasets/prefix_cache_test.json
+env_tag: ascend
+device: ascend
+
+config:
+    tp:
+    dp_ep:
+    cp_tp:
+
+
+pytorch_chat_model:
+    tp:
+        - test/test_tp1
+
+
+pytorch_quantization:
+    awq:
+        - test/test_tp1
+    w8a8:
+        - test/test_tp1
+    no_kvint4:
+        - test/test_tp1
+    no_kvint8:
+        - test/test_tp1

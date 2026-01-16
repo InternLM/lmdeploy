@@ -1,0 +1,194 @@
+model_path: /nvme/qa_test_models
+resource_path: /nvme/qa_test_models/resource
+log_path: /nvme/qa_test_models/autotest_model/log
+server_log_path: /nvme/qa_test_models/server_log
+eval_path: /nvme/qa_test_models/evaluation_report
+mllm_eval_path: /nvme/qa_test_models/mllm_evaluation_report
+benchmark_path: /nvme/qa_test_models/benchmark-reports
+dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
+prefix_dataset_path: /nvme/qa_test_models/datasets/prefix_cache_test.json
+env_tag: test
+device: cuda
+
+config:
+    tp:
+        test/test_tp2: 2
+        test/test_tp2_gpqa: 2
+        test/test_tp2_int4: 2
+        test/test_tp8: 8
+        test/test_vl_tp2: 2
+        test/test_vl_tp2_gpqa: 2
+        test/test_vl_tp2_int4: 2
+        test/test_vl_tp8: 8
+
+    dp_ep:
+        test/test_dpep16:
+            dp: 16
+            ep: 16
+        test/test_dpep8:
+            dp: 8
+            ep: 8
+        test/test_vl_dpep16:
+            dp: 16
+            ep: 16
+        test/test_vl_dpep8:
+            dp: 8
+            ep: 8
+
+    cp_tp:
+        test/test_cp2tp8:
+            cp: 2
+            tp: 8
+        test/test_vl_cp2tp8:
+            cp: 2
+            tp: 8
+
+
+turbomind_chat_model:
+    tp:
+        - test/test_tp1
+        - test/test_tp2
+        - test/test_tp2_gpqa
+        - test/test_tp2_int4
+        - test/test_tp8
+        - test/test_vl_tp1
+        - test/test_vl_tp2
+        - test/test_vl_tp2_gpqa
+        - test/test_vl_tp2_int4
+        - test/test_vl_tp8
+    cp_tp:
+        - test/test_cp2tp8
+        - test/test_vl_cp2tp8
+
+pytorch_chat_model:
+    tp:
+        - test/test_tp1
+        - test/test_tp1_pytorch
+        - test/test_tp2
+        - test/test_tp2_gpqa
+        - test/test_tp2_int4
+        - test/test_tp8
+        - test/test_vl_tp1
+        - test/test_vl_tp1_pytorch
+        - test/test_vl_tp2
+        - test/test_vl_tp2_gpqa
+        - test/test_vl_tp2_int4
+        - test/test_vl_tp8
+    dp_ep:
+        - test/test_dpep8
+        - test/test_dpep16
+        - test/test_vl_dpep8
+        - test/test_vl_dpep16
+    cp_tp:
+        - test/test_cp2tp8
+        - test/test_vl_cp2tp8
+
+turbomind_vl_model:
+    tp:
+        - test/test_vl_tp1
+        - test/test_vl_tp2
+        - test/test_vl_tp2_gpqa
+        - test/test_vl_tp2_int4
+        - test/test_vl_tp8
+
+pytorch_vl_model:
+    tp:
+        - test/test_vl_tp1
+        - test/test_vl_tp1_pytorch
+        - test/test_vl_tp2
+        - test/test_vl_tp2_gpqa
+        - test/test_vl_tp2_int4
+        - test/test_vl_tp8
+    dp_ep:
+        - test/test_vl_dpep8
+        - test/test_vl_dpep16
+
+turbomind_base_model:
+    tp:
+        - test/test_tp1
+        - test/test_tp2
+
+pytorch_base_model:
+    tp:
+        - test/test_tp1
+        - test/test_tp1_pytorch
+        - test/test_tp2
+
+turbomind_quantization:
+    no_awq:
+        - test/test_tp2
+        - test/test_vl_tp2
+        - test/test_tp2_gpqa
+        - test/test_vl_tp2_gpqa
+        - test/test_cp2tp8
+        - test/test_dpep8
+    gptq:
+        - test/test_tp1
+        - test/test_vl_tp1
+        - test/test_cp2tp8
+        - test/test_dpep8
+    no_kvint4:
+        - test/test_tp2
+        - test/test_vl_tp2
+        - test/test_cp2tp8
+        - test/test_vl_dpep8
+    no_kvint8:
+        - test/test_tp1
+        - test/test_vl_tp1
+        - test/test_dpep8
+        - test/test_vl_cp2tp8
+
+pytorch_quantization:
+    awq:
+        - test/test_tp1
+    w8a8:
+        - test/test_tp2
+    no_kvint4:
+        - test/test_tp2
+        - test/test_cp2tp8
+        - test/test_vl_cp2tp8
+    no_kvint8:
+        - test/test_tp1
+        - test/test_vl_tp1
+        - test/test_vl_dpep8
+
+longtext_model:
+    - test/test_tp1
+    - test/test_tp1_pytorch
+    - test/test_vl_tp2
+    - test/test_vl_tp8
+    - test/test_cp2tp8
+    - test/test_vl_dpep8
+
+benchmark_model:
+    - test/test_tp1
+    - test/test_tp1_pytorch
+    - test/test_vl_tp2
+    - test/test_vl_tp8
+    - test/test_cp2tp8
+    - test/test_vl_dpep8
+
+mllm_benchmark_model:
+    - test/test_vl_tp1
+    - test/test_vl_tp1_pytorch
+    - test/test_vl_tp2
+    - test/test_vl_tp8
+    - test/test_vl_dpep16
+    - test/test_vl_cp2tp8
+
+evaluate_model:
+    - test/test_tp1
+    - test/test_tp1_pytorch
+    - test/test_vl_tp2
+    - test/test_vl_tp8
+    - test/test_cp2tp8
+    - test/test_dpep16
+    - test/test_vl_dpep8
+
+mllm_evaluate_model:
+    - test/test_vl_tp1
+    - test/test_vl_tp1_pytorch
+    - test/test_vl_tp2
+    - test/test_vl_tp8
+    - test/test_vl_dpep16
+    - test/test_vl_cp2tp8

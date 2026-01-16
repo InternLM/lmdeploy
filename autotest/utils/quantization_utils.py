@@ -2,8 +2,6 @@ import os
 import subprocess
 from subprocess import PIPE
 
-from utils.config_utils import _is_bf16_supported_by_device
-
 
 def quantization(config,
                  quantization_model_name,
@@ -12,8 +10,8 @@ def quantization(config,
                  cuda_prefix: str = 'CUDA_VISIBLE_DEVICES=0'):
     model_path = config.get('model_path')
     log_path = config.get('log_path')
-    origin_model_path = config.get('model_path') + '/' + origin_model_name
-    quantization_model_path = model_path + '/' + quantization_model_name
+    origin_model_path = os.path.join(config.get('model_path'), origin_model_name)
+    quantization_model_path = os.path.join(model_path, quantization_model_name)
     quantization_log = os.path.join(
         log_path, '_'.join(['quantization', quantization_type,
                             quantization_model_name.split('/')[1]]) + '.log')
@@ -42,9 +40,7 @@ def quantization(config,
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
 
-    if not _is_bf16_supported_by_device() or quantization_type == 'gptq':
-        quantization_cmd += ' --batch-size 8'
-    elif str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
+    if quantization_type == 'gptq' or str(config.get('env_tag')) == '3090' or str(config.get('env_tag')) == '5080':
         quantization_cmd += ' --batch-size 8'
     else:
         quantization_cmd += ' --batch-size 32'

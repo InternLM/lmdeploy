@@ -38,6 +38,8 @@ EVAL_CONFIGS = {
     }
 }
 
+MLLM_EVAL_CONFIGS = {'default': '--temperature 0.7 --top-k 20 --top-p 0.8 --repetition-penalty 1.0'}
+
 BACKEND_LIST = ['turbomind', 'pytorch']
 
 RESTFUL_MODEL_LIST = [
@@ -48,3 +50,22 @@ RESTFUL_MODEL_LIST = [
 ]
 
 RESTFUL_BASE_MODEL_LIST = ['Qwen/Qwen3-8B-Base', 'internlm/internlm2_5-20b', 'Qwen/Qwen3-4B']
+
+SUFFIX_INNER_AWQ = '-inner-4bits'
+SUFFIX_INNER_GPTQ = '-inner-gptq'
+SUFFIX_INNER_W8A8 = '-inner-w8a8'
+
+EVAL_RUN_CONFIG = {
+    'model': 'Qwen/Qwen2.5-32B-Instruct',
+    'backend': 'turbomind',
+    'communicator': 'nccl',
+    'quant_policy': 0,
+    'parallel_config': {
+        'tp': 2
+    },
+    'extra_params': {
+        'server-name': '127.0.0.1',
+        'session-len': 76000,
+        'cache-max-entry-count': 0.7
+    }
+}
