@@ -52,7 +52,10 @@ class ModelChecker(BaseChecker):
 
             from lmdeploy.pytorch.config import ModelConfig
             from lmdeploy.utils import is_bf16_supported
-            model_config = ModelConfig.from_hf_config(config, model_path=model_path, dtype=dtype, device_type=device_type)
+            model_config = ModelConfig.from_hf_config(config,
+                                                      model_path=model_path,
+                                                      dtype=dtype,
+                                                      device_type=device_type)
             if model_config.dtype == torch.bfloat16:
                 if not is_bf16_supported(device_type):
                     logger.warning('Device does not support bfloat16.')
