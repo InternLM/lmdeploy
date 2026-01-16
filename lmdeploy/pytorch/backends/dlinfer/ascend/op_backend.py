@@ -281,7 +281,7 @@ class AscendOpsBackend(DlinferOpsBackend):
 
         def get_tokens_info(dp_size, tp_size, ep_size, ep_group):
             if ep_size <= 1:
-                return 0, 0, 0, None
+                return 0, 0, 0
             # get runtime num_tokens
             is_graph = cls.enable_graph and step_context.is_decoding
             if is_graph:
