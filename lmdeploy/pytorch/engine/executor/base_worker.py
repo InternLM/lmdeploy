@@ -51,6 +51,7 @@ class WorkerWrapperBase:
         logger.setLevel(log_level)
         self.out_que: asyncio.Queue = None
         self._output_loop: asyncio.Task = None
+        self._forward_event: asyncio.Event = None
 
         # frequently gc would cause latency spike
         # default threshold (700, 10, 10)
@@ -151,7 +152,9 @@ class WorkerWrapperBase:
 
     def start(self):
         """Start engine loop."""
-        self.model_agent.start()
+        self._forward_event = asyncio.Event()
+        self._forward_event.set()  # Set the event to allow forward calls
+        self.model_agent.start(self._forward_event)
         event_loop = asyncio.get_event_loop()
         self.out_que = asyncio.Queue()
         self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
@@ -178,6 +181,7 @@ class WorkerWrapperBase:
             self._output_loop.cancel()
 
     async def stop_async(self):
+        await self._forward_event.wait()  # Ensure forward event is set before stopping
         await self.model_agent.stop_async()
         if self._output_loop is not None:
             self._output_loop.cancel()
