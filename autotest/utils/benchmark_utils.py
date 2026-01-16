@@ -108,12 +108,12 @@ def restful_test(config, run_config, worker_id: str = '', is_smoke: bool = False
     try:
         if pid > 0:
             if is_mllm:
-                return mllm_restful_profile(config.get('log_path'),
+                return mllm_restful_profile(config,
                                             case_name,
                                             port=constant.DEFAULT_PORT + get_workerid(worker_id),
                                             is_smoke=is_smoke)
             else:
-                return restful_profile(config.get('log_path'),
+                return restful_profile(config,
                                        case_name,
                                        port=constant.DEFAULT_PORT + get_workerid(worker_id),
                                        is_smoke=is_smoke)
