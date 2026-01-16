@@ -89,7 +89,7 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
     if quant_method == 'awq':
-        if dtype == 'bfloat16':
+        if dtype == 'bfloat16' and device_type == 'ascend':
             logger.debug('set torch_dtype to bfloat16 for awq.')
             config.hf_config.torch_dtype = 'bfloat16'
             config.dtype = torch.bfloat16
