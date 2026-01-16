@@ -323,6 +323,7 @@ class ModelConfig:
         hf_overrides: Dict[str, Any] = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        device_type: str = 'cuda',
     ):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
@@ -351,6 +352,7 @@ class ModelConfig:
             dist_config=dist_config,
             is_draft_model=is_draft_model,
             spec_method=spec_method,
+            device_type=device_type,
         )
 
         if hf_overrides is not None:
