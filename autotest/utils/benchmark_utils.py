@@ -66,6 +66,7 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
         if 'extra_params' not in run_config:
             run_config['extra_params'] = {}
         run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
+        run_config['extra_params'].pop('session-len', None)
 
     cuda_prefix = get_cuda_prefix_by_workerid(worker_id, run_config.get('parallel_config'))
 
@@ -213,7 +214,7 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
     env = os.environ.copy()
     env.update(run_config.get('env', {}))
 
-    test_configs = [(16384, 1024, 10, '16k', None)]
+    test_configs = [(8096, 256, 10, '8k', None)]
     for enable_prefix_caching in [False, True]:
         suffix = 'cache' if enable_prefix_caching else 'no_cache'
 

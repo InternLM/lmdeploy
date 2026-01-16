@@ -142,6 +142,6 @@ def test_throughput_func_tp2(config, run_config, worker_id):
     'extra_params': {}
 }])
 def test_throughput_prtest_tp1(config, run_config, worker_id):
-    worker_id = 'gw' + str(5 + get_workerid(worker_id))
+    worker_id = 'gw' + str(6 + get_workerid(worker_id))
     result, msg = throughput_test(config, run_config, worker_id=worker_id, is_smoke=True)
     assert result, msg

@@ -70,7 +70,7 @@ def test_hf_turbomind_base_tp2(config, run_config, cli_case_config, worker_id):
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', TURBOMIND_PR_TEST_LLM_GPU2)
 def test_hf_turbomind_chat_pr_tp2(config, run_config, cli_case_config, worker_id):
-    worker_id = 'gw' + str(5 + get_workerid(worker_id))
+    worker_id = 'gw' + str(3 + get_workerid(worker_id))
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
 
 
@@ -79,7 +79,7 @@ def test_hf_turbomind_chat_pr_tp2(config, run_config, cli_case_config, worker_id
 @pytest.mark.pr_test
 @pytest.mark.parametrize('run_config', TURBOMIND_PR_TEST_LLM_GPU1)
 def test_hf_turbomind_chat_pr_tp1(config, run_config, cli_case_config, worker_id):
-    worker_id = 'gw' + str(5 + get_workerid(worker_id))
+    worker_id = 'gw' + str(6 + get_workerid(worker_id))
     run_tests(config, 'chat_testcase', cli_case_config, run_config, worker_id)
 
 
