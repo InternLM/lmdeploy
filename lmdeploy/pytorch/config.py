@@ -10,7 +10,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.utils import maybe_register_config_serialize_by_value
 
 
-def _update_torch_dtype(config: 'ModelConfig', dtype: str):
+def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'cuda'):
     """Update the torch dtype from the model config.
 
     Args:
@@ -24,8 +24,8 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
     if quant_method == 'awq':
-        if dtype == 'bfloat16':
-            logger.debug('set torch_dtype to bfloat16 for awq.')
+        if dtype == 'bfloat16' and device_type == 'ascend':
+            logger.debug('awq on ascend only support bfloat16, set torch_dtype to bfloat16 for awq.')
             config.hf_config.torch_dtype = 'bfloat16'
             config.dtype = torch.bfloat16
         else:
@@ -372,6 +372,7 @@ class ModelConfig:
         dist_config: DistConfig = None,
         is_draft_model: bool = False,
         spec_method: str = None,
+        device_type: str = 'cuda',
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -400,7 +401,7 @@ class ModelConfig:
             assert tp % model_config.num_key_value_heads == 0
 
         # should after setting `hf_config` and `model_arch` attributes
-        model_config = _update_torch_dtype(model_config, dtype)
+        model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):
