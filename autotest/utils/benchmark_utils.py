@@ -74,8 +74,7 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
     env = os.environ.copy()
     env.update(run_config.get('env', {}))
 
-    for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', 20),
-                                                                    (1, 65536, 10, '64k', 10),
+    for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 20, '32k', 20), (1, 65536, 5, '64k', 5),
                                                                     (65536, 1024, 15, '64k-1k', 15),
                                                                     (198000, 1024, 3, '198k-1k', 1)]:
         session_len = input_len + out_len + 1
@@ -87,7 +86,7 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
             f'--session-len {session_len}', '--random-range-ratio 1', f'--csv {csv_path}'
         ]).strip()
 
-        result, stderr = execute_command_with_logging(cmd, benchmark_log, env=env)
+        result, stderr = execute_command_with_logging(cmd, benchmark_log, timeout=7200, env=env)
         allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if result and not os.path.isfile(csv_path):

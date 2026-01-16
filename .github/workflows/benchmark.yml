@@ -200,27 +200,3 @@ jobs:
           rm -rf $workdir
           mkdir $workdir
           chmod -R 777 $workdir
-
-
-  get_result_overview:
-    if: always() && !cancelled()
-    needs: [benchmark]
-    timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
-    container:
-      image: openmmlab/lmdeploy:latest-cu12.8
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Get overview
-        run: |
-          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          pip install pandas fire mmengine
-          python3 .github/scripts/action_tools.py generate_benchmark_report $REPORT_DIR

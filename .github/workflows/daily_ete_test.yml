@@ -639,30 +639,6 @@ jobs:
           mkdir $workdir
           chmod -R 777 $workdir
 
-  get_benchmark_result:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
-    needs: [test_benchmark]
-    timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
-    container:
-      image: openmmlab/lmdeploy:latest-cu12.8
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    env:
-      BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
-    steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Get overview
-        run: |
-          pip install pandas fire mmengine
-          python3 .github/scripts/action_tools.py generate_benchmark_report $BENCHMARK_REPORT_DIR
-
 
   get_coverage_report:
     if: ${{!cancelled()}}

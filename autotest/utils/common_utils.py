@@ -33,7 +33,8 @@ def execute_command_with_logging(cmd,
                                      stderr=subprocess.STDOUT,
                                      env=env,
                                      bufsize=1,
-                                     timeout=timeout)
+                                     timeout=timeout,
+                                     start_new_session=True)
 
             if process.stdout:
                 if should_print:
