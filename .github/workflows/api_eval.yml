@@ -38,7 +38,7 @@ env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/evaluation-reports/allure_report/${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/evaluation-reports/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: '--lf'
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
