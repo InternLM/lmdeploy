@@ -87,6 +87,7 @@ Documentation
    :caption: Benchmark
 
    benchmark/benchmark.md
+   benchmark/deepseekv3.md
    benchmark/evaluate_with_opencompass.md
    benchmark/evaluate_with_vlmevalkit.md
 
