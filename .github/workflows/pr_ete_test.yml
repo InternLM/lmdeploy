@@ -32,9 +32,9 @@ jobs:
     runs-on: [self-hosted, linux-a100-pr]
     timeout-minutes: 120
     env:
-      REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.base_ref }}_${{ github.run_id }}
+      REPORT_DIR: /nvme/qa_test_models/test-reports/${{ github.head_ref }}_${{ github.run_id }}
     container:
-      image: nvidia/cuda:12.4.1-devel-ubuntu22.04
+      image: openmmlab/lmdeploy:dev-cu12.8
       options: --gpus all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip --pull never
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
@@ -45,34 +45,13 @@ jobs:
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
-      - name: Setup systems
-        run: |
-          apt-get update -y && apt-get install -y software-properties-common wget vim git curl &&\
-          curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
-          add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
-          ninja-build rapidjson-dev libgoogle-glog-dev gdb python3.10 python3.10-dev python3.10-venv \
-          && apt-get clean -y && rm -rf /var/lib/apt/lists/* && cd /opt && python3 -m venv py3
-          echo "PATH=/opt/py3/bin:$PATH" >> "$GITHUB_ENV"
       - name: Clone repository
         uses: actions/checkout@v2
-      - name: Install pytorch
+      - name: Install lmdeploy
         run: |
-          python3 -m pip cache dir
-          python3 -m pip install --upgrade pip setuptools==69.5.1
-      - name: Build lmdeploy
-        run: |
-          cp /nvme/qa_test_models/offline_pkg/openmpi-4.1.5.tar.gz .
-          tar xf openmpi-4.1.5.tar.gz && cd openmpi-4.1.5 && ./configure --prefix=/usr/local/openmpi
-          make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
-          export PATH=$PATH:/usr/local/openmpi/bin
-          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-          # We need to pin transformers version (<4.52.0) to avoid test failures due to breaking changes.
-          python3 -m pip install transformers==4.51.3
           python3 -m pip install -r requirements/lite.txt
           python3 -m pip install -r requirements/test.txt
           python3 -m pip install -e .
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /nvme/qa_test_models/offline_pkg/flash_attn-2.8.3+cu12torch2.8cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
       - name: Check env
         run: |
           python3 -m pip list
