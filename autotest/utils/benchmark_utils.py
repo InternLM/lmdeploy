@@ -106,17 +106,16 @@ def restful_test(config, run_config, worker_id: str = '', is_smoke: bool = False
         run_config['extra_params']['cache-max-entry-count'] = max_cache_entry
 
     pid, content = start_openai_service(config, run_config, worker_id)
-    case_name = get_case_str_by_config(run_config)
     try:
         if pid > 0:
             if is_mllm:
                 return mllm_restful_profile(config,
-                                            case_name,
+                                            run_config,
                                             port=constant.DEFAULT_PORT + get_workerid(worker_id),
                                             is_smoke=is_smoke)
             else:
                 return restful_profile(config,
-                                       case_name,
+                                       run_config,
                                        port=constant.DEFAULT_PORT + get_workerid(worker_id),
                                        is_smoke=is_smoke)
         else:
@@ -130,7 +129,9 @@ MASTER_ADDR = os.getenv('MASTER_ADDR', 'localhost')
 BASE_HTTP_URL = f'http://{MASTER_ADDR}'
 
 
-def restful_profile(config, case_name, port, is_smoke: bool = False):
+def restful_profile(config, run_config, port, is_smoke: bool = False):
+    model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+    case_name = get_case_str_by_config(run_config)
     dataset_path = config.get('dataset_path')
     benchmark_path = os.path.join(config.get('benchmark_path'), 'restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
@@ -143,7 +144,7 @@ def restful_profile(config, case_name, port, is_smoke: bool = False):
 
     csv_path = f'{work_dir}/restful.csv'
 
-    command = f'python benchmark/profile_restful_api.py --backend lmdeploy --dataset-name sharegpt --dataset-path {dataset_path} --base-url {http_url} --output-file {csv_path}'  # noqa
+    command = f'python benchmark/profile_restful_api.py --backend lmdeploy --dataset-name sharegpt --dataset-path {dataset_path} --tokenizer {model_path} --base-url {http_url} --output-file {csv_path}'  # noqa
     if is_smoke:
         command += ' --num-prompts 100'
     else:
@@ -159,7 +160,9 @@ def restful_profile(config, case_name, port, is_smoke: bool = False):
     return True, 'success'
 
 
-def mllm_restful_profile(config, case_name, port, is_smoke: bool = False):
+def mllm_restful_profile(config, run_config, port, is_smoke: bool = False):
+    model_path = os.path.join(config.get('model_path'), run_config.get('model'))
+    case_name = get_case_str_by_config(run_config)
     benchmark_path = os.path.join(config.get('benchmark_path'), 'mllm_restful')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
     benchmark_log = os.path.join(benchmark_path, f'log_{case_name}.log')
@@ -171,7 +174,7 @@ def mllm_restful_profile(config, case_name, port, is_smoke: bool = False):
 
     csv_path = f'{work_dir}/mllm_restful.csv'
 
-    command = f'python benchmark/profile_restful_api.py --backend lmdeploy-chat --dataset-name image --random-input-len 100 --random-output-len 100 --random-range-ratio 1 --image-format jpeg --image-count 1 --image-content random --image-resolution 1024x1024 --base-url {http_url} --output-file {csv_path}'  # noqa
+    command = f'python benchmark/profile_restful_api.py --backend lmdeploy-chat --dataset-name image --tokenizer {model_path} --random-input-len 100 --random-output-len 100 --random-range-ratio 1 --image-format jpeg --image-count 1 --image-content random --image-resolution 1024x1024 --base-url {http_url} --output-file {csv_path}'  # noqa
     if is_smoke:
         command += ' --num-prompts 100'
     else:
