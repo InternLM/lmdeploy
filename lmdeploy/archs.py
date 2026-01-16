@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from transformers import AutoConfig
 
@@ -58,7 +58,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
 def autoget_backend_config(
     model_path: str,
     backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None
-) -> Union[PytorchEngineConfig, TurbomindEngineConfig]:
+) -> Tuple[Literal['turbomind', 'pytorch'], Union[PytorchEngineConfig, TurbomindEngineConfig]]:
     """Get backend config automatically.
 
     Args:
@@ -72,14 +72,14 @@ def autoget_backend_config(
     """
     from dataclasses import asdict
 
+    if isinstance(backend_config, PytorchEngineConfig):
+        return 'pytorch', backend_config
+
     backend = autoget_backend(model_path)
-    if backend == 'pytorch':
-        config = PytorchEngineConfig()
-    else:
-        config = TurbomindEngineConfig()
+    config = PytorchEngineConfig() if backend == 'pytorch' else TurbomindEngineConfig()
     if backend_config is not None:
         if type(backend_config) == type(config):
-            return backend_config
+            config = backend_config
         else:
             data = asdict(backend_config)
             for k, v in data.items():
@@ -90,7 +90,7 @@ def autoget_backend_config(
                 config.block_size = backend_config.cache_block_seq_len
             else:
                 config.cache_block_seq_len = backend_config.block_size
-    return config
+    return backend, config
 
 
 def check_vl_llm(config: dict) -> bool:
@@ -126,14 +126,14 @@ def check_vl_llm(config: dict) -> bool:
 
 def get_task(model_path: str):
     """Get pipeline type and pipeline class from model config."""
-    from lmdeploy.serve.async_engine import AsyncEngine
+    from lmdeploy.serve.core import AsyncEngine
 
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
     _, config = get_model_arch(model_path)
     if check_vl_llm(config.to_dict()):
-        from lmdeploy.serve.vl_async_engine import VLAsyncEngine
+        from lmdeploy.serve.core import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 
     # default task, pipeline_class

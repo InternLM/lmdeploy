@@ -6,11 +6,12 @@ from .protocol import ChatCompletionRequest
 if TYPE_CHECKING:
     from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 
+from lmdeploy.serve.managers import SessionManager
+
+session_manager: SessionManager = SessionManager()
+
 
 def check_request(request: ChatCompletionRequest, engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
-    if not isinstance(request, ChatCompletionRequest):
-        raise TypeError(f'Invalid request type, expected ChatCompletionRequest, got {type(request)}')
-
     # Check logprobs settings
     try:
         logprobs_mode = engine_config.logprobs_mode
@@ -24,6 +25,9 @@ def check_request(request: ChatCompletionRequest, engine_config: 'TurbomindEngin
                     'when logprobs_mode is enabled in engine configuration.')
     except AttributeError:
         pass
+
+    if session_manager.has(request.session_id):
+        return f'The session_id {request.session_id!r} is occupied.'
 
     # check sampling settings
     if request.n <= 0:

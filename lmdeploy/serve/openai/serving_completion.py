@@ -6,11 +6,12 @@ from .protocol import CompletionRequest
 if TYPE_CHECKING:
     from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 
+from lmdeploy.serve.managers import SessionManager
+
+session_manager: SessionManager = SessionManager()
+
 
 def check_request(request: CompletionRequest, engine_config: 'TurbomindEngineConfig | PytorchEngineConfig') -> str:
-    if not isinstance(request, CompletionRequest):
-        raise TypeError(f'Invalid request type, expected CompletionRequest, got {type(request)}')
-
     # Check logprobs settings
     try:
         logprobs_mode = engine_config.logprobs_mode
@@ -21,6 +22,9 @@ def check_request(request: CompletionRequest, engine_config: 'TurbomindEngineCon
             return 'logprobs must be non-negative when logprobs_mode is enabled in engine configuration.'
     except AttributeError:
         pass
+
+    if session_manager.has(request.session_id):
+        return f'The session_id {request.session_id!r} is occupied.'
 
     # check sampling settings
     if request.n <= 0:

@@ -5,6 +5,7 @@ mmengine-lite
 openai_harmony
 partial_json_parser
 pillow
+pybase64
 pydantic
 pyyaml
 shortuuid
