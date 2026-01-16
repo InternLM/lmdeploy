@@ -171,7 +171,6 @@ jobs:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources:/root/resources
-        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121

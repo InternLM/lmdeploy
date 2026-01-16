@@ -39,7 +39,7 @@ env:
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   OUTPUT_FOLDER: cuda12.8_dist_${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPORT_DIR: /nvme/qa_test_models/evaluation-reports/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
+  REPORT_DIR: /nvme/qa_test_models/evaluation_report/allure_report/${{ inputs.repo_ref }}_${{ github.run_id }}
   COV_PARAM: --cov /opt/py3/lib/python3.10/site-packages/lmdeploy
   FAIL_CONFIG: '--lf'
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ github.run_id }}
@@ -107,7 +107,6 @@ jobs:
         - /nvme/github-actions/packages:/root/packages
         - /nvme/github-actions/resources:/root/resources
         - /nvme/github-actions/opencompass-data:/root/opencompass-data
-        - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme1/qa_test_models:/nvme1/qa_test_models
         - /nvme2/share:/nvme2/share

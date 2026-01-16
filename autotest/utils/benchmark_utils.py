@@ -57,7 +57,7 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
     dataset_path = config.get('dataset_path')
 
     case_name = get_case_str_by_config(run_config)
-    benchmark_path = os.path.join(config.get('benchmark_path'), 'longtext-throughtput')
+    benchmark_path = os.path.join(config.get('benchmark_path'), 'longtext-throughput')
     work_dir = os.path.join(benchmark_path, f'wk_{case_name}')
     os.makedirs(work_dir, exist_ok=True)
 
@@ -74,12 +74,13 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
     env = os.environ.copy()
     env.update(run_config.get('env', {}))
 
-    for input_len, out_len, num_prompts, case_name, concurrency in [(1, 32768, 10, '32k', 10), (1, 65536, 5, '64k', 5),
-                                                                    (65536, 1024, 15, '64k-1k', 15),
-                                                                    (198000, 1024, 3, '198k-1k', 1)]:
+    for input_len, out_len, num_prompts, session_info, concurrency in [(1, 32768, 10, '32k', 10),
+                                                                       (1, 65536, 5, '64k', 5),
+                                                                       (65536, 1024, 15, '64k-1k', 15),
+                                                                       (198000, 1024, 3, '198k-1k', 1)]:
         session_len = input_len + out_len + 1
-        csv_path = os.path.join(work_dir, f'{case_name}.csv')
-        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{concurrency}.log')
+        csv_path = os.path.join(work_dir, f'{case_name}_{session_info}.csv')
+        benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{session_info}.log')
         cmd = ' '.join([
             command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
             f'--num-prompts {num_prompts}', f'--concurrency {concurrency}', '--stream-output',
@@ -97,7 +98,7 @@ def longtext_throughput_test(config, run_config, worker_id: str = ''):
 
 
 def restful_test(config, run_config, worker_id: str = '', is_smoke: bool = False, is_mllm: bool = False):
-    max_cache_entry = get_max_cache_entry(config.get('model'), run_config.get('backend'))
+    max_cache_entry = get_max_cache_entry(run_config.get('model'), run_config.get('backend'))
     if max_cache_entry is not None:
         if 'extra_params' not in run_config:
             run_config['extra_params'] = {}
@@ -216,9 +217,9 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
     for enable_prefix_caching in [False, True]:
         suffix = 'cache' if enable_prefix_caching else 'no_cache'
 
-        for input_len, out_len, num_prompts, case_name, concurrency in test_configs:
-            benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{suffix}.log')
-            csv_path = os.path.join(work_dir, f'{suffix}.csv')
+        for input_len, out_len, num_prompts, session_info, concurrency in test_configs:
+            benchmark_log = os.path.join(benchmark_path, f'log_{case_name}_{session_info}_{suffix}.log')
+            csv_path = os.path.join(work_dir, f'{session_info}_{suffix}.csv')
 
             command = ' '.join([
                 command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',

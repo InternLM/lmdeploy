@@ -33,7 +33,7 @@ def test_quantization_gptq(config, model, worker_id):
 @pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 def test_quantization_awq_pr(config, model):
     quantization_type = 'awq'
-    quantization_all(config, model + '-inner-4bits', model, quantization_type)
+    quantization_all(config, model + '-inner-4bits', model, quantization_type, cuda_prefix='CUDA_VISIBLE_DEVICES=5')
 
 
 def quantization_all(config, quantization_model_name, origin_model_name, quantization_type, cuda_prefix: str = ''):

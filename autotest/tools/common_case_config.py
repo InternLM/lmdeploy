@@ -245,7 +245,7 @@ PYTORCH_PR_TEST_LLM_GPU2 = [{
 }]
 
 PYTORCH_PR_TEST_LLM_GPU1 = [{
-    'model': 'meta-llama/Llama-2-7b-chat-hf',
+    'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
     'backend': PYTORCH,
     'communicator': 'nccl',
     'quant_policy': 0,

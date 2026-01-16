@@ -37,10 +37,10 @@ def start_openai_service(config, run_config, worker_id):
         run_config['extra_params'] = {}
     run_config['extra_params']['server-port'] = str(port)
     run_config['extra_params']['allow-terminate-by-client'] = None
-    run_config['extra_params'].pop('model_name', None)
+    run_config['extra_params'].pop('model-name', None)
     cmd = ' '.join([
         cuda_prefix, 'lmdeploy serve api_server', model_path,
-        get_cli_common_param(run_config), f'--model_name {case_name}'
+        get_cli_common_param(run_config), f'--model-name {case_name}'
     ]).strip()
 
     print('reproduce command restful: ' + cmd)
