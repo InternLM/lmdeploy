@@ -222,12 +222,14 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = ''):
 
             command = ' '.join([
                 command, '--dataset-name random', f'--random-input-len {input_len}', f'--random-output-len {out_len}',
-                '--random-range-ratio 1.0', f' --concurrency {concurrency}', f'--num-prompts {num_prompts}',
-                '--stream-output', f'--csv {csv_path}'
+                '--random-range-ratio 1.0', f'--num-prompts {num_prompts}', '--stream-output', f'--csv {csv_path}'
             ]).strip()
 
             if enable_prefix_caching:
                 command += ' --enable-prefix-caching'
+
+            if concurrency:
+                command += f' --concurrency {concurrency}'
 
             result, stderr = execute_command_with_logging(command, benchmark_log, env=env)
             allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)

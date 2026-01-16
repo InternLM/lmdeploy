@@ -36,7 +36,7 @@ def test_quantization_awq_pr(config, model):
     quantization_all(config, model + '-inner-4bits', model, quantization_type)
 
 
-def quantization_all(config, quantization_model_name, origin_model_name, quantization_type, cuda_prefix):
+def quantization_all(config, quantization_model_name, origin_model_name, quantization_type, cuda_prefix: str = ''):
     result, msg = quantization(config, quantization_model_name, origin_model_name, quantization_type, cuda_prefix)
     log_path = config.get('log_path')
     quantization_log = os.path.join(
