@@ -56,9 +56,9 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
           mkdir ${{env.REPORT_DIR}} -p
           mkdir ${{env.REPORT_DIR}}/server_log -p
+          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Test lmdeploy - func
         run: |
           pytest autotest -m 'pr_test and gpu_num_2' -x --alluredir=${{env.REPORT_DIR}} --clean-alluredir
