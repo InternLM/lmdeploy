@@ -375,9 +375,8 @@ class MPExecutor(ExecutorBase):
 
     async def _prefetch_outputs(self):
         while True:
-            outs = (await self.collective_rpc_async('get_outputs', receiver_mask=1, return_mask=1))[0]
-            for out in outs:
-                self.remote_outs.put_nowait(out)
+            out = (await self.collective_rpc_async('get_outputs', receiver_mask=1, return_mask=1))[0]
+            self.remote_outs.put_nowait(out)
 
     def start(self, forward_event: asyncio.Event):
         """Start engine loop."""

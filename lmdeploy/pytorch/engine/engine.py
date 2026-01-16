@@ -501,7 +501,8 @@ class Engine(EngineBase):
             return
 
         try:
-            await self._loop_main
+            # await self._loop_main
+            await self.req_manager.wait_tasks()
         except asyncio.CancelledError:
             logger.info('Engine main loop cancelled in wait_tasks.')
             raise
