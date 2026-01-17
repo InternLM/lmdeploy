@@ -1,5 +1,42 @@
+[project]
+name = "lmdeploy"
+description = "A toolset for compressing, deploying and serving LLM"
+authors = [
+	{name = "OpenMMLab", email = "openmmlab@gmail.com" },
+]
+maintainers = [
+	{name = "OpenMMLab", email = "openmmlab@gmail.com" },
+]
+classifiers = [
+	"Programming Language :: Python :: 3.9",
+	"Programming Language :: Python :: 3.10",
+	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.12",
+	"Programming Language :: Python :: 3.13",
+	"Intended Audience :: Developers",
+	"Intended Audience :: Education",
+	"Intended Audience :: Science/Research",
+]
+requires-python = ">= 3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dynamic = ["version", "readme", "dependencies", "optional-dependencies"]
+
+[tool.setuptools.dynamic]
+version = {attr = "lmdeploy.version.__version__"}
+readme = {file = ["README.md"], content-type = "text/markdown"}
+
+[tool.setuptools.packages.find]
+namespaces = false
+exclude = []
+
+[project.scripts]
+lmdeploy = "lmdeploy.cli:run"
+
 [build-system]
 requires = [
     "cmake_build_extension",
+	"pybind11 <= 2.13.1",
+	"setuptools >= 77.0.3",
 ]
 build-backend = "setuptools.build_meta"
