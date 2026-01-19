@@ -3,7 +3,7 @@ resource_path: /mnt/vc-intern-delivery/qa-llm-cicd/resource
 log_path: /mnt/vc-intern-delivery/qa-llm-cicd/log
 eval_path: /mnt/vc-intern-delivery/qa-llm-cicd/evaluation_report
 mllm_eval_path: /mnt/vc-intern-delivery/qa-llm-cicd/mllm_evaluation_report
-benchmark_path: /mnt/vc-intern-delivery/qa-llm-cicd/benchmark-reports
+benchmark_path: /mnt/vc-intern-delivery/qa-llm-cicd/benchmark_report
 dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 prefix_dataset_path: /mnt/vc-intern-delivery/qa-llm-cicd/datasets/prefix_cache_test.json
 env_tag: ascend

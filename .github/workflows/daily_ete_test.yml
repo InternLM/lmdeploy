@@ -628,7 +628,7 @@ jobs:
         run: |
           echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
           chmod -R 777 $REPORT_DIR
-          chmod -R 777 /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
+          chmod -R 777 /nvme/qa_test_models/benchmark_report/${{ github.run_id }}
           export workdir=$(pwd)
           cd ..
           rm -rf $workdir

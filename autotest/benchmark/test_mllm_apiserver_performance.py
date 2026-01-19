@@ -4,7 +4,7 @@ from utils.config_utils import get_func_config_list
 
 
 def get_models(backend, parallel_config):
-    return get_func_config_list(backend, parallel_config, func_type='mllm_benchmark')
+    return get_func_config_list(backend, parallel_config, model_type='vl_model', func_type='mllm_evaluate')
 
 
 TURBOMIND = 'turbomind'
